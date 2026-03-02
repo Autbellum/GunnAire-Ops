@@ -148,8 +148,7 @@ struct ScheduleView: View {
                         .onDelete(perform: deleteCalls)
                     }
                     .listStyle(.insetGrouped)
-                    .scrollContentBackground(.hidden)
-                    .background(Color.primaryBlack)
+                    .scrollContentBackground(.automatic)
                 }
                 .navigationTitle("Schedule")
                 .foregroundColor(Color.brandGold)

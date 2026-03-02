@@ -268,8 +268,7 @@ struct AddServiceCallView: View {
                 }
                 TextField("Notes", text: $notes, axis: .vertical)
             }
-            .scrollContentBackground(.hidden)
-            .background(Color.primaryBlack)
+            .scrollContentBackground(.automatic)
             .navigationTitle("New Service Call")
             .foregroundColor(Color.brandGold) // Title and labels in gold using Color
             .toolbar {
