@@ -27,6 +27,7 @@
 		642980E62F4CAB5900A62E15 /* GunnAire Ops.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "GunnAire Ops.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		642980F52F4CAB5A00A62E15 /* GunnAire OpsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "GunnAire OpsTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		642980FF2F4CAB5A00A62E15 /* GunnAire OpsUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "GunnAire OpsUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		6429812A2F4CB15C00A62E15 /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -75,6 +76,7 @@
 		642980DD2F4CAB5900A62E15 = {
 			isa = PBXGroup;
 			children = (
+				6429812A2F4CB15C00A62E15 /* .gitignore */,
 				642980E82F4CAB5900A62E15 /* GunnAire Ops */,
 				642980F82F4CAB5A00A62E15 /* GunnAire OpsTests */,
 				642981022F4CAB5A00A62E15 /* GunnAire OpsUITests */,
