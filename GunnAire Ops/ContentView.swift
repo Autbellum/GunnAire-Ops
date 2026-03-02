@@ -19,6 +19,7 @@ import os
 
 struct ContentView: View {
     @State private var selectedSidebarItem: SidebarItem? = .scheduleAndJobs
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     
     @State private var showingSettings = false
     
@@ -40,7 +41,7 @@ struct ContentView: View {
         ZStack {
             WatermarkBackground()
             
-            NavigationSplitView {
+            NavigationSplitView(columnVisibility: $columnVisibility) {
                 List(selection: $selectedSidebarItem) {
                     Section(header: Text("Menu")
                         .font(.headline)
@@ -48,13 +49,11 @@ struct ContentView: View {
                         .foregroundColor(Color.brandGold)
                     ) {
                         ForEach(SidebarItem.allCases) { item in
-                            NavigationLink(value: item) {
-                                Label(item.rawValue, systemImage: iconName(for: item))
-                                    .font(.headline)
-                                    .bold()
-                                    // Use foregroundColor with Color instead of ShapeStyle to ensure proper type usage
-                                    .foregroundColor(Color.brandGold)
-                            }
+                            Label(item.rawValue, systemImage: iconName(for: item))
+                                .font(.headline)
+                                .bold()
+                                .foregroundColor(Color.brandGold)
+                                .tag(item)
                             .listRowBackground(Color.primaryBlack)
                         }
                     }
@@ -102,11 +101,16 @@ struct ContentView: View {
                         Text("Missing view: OnsiteDocumentationView")
                             .foregroundColor(.secondary)
                     case .none:
-                        Text("Select a menu item")
-                            .foregroundColor(.secondary)
+                        ScheduleView()
                     }
                 }
                 .tint(Color.brandGold) // Accent color for links/buttons in detail using Color
+            }
+            .navigationSplitViewStyle(.balanced)
+            .onAppear {
+                if selectedSidebarItem == nil {
+                    selectedSidebarItem = .scheduleAndJobs
+                }
             }
             // Settings Sheet accessible from toolbar
             .sheet(isPresented: $showingSettings) {
@@ -121,8 +125,6 @@ struct ContentView: View {
             })
             .tint(Color.brandGold) // Apply gold accent color app-wide for links/buttons using Color
         }
-        // Make watermark and content fill entire iPad screen edge-to-edge, ignoring safe area
-        .ignoresSafeArea()
     }
     
     private func iconName(for item: SidebarItem) -> String {
