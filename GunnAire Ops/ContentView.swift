@@ -509,10 +509,8 @@ class ContentViewPresentationContextProvider: NSObject, ASWebAuthenticationPrese
             return tempWindow
         }
 
-        Self.dlog("Returning hidden dummy window as last-resort anchor")
-        let dummyWindow = UIWindow(frame: .zero)
-        dummyWindow.isHidden = true
-        return dummyWindow
+        Self.dlog("Returning default presentation anchor as last-resort fallback")
+        return ASPresentationAnchor()
     }
 }
 
