@@ -135,11 +135,12 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
             URLSession.shared.dataTask(with: request) { data, resp, error in
-                if let error = error { completion(.failure(error)); return }
-                guard let data = data else { completion(.failure(QBError.noData)); return }
-                // Decode response
-                let invoices = (try? JSONDecoder().decode(QuickBooksInvoiceQueryResponse.self, from: data))?.QueryResponse.Invoice ?? []
-                DispatchQueue.main.async { completion(.success(invoices)) }
+                Task { @MainActor in
+                    if let error = error { completion(.failure(error)); return }
+                    guard let data = data else { completion(.failure(QBError.noData)); return }
+                    let invoices = (try? JSONDecoder().decode(QuickBooksInvoiceQueryResponse.self, from: data))?.QueryResponse.Invoice ?? []
+                    completion(.success(invoices))
+                }
             }.resume()
         }
     }
@@ -152,13 +153,15 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
             URLSession.shared.dataTask(with: request) { data, resp, error in
-                if let error = error { completion(.failure(error)); return }
-                guard let data = data else { completion(.failure(QBError.noData)); return }
-                guard let invoice = try? JSONDecoder().decode(QuickBooksInvoiceResponse.self, from: data).Invoice else {
-                    completion(.failure(QBError.decoding))
-                    return
+                Task { @MainActor in
+                    if let error = error { completion(.failure(error)); return }
+                    guard let data = data else { completion(.failure(QBError.noData)); return }
+                    guard let invoice = try? JSONDecoder().decode(QuickBooksInvoiceResponse.self, from: data).Invoice else {
+                        completion(.failure(QBError.decoding))
+                        return
+                    }
+                    completion(.success(invoice))
                 }
-                DispatchQueue.main.async { completion(.success(invoice)) }
             }.resume()
         }
     }
@@ -171,10 +174,12 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
             URLSession.shared.dataTask(with: request) { data, resp, error in
-                if let error = error { completion(.failure(error)); return }
-                guard let data = data else { completion(.failure(QBError.noData)); return }
-                let bills = (try? JSONDecoder().decode(QuickBooksBillQueryResponse.self, from: data))?.QueryResponse.Bill ?? []
-                DispatchQueue.main.async { completion(.success(bills)) }
+                Task { @MainActor in
+                    if let error = error { completion(.failure(error)); return }
+                    guard let data = data else { completion(.failure(QBError.noData)); return }
+                    let bills = (try? JSONDecoder().decode(QuickBooksBillQueryResponse.self, from: data))?.QueryResponse.Bill ?? []
+                    completion(.success(bills))
+                }
             }.resume()
         }
     }
@@ -187,13 +192,15 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
             URLSession.shared.dataTask(with: request) { data, resp, error in
-                if let error = error { completion(.failure(error)); return }
-                guard let data = data else { completion(.failure(QBError.noData)); return }
-                guard let bill = try? JSONDecoder().decode(QuickBooksBillResponse.self, from: data).Bill else {
-                    completion(.failure(QBError.decoding))
-                    return
+                Task { @MainActor in
+                    if let error = error { completion(.failure(error)); return }
+                    guard let data = data else { completion(.failure(QBError.noData)); return }
+                    guard let bill = try? JSONDecoder().decode(QuickBooksBillResponse.self, from: data).Bill else {
+                        completion(.failure(QBError.decoding))
+                        return
+                    }
+                    completion(.success(bill))
                 }
-                DispatchQueue.main.async { completion(.success(bill)) }
             }.resume()
         }
     }
@@ -206,10 +213,12 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
             URLSession.shared.dataTask(with: request) { data, resp, error in
-                if let error = error { completion(.failure(error)); return }
-                guard let data = data else { completion(.failure(QBError.noData)); return }
-                let vendors = (try? JSONDecoder().decode(QuickBooksVendorQueryResponse.self, from: data))?.QueryResponse.Vendor ?? []
-                DispatchQueue.main.async { completion(.success(vendors)) }
+                Task { @MainActor in
+                    if let error = error { completion(.failure(error)); return }
+                    guard let data = data else { completion(.failure(QBError.noData)); return }
+                    let vendors = (try? JSONDecoder().decode(QuickBooksVendorQueryResponse.self, from: data))?.QueryResponse.Vendor ?? []
+                    completion(.success(vendors))
+                }
             }.resume()
         }
     }
@@ -222,13 +231,15 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
             URLSession.shared.dataTask(with: request) { data, resp, error in
-                if let error = error { completion(.failure(error)); return }
-                guard let data = data else { completion(.failure(QBError.noData)); return }
-                guard let vendor = try? JSONDecoder().decode(QuickBooksVendorResponse.self, from: data).Vendor else {
-                    completion(.failure(QBError.decoding))
-                    return
+                Task { @MainActor in
+                    if let error = error { completion(.failure(error)); return }
+                    guard let data = data else { completion(.failure(QBError.noData)); return }
+                    guard let vendor = try? JSONDecoder().decode(QuickBooksVendorResponse.self, from: data).Vendor else {
+                        completion(.failure(QBError.decoding))
+                        return
+                    }
+                    completion(.success(vendor))
                 }
-                DispatchQueue.main.async { completion(.success(vendor)) }
             }.resume()
         }
     }
@@ -241,10 +252,12 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
             URLSession.shared.dataTask(with: request) { data, resp, error in
-                if let error = error { completion(.failure(error)); return }
-                guard let data = data else { completion(.failure(QBError.noData)); return }
-                let payments = (try? JSONDecoder().decode(QuickBooksPaymentQueryResponse.self, from: data))?.QueryResponse.Payment ?? []
-                DispatchQueue.main.async { completion(.success(payments)) }
+                Task { @MainActor in
+                    if let error = error { completion(.failure(error)); return }
+                    guard let data = data else { completion(.failure(QBError.noData)); return }
+                    let payments = (try? JSONDecoder().decode(QuickBooksPaymentQueryResponse.self, from: data))?.QueryResponse.Payment ?? []
+                    completion(.success(payments))
+                }
             }.resume()
         }
     }
@@ -257,13 +270,15 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
             URLSession.shared.dataTask(with: request) { data, resp, error in
-                if let error = error { completion(.failure(error)); return }
-                guard let data = data else { completion(.failure(QBError.noData)); return }
-                guard let payment = try? JSONDecoder().decode(QuickBooksPaymentResponse.self, from: data).Payment else {
-                    completion(.failure(QBError.decoding))
-                    return
+                Task { @MainActor in
+                    if let error = error { completion(.failure(error)); return }
+                    guard let data = data else { completion(.failure(QBError.noData)); return }
+                    guard let payment = try? JSONDecoder().decode(QuickBooksPaymentResponse.self, from: data).Payment else {
+                        completion(.failure(QBError.decoding))
+                        return
+                    }
+                    completion(.success(payment))
                 }
-                DispatchQueue.main.async { completion(.success(payment)) }
             }.resume()
         }
     }

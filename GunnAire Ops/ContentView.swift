@@ -509,8 +509,8 @@ class ContentViewPresentationContextProvider: NSObject, ASWebAuthenticationPrese
             return tempWindow
         }
 
-        Self.dlog("Returning default presentation anchor as last-resort fallback")
-        return ASPresentationAnchor()
+        Self.dlog("No UIWindowScene available for presentation anchor")
+        preconditionFailure("No UIWindowScene available for ASWebAuthenticationSession presentation anchor.")
     }
 }
 
