@@ -1,0 +1,45 @@
+# Xcode build products
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+project.xcworkspace/
+xcshareddata/
+.idea/
+*.moved-aside
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Packages/
+Package.resolved
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# CocoaPods (if you use pods)
+Pods/
+Podfile.lock
+
+# Carthage (if you use Carthage)
+Carthage/
+
+# Fastlane (if you use Fastlane)
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
+
+# Misc
+*.hmap
+*.ipa
+*.dSYM
+.DS_Store
+*.swp
+*~
