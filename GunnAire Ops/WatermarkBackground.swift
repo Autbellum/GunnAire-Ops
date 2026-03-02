@@ -3,13 +3,21 @@ import SwiftUI
 // A reusable watermark background with the app logo
 struct WatermarkBackground: View {
     var body: some View {
-        Image("AppLogo")
-            .resizable()
-            .scaledToFit()
-            .opacity(0.08)
-            .blur(radius: 1)
-            .allowsHitTesting(false)
-            .ignoresSafeArea()
+        ZStack {
+            LinearGradient(
+                colors: [Color(.systemBackground), Color(.secondarySystemBackground)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            Image("AppLogo")
+                .resizable()
+                .scaledToFit()
+                .padding(80)
+                .opacity(0.035)
+                .allowsHitTesting(false)
+        }
+        .ignoresSafeArea()
     }
 }
 

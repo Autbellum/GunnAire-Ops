@@ -54,13 +54,12 @@ struct ContentView: View {
                                 .bold()
                                 .foregroundColor(Color.brandGold)
                                 .tag(item)
-                            .listRowBackground(Color.primaryBlack)
+                                .listRowBackground(Color.clear)
                         }
                     }
                 }
                 .listStyle(.sidebar)
-                .background(Color.primaryBlack) // Sidebar background in brand black
-                .scrollContentBackground(.hidden) // Hide default background to show black
+                .scrollContentBackground(.automatic)
                 .navigationTitle("QuickTech")
                 .foregroundColor(Color.brandGold) // Navigation title in gold using Color
                 .toolbar {
