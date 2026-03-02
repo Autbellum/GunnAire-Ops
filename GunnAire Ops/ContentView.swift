@@ -509,8 +509,15 @@ class ContentViewPresentationContextProvider: NSObject, ASWebAuthenticationPrese
             return tempWindow
         }
 
-        Self.dlog("No UIWindowScene available for presentation anchor")
-        preconditionFailure("No UIWindowScene available for ASWebAuthenticationSession presentation anchor.")
+        // Last fallback: use any connected window scene, even if not active.
+        if let fallbackScene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            Self.dlog("Creating temp window from first connected scene (last fallback)")
+            return UIWindow(windowScene: fallbackScene)
+        }
+
+        // No valid scene should happen only in abnormal lifecycle states.
+        assertionFailure("No UIWindowScene available for ASWebAuthenticationSession presentation anchor.")
+        fatalError("No UIWindowScene available for ASWebAuthenticationSession presentation anchor.")
     }
 }
 
