@@ -2,11 +2,11 @@ import Foundation
 
 // Sidebar menu items for the main NavigationSplitView
 enum SidebarItem: String, CaseIterable, Identifiable {
+    case timeClock = "Clock In/Out"
     case scheduleAndJobs = "Schedule & Jobs"
-    case googleCalendar = "Google Calendar"
     case customers = "Customers"
     case invoicesEstimates = "Invoices & Estimates"
-    case paymentsReceipts = "Payments & Receipts"
+    case payments = "Payments"
     case receiptsBills = "Receipts & Bills"
     case quickBooksManagement = "QuickBooks Management"
     case syncIntegrations = "Sync & Integrations"

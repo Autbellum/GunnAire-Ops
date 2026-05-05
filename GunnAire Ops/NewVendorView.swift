@@ -3,15 +3,17 @@ import SwiftUI
 struct NewVendorView: View {
     @Environment(\.dismiss) private var dismiss
     var dismissHandler: (() -> Void)?
-    
+    var onAdd: ((QBStubVendorCreate) -> Void)?
+
     @State private var vendorName: String = ""
     @State private var email: String = ""
     @State private var phone: String = ""
-    
-    init(dismiss: @escaping () -> Void) {
+
+    init(dismiss: @escaping () -> Void, onAdd: ((QBStubVendorCreate) -> Void)? = nil) {
         self.dismissHandler = dismiss
+        self.onAdd = onAdd
     }
-    
+
     var body: some View {
         NavigationStack {
             Form {
@@ -35,7 +37,13 @@ struct NewVendorView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
-                        // TODO: Implement QuickBooks API call to add new vendor
+                        onAdd?(
+                            QBStubVendorCreate(
+                                displayName: vendorName,
+                                email: email.isEmpty ? nil : email,
+                                phone: phone.isEmpty ? nil : phone
+                            )
+                        )
                         dismiss()
                         dismissHandler?()
                     }

@@ -3,19 +3,23 @@ import SwiftUI
 struct NewPaymentView: View {
     @Environment(\.dismiss) private var dismiss
     var dismissHandler: (() -> Void)?
-    
+    var onAdd: ((QBStubPaymentCreate) -> Void)?
+
+    @State private var customerName: String = ""
     @State private var paymentAmount: String = ""
     @State private var paymentMethod: String = ""
     @State private var notes: String = ""
-    
-    init(dismiss: @escaping () -> Void) {
+
+    init(dismiss: @escaping () -> Void, onAdd: ((QBStubPaymentCreate) -> Void)? = nil) {
         self.dismissHandler = dismiss
+        self.onAdd = onAdd
     }
-    
+
     var body: some View {
         NavigationStack {
             Form {
                 Section("Payment Details") {
+                    TextField("Customer Name", text: $customerName)
                     TextField("Amount", text: $paymentAmount)
                         .keyboardType(.decimalPad)
                     TextField("Payment Method", text: $paymentMethod)
@@ -34,11 +38,19 @@ struct NewPaymentView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
-                        // TODO: Implement QuickBooks API call to add new payment
+                        guard let amountValue = Double(paymentAmount) else { return }
+                        onAdd?(
+                            QBStubPaymentCreate(
+                                customerName: customerName.isEmpty ? "Unknown Customer" : customerName,
+                                amount: amountValue,
+                                method: paymentMethod.isEmpty ? "Manual" : paymentMethod,
+                                notes: notes.isEmpty ? nil : notes
+                            )
+                        )
                         dismiss()
                         dismissHandler?()
                     }
-                    .disabled(paymentAmount.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(Double(paymentAmount) == nil)
                     .tint(Color.brandGold)
                 }
             }

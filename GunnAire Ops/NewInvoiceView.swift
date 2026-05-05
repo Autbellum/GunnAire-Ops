@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct NewInvoiceView: View {
+    private let termsURL = URL(string: "https://gunnaire.com/terms-of-service/")!
+
     @Environment(\.dismiss) private var dismiss
     var dismissHandler: (() -> Void)?
     
@@ -25,6 +27,10 @@ struct NewInvoiceView: View {
                     TextField("Amount", text: $amount)
                         .keyboardType(.decimalPad)
                     TextField("Notes", text: $notes)
+                    Link("View Terms of Service", destination: termsURL)
+                    Text("Terms URL included on invoice/estimate views: \(termsURL.absoluteString)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                     
                     if isCreating {
                         ProgressView("Creating Invoice...")

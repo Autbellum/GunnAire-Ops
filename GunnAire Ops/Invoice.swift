@@ -6,16 +6,22 @@ import SwiftData
 @Model
 final class Invoice {
     @Attribute(.unique) var id: UUID
-    var serviceCall: ServiceCall
+    var customer: Customer
     var quickBooksID: String?
+    var lineItemSummary: String
     var amount: Double
     var status: String // unpaid, paid, overdue
+    var notes: String?
+    var createdAt: Date
     
-    init(id: UUID = UUID(), serviceCall: ServiceCall, quickBooksID: String? = nil, amount: Double = 0, status: String = "unpaid") {
+    init(id: UUID = UUID(), customer: Customer, quickBooksID: String? = nil, lineItemSummary: String = "", amount: Double = 0, status: String = "unpaid", notes: String? = nil, createdAt: Date = Date()) {
         self.id = id
-        self.serviceCall = serviceCall
+        self.customer = customer
         self.quickBooksID = quickBooksID
+        self.lineItemSummary = lineItemSummary
         self.amount = amount
         self.status = status
+        self.notes = notes
+        self.createdAt = createdAt
     }
 }

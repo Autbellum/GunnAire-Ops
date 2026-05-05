@@ -9,26 +9,41 @@ struct QuickBooksOAuthTokens: Codable {
     let expiration: Date
 }
 
+private struct QuickBooksKeychainPayload: Codable {
+    let tokens: QuickBooksOAuthTokens
+    let realmID: String
+}
+
 /// Singleton QuickBooks API client
 final class QuickBooksDataAPI: ObservableObject {
     static let shared = QuickBooksDataAPI()
     
     @Published private(set) var tokens: QuickBooksOAuthTokens?
+    @Published private(set) var storedRealmID: String?
     private let clientId = Config.QuickBooks.clientID
     private let clientSecret = Config.QuickBooks.clientSecret
-    private let baseURL = "https://quickbooks.api.intuit.com/v3/company/"
+    private var baseURL: String {
+        if Config.QuickBooks.environment.lowercased() == "sandbox" {
+            return "https://sandbox-quickbooks.api.intuit.com/v3/company/"
+        }
+        return "https://quickbooks.api.intuit.com/v3/company/"
+    }
     private let realmIDKey = "QuickBooksRealmID"
     
     // Storage keys
     private let tokenStorageKey = "QuickBooksOAuthTokens"
+    private let keychainAccount = "QuickBooksOAuthPayload"
+    private let minorVersion = "75"
     
     var realmID: String? {
-        UserDefaults.standard.string(forKey: realmIDKey)
+        storedRealmID
     }
 
     // MARK: - OAuth Token Management
     func storeTokens(_ tokens: QuickBooksOAuthTokens, realmID: String) {
         self.tokens = tokens
+        self.storedRealmID = realmID
+        try? KeychainStore.saveCodable(QuickBooksKeychainPayload(tokens: tokens, realmID: realmID), account: keychainAccount)
         UserDefaults.standard.set(realmID, forKey: realmIDKey)
         if let data = try? JSONEncoder().encode(tokens) {
             UserDefaults.standard.set(data, forKey: tokenStorageKey)
@@ -36,21 +51,37 @@ final class QuickBooksDataAPI: ObservableObject {
     }
     
     func loadTokens() {
+        if let payload = try? KeychainStore.loadCodable(QuickBooksKeychainPayload.self, account: keychainAccount) {
+            self.tokens = payload.tokens
+            self.storedRealmID = payload.realmID
+            return
+        }
+
+        // Backward-compat migration from UserDefaults.
         if let data = UserDefaults.standard.data(forKey: tokenStorageKey),
-           let tokens = try? JSONDecoder().decode(QuickBooksOAuthTokens.self, from: data) {
+           let tokens = try? JSONDecoder().decode(QuickBooksOAuthTokens.self, from: data),
+           let realmID = UserDefaults.standard.string(forKey: realmIDKey) {
             self.tokens = tokens
+            self.storedRealmID = realmID
+            storeTokens(tokens, realmID: realmID)
         }
     }
     
     func clearTokens() {
         self.tokens = nil
+        self.storedRealmID = nil
+        try? KeychainStore.remove(account: keychainAccount)
         UserDefaults.standard.removeObject(forKey: tokenStorageKey)
         UserDefaults.standard.removeObject(forKey: realmIDKey)
     }
 
     // MARK: - Token Refresh
     func refreshTokensIfNeeded(completion: @escaping (Bool) -> Void) {
-        guard let tokens = tokens, tokens.expiration < Date() else {
+        guard let tokens = tokens else {
+            completeOnMain(completion, value: false)
+            return
+        }
+        guard tokens.expiration < Date() else {
             completeOnMain(completion, value: true)
             return
         }
@@ -110,10 +141,19 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     // MARK: - API Request
-    private func authorizedRequest(path: String, method: String = "GET", body: Data? = nil, contentType: String? = nil) -> URLRequest? {
-        guard let tokens = tokens, let realmID = realmID, let url = URL(string: baseURL + "\(realmID)/\(path)") else {
+    private func authorizedRequest(path: String, queryItems: [URLQueryItem] = [], method: String = "GET", body: Data? = nil, contentType: String? = nil) -> URLRequest? {
+        guard let tokens = tokens, let realmID = realmID else {
             return nil
         }
+        let root = baseURL + "\(realmID)/\(path)"
+        guard var components = URLComponents(string: root) else { return nil }
+        var mergedQueryItems = components.queryItems ?? []
+        mergedQueryItems.append(contentsOf: queryItems)
+        if !mergedQueryItems.contains(where: { $0.name == "minorversion" }) {
+            mergedQueryItems.append(URLQueryItem(name: "minorversion", value: minorVersion))
+        }
+        components.queryItems = mergedQueryItems
+        guard let url = components.url else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
@@ -124,19 +164,36 @@ final class QuickBooksDataAPI: ObservableObject {
         request.httpBody = body
         return request
     }
+
+    private func makeQueryRequest(_ sql: String) -> URLRequest? {
+        authorizedRequest(path: "query", queryItems: [URLQueryItem(name: "query", value: sql)])
+    }
+
+    private func resolveHTTPError(data: Data?, response: URLResponse?) -> QBError? {
+        guard let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) else {
+            return nil
+        }
+        if let data,
+           let apiError = try? JSONDecoder().decode(QuickBooksFaultEnvelope.self, from: data),
+           let firstError = apiError.Fault.Error.first {
+            return .api(statusCode: http.statusCode, detail: "\(firstError.Message): \(firstError.Detail)")
+        }
+        return .http(statusCode: http.statusCode)
+    }
     
     // MARK: - Public API Methods (examples; fill out for all QuickBooks endpoints)
     
     /// Fetches all invoices.
     func fetchInvoices(completion: @escaping (Result<[QuickBooksInvoice],Error>) -> Void) {
         refreshTokensIfNeeded { ok in
-            guard ok, let request = self.authorizedRequest(path: "query?query=SELECT * FROM Invoice") else {
+            guard ok, let request = self.makeQueryRequest("SELECT * FROM Invoice") else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
             URLSession.shared.dataTask(with: request) { data, resp, error in
                 Task { @MainActor in
                     if let error = error { completion(.failure(error)); return }
+                    if let httpError = self.resolveHTTPError(data: data, response: resp) { completion(.failure(httpError)); return }
                     guard let data = data else { completion(.failure(QBError.noData)); return }
                     let invoices = (try? JSONDecoder().decode(QuickBooksInvoiceQueryResponse.self, from: data))?.QueryResponse.Invoice ?? []
                     completion(.success(invoices))
@@ -155,6 +212,7 @@ final class QuickBooksDataAPI: ObservableObject {
             URLSession.shared.dataTask(with: request) { data, resp, error in
                 Task { @MainActor in
                     if let error = error { completion(.failure(error)); return }
+                    if let httpError = self.resolveHTTPError(data: data, response: resp) { completion(.failure(httpError)); return }
                     guard let data = data else { completion(.failure(QBError.noData)); return }
                     guard let invoice = try? JSONDecoder().decode(QuickBooksInvoiceResponse.self, from: data).Invoice else {
                         completion(.failure(QBError.decoding))
@@ -169,13 +227,14 @@ final class QuickBooksDataAPI: ObservableObject {
     /// Fetches all bills.
     func fetchBills(completion: @escaping (Result<[QuickBooksBill],Error>) -> Void) {
         refreshTokensIfNeeded { ok in
-            guard ok, let request = self.authorizedRequest(path: "query?query=SELECT * FROM Bill") else {
+            guard ok, let request = self.makeQueryRequest("SELECT * FROM Bill") else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
             URLSession.shared.dataTask(with: request) { data, resp, error in
                 Task { @MainActor in
                     if let error = error { completion(.failure(error)); return }
+                    if let httpError = self.resolveHTTPError(data: data, response: resp) { completion(.failure(httpError)); return }
                     guard let data = data else { completion(.failure(QBError.noData)); return }
                     let bills = (try? JSONDecoder().decode(QuickBooksBillQueryResponse.self, from: data))?.QueryResponse.Bill ?? []
                     completion(.success(bills))
@@ -194,6 +253,7 @@ final class QuickBooksDataAPI: ObservableObject {
             URLSession.shared.dataTask(with: request) { data, resp, error in
                 Task { @MainActor in
                     if let error = error { completion(.failure(error)); return }
+                    if let httpError = self.resolveHTTPError(data: data, response: resp) { completion(.failure(httpError)); return }
                     guard let data = data else { completion(.failure(QBError.noData)); return }
                     guard let bill = try? JSONDecoder().decode(QuickBooksBillResponse.self, from: data).Bill else {
                         completion(.failure(QBError.decoding))
@@ -208,13 +268,14 @@ final class QuickBooksDataAPI: ObservableObject {
     /// Fetches all vendors.
     func fetchVendors(completion: @escaping (Result<[QuickBooksVendor],Error>) -> Void) {
         refreshTokensIfNeeded { ok in
-            guard ok, let request = self.authorizedRequest(path: "query?query=SELECT * FROM Vendor") else {
+            guard ok, let request = self.makeQueryRequest("SELECT * FROM Vendor") else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
             URLSession.shared.dataTask(with: request) { data, resp, error in
                 Task { @MainActor in
                     if let error = error { completion(.failure(error)); return }
+                    if let httpError = self.resolveHTTPError(data: data, response: resp) { completion(.failure(httpError)); return }
                     guard let data = data else { completion(.failure(QBError.noData)); return }
                     let vendors = (try? JSONDecoder().decode(QuickBooksVendorQueryResponse.self, from: data))?.QueryResponse.Vendor ?? []
                     completion(.success(vendors))
@@ -233,6 +294,7 @@ final class QuickBooksDataAPI: ObservableObject {
             URLSession.shared.dataTask(with: request) { data, resp, error in
                 Task { @MainActor in
                     if let error = error { completion(.failure(error)); return }
+                    if let httpError = self.resolveHTTPError(data: data, response: resp) { completion(.failure(httpError)); return }
                     guard let data = data else { completion(.failure(QBError.noData)); return }
                     guard let vendor = try? JSONDecoder().decode(QuickBooksVendorResponse.self, from: data).Vendor else {
                         completion(.failure(QBError.decoding))
@@ -247,13 +309,14 @@ final class QuickBooksDataAPI: ObservableObject {
     /// Fetches all payments.
     func fetchPayments(completion: @escaping (Result<[QuickBooksPayment],Error>) -> Void) {
         refreshTokensIfNeeded { ok in
-            guard ok, let request = self.authorizedRequest(path: "query?query=SELECT * FROM Payment") else {
+            guard ok, let request = self.makeQueryRequest("SELECT * FROM Payment") else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
             URLSession.shared.dataTask(with: request) { data, resp, error in
                 Task { @MainActor in
                     if let error = error { completion(.failure(error)); return }
+                    if let httpError = self.resolveHTTPError(data: data, response: resp) { completion(.failure(httpError)); return }
                     guard let data = data else { completion(.failure(QBError.noData)); return }
                     let payments = (try? JSONDecoder().decode(QuickBooksPaymentQueryResponse.self, from: data))?.QueryResponse.Payment ?? []
                     completion(.success(payments))
@@ -272,6 +335,7 @@ final class QuickBooksDataAPI: ObservableObject {
             URLSession.shared.dataTask(with: request) { data, resp, error in
                 Task { @MainActor in
                     if let error = error { completion(.failure(error)); return }
+                    if let httpError = self.resolveHTTPError(data: data, response: resp) { completion(.failure(httpError)); return }
                     guard let data = data else { completion(.failure(QBError.noData)); return }
                     guard let payment = try? JSONDecoder().decode(QuickBooksPaymentResponse.self, from: data).Payment else {
                         completion(.failure(QBError.decoding))
@@ -280,6 +344,127 @@ final class QuickBooksDataAPI: ObservableObject {
                     completion(.success(payment))
                 }
             }.resume()
+        }
+    }
+
+    /// Uploads a document to QuickBooks (receipt, bill image, PDF).
+    func uploadDocument(
+        fileURL: URL,
+        note: String? = nil,
+        attachToEntityType: QuickBooksAttachableEntityType? = nil,
+        attachToEntityID: String? = nil,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        refreshTokensIfNeeded { ok in
+            guard ok else {
+                completion(.failure(QBError.unauthorized))
+                return
+            }
+
+            let filename = fileURL.lastPathComponent
+            let contentType = Self.mimeType(for: fileURL)
+            let boundary = "Boundary-\(UUID().uuidString)"
+            let attachableRefs: [QuickBooksAttachableReference]
+            if let attachToEntityType, let attachToEntityID, !attachToEntityID.isEmpty {
+                attachableRefs = [
+                    QuickBooksAttachableReference(
+                        EntityRef: QuickBooksAttachableEntityRef(
+                            type: attachToEntityType.rawValue,
+                            value: attachToEntityID
+                        ),
+                        IncludeOnSend: true
+                    )
+                ]
+            } else {
+                attachableRefs = []
+            }
+            let metadata = QuickBooksUploadMetadata(
+                FileName: filename,
+                ContentType: contentType,
+                Note: note ?? "Uploaded from GunnAire Ops",
+                AttachableRef: attachableRefs.isEmpty ? nil : attachableRefs
+            )
+
+            guard
+                let fileData = try? Data(contentsOf: fileURL),
+                let metadataData = try? JSONEncoder().encode(metadata),
+                let metadataJSON = String(data: metadataData, encoding: .utf8)
+            else {
+                completion(.failure(QBError.noData))
+                return
+            }
+
+            let body = Self.buildUploadBody(
+                boundary: boundary,
+                filename: filename,
+                contentType: contentType,
+                fileData: fileData,
+                metadataJSON: metadataJSON
+            )
+
+            guard let request = self.authorizedRequest(
+                path: "upload",
+                method: "POST",
+                body: body,
+                contentType: "multipart/form-data; boundary=\(boundary)"
+            ) else {
+                completion(.failure(QBError.unauthorized))
+                return
+            }
+
+            URLSession.shared.dataTask(with: request) { data, resp, error in
+                Task { @MainActor in
+                    if let error = error {
+                        completion(.failure(error))
+                        return
+                    }
+                    if let httpError = self.resolveHTTPError(data: data, response: resp) {
+                        completion(.failure(httpError))
+                        return
+                    }
+                    guard let data = data else {
+                        completion(.failure(QBError.noData))
+                        return
+                    }
+                    if let parsed = try? JSONDecoder().decode(QuickBooksUploadResponse.self, from: data),
+                       let attachable = parsed.AttachableResponse.first {
+                        completion(.success(attachable.Id))
+                        return
+                    }
+                    // Return a stable success marker when QuickBooks accepts upload but response shape differs.
+                    completion(.success("uploaded-\(filename)"))
+                }
+            }.resume()
+        }
+    }
+
+    static func buildUploadBody(boundary: String, filename: String, contentType: String, fileData: Data, metadataJSON: String) -> Data {
+        var body = Data()
+        let lineBreak = "\r\n"
+
+        body.append("--\(boundary)\(lineBreak)")
+        body.append("Content-Disposition: form-data; name=\"file_metadata_01\"\(lineBreak)")
+        body.append("Content-Type: application/json\(lineBreak)\(lineBreak)")
+        body.append("\(metadataJSON)\(lineBreak)")
+
+        body.append("--\(boundary)\(lineBreak)")
+        body.append("Content-Disposition: form-data; name=\"file_content_01\"; filename=\"\(filename)\"\(lineBreak)")
+        body.append("Content-Type: \(contentType)\(lineBreak)\(lineBreak)")
+        body.append(fileData)
+        body.append(lineBreak)
+
+        body.append("--\(boundary)--\(lineBreak)")
+        return body
+    }
+
+    static func mimeType(for fileURL: URL) -> String {
+        switch fileURL.pathExtension.lowercased() {
+        case "jpg", "jpeg": return "image/jpeg"
+        case "png": return "image/png"
+        case "pdf": return "application/pdf"
+        case "txt": return "text/plain"
+        case "rtf": return "application/rtf"
+        default: return "application/octet-stream"
         }
     }
     
@@ -292,8 +477,27 @@ final class QuickBooksDataAPI: ObservableObject {
     */
     
     // Example error types
-    enum QBError: Error {
-        case unauthorized, noData, decoding
+    enum QBError: Error, LocalizedError {
+        case unauthorized
+        case noData
+        case decoding
+        case http(statusCode: Int)
+        case api(statusCode: Int, detail: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .unauthorized:
+                return "QuickBooks access token is missing or expired."
+            case .noData:
+                return "QuickBooks returned no data."
+            case .decoding:
+                return "QuickBooks response decoding failed."
+            case .http(let statusCode):
+                return "QuickBooks request failed (HTTP \(statusCode))."
+            case .api(let statusCode, let detail):
+                return "QuickBooks API error (HTTP \(statusCode)): \(detail)"
+            }
+        }
     }
 }
 
@@ -405,4 +609,56 @@ struct QuickBooksPaymentResponse: Codable {
     let Payment: QuickBooksPayment
 }
 
+struct QuickBooksFaultEnvelope: Codable {
+    let Fault: QuickBooksFault
+}
+
+struct QuickBooksFault: Codable {
+    let Error: [QuickBooksFaultError]
+}
+
+struct QuickBooksFaultError: Codable {
+    let Message: String
+    let Detail: String
+}
+
+struct QuickBooksUploadMetadata: Codable {
+    let FileName: String
+    let ContentType: String
+    let Note: String
+    let AttachableRef: [QuickBooksAttachableReference]?
+}
+
+enum QuickBooksAttachableEntityType: String, CaseIterable {
+    case invoice = "Invoice"
+    case bill = "Bill"
+    case payment = "Payment"
+}
+
+struct QuickBooksAttachableReference: Codable {
+    let EntityRef: QuickBooksAttachableEntityRef
+    let IncludeOnSend: Bool
+}
+
+struct QuickBooksAttachableEntityRef: Codable {
+    let type: String
+    let value: String
+}
+
+struct QuickBooksUploadResponse: Codable {
+    let AttachableResponse: [QuickBooksAttachable]
+}
+
+struct QuickBooksAttachable: Codable {
+    let Id: String
+}
+
 // ... More models as needed (Receipts, etc.)
+
+private extension Data {
+    mutating func append(_ string: String) {
+        if let data = string.data(using: .utf8) {
+            append(data)
+        }
+    }
+}

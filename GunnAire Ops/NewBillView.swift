@@ -3,15 +3,17 @@ import SwiftUI
 struct NewBillView: View {
     @Environment(\.dismiss) private var dismiss
     var dismissHandler: (() -> Void)?
-    
+    var onCreate: ((QBStubBillCreate) -> Void)?
+
     @State private var vendorName: String = ""
     @State private var amount: String = ""
     @State private var notes: String = ""
-    
-    init(dismiss: @escaping () -> Void) {
+
+    init(dismiss: @escaping () -> Void, onCreate: ((QBStubBillCreate) -> Void)? = nil) {
         self.dismissHandler = dismiss
+        self.onCreate = onCreate
     }
-    
+
     var body: some View {
         NavigationStack {
             Form {
@@ -34,11 +36,12 @@ struct NewBillView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
-                        // TODO: Implement QuickBooks API call to create bill
+                        guard let amountValue = Double(amount) else { return }
+                        onCreate?(QBStubBillCreate(vendorName: vendorName, totalAmt: amountValue, notes: notes.isEmpty ? nil : notes))
                         dismiss()
                         dismissHandler?()
                     }
-                    .disabled(vendorName.trimmingCharacters(in: .whitespaces).isEmpty || amount.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(vendorName.trimmingCharacters(in: .whitespaces).isEmpty || Double(amount) == nil)
                     .tint(Color.brandGold)
                 }
             }

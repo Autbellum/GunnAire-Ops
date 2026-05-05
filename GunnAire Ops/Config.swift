@@ -4,12 +4,33 @@
 import Foundation
 
 struct Config {
+    private static func value(_ key: String, fallback: String) -> String {
+        let env = ProcessInfo.processInfo.environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let env, !env.isEmpty { return env }
+        let plist = (Bundle.main.object(forInfoDictionaryKey: key) as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let plist, !plist.isEmpty { return plist }
+        return fallback
+    }
+
+    struct AppSecurity {
+        // TODO: Set this to false before publishing to App Store / production.
+        #if DEBUG
+        static let allowTestingBypass = true
+        #else
+        static let allowTestingBypass = false
+        #endif
+    }
+
     struct QuickBooks {
         // Prefer env overrides for local/dev workflows.
-        static let clientID = ProcessInfo.processInfo.environment["QB_CLIENT_ID"] ?? "YOUR_CLIENT_ID"
-        static let clientSecret = ProcessInfo.processInfo.environment["QB_CLIENT_SECRET"] ?? "YOUR_CLIENT_SECRET"
-        static let redirectURI = ProcessInfo.processInfo.environment["QB_REDIRECT_URI"] ?? "YOUR_REDIRECT_URI"
-        static let environment = ProcessInfo.processInfo.environment["QB_ENVIRONMENT"] ?? "sandbox" // sandbox or production
+        static let clientID = Config.value("QB_CLIENT_ID", fallback: "YOUR_CLIENT_ID")
+        static let clientSecret = Config.value("QB_CLIENT_SECRET", fallback: "YOUR_CLIENT_SECRET")
+        static let redirectURI = Config.value("QB_REDIRECT_URI", fallback: "YOUR_REDIRECT_URI")
+        // Optional callback scheme for ASWebAuthenticationSession when using an HTTPS redirect bridge.
+        static let callbackScheme = Config.value("QB_CALLBACK_SCHEME", fallback: "gunnaireops")
+        static let environment = Config.value("QB_ENVIRONMENT", fallback: "sandbox") // sandbox or production
+        // Required for invoice line item creation in QBO. Set to a valid Sales Item ID in your company.
+        static let defaultSalesItemRef = Config.value("QB_DEFAULT_ITEM_REF", fallback: "1")
         
         // OAuth 2.0 endpoints for QuickBooks Online
         static let authorizationEndpoint = "https://appcenter.intuit.com/connect/oauth2" // Authorization endpoint URL
@@ -17,27 +38,20 @@ struct Config {
     }
     struct Google {
         // Prefer env overrides for local/dev workflows.
-        static let clientID = ProcessInfo.processInfo.environment["GOOGLE_CLIENT_ID"] ?? "YOUR_GOOGLE_CLIENT_ID"
-        static let clientSecret = ProcessInfo.processInfo.environment["GOOGLE_CLIENT_SECRET"] ?? "YOUR_GOOGLE_CLIENT_SECRET"
-        static let redirectURI = ProcessInfo.processInfo.environment["GOOGLE_REDIRECT_URI"] ?? "YOUR_GOOGLE_REDIRECT_URI"
+        static let clientID = Config.value("GOOGLE_CLIENT_ID", fallback: "YOUR_GOOGLE_CLIENT_ID")
+        static let clientSecret = Config.value("GOOGLE_CLIENT_SECRET", fallback: "YOUR_GOOGLE_CLIENT_SECRET")
+        static let redirectURI = Config.value("GOOGLE_REDIRECT_URI", fallback: "YOUR_GOOGLE_REDIRECT_URI")
+        // Optional callback scheme for ASWebAuthenticationSession when using an HTTPS redirect bridge.
+        static let callbackScheme = Config.value("GOOGLE_CALLBACK_SCHEME", fallback: "gunnaireops")
+        static let allowedHostedDomain = Config.value("GOOGLE_ALLOWED_HOSTED_DOMAIN", fallback: "gunnaire.com")
         
-        // Most common and useful Google OAuth scopes for email, profile, calendar, and cloud services.
-        // For more scopes, visit: https://developers.google.com/identity/protocols/oauth2/scopes
+        // Keep scopes minimal for OAuth policy compliance during development/testing.
+        // Add broader scopes only after Google app verification if required.
         static let scopes = [
-            "openid",                                   // OpenID Connect scope for user identity
-            "profile",                                  // Access to basic profile info
-            "email",                                    // Access to user's email address
-            "https://www.googleapis.com/auth/userinfo.email",       // Read user's email address
-            "https://www.googleapis.com/auth/bigquery",              // Manage BigQuery data
-            "https://www.googleapis.com/auth/trace.readonly",       // Read Trace data
-            "https://www.googleapis.com/auth/trace.append",         // Append Trace data
-            "https://www.googleapis.com/auth/iam.test",              // Test IAM permissions
-            "https://www.googleapis.com/auth/logging.admin",         // Administer Logs
-            "https://www.googleapis.com/auth/calendar",              // Full access to user's calendar
-            "https://www.googleapis.com/auth/calendar.acls",         // Manage calendar ACLs
-            "https://www.googleapis.com/auth/calendar.app.created",  // Manage calendars created by the app
-            "https://www.googleapis.com/auth/calendar.calendarlist", // Manage calendar list
-            "https://www.googleapis.com/auth/calendar.calendars"     // Manage calendars
+            "openid",
+            "profile",
+            "email",
+            "https://www.googleapis.com/auth/calendar"
         ]
         
         // OAuth 2.0 endpoints for Google

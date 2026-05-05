@@ -5,6 +5,7 @@ struct ScheduleView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: [SortDescriptor(\ServiceCall.scheduledDate)]) private var serviceCalls: [ServiceCall]
     @Query private var recurringContracts: [RecurringMaintenanceContract]
+    @ObservedObject private var googleAuth = GoogleAuthManager.shared
     
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showingAddCallSheet = false
@@ -18,13 +19,14 @@ struct ScheduleView: View {
     @State private var viewMode: ViewMode = .day
     
     var filteredCalls: [ServiceCall] {
+        let calls = callsForSignedInUser
         switch viewMode {
         case .day:
-            return serviceCalls.filter { Calendar.current.isDate($0.scheduledDate, inSameDayAs: selectedDate) }
+            return calls.filter { Calendar.current.isDate($0.scheduledDate, inSameDayAs: selectedDate) }
         case .week:
             let calendar = Calendar.current
             guard let weekInterval = calendar.dateInterval(of: .weekOfYear, for: selectedDate) else { return [] }
-            return serviceCalls.filter { $0.scheduledDate >= weekInterval.start && $0.scheduledDate <= weekInterval.end }
+            return calls.filter { $0.scheduledDate >= weekInterval.start && $0.scheduledDate <= weekInterval.end }
                 .sorted { $0.scheduledDate < $1.scheduledDate }
         }
     }
@@ -33,8 +35,20 @@ struct ScheduleView: View {
         let now = Date()
         let calendar = Calendar.current
         let sevenDaysAhead = calendar.date(byAdding: .day, value: 7, to: now) ?? now
-        return serviceCalls.filter { $0.scheduledDate >= now && $0.scheduledDate <= sevenDaysAhead }
+        return callsForSignedInUser.filter { $0.scheduledDate >= now && $0.scheduledDate <= sevenDaysAhead }
             .sorted { $0.scheduledDate < $1.scheduledDate }
+    }
+
+    private var callsForSignedInUser: [ServiceCall] {
+        guard let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") else {
+            return serviceCalls
+        }
+        let matched = serviceCalls.filter { call in
+            guard let technician = call.assignedTechnician else { return true }
+            return technician.contactInfo?.localizedCaseInsensitiveContains(email) == true ||
+                email.localizedCaseInsensitiveContains(technician.name)
+        }
+        return matched
     }
     
     var activeRecurringContracts: [RecurringMaintenanceContract] {
@@ -49,7 +63,7 @@ struct ScheduleView: View {
                 VStack(spacing: 16) {
                     GroupBox {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Upcoming Jobs (Next 7 Days):")
+                            Text("Your Upcoming Jobs (Next 7 Days):")
                                 .font(.headline)
                                 .foregroundColor(Color.brandGold)
                             if upcomingJobs.isEmpty {
@@ -148,7 +162,8 @@ struct ScheduleView: View {
                         .onDelete(perform: deleteCalls)
                     }
                     .listStyle(.insetGrouped)
-                    .scrollContentBackground(.automatic)
+                    .scrollContentBackground(.hidden)
+                    .background(Color.primaryBlack)
                 }
                 .navigationTitle("Schedule")
                 .foregroundColor(Color.brandGold)

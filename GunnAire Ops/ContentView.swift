@@ -18,8 +18,13 @@ import os
 // MARK: - ContentView with NavigationSplitView Sidebar
 
 struct ContentView: View {
-    @State private var selectedSidebarItem: SidebarItem? = .scheduleAndJobs
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @Environment(\.modelContext) private var modelContext
+    @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @ObservedObject private var googleAuth = GoogleAuthManager.shared
+
+    @State private var selectedSidebarItem: SidebarItem? = .timeClock
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     
     @State private var showingSettings = false
     
@@ -36,108 +41,186 @@ struct ContentView: View {
     
     // Strong reference to presentation context provider to avoid deallocation
     private let authPresentationContextProvider = ContentViewPresentationContextProvider()
+
+    private var currentUserEmail: String? {
+        googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+    }
+
+    private var isAdminUser: Bool {
+        AppAccess.isAdmin(email: currentUserEmail, users: users)
+    }
+
+    private var visibleSidebarItems: [SidebarItem] {
+        SidebarItem.allCases.filter { item in
+            isAdminUser || (item != .quickBooksManagement && item != .syncIntegrations)
+        }
+    }
+
+    private var operationsItems: [SidebarItem] {
+        [.timeClock, .scheduleAndJobs, .customers, .onsiteDocumentation]
+            .filter { visibleSidebarItems.contains($0) }
+    }
+
+    private var backOfficeItems: [SidebarItem] {
+        [.invoicesEstimates, .payments, .receiptsBills]
+            .filter { visibleSidebarItems.contains($0) }
+    }
+
+    private var adminItems: [SidebarItem] {
+        [.quickBooksManagement, .syncIntegrations]
+            .filter { visibleSidebarItems.contains($0) }
+    }
     
     var body: some View {
-        ZStack {
-            WatermarkBackground()
-            
-            NavigationSplitView(columnVisibility: $columnVisibility) {
-                List(selection: $selectedSidebarItem) {
-                    Section(header: Text("Menu")
-                        .font(.headline)
-                        .bold()
-                        .foregroundColor(Color.brandGold)
-                    ) {
-                        ForEach(SidebarItem.allCases) { item in
-                            Label(item.rawValue, systemImage: iconName(for: item))
-                                .font(.headline)
-                                .bold()
-                                .foregroundColor(Color.brandGold)
-                                .tag(item)
-                                .listRowBackground(Color.clear)
-                        }
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            List(selection: $selectedSidebarItem) {
+                Section("Operations") {
+                    sidebarRows(for: operationsItems)
+                }
+
+                Section("Back Office") {
+                    sidebarRows(for: backOfficeItems)
+                }
+
+                if isAdminUser, !adminItems.isEmpty {
+                    Section("Administrator") {
+                        sidebarRows(for: adminItems)
                     }
                 }
-                .listStyle(.sidebar)
-                .scrollContentBackground(.automatic)
-                .navigationTitle("QuickTech")
-                .foregroundColor(Color.brandGold) // Navigation title in gold using Color
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button {
-                            showingSettings = true
-                        } label: {
-                            Label("Settings", systemImage: "gearshape")
-                                .bold()
-                        }
-                        .tint(Color.brandGold) // Toolbar button tint in gold
+
+                Section("Account") {
+                    Label(currentUserEmail ?? "Signed in", systemImage: isAdminUser ? "person.crop.circle.badge.checkmark" : "person.crop.circle")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                    if isAdminUser {
+                        Label("Administrator", systemImage: "key.fill")
+                            .font(.footnote)
+                            .foregroundColor(Color.brandGold)
                     }
                 }
-            } detail: {
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.automatic)
+            .navigationTitle("GunnAire Ops")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Settings")
+                    .tint(Color.brandGold)
+                }
+            }
+        } detail: {
+            ZStack {
+                WatermarkBackground()
                 Group {
-                    switch selectedSidebarItem {
-                    case .scheduleAndJobs:
-                        ScheduleView()
-                    case .googleCalendar:
-                        Text("Missing view: GoogleCalendarView")
+                    if let selectedSidebarItem, visibleSidebarItems.contains(selectedSidebarItem) {
+                        switch selectedSidebarItem {
+                        case .timeClock:
+                            TimeClockView()
+                        case .scheduleAndJobs:
+                            ScheduleView()
+                        case .customers:
+                            CustomersSandboxView()
+                        case .invoicesEstimates:
+                            BillingDocumentsView()
+                        case .payments:
+                            PaymentsAndReceiptsView()
+                        case .receiptsBills:
+                            ReceiptsAndBillsView()
+                        case .quickBooksManagement:
+                            QuickBooksManagementView()
+                        case .syncIntegrations:
+                            SyncIntegrationsSandboxView()
+                        case .onsiteDocumentation:
+                            OnsiteDocumentationSandboxView()
+                        }
+                    } else {
+                        Text("Select a menu item")
                             .foregroundColor(.secondary)
-                    case .customers:
-                        Text("Missing view: CustomersView")
-                            .foregroundColor(.secondary)
-                    case .invoicesEstimates:
-                        Text("Missing view: InvoicesAndEstimatesView")
-                            .foregroundColor(.secondary)
-                    case .paymentsReceipts:
-                        PaymentsAndReceiptsView()
-                    case .receiptsBills:
-                        ReceiptsAndBillsView()
-                    case .quickBooksManagement:
-                        QuickBooksManagementView()
-                    case .syncIntegrations:
-                        Text("Missing view: SyncAndIntegrationsView")
-                            .foregroundColor(.secondary)
-                    case .onsiteDocumentation:
-                        Text("Missing view: OnsiteDocumentationView")
-                            .foregroundColor(.secondary)
-                    case .none:
-                        ScheduleView()
                     }
                 }
-                .tint(Color.brandGold) // Accent color for links/buttons in detail using Color
+                .tint(Color.brandGold)
             }
-            .navigationSplitViewStyle(.balanced)
-            .onAppear {
-                if selectedSidebarItem == nil {
-                    selectedSidebarItem = .scheduleAndJobs
-                }
+        }
+        .navigationSplitViewStyle(.balanced)
+        .onAppear {
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                columnVisibility = .doubleColumn
             }
-            // Settings Sheet accessible from toolbar
-            .sheet(isPresented: $showingSettings) {
-                SettingsView(isQuickBooksAuthenticated: $isQuickBooksAuthenticated, isGoogleAuthenticated: $isGoogleAuthenticated, authenticateQuickBooks: authenticateQuickBooks, authenticateGoogle: authenticateGoogle, dismiss: { showingSettings = false })
-                    .tint(Color.brandGold) // Settings sheet accent color gold using Color
+            QuickBooksDataAPI.shared.loadTokens()
+            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.tokens != nil && QuickBooksDataAPI.shared.realmID != nil
+            isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
+            ensurePrimaryAdminExists()
+            if let selectedSidebarItem, !visibleSidebarItems.contains(selectedSidebarItem) {
+                self.selectedSidebarItem = .timeClock
             }
-            // Alerts for OAuth authentication
-            .alert(authAlertTitle, isPresented: $showAuthAlert, actions: {
-                Button("OK", role: .cancel) {}
-            }, message: {
-                Text(authAlertMessage)
-            })
-            .tint(Color.brandGold) // Apply gold accent color app-wide for links/buttons using Color
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(
+                isQuickBooksAuthenticated: $isQuickBooksAuthenticated,
+                isGoogleAuthenticated: $isGoogleAuthenticated,
+                authenticateQuickBooks: authenticateQuickBooks,
+                authenticateGoogle: authenticateGoogle,
+                disconnectQuickBooks: {
+                    QuickBooksAuthAPI.shared.signOut()
+                },
+                disconnectGoogle: {
+                    GoogleAuthManager.shared.signOut()
+                },
+                signOutOfApp: {
+                    QuickBooksAuthAPI.shared.signOut()
+                    GoogleAuthManager.shared.signOut()
+                    isGoogleAuthenticated = false
+                    isQuickBooksAuthenticated = false
+                    showingSettings = false
+                    hasAuthenticatedUser = false
+                },
+                dismiss: { showingSettings = false }
+            )
+                .tint(Color.brandGold)
+        }
+        .alert(authAlertTitle, isPresented: $showAuthAlert, actions: {
+            Button("OK", role: .cancel) {}
+        }, message: {
+            Text(authAlertMessage)
+        })
+        .tint(Color.brandGold)
+    }
+
+    @ViewBuilder
+    private func sidebarRows(for items: [SidebarItem]) -> some View {
+        ForEach(items) { item in
+            Label(item.rawValue, systemImage: iconName(for: item))
+                .font(.body)
+                .fontWeight(selectedSidebarItem == item ? .semibold : .regular)
+                .foregroundColor(selectedSidebarItem == item ? Color.brandGold : .primary)
+                .tag(item)
+                .listRowBackground(selectedSidebarItem == item ? Color.brandGold.opacity(0.12) : Color.clear)
         }
     }
     
     private func iconName(for item: SidebarItem) -> String {
         switch item {
+        case .timeClock: return "clock"
         case .scheduleAndJobs: return "calendar"
-        case .googleCalendar: return "calendar.badge.plus"
         case .customers: return "person.3"
         case .invoicesEstimates: return "doc.text"
-        case .paymentsReceipts: return "creditcard"
+        case .payments: return "creditcard"
         case .receiptsBills: return "tray.and.arrow.up"
         case .quickBooksManagement: return "banknote"
         case .syncIntegrations: return "arrow.triangle.2.circlepath"
         case .onsiteDocumentation: return "book"
         }
+    }
+
+    private func ensurePrimaryAdminExists() {
+        guard !users.contains(where: { $0.email == AppAccess.primaryAdminEmail }) else { return }
+        modelContext.insert(AppUser(email: AppAccess.primaryAdminEmail, role: .admin))
     }
 }
 
@@ -268,7 +351,8 @@ struct AddServiceCallView: View {
                 }
                 TextField("Notes", text: $notes, axis: .vertical)
             }
-            .scrollContentBackground(.automatic)
+            .scrollContentBackground(.hidden)
+            .background(Color.primaryBlack)
             .navigationTitle("New Service Call")
             .foregroundColor(Color.brandGold) // Title and labels in gold using Color
             .toolbar {
@@ -312,121 +396,37 @@ struct AddServiceCallView: View {
 extension ContentView {
     // MARK: - QuickBooks OAuth Authentication
     func authenticateQuickBooks() {
-        // Use ASWebAuthenticationSession to start OAuth flow for QuickBooks
-        
-        let clientId = Config.QuickBooks.clientID
-        let redirectURI = Config.QuickBooks.redirectURI
-        let scopes = "com.intuit.quickbooks.accounting"
-        let state = UUID().uuidString
-        quickBooksOAuthState = state
-        
-        guard var components = URLComponents(string: "https://appcenter.intuit.com/connect/oauth2") else {
-            presentAuthAlert(title: "QuickBooks Auth Error", message: "Invalid OAuth URL")
-            return
-        }
-        components.queryItems = [
-            URLQueryItem(name: "client_id", value: clientId),
-            URLQueryItem(name: "redirect_uri", value: redirectURI),
-            URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "scope", value: scopes),
-            URLQueryItem(name: "state", value: state)
-        ]
-        
-        guard let authURL = components.url else {
-            presentAuthAlert(title: "QuickBooks Auth Error", message: "Failed to build auth URL")
-            return
-        }
-        
-        let session = ASWebAuthenticationSession(url: authURL, callbackURLScheme: URL(string: redirectURI)?.scheme) { callbackURL, error in
-            if let error = error {
-                presentAuthAlert(title: "QuickBooks Auth Failed", message: error.localizedDescription)
-                return
+        QuickBooksAPI.shared.startSignIn(presentationContext: authPresentationContextProvider) { result in
+            switch result {
+            case .success:
+                fetchAndSyncQuickBooksData()
+                DispatchQueue.main.async {
+                    isQuickBooksAuthenticated = true
+                    quickBooksOAuthState = nil
+                }
+            case .failure(let error):
+                DispatchQueue.main.async {
+                    presentAuthAlert(title: "QuickBooks Auth Failed", message: error.localizedDescription)
+                }
             }
-            
-            guard let callbackURL = callbackURL,
-                  let queryItems = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems,
-                  let code = queryItems.first(where: { $0.name == "code" })?.value else {
-                presentAuthAlert(title: "QuickBooks Auth Failed", message: "No authorization code received")
-                return
-            }
-            guard let callbackState = queryItems.first(where: { $0.name == "state" })?.value,
-                  callbackState == quickBooksOAuthState else {
-                presentAuthAlert(title: "QuickBooks Auth Failed", message: "OAuth state validation failed")
-                return
-            }
-            
-            _ = code
-            fetchAndSyncQuickBooksData()
-            
-            DispatchQueue.main.async {
-                isQuickBooksAuthenticated = true
-                quickBooksOAuthState = nil
-                presentAuthAlert(title: "QuickBooks Auth Success", message: "Successfully authenticated with QuickBooks.")
-            }
-        }
-        
-        session.presentationContextProvider = authPresentationContextProvider
-        if !session.start() {
-            presentAuthAlert(title: "QuickBooks Auth Error", message: "Failed to start authentication session.")
         }
     }
     
     // MARK: - Google OAuth Authentication
     func authenticateGoogle() {
-        let clientId = Config.Google.clientID
-        let redirectURI = Config.Google.redirectURI
-        let scopes = ["openid", "profile", "email"].joined(separator: " ")
-        let state = UUID().uuidString
-        googleOAuthState = state
-        
-        guard var components = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth") else {
-            presentAuthAlert(title: "Google Auth Error", message: "Invalid OAuth URL")
-            return
-        }
-        components.queryItems = [
-            URLQueryItem(name: "client_id", value: clientId),
-            URLQueryItem(name: "redirect_uri", value: redirectURI),
-            URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "scope", value: scopes),
-            URLQueryItem(name: "state", value: state)
-        ]
-        
-        guard let authURL = components.url else {
-            presentAuthAlert(title: "Google Auth Error", message: "Failed to build auth URL")
-            return
-        }
-        
-        let session = ASWebAuthenticationSession(url: authURL, callbackURLScheme: URL(string: redirectURI)?.scheme) { callbackURL, error in
-            if let error = error {
-                presentAuthAlert(title: "Google Auth Failed", message: error.localizedDescription)
-                return
+        GoogleAuthManager.shared.startSignIn(presentationContext: authPresentationContextProvider) { result in
+            switch result {
+            case .success:
+                fetchAndSyncGoogleData()
+                DispatchQueue.main.async {
+                    isGoogleAuthenticated = true
+                    googleOAuthState = nil
+                }
+            case .failure(let error):
+                DispatchQueue.main.async {
+                    presentAuthAlert(title: "Google Auth Failed", message: error.localizedDescription)
+                }
             }
-            
-            guard let callbackURL = callbackURL,
-                  let queryItems = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems,
-                  let code = queryItems.first(where: { $0.name == "code" })?.value else {
-                presentAuthAlert(title: "Google Auth Failed", message: "No authorization code received")
-                return
-            }
-            guard let callbackState = queryItems.first(where: { $0.name == "state" })?.value,
-                  callbackState == googleOAuthState else {
-                presentAuthAlert(title: "Google Auth Failed", message: "OAuth state validation failed")
-                return
-            }
-            
-            _ = code
-            fetchAndSyncGoogleData()
-            
-            DispatchQueue.main.async {
-                isGoogleAuthenticated = true
-                googleOAuthState = nil
-                presentAuthAlert(title: "Google Auth Success", message: "Successfully authenticated with Google.")
-            }
-        }
-        
-        session.presentationContextProvider = authPresentationContextProvider
-        if !session.start() {
-            presentAuthAlert(title: "Google Auth Error", message: "Failed to start authentication session.")
         }
     }
     
@@ -438,23 +438,142 @@ extension ContentView {
         }
     }
     
-    // MARK: - Stub: Fetch and Sync QuickBooks data
+    // MARK: - Fetch and Sync QuickBooks data
     func fetchAndSyncQuickBooksData() {
-        // TODO: Implement fetching QuickBooks data using API endpoints
-        // Use the OAuth tokens obtained during authentication
-        // Sync data with local modelContext
-        // Refer to Config.swift for endpoints and credentials
-        
-        print("fetchAndSyncQuickBooksData() called - implement API calls here")
+        let group = DispatchGroup()
+        var failures: [String] = []
+        var invoiceCount = 0
+        var billCount = 0
+        var vendorCount = 0
+        var paymentCount = 0
+
+        group.enter()
+        QuickBooksAPI.shared.fetchInvoices { result in
+            switch result {
+            case .success(let invoices):
+                invoiceCount = invoices.count
+            case .failure(let error):
+                failures.append("Invoices: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
+        QuickBooksAPI.shared.fetchBills { result in
+            switch result {
+            case .success(let bills):
+                billCount = bills.count
+            case .failure(let error):
+                failures.append("Bills: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
+        QuickBooksAPI.shared.fetchVendors { result in
+            switch result {
+            case .success(let vendors):
+                vendorCount = vendors.count
+            case .failure(let error):
+                failures.append("Vendors: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
+        QuickBooksAPI.shared.fetchPayments { result in
+            switch result {
+            case .success(let payments):
+                paymentCount = payments.count
+            case .failure(let error):
+                failures.append("Payments: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.notify(queue: .main) {
+            if failures.isEmpty {
+                presentAuthAlert(
+                    title: "QuickBooks Sync Complete",
+                    message: "Loaded \(invoiceCount) invoices, \(billCount) bills, \(vendorCount) vendors, \(paymentCount) payments."
+                )
+            } else {
+                presentAuthAlert(
+                    title: "QuickBooks Sync Partial",
+                    message: failures.joined(separator: "\n")
+                )
+            }
+        }
     }
     
-    // MARK: - Stub: Fetch and Sync Google data
+    // MARK: - Fetch and Sync Google data
     func fetchAndSyncGoogleData() {
-        // TODO: Implement fetching Google data using API endpoints
-        // Use the OAuth tokens obtained during authentication
-        // Sync data such as calendar events, contacts etc. with local modelContext
-        
-        print("fetchAndSyncGoogleData() called - implement API calls here")
+        let group = DispatchGroup()
+        var failures: [String] = []
+        var profileEmail: String?
+        var calendarCount = 0
+        var eventCount = 0
+        var primaryCalendarID: String?
+
+        group.enter()
+        GoogleAuthManager.shared.fetchUserProfile { result in
+            switch result {
+            case .success(let profile):
+                profileEmail = profile.email
+            case .failure(let error):
+                failures.append("Profile: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
+        GoogleAuthManager.shared.fetchCalendars { result in
+            switch result {
+            case .success(let calendars):
+                calendarCount = calendars.count
+                primaryCalendarID = calendars.first?.id ?? "primary"
+            case .failure(let error):
+                failures.append("Calendars: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.notify(queue: .main) {
+            guard let calendarID = primaryCalendarID else {
+                if failures.isEmpty {
+                    presentAuthAlert(
+                        title: "Google Sync Complete",
+                        message: "Loaded profile \(profileEmail ?? "unknown"), \(calendarCount) calendars."
+                    )
+                } else {
+                    presentAuthAlert(title: "Google Sync Partial", message: failures.joined(separator: "\n"))
+                }
+                return
+            }
+
+            GoogleAuthManager.shared.fetchCalendarEvents(
+                calendarID: calendarID,
+                timeMin: Date(),
+                timeMax: Calendar.current.date(byAdding: .day, value: 30, to: Date())
+            ) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let events):
+                        eventCount = events.count
+                    case .failure(let error):
+                        failures.append("Events: \(error.localizedDescription)")
+                    }
+                    if failures.isEmpty {
+                        presentAuthAlert(
+                            title: "Google Sync Complete",
+                            message: "Loaded profile \(profileEmail ?? "unknown"), \(calendarCount) calendars, \(eventCount) events."
+                        )
+                    } else {
+                        presentAuthAlert(title: "Google Sync Partial", message: failures.joined(separator: "\n"))
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -509,19 +628,33 @@ class ContentViewPresentationContextProvider: NSObject, ASWebAuthenticationPrese
             return tempWindow
         }
 
-        // Last fallback: use any connected window scene, even if not active.
-        if let fallbackScene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
-            Self.dlog("Creating temp window from first connected scene (last fallback)")
-            return UIWindow(windowScene: fallbackScene)
+        // Preview/runtime fallback: avoid terminating the process when no scene is available yet.
+        // On iOS 26+, avoid deprecated ASPresentationAnchor init(); prefer a temp window from any scene if possible.
+        if let anyScene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first {
+            Self.dlog("Creating temp window from any available scene (ultimate fallback)")
+            let tempWindow = UIWindow(windowScene: anyScene)
+            return tempWindow
         }
-
-        // No valid scene should happen only in abnormal lifecycle states.
-        assertionFailure("No UIWindowScene available for ASWebAuthenticationSession presentation anchor.")
-        fatalError("No UIWindowScene available for ASWebAuthenticationSession presentation anchor.")
+        // If no scenes exist (e.g., SwiftUI previews very early), as a last resort return a minimal anchor.
+        if #available(iOS 26.0, *) {
+            // Avoid deprecated UIWindow.init() on iOS 26+. Return a temporary unattached window to satisfy ASPresentationAnchor.
+            Self.dlog("No UIWindowScene available on iOS 26+; returning temporary UIWindow(frame: .zero) anchor")
+            return UIWindow(frame: .zero)
+        } else {
+            Self.dlog("No UIWindowScene available; returning empty ASPresentationAnchor for iOS < 26")
+            return ASPresentationAnchor()
+        }
     }
 }
 
 #Preview {
     ContentView()
         .modelContainer(for: [ServiceCall.self, Customer.self, Technician.self, RecurringMaintenanceContract.self], inMemory: true)
+}
+
+#Preview("Canvas Sanity") {
+    Text("Canvas is rendering.")
+        .padding()
 }

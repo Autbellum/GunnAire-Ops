@@ -7,11 +7,70 @@
 
 import Testing
 @testable import GunnAire_Ops
+import Foundation
 
 struct GunnAire_OpsTests {
 
-    @Test func example() async throws {
-        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+    @Test func serviceCallIsUpcomingThisWeekForFutureDate() async throws {
+        let customer = Customer(name: "Test Customer")
+        let call = ServiceCall(
+            type: .service,
+            scheduledDate: Date().addingTimeInterval(60 * 60 * 24),
+            customer: customer
+        )
+
+        #expect(call.isUpcomingThisWeek == true)
+    }
+
+    @Test func serviceCallIsNotUpcomingThisWeekForPastDate() async throws {
+        let customer = Customer(name: "Test Customer")
+        let call = ServiceCall(
+            type: .service,
+            scheduledDate: Date().addingTimeInterval(-60 * 60 * 24),
+            customer: customer
+        )
+
+        #expect(call.isUpcomingThisWeek == false)
+    }
+
+    @Test func serviceCallIsNotUpcomingThisWeekForFarFutureDate() async throws {
+        let customer = Customer(name: "Test Customer")
+        let call = ServiceCall(
+            type: .service,
+            scheduledDate: Date().addingTimeInterval(60 * 60 * 24 * 14),
+            customer: customer
+        )
+
+        #expect(call.isUpcomingThisWeek == false)
+    }
+
+    @Test func quickBooksMimeTypeDetection() async throws {
+        #expect(QuickBooksDataAPI.mimeType(for: URL(fileURLWithPath: "/tmp/file.jpg")) == "image/jpeg")
+        #expect(QuickBooksDataAPI.mimeType(for: URL(fileURLWithPath: "/tmp/file.pdf")) == "application/pdf")
+        #expect(QuickBooksDataAPI.mimeType(for: URL(fileURLWithPath: "/tmp/file.unknown")) == "application/octet-stream")
+    }
+
+    @Test func quickBooksUploadBodyContainsExpectedParts() async throws {
+        let boundary = "Boundary-Test"
+        let filename = "receipt.jpg"
+        let contentType = "image/jpeg"
+        let fileData = Data([0x01, 0x02, 0x03])
+        let metadataJSON = #"{"FileName":"receipt.jpg","ContentType":"image/jpeg","Note":"Uploaded from test"}"#
+
+        let body = QuickBooksDataAPI.buildUploadBody(
+            boundary: boundary,
+            filename: filename,
+            contentType: contentType,
+            fileData: fileData,
+            metadataJSON: metadataJSON
+        )
+        let bodyString = String(data: body, encoding: .utf8) ?? ""
+
+        #expect(bodyString.contains("name=\"file_metadata_01\""))
+        #expect(bodyString.contains(metadataJSON))
+        #expect(bodyString.contains("name=\"file_content_01\"; filename=\"\(filename)\""))
+        #expect(bodyString.contains("Content-Type: \(contentType)"))
+        #expect(bodyString.contains("--\(boundary)--"))
     }
 
 }
