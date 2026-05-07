@@ -39,6 +39,10 @@ struct QuickBooksManagementView: View {
         Config.QuickBooks.isConfigured
     }
 
+    private var salesItemConfigReady: Bool {
+        Config.QuickBooks.hasExplicitDefaultSalesItemRef
+    }
+
     private var totalInvoiceAmount: Double {
         invoices.reduce(0) { $0 + $1.TotalAmt }
     }
@@ -198,11 +202,17 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
+                        if !salesItemConfigReady {
+                            Text("Set `QB_DEFAULT_ITEM_REF` to a valid QuickBooks sales item before creating live estimates.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
                         Button("Create Estimate") { showingNewEstimateSheet = true }
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || customers.isEmpty)
+                            .disabled(!isAuthenticated || customers.isEmpty || !salesItemConfigReady)
                     }
 
                     Section(header: Text("Invoices").foregroundColor(Color.brandGold)) {
@@ -240,11 +250,17 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
+                        if !salesItemConfigReady {
+                            Text("Set `QB_DEFAULT_ITEM_REF` to a valid QuickBooks sales item before creating live invoices.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
                         Button("Create Invoice") { showingNewInvoiceSheet = true }
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || customers.isEmpty)
+                            .disabled(!isAuthenticated || customers.isEmpty || !salesItemConfigReady)
                     }
 
                     Section(header: Text("Bills").foregroundColor(Color.brandGold)) {

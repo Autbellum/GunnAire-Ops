@@ -93,6 +93,7 @@ final class QuickBooksPaymentsService {
     }
 
     private var resolvedSalesItemRef: String? {
+        guard Config.QuickBooks.hasExplicitDefaultSalesItemRef else { return nil }
         let trimmed = Config.QuickBooks.defaultSalesItemRef.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }

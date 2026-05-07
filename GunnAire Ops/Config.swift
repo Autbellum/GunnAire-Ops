@@ -4,12 +4,16 @@
 import Foundation
 
 struct Config {
-    private static func value(_ key: String, fallback: String) -> String {
+    private static func optionalValue(_ key: String) -> String? {
         let env = ProcessInfo.processInfo.environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let env, !env.isEmpty, !env.contains("$(") { return env }
         let plist = (Bundle.main.object(forInfoDictionaryKey: key) as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let plist, !plist.isEmpty, !plist.contains("$(") { return plist }
-        return fallback
+        return nil
+    }
+
+    private static func value(_ key: String, fallback: String) -> String {
+        optionalValue(key) ?? fallback
     }
 
     struct AppSecurity {
@@ -28,6 +32,7 @@ struct Config {
         static let defaultSalesItemRef = Config.value("QB_DEFAULT_ITEM_REF", fallback: "1")
         static let defaultIncomeAccountRef = Config.value("QB_DEFAULT_INCOME_ACCOUNT_REF", fallback: "")
         static let defaultExpenseAccountRef = Config.value("QB_DEFAULT_EXPENSE_ACCOUNT_REF", fallback: "")
+        static let hasExplicitDefaultSalesItemRef = Config.optionalValue("QB_DEFAULT_ITEM_REF") != nil
         
         // OAuth 2.0 endpoints for QuickBooks Online
         static let authorizationEndpoint = "https://appcenter.intuit.com/connect/oauth2" // Authorization endpoint URL
