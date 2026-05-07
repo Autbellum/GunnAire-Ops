@@ -218,6 +218,10 @@ struct QuickBooksManagementView: View {
                                         dateText: invoice.TxnDate
                                     )
 
+                                    Text("Balance due: \(outstandingQuickBooksBalance(for: invoice), format: .currency(code: "USD"))")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+
                                     HStack {
                                         Button(activePaymentInvoiceID == invoice.Id ? "Processing..." : "Take Payment") {
                                             takeLiveCustomerPayment(for: invoice)
@@ -225,7 +229,7 @@ struct QuickBooksManagementView: View {
                                         .buttonStyle(.borderedProminent)
                                         .tint(Color.brandGold)
                                         .foregroundStyle(Color.primaryBlack)
-                                        .disabled(activePaymentInvoiceID != nil)
+                                        .disabled(activePaymentInvoiceID != nil || outstandingQuickBooksBalance(for: invoice) <= 0)
 
                                         if let invoiceURL = liveInvoiceURL(for: invoice) {
                                             Link("Open in QuickBooks", destination: invoiceURL)
@@ -795,15 +799,20 @@ struct QuickBooksManagementView: View {
     }
 
     private func takeLiveCustomerPayment(for invoice: QuickBooksInvoice) {
+        let amountDue = outstandingQuickBooksBalance(for: invoice)
+        guard amountDue > 0 else {
+            actionMessage = "This QuickBooks invoice is already paid."
+            return
+        }
         activePaymentInvoiceID = invoice.Id
         let payload = QuickBooksPaymentCreate(
             CustomerRef: invoice.CustomerRef,
-            TotalAmt: invoice.TotalAmt,
+            TotalAmt: amountDue,
             PrivateNote: "Created from GunnAire Ops for invoice \(invoice.DocNumber ?? invoice.Id)",
             PaymentRefNum: nil,
             Line: [
                 QuickBooksPaymentLine(
-                    Amount: invoice.TotalAmt,
+                    Amount: amountDue,
                     LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoice.Id, TxnType: "Invoice")]
                 )
             ]
@@ -940,6 +949,10 @@ struct QuickBooksManagementView: View {
         actionMessage = nil
         statusMessage = message
         work()
+    }
+
+    private func outstandingQuickBooksBalance(for invoice: QuickBooksInvoice) -> Double {
+        max(invoice.Balance ?? invoice.TotalAmt, 0)
     }
 
     private func liveInvoiceURL(for invoice: QuickBooksInvoice) -> URL? {
@@ -1150,8 +1163,13 @@ private struct QuickBooksPaymentComposeView: View {
             }
             .onAppear {
                 if let firstInvoice = invoices.first {
-                    amountText = String(format: "%.2f", firstInvoice.Balance ?? firstInvoice.TotalAmt)
+                    amountText = String(format: "%.2f", max(firstInvoice.Balance ?? firstInvoice.TotalAmt, 0))
                 }
+            }
+            .onChange(of: selectedInvoiceIndex) { _, newValue in
+                guard invoices.indices.contains(newValue) else { return }
+                let invoice = invoices[newValue]
+                amountText = String(format: "%.2f", max(invoice.Balance ?? invoice.TotalAmt, 0))
             }
         }
     }
