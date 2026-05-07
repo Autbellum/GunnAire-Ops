@@ -113,6 +113,7 @@ struct GunnAire_OpsTests {
     @Test func splashVideoPreferredDelayCapsLongVideos() async throws {
         #expect(SplashVideoLocator.preferredFinishDelay(durationSeconds: 2.5) == 2.7)
         #expect(SplashVideoLocator.preferredFinishDelay(durationSeconds: 12) == 6.0)
+        #expect(SplashVideoLocator.preferredFinishDelay(durationSeconds: 12, maximumDuration: 4.5) == 4.5)
     }
 
 }

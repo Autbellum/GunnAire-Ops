@@ -4,7 +4,8 @@ import AVFoundation
 
 struct AppRootView: View {
     @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
-    @State private var showingSplash = true
+    @AppStorage("enableSplashVideo") private var enableSplashVideo = true
+    @State private var showingSplash = false
 
     var body: some View {
         ZStack {
@@ -25,6 +26,13 @@ struct AppRootView: View {
                 }
             }
         }
+        .onAppear {
+            if enableSplashVideo && SplashVideoLocator.resolveURL() != nil {
+                showingSplash = true
+            } else {
+                showingSplash = false
+            }
+        }
     }
 }
 
@@ -36,6 +44,7 @@ private struct VideoSplashView: View {
     @State private var timeoutWork: DispatchWorkItem?
     @State private var playbackEndObserver: NSObjectProtocol?
     @State private var playbackFailureObserver: NSObjectProtocol?
+    @AppStorage("maximumSplashDurationSeconds") private var maximumSplashDurationSeconds = 6.0
 
     var body: some View {
         ZStack {
@@ -74,7 +83,10 @@ private struct VideoSplashView: View {
             }
             timeoutWork = work
             DispatchQueue.main.asyncAfter(
-                deadline: .now() + SplashVideoLocator.preferredFinishDelay(for: url),
+                deadline: .now() + SplashVideoLocator.preferredFinishDelay(
+                    for: url,
+                    maximumDuration: maximumSplashDurationSeconds
+                ),
                 execute: work
             )
 
@@ -236,19 +248,19 @@ enum SplashVideoLocator {
         )
     }
 
-    static func preferredFinishDelay(for url: URL) -> TimeInterval {
+    static func preferredFinishDelay(for url: URL, maximumDuration: TimeInterval = 6.0) -> TimeInterval {
         let durationSeconds = inspectVideoMetrics(at: url)?.durationSeconds ?? 0
-        return preferredFinishDelay(durationSeconds: durationSeconds)
+        return preferredFinishDelay(durationSeconds: durationSeconds, maximumDuration: maximumDuration)
     }
 
-    static func preferredFinishDelay(durationSeconds: TimeInterval) -> TimeInterval {
+    static func preferredFinishDelay(durationSeconds: TimeInterval, maximumDuration: TimeInterval = 6.0) -> TimeInterval {
         let fallbackDelay: TimeInterval = 3.0
         guard durationSeconds.isFinite, durationSeconds > 0 else {
             return fallbackDelay
         }
 
         let paddedDuration = durationSeconds + 0.2
-        return min(max(paddedDuration, 1.2), 6.0)
+        return min(max(paddedDuration, 1.2), max(maximumDuration, 1.2))
     }
 
     private static func inspectVideo(at url: URL, fileManager: FileManager) throws -> VideoDetails {

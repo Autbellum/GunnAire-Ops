@@ -31,6 +31,8 @@ struct SettingsView: View {
     @AppStorage("dispatchStartHour") private var dispatchStartHour = 8
     @AppStorage("dispatchEndHour") private var dispatchEndHour = 17
     @AppStorage("defaultJobDurationMinutes") private var defaultJobDurationMinutes = 90
+    @AppStorage("enableSplashVideo") private var enableSplashVideo = true
+    @AppStorage("maximumSplashDurationSeconds") private var maximumSplashDurationSeconds = 6.0
     @AppStorage("requireTechnicianClockIn") private var requireTechnicianClockIn = true
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
     @AppStorage("requireCustomerSignature") private var requireCustomerSignature = true
@@ -108,6 +110,15 @@ struct SettingsView: View {
                         }
 
                         Section("App Loading Video") {
+                            Toggle("Play Splash Video On Launch", isOn: $enableSplashVideo)
+
+                            Stepper(
+                                "Maximum Splash Playback: \(maximumSplashDurationSeconds.formatted(.number.precision(.fractionLength(0...1)))) seconds",
+                                value: $maximumSplashDurationSeconds,
+                                in: 1.5...8.0,
+                                step: 0.5
+                            )
+
                             HStack {
                                 Text("Current Splash")
                                 Spacer()
@@ -162,6 +173,10 @@ struct SettingsView: View {
                             .disabled(splashVideoStatus != "Custom Loading.mp4")
 
                             Text("The app will play `Loading.mp4` from app storage first, then a bundled video if one exists, and finally fall back to the logo.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            Text("Short videos are allowed to finish; longer videos are capped by the maximum playback setting above.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
 
