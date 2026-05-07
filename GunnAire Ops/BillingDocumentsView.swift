@@ -32,6 +32,7 @@ struct BillingDocumentsView: View {
     @State private var didLoadInitialContext = false
     @State private var openCloseoutAfterInvoiceCreation = false
     @State private var didAttemptInitialCatalogImport = false
+    @State private var openInvoiceAfterEstimateCreation = false
 
     init(initialServiceCall: ServiceCall? = nil) {
         self.initialServiceCall = initialServiceCall
@@ -199,6 +200,10 @@ struct BillingDocumentsView: View {
 
                     Text("Total: \(selectedTotal, format: .currency(code: "USD"))")
                         .font(.headline)
+
+                    if initialServiceCall != nil && selectedDocumentKind == .estimate {
+                        Toggle("Open Invoice Builder After Estimate", isOn: $openInvoiceAfterEstimateCreation)
+                    }
 
                     if initialServiceCall != nil && selectedDocumentKind == .invoice {
                         Toggle("Open Closeout After Invoice Creation", isOn: $openCloseoutAfterInvoiceCreation)
@@ -440,6 +445,7 @@ struct BillingDocumentsView: View {
             if selectedItems.isEmpty {
                 selectedItems = recommendedItemIDs(for: call)
             }
+            openInvoiceAfterEstimateCreation = true
             openCloseoutAfterInvoiceCreation = true
         } else if let firstCustomer = customers.first {
             selectedCustomerID = firstCustomer.id
@@ -641,6 +647,10 @@ struct BillingDocumentsView: View {
             initialServiceCall?.linkedEstimateID = estimate.id
             actionMessage = isQuickBooksConnected ? "Estimate created locally. Syncing to QuickBooks..." : "Estimate created locally."
             syncEstimateIfNeeded(estimate, customer: customer, items: selectedLineItems)
+            if openInvoiceAfterEstimateCreation {
+                selectedDocumentKind = .invoice
+                actionMessage = "Estimate created. Review and create the invoice when ready."
+            }
 
         case .invoice:
             let invoice = Invoice(
