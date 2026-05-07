@@ -267,6 +267,34 @@ private enum GunnAireIntentStore {
             .first(where: { outstandingBalance(for: $0, payments: payments) > 0 })
     }
 
+    @MainActor
+    static func nextOverdueInvoice() throws -> Invoice? {
+        let now = Date()
+        let overdueThreshold = Calendar.current.date(byAdding: .day, value: -7, to: now) ?? now
+        let invoices = try invoices()
+        let payments = try payments()
+        return invoices
+            .filter { outstandingBalance(for: $0, payments: payments) > 0 && $0.createdAt <= overdueThreshold }
+            .sorted { lhs, rhs in
+                let lhsBalance = outstandingBalance(for: lhs, payments: payments)
+                let rhsBalance = outstandingBalance(for: rhs, payments: payments)
+                if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+                return lhsBalance > rhsBalance
+            }
+            .first
+    }
+
+    @MainActor
+    static func nextCustomerNeedingAttention() throws -> Customer? {
+        if let nextJobCustomer = try nextActionableServiceCall()?.customer {
+            return nextJobCustomer
+        }
+        if let collectionsCustomer = try nextCollectibleInvoice()?.customer {
+            return collectionsCustomer
+        }
+        return try customers().first
+    }
+
     nonisolated static func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
         let netPayments = payments
             .filter { $0.invoice.id == invoice.id }
@@ -682,6 +710,34 @@ struct CollectNextOutstandingInvoiceIntent: AppIntent {
         }
         GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
         return .result(dialog: "Opening payment collection for \(invoice.customer.name).")
+    }
+}
+
+struct CollectNextOverdueInvoiceIntent: AppIntent {
+    static let title: LocalizedStringResource = "Collect Next Overdue Invoice"
+    static let description = IntentDescription("Open GunnAire Ops to collect the next overdue invoice balance.")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard let invoice = try await GunnAireIntentStore.nextOverdueInvoice() else {
+            return .result(dialog: "There are no overdue invoices right now.")
+        }
+        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+        return .result(dialog: "Opening overdue collection for \(invoice.customer.name).")
+    }
+}
+
+struct OpenNextCustomerRecordIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Next Customer Record"
+    static let description = IntentDescription("Open GunnAire Ops to the next customer needing attention.")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard let customer = try await GunnAireIntentStore.nextCustomerNeedingAttention() else {
+            return .result(dialog: "There are no customers available right now.")
+        }
+        GunnAireAppIntentRouter.storeCustomerRoute(customer.id)
+        return .result(dialog: "Opening \(customer.name).")
     }
 }
 
