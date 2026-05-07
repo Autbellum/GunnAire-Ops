@@ -13,6 +13,7 @@ struct PaymentsAndReceiptsView: View {
     }
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openURL) private var openURL
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -59,11 +60,32 @@ struct PaymentsAndReceiptsView: View {
             }
     }
 
+    private var totalOutstandingBalance: Double {
+        outstandingInvoices.reduce(0) { $0 + $1.balanceDue }
+    }
+
+    private var overdueInvoiceCount: Int {
+        outstandingInvoices.filter { isOverdue($0.invoice) }.count
+    }
+
+    private var collectedToday: Double {
+        let calendar = Calendar.current
+        return payments
+            .filter { calendar.isDateInToday($0.date) }
+            .reduce(0) { $0 + $1.amount }
+    }
+
     var body: some View {
         ZStack {
             WatermarkBackground()
             NavigationStack {
                 List {
+                    Section("Collections Dashboard") {
+                        metricRow(title: "Outstanding Balance", value: totalOutstandingBalance.formatted(.currency(code: "USD")))
+                        metricRow(title: "Overdue Invoices", value: "\(overdueInvoiceCount)")
+                        metricRow(title: "Collected Today", value: collectedToday.formatted(.currency(code: "USD")))
+                    }
+
                     Section("Payment Status") {
                         Text("QuickBooks: \(isQuickBooksConnected ? "Connected" : "Not Connected")")
                             .foregroundColor(isQuickBooksConnected ? .green : .secondary)
@@ -90,6 +112,9 @@ struct PaymentsAndReceiptsView: View {
                                             Text(entry.invoice.lineItemSummary.isEmpty ? "Invoice \(entry.invoice.id.uuidString.prefix(8))" : entry.invoice.lineItemSummary)
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
+                                            Text(isOverdue(entry.invoice) ? "Overdue follow-up needed" : "Awaiting collection")
+                                                .font(.caption2)
+                                                .foregroundColor(isOverdue(entry.invoice) ? .red : .secondary)
                                         }
                                         Spacer()
                                         VStack(alignment: .trailing, spacing: 4) {
@@ -116,6 +141,22 @@ struct PaymentsAndReceiptsView: View {
                                             .buttonStyle(.borderedProminent)
                                             .tint(Color.brandGold)
                                             .foregroundStyle(Color.primaryBlack)
+                                        }
+                                    }
+
+                                    HStack {
+                                        if let phoneURL = customerPhoneURL(for: entry.invoice) {
+                                            Button("Call") {
+                                                openURL(phoneURL)
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+
+                                        if let reminderURL = reminderEmailURL(for: entry.invoice, balanceDue: entry.balanceDue) {
+                                            Button("Email Reminder") {
+                                                openURL(reminderURL)
+                                            }
+                                            .buttonStyle(.bordered)
                                         }
                                     }
                                 }
@@ -196,6 +237,22 @@ struct PaymentsAndReceiptsView: View {
                                         Text(notes)
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
+                                    }
+
+                                    HStack {
+                                        if let receiptURL = receiptEmailURL(for: payment) {
+                                            Button("Send Receipt") {
+                                                openURL(receiptURL)
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+
+                                        if let phoneURL = customerPhoneURL(for: payment.invoice) {
+                                            Button("Call Customer") {
+                                                openURL(phoneURL)
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
                                     }
                                 }
                                 .padding(.vertical, 4)
@@ -357,6 +414,73 @@ struct PaymentsAndReceiptsView: View {
         return max(invoice.amount - paid, 0)
     }
 
+    private func isOverdue(_ invoice: Invoice) -> Bool {
+        guard outstandingBalance(for: invoice) > 0 else { return false }
+        guard let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) else { return false }
+        return invoice.createdAt < cutoff
+    }
+
+    private func customerPhoneURL(for invoice: Invoice) -> URL? {
+        guard let phone = invoice.customer.phone?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !phone.isEmpty else { return nil }
+        let digits = phone.filter(\.isNumber)
+        guard !digits.isEmpty else { return nil }
+        return URL(string: "tel://\(digits)")
+    }
+
+    private func reminderEmailURL(for invoice: Invoice, balanceDue: Double) -> URL? {
+        guard let email = invoice.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = email
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Invoice Balance Due - \(invoiceReference(for: invoice))"),
+            URLQueryItem(name: "body", value: """
+Hello \(invoice.customer.name),
+
+This is a reminder that your current invoice balance is \(balanceDue.formatted(.currency(code: "USD"))).
+
+Invoice reference: \(invoiceReference(for: invoice))
+
+Thank you,
+GunnAire
+""")
+        ]
+        return components.url
+    }
+
+    private func receiptEmailURL(for payment: Payment) -> URL? {
+        guard let email = payment.invoice.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        let remainingBalance = outstandingBalance(for: payment.invoice)
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = email
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Payment Receipt - \(invoiceReference(for: payment.invoice))"),
+            URLQueryItem(name: "body", value: """
+Hello \(payment.invoice.customer.name),
+
+We received your payment of \(payment.amount.formatted(.currency(code: "USD"))) on \(payment.date.formatted(date: .abbreviated, time: .shortened)).
+
+Payment method: \(payment.methodSummary)
+Remaining balance: \(remainingBalance.formatted(.currency(code: "USD")))
+
+Thank you,
+GunnAire
+""")
+        ]
+        return components.url
+    }
+
+    private func invoiceReference(for invoice: Invoice) -> String {
+        if let quickBooksID = invoice.quickBooksID, !quickBooksID.isEmpty {
+            return quickBooksID
+        }
+        return String(invoice.id.uuidString.prefix(8))
+    }
+
     private func syncPaymentToQuickBooks(_ payment: Payment) {
         guard isQuickBooksConnected else {
             actionMessage = "Connect QuickBooks before syncing payments."
@@ -410,6 +534,17 @@ struct PaymentsAndReceiptsView: View {
         authorizationReference = ""
         paymentNotes = ""
         tapToPayMessage = ""
+    }
+
+    @ViewBuilder
+    private func metricRow(title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value)
+                .fontWeight(.semibold)
+                .foregroundColor(Color.brandGold)
+        }
     }
 }
 
