@@ -132,6 +132,20 @@ enum GunnAireAppIntentRouter {
         return id
     }
 
+    nonisolated static func storeScheduleCallRoute(_ id: UUID) {
+        store(.schedule)
+        UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingScheduleServiceCallID")
+    }
+
+    nonisolated static func consumePendingScheduleCallID() -> UUID? {
+        guard let rawValue = UserDefaults.standard.string(forKey: "GunnAirePendingScheduleServiceCallID"),
+              let id = UUID(uuidString: rawValue) else {
+            return nil
+        }
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingScheduleServiceCallID")
+        return id
+    }
+
     nonisolated static func storePaymentCollectionRoute(_ id: UUID) {
         store(.payments)
         UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingInvoiceID")
@@ -219,6 +233,18 @@ private enum GunnAireIntentStore {
                 let lhsDistance = abs(lhs.scheduledDate.timeIntervalSince(now))
                 let rhsDistance = abs(rhs.scheduledDate.timeIntervalSince(now))
                 if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+                return lhs.customer.name.localizedCaseInsensitiveCompare(rhs.customer.name) == .orderedAscending
+            }
+            .first
+    }
+
+    @MainActor
+    static func nextScheduledServiceCall() throws -> ServiceCall? {
+        let now = Date()
+        return try serviceCalls()
+            .filter { $0.status != .cancelled && $0.scheduledDate >= now }
+            .sorted { lhs, rhs in
+                if lhs.scheduledDate != rhs.scheduledDate { return lhs.scheduledDate < rhs.scheduledDate }
                 return lhs.customer.name.localizedCaseInsensitiveCompare(rhs.customer.name) == .orderedAscending
             }
             .first
@@ -580,6 +606,37 @@ struct OpenJobDocumentationIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         GunnAireAppIntentRouter.storeDocumentationRoute(serviceCall.id)
         return .result(dialog: "Opening documentation for \(serviceCall.customerName).")
+    }
+}
+
+struct OpenScheduleJobIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Schedule Job"
+    static let description = IntentDescription("Open GunnAire Ops to a specific job in the schedule.")
+    static let openAppWhenRun = true
+    static var parameterSummary: some ParameterSummary {
+        Summary("Open schedule job \(\.$serviceCall)")
+    }
+
+    @Parameter(title: "Service Call")
+    var serviceCall: GunnAireServiceCallEntity
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        GunnAireAppIntentRouter.storeScheduleCallRoute(serviceCall.id)
+        return .result(dialog: "Opening the schedule for \(serviceCall.customerName).")
+    }
+}
+
+struct OpenNextScheduledJobIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Next Scheduled Job"
+    static let description = IntentDescription("Open GunnAire Ops to the next scheduled job in the schedule.")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard let call = try await GunnAireIntentStore.nextScheduledServiceCall() else {
+            return .result(dialog: "There are no upcoming scheduled jobs right now.")
+        }
+        GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
+        return .result(dialog: "Opening the next scheduled job for \(call.customer.name).")
     }
 }
 

@@ -18,10 +18,12 @@ struct ScheduleView: View {
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showingAddCallSheet = false
     @State private var documentationCall: ServiceCall?
+    @State private var navigationPath = NavigationPath()
     @State private var openDocumentationInCloseout = false
     @State private var openDocumentationInTapToPay = false
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
+    @State private var didApplyPendingScheduleIntent = false
     
     enum ViewMode: String, CaseIterable, Identifiable {
         case day = "Day"
@@ -121,7 +123,7 @@ struct ScheduleView: View {
     var body: some View {
         ZStack {
             WatermarkBackground()
-            NavigationStack {
+            NavigationStack(path: $navigationPath) {
                 List {
                     Section("Dashboard") {
                         dashboardSection
@@ -236,6 +238,7 @@ struct ScheduleView: View {
                     ServiceCallDetailView(call: call)
                         .tint(Color.brandGold)
                 }
+                .onAppear(perform: applyPendingScheduleIntentIfNeeded)
                 .sheet(isPresented: $showingAddCallSheet) {
                     AddServiceCallView(selectedDate: selectedDate) { createdCall in
                         openDocumentationInCloseout = false
@@ -260,6 +263,17 @@ struct ScheduleView: View {
                 }
             }
         }
+    }
+
+    private func applyPendingScheduleIntentIfNeeded() {
+        guard !didApplyPendingScheduleIntent else { return }
+        didApplyPendingScheduleIntent = true
+        guard let pendingID = GunnAireAppIntentRouter.consumePendingScheduleCallID(),
+              let call = callsForSignedInUser.first(where: { $0.id == pendingID }) ?? serviceCalls.first(where: { $0.id == pendingID }) else {
+            return
+        }
+        selectedDate = Calendar.current.startOfDay(for: call.scheduledDate)
+        navigationPath.append(call)
     }
 
     @ViewBuilder
