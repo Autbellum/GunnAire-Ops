@@ -76,6 +76,16 @@ struct ScheduleView: View {
             }
     }
 
+    private var overdueCollectionJobs: [ServiceCall] {
+        jobsNeedingPayment
+            .filter(isCollectionOverdue(for:))
+            .sorted { lhs, rhs in
+                let lhsDate = invoice(for: lhs)?.createdAt ?? lhs.scheduledDate
+                let rhsDate = invoice(for: rhs)?.createdAt ?? rhs.scheduledDate
+                return lhsDate < rhsDate
+            }
+    }
+
     private var callsForSignedInUser: [ServiceCall] {
         guard let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") else {
             return serviceCalls
@@ -328,6 +338,52 @@ struct ScheduleView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 8) {
+                Text("Overdue Collections")
+                    .font(.headline)
+                    .foregroundColor(Color.brandGold)
+                if overdueCollectionJobs.isEmpty {
+                    Text("No overdue invoice follow-up is waiting.")
+                        .foregroundColor(.secondary)
+                        .italic()
+                } else {
+                    ForEach(overdueCollectionJobs.prefix(3)) { job in
+                        Button {
+                            openDocumentationInCloseout = true
+                            openDocumentationInTapToPay = tapToPayReady
+                            documentationCall = job
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(job.customer.name)
+                                        .font(.subheadline)
+                                        .foregroundColor(.primary)
+                                    if let invoice = invoice(for: job) {
+                                        Text("Invoice age: \(invoiceAgeDescription(invoice))")
+                                            .font(.caption2)
+                                            .foregroundColor(.red)
+                                    }
+                                }
+                                Spacer()
+                                if let balanceDue = balanceDue(for: job) {
+                                    Text(balanceDue, format: .currency(code: "USD"))
+                                        .font(.caption)
+                                        .foregroundColor(Color.brandGold)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if overdueCollectionJobs.count > 3 {
+                        Text("And \(overdueCollectionJobs.count - 3) more...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Needs Payment")
                     .font(.headline)
                     .foregroundColor(Color.brandGold)
@@ -452,6 +508,9 @@ struct ScheduleView: View {
                 if let invoice = invoice(for: call) {
                     Label(invoice.status.capitalized, systemImage: invoice.status == "paid" ? "checkmark.circle.fill" : "creditcard.fill")
                 }
+                if isCollectionOverdue(for: call) {
+                    Label("Overdue", systemImage: "exclamationmark.triangle.fill")
+                }
                 if let balanceDue = balanceDue(for: call), balanceDue > 0 {
                     Text("Due \(balanceDue, format: .currency(code: "USD"))")
                 } else if call.linkedInvoiceID != nil {
@@ -517,6 +576,17 @@ struct ScheduleView: View {
                     }
                     .buttonStyle(.borderless)
                     .foregroundColor(.green)
+
+                    if let reminderURL = reminderEmailURL(for: call) {
+                        Button {
+                            openURL(reminderURL)
+                        } label: {
+                            Label("Remind", systemImage: "envelope.badge")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundColor(.orange)
+                    }
                 }
             }
         }
@@ -613,6 +683,45 @@ struct ScheduleView: View {
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { $0 + $1.amount }
         return max(invoice.amount - paid, 0)
+    }
+
+    private func isCollectionOverdue(for call: ServiceCall) -> Bool {
+        guard let invoice = invoice(for: call),
+              let balanceDue = balanceDue(for: call),
+              balanceDue > 0,
+              let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) else { return false }
+        return invoice.createdAt < cutoff
+    }
+
+    private func invoiceAgeDescription(_ invoice: Invoice) -> String {
+        let days = Calendar.current.dateComponents([.day], from: invoice.createdAt, to: Date()).day ?? 0
+        return days <= 0 ? "Due today" : "\(days)d old"
+    }
+
+    private func reminderEmailURL(for call: ServiceCall) -> URL? {
+        guard let invoice = invoice(for: call),
+              let balanceDue = balanceDue(for: call),
+              balanceDue > 0,
+              let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = email
+        let invoiceReference = invoice.quickBooksID?.isEmpty == false ? invoice.quickBooksID! : String(invoice.id.uuidString.prefix(8))
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Invoice Balance Due - \(invoiceReference)"),
+            URLQueryItem(name: "body", value: """
+Hello \(call.customer.name),
+
+This is a reminder that your current invoice balance is \(balanceDue.formatted(.currency(code: "USD"))).
+
+Invoice reference: \(invoiceReference)
+
+Thank you,
+GunnAire
+""")
+        ]
+        return components.url
     }
 }
 

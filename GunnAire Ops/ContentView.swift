@@ -340,6 +340,37 @@ struct ServiceCallDetailView: View {
         return invoice.status != "paid" && max(invoice.amount - totalPaid, 0) > 0
     }
 
+    private var collectionIsOverdue: Bool {
+        guard let linkedInvoice, hasOpenInvoiceBalance,
+              let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) else { return false }
+        return linkedInvoice.createdAt < cutoff
+    }
+
+    private var reminderEmailURL: URL? {
+        guard let linkedInvoice,
+              hasOpenInvoiceBalance,
+              let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = email
+        let reference = linkedInvoice.quickBooksID?.isEmpty == false ? linkedInvoice.quickBooksID! : String(linkedInvoice.id.uuidString.prefix(8))
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Invoice Balance Due - \(reference)"),
+            URLQueryItem(name: "body", value: """
+Hello \(call.customer.name),
+
+This is a reminder that your current invoice balance is \(max(linkedInvoice.amount - totalPaid, 0).formatted(.currency(code: "USD"))).
+
+Invoice reference: \(reference)
+
+Thank you,
+GunnAire
+""")
+        ]
+        return components.url
+    }
+
     private var selectedProcessor: OnsitePaymentProcessor {
         OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
     }
@@ -493,6 +524,11 @@ struct ServiceCallDetailView: View {
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
+                            if collectionIsOverdue {
+                                Text("Collection follow-up is overdue.")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                            }
                         }
                     }
 
@@ -606,18 +642,31 @@ struct ServiceCallDetailView: View {
                     .foregroundStyle(Color.primaryBlack)
 
                     if hasOpenInvoiceBalance {
-                        NavigationLink {
-                            BillingDocumentsView(
-                                initialServiceCall: call,
-                                openCloseoutOnAppear: true,
-                                openTapToPayOnAppear: tapToPayReady
-                            )
-                        } label: {
-                            Label(tapToPayReady ? "Tap to Pay" : "Take Payment", systemImage: "creditcard")
-                                .frame(maxWidth: .infinity)
+                        VStack(spacing: 10) {
+                            NavigationLink {
+                                BillingDocumentsView(
+                                    initialServiceCall: call,
+                                    openCloseoutOnAppear: true,
+                                    openTapToPayOnAppear: tapToPayReady
+                                )
+                            } label: {
+                                Label(tapToPayReady ? "Tap to Pay" : "Take Payment", systemImage: "creditcard")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
+
+                            if let reminderEmailURL {
+                                Button {
+                                    openURL(reminderEmailURL)
+                                } label: {
+                                    Label("Send Payment Reminder", systemImage: "envelope.badge")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(.orange)
+                            }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.green)
                     }
 
                     Spacer(minLength: 0)
