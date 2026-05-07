@@ -627,8 +627,11 @@ struct QuickBooksManagementView: View {
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingNewPaymentSheet) {
-                    QuickBooksPaymentComposeView(invoices: collectibleQuickBooksInvoices) { invoice, amount, note in
-                        createPayment(for: invoice, amount: amount, note: note)
+                    QuickBooksPaymentComposeView(
+                        invoices: collectibleQuickBooksInvoices,
+                        paymentMethods: paymentMethods
+                    ) { invoice, amount, note, paymentMethodRef in
+                        createPayment(for: invoice, amount: amount, note: note, paymentMethodRef: paymentMethodRef)
                     }
                     .tint(Color.brandGold)
                 }
@@ -1002,7 +1005,7 @@ struct QuickBooksManagementView: View {
         }
     }
 
-    private func createPayment(for invoice: QuickBooksInvoice, amount: Double, note: String?) {
+    private func createPayment(for invoice: QuickBooksInvoice, amount: Double, note: String?, paymentMethodRef: QuickBooksReference?) {
         let payload = QuickBooksPaymentCreate(
             CustomerRef: invoice.CustomerRef,
             TotalAmt: amount,
@@ -1014,7 +1017,7 @@ struct QuickBooksManagementView: View {
                     LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoice.Id, TxnType: "Invoice")]
                 )
             ],
-            PaymentMethodRef: nil,
+            PaymentMethodRef: paymentMethodRef,
             CreditCardPayment: nil
         )
 
@@ -1447,9 +1450,11 @@ private struct QuickBooksPaymentComposeView: View {
     @Environment(\.dismiss) private var dismiss
 
     let invoices: [QuickBooksInvoice]
-    let onAdd: (QuickBooksInvoice, Double, String?) -> Void
+    let paymentMethods: [QuickBooksPaymentMethod]
+    let onAdd: (QuickBooksInvoice, Double, String?, QuickBooksReference?) -> Void
 
     @State private var selectedInvoiceIndex = 0
+    @State private var selectedPaymentMethodID = ""
     @State private var amountText = ""
     @State private var note = ""
 
@@ -1467,6 +1472,13 @@ private struct QuickBooksPaymentComposeView: View {
                                 Text("\(invoice.DocNumber ?? invoice.Id) · \(invoice.CustomerRef.displayName)").tag(index)
                             }
                         }
+
+                        Picker("Payment Method", selection: $selectedPaymentMethodID) {
+                            Text("None").tag("")
+                            ForEach(paymentMethods) { method in
+                                Text(method.Name).tag(method.Id)
+                            }
+                        }
                     }
 
                     TextField("Amount", text: $amountText)
@@ -1482,7 +1494,8 @@ private struct QuickBooksPaymentComposeView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
                         guard !invoices.isEmpty, let amount = Double(amountText), amount > 0 else { return }
-                        onAdd(invoices[selectedInvoiceIndex], amount, note.isEmpty ? nil : note)
+                        let paymentMethodRef = paymentMethods.first(where: { $0.Id == selectedPaymentMethodID })?.reference
+                        onAdd(invoices[selectedInvoiceIndex], amount, note.isEmpty ? nil : note, paymentMethodRef)
                         dismiss()
                     }
                     .disabled(invoices.isEmpty || Double(amountText) == nil)
@@ -1491,6 +1504,11 @@ private struct QuickBooksPaymentComposeView: View {
             .onAppear {
                 if let firstInvoice = invoices.first {
                     amountText = String(format: "%.2f", max(firstInvoice.Balance ?? firstInvoice.TotalAmt, 0))
+                }
+                if selectedPaymentMethodID.isEmpty {
+                    selectedPaymentMethodID = paymentMethods.first(where: { $0.Name.caseInsensitiveCompare("QuickBooks Card") == .orderedSame })?.Id
+                        ?? paymentMethods.first?.Id
+                        ?? ""
                 }
             }
             .onChange(of: selectedInvoiceIndex) { _, newValue in
