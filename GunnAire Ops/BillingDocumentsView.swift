@@ -380,6 +380,9 @@ struct BillingDocumentsView: View {
             if customerAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let address = selectedJobAddress {
                 customerAddress = address
             }
+            if selectedItems.isEmpty {
+                selectedItems = recommendedItemIDs(for: call)
+            }
         } else if let firstCustomer = customers.first {
             selectedCustomerID = firstCustomer.id
             populateCustomerFields(from: firstCustomer)
@@ -446,9 +449,67 @@ struct BillingDocumentsView: View {
                     actionMessage = imported == 0
                         ? "QuickBooks catalog is already up to date."
                         : "Imported \(imported) catalog items from QuickBooks."
+                    if let call = initialServiceCall, selectedItems.isEmpty {
+                        selectedItems = recommendedItemIDs(for: call)
+                    }
                 }
             }
         }
+    }
+
+    private func recommendedItemIDs(for call: ServiceCall) -> Set<UUID> {
+        let keywords = recommendationKeywords(for: call)
+        guard !keywords.isEmpty else { return [] }
+
+        let rankedItems = items.compactMap { item -> (UUID, Int)? in
+            let haystack = [
+                item.name,
+                item.itemDescription ?? ""
+            ]
+            .joined(separator: " ")
+            .lowercased()
+
+            let score = keywords.reduce(into: 0) { partialResult, keyword in
+                if haystack.contains(keyword) {
+                    partialResult += keyword.count
+                }
+            }
+
+            guard score > 0 else { return nil }
+            return (item.id, score)
+        }
+        .sorted { lhs, rhs in
+            if lhs.1 == rhs.1 {
+                return lhs.0.uuidString < rhs.0.uuidString
+            }
+            return lhs.1 > rhs.1
+        }
+
+        return Set(rankedItems.prefix(3).map(\.0))
+    }
+
+    private func recommendationKeywords(for call: ServiceCall) -> [String] {
+        var keywords = [call.type.rawValue.lowercased()]
+        let noteWords = (call.notes ?? "")
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+            .filter { $0.count >= 4 }
+
+        keywords.append(contentsOf: noteWords)
+
+        switch call.type {
+        case .service:
+            keywords.append(contentsOf: ["service", "diagnostic", "repair"])
+        case .estimate:
+            keywords.append(contentsOf: ["estimate", "inspection", "proposal"])
+        case .install:
+            keywords.append(contentsOf: ["install", "installation", "replacement"])
+        case .maintenance:
+            keywords.append(contentsOf: ["maintenance", "tune", "cleaning"])
+        }
+
+        return Array(Set(keywords))
     }
 
     private func toggleItem(_ item: Item) {
