@@ -8,6 +8,9 @@ final class Payment {
     @Attribute(.unique) var id: UUID
     var invoice: Invoice
     var quickBooksID: String?
+    var quickBooksChargeID: String?
+    var quickBooksClientTransID: String?
+    var quickBooksRefundReceiptID: String?
     var amount: Double
     var date: Date
     var method: String // cash, check, card
@@ -15,22 +18,32 @@ final class Payment {
     var authorizationReference: String?
     var notes: String?
     var processor: String?
+    var isRefund: Bool
+    var refundedPaymentID: UUID?
     
     init(
         id: UUID = UUID(),
         invoice: Invoice,
         quickBooksID: String? = nil,
+        quickBooksChargeID: String? = nil,
+        quickBooksClientTransID: String? = nil,
+        quickBooksRefundReceiptID: String? = nil,
         amount: Double,
         date: Date = Date(),
         method: String = "cash",
         cardLast4: String? = nil,
         authorizationReference: String? = nil,
         notes: String? = nil,
-        processor: String? = nil
+        processor: String? = nil,
+        isRefund: Bool = false,
+        refundedPaymentID: UUID? = nil
     ) {
         self.id = id
         self.invoice = invoice
         self.quickBooksID = quickBooksID
+        self.quickBooksChargeID = quickBooksChargeID
+        self.quickBooksClientTransID = quickBooksClientTransID
+        self.quickBooksRefundReceiptID = quickBooksRefundReceiptID
         self.amount = amount
         self.date = date
         self.method = method
@@ -38,6 +51,8 @@ final class Payment {
         self.authorizationReference = authorizationReference
         self.notes = notes
         self.processor = processor
+        self.isRefund = isRefund
+        self.refundedPaymentID = refundedPaymentID
     }
 }
 

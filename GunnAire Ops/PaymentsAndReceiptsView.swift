@@ -21,21 +21,39 @@ struct PaymentsAndReceiptsView: View {
 
     @StateObject private var onsitePaymentManager = OnsitePaymentManager.shared
     @State private var showingRecordPaymentSheet = false
+    @State private var showingRefundSheet = false
     @State private var selectedInvoiceID: UUID?
+    @State private var refundPaymentID: UUID?
     @State private var amountText = ""
+    @State private var refundAmountText = ""
     @State private var selectedMethod: PaymentMethod = .card
     @State private var cardLast4 = ""
     @State private var authorizationReference = ""
     @State private var paymentNotes = ""
+    @State private var refundNotes = ""
     @State private var tapToPayMessage = ""
     @State private var actionMessage = ""
     @State private var syncingPaymentID: UUID?
+    @State private var isProcessingQuickBooksPayment = false
+    @State private var isProcessingQuickBooksRefund = false
+    @State private var processCardWithQuickBooks = false
+    @State private var cardholderName = ""
+    @State private var cardNumber = ""
+    @State private var expirationMonth = ""
+    @State private var expirationYear = ""
+    @State private var cardCVC = ""
+    @State private var billingPostalCode = ""
 
     private let liveAPI = QuickBooksDataAPI.shared
 
     private var selectedInvoice: Invoice? {
         guard let selectedInvoiceID else { return nil }
         return invoices.first { $0.id == selectedInvoiceID }
+    }
+
+    private var selectedRefundPayment: Payment? {
+        guard let refundPaymentID else { return nil }
+        return payments.first { $0.id == refundPaymentID }
     }
 
     private var selectedProcessor: OnsitePaymentProcessor {
@@ -212,7 +230,7 @@ struct PaymentsAndReceiptsView: View {
                                     }
 
                                     HStack {
-                                        Text(payment.quickBooksID == nil ? "Not synced to QuickBooks" : "QuickBooks ID: \(payment.quickBooksID ?? "")")
+                                        Text(payment.quickBooksID == nil ? "Not synced to QuickBooks accounting" : "QuickBooks ID: \(payment.quickBooksID ?? "")")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
                                         Spacer()
@@ -220,7 +238,7 @@ struct PaymentsAndReceiptsView: View {
                                             syncPaymentToQuickBooks(payment)
                                         }
                                         .buttonStyle(.bordered)
-                                        .disabled(payment.quickBooksID != nil || syncingPaymentID != nil || !isQuickBooksConnected)
+                                        .disabled(payment.quickBooksID != nil || syncingPaymentID != nil || !isQuickBooksConnected || payment.isRefund || payment.amount <= 0)
                                     }
                                     if let cardLast4 = payment.cardLast4, !cardLast4.isEmpty {
                                         Text("Card ending in \(cardLast4)")
@@ -229,6 +247,16 @@ struct PaymentsAndReceiptsView: View {
                                     }
                                     if let authorizationReference = payment.authorizationReference, !authorizationReference.isEmpty {
                                         Text("Authorization: \(authorizationReference)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if let chargeID = payment.quickBooksChargeID, !chargeID.isEmpty {
+                                        Text(payment.isRefund ? "Refund charge ID: \(chargeID)" : "Charge ID: \(chargeID)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if let refundReceiptID = payment.quickBooksRefundReceiptID, !refundReceiptID.isEmpty {
+                                        Text("Refund receipt ID: \(refundReceiptID)")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
@@ -257,6 +285,17 @@ struct PaymentsAndReceiptsView: View {
                                             }
                                             .buttonStyle(.bordered)
                                         }
+
+                                        if payment.quickBooksChargeID?.isEmpty == false,
+                                           !payment.isRefund,
+                                           payment.amount > 0 {
+                                            Button("Refund") {
+                                                prepareRefundForm(for: payment)
+                                                showingRefundSheet = true
+                                            }
+                                            .buttonStyle(.borderedProminent)
+                                            .tint(.red)
+                                        }
                                     }
                                 }
                                 .padding(.vertical, 4)
@@ -269,6 +308,9 @@ struct PaymentsAndReceiptsView: View {
         }
         .sheet(isPresented: $showingRecordPaymentSheet) {
             paymentSheet
+        }
+        .sheet(isPresented: $showingRefundSheet) {
+            refundSheet
         }
     }
 
@@ -315,6 +357,29 @@ struct PaymentsAndReceiptsView: View {
                         TextField("Card last 4", text: $cardLast4)
                             .keyboardType(.numberPad)
                         TextField("Authorization ref", text: $authorizationReference)
+
+                        if isQuickBooksConnected {
+                            Toggle("Process with QuickBooks Payments", isOn: $processCardWithQuickBooks)
+
+                            if processCardWithQuickBooks {
+                                TextField("Cardholder name", text: $cardholderName)
+                                TextField("Card number", text: $cardNumber)
+                                    .keyboardType(.numberPad)
+                                HStack {
+                                    TextField("Exp MM", text: $expirationMonth)
+                                        .keyboardType(.numberPad)
+                                    TextField("Exp YYYY", text: $expirationYear)
+                                        .keyboardType(.numberPad)
+                                    TextField("CVC", text: $cardCVC)
+                                        .keyboardType(.numberPad)
+                                }
+                                TextField("Billing ZIP", text: $billingPostalCode)
+                                    .keyboardType(.numbersAndPunctuation)
+                                Text("Card details are only used to create a QuickBooks Payments token for this transaction and are not saved locally.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
                     }
 
                     TextField("Payment notes", text: $paymentNotes, axis: .vertical)
@@ -336,14 +401,69 @@ struct PaymentsAndReceiptsView: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        savePaymentRecord()
+                    Button(isProcessingQuickBooksPayment ? "Processing..." : "Save") {
+                        Task {
+                            await savePaymentRecord()
+                        }
                     }
-                    .disabled(selectedInvoice == nil || Double(amountText) == nil)
+                    .disabled(selectedInvoice == nil || Double(amountText) == nil || isProcessingQuickBooksPayment || !paymentFormIsValid)
                 }
             }
         }
         .tint(Color.brandGold)
+    }
+
+    private var refundSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Refund") {
+                    if let selectedRefundPayment {
+                        Text(selectedRefundPayment.invoice.customer.name)
+                        Text("Original payment: \(selectedRefundPayment.amount.formatted(.currency(code: "USD")))")
+                        Text("Invoice balance after refund: \((outstandingBalance(for: selectedRefundPayment.invoice) + refundAmountValue).formatted(.currency(code: "USD")))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    TextField("Refund amount", text: $refundAmountText)
+                        .keyboardType(.decimalPad)
+                    TextField("Refund notes", text: $refundNotes, axis: .vertical)
+                        .lineLimit(2...4)
+                }
+            }
+            .navigationTitle("Refund Payment")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        resetRefundForm()
+                        showingRefundSheet = false
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isProcessingQuickBooksRefund ? "Refunding..." : "Refund") {
+                        Task {
+                            await submitRefund()
+                        }
+                    }
+                    .disabled(selectedRefundPayment == nil || refundAmountValue <= 0 || isProcessingQuickBooksRefund)
+                }
+            }
+        }
+        .tint(Color.brandGold)
+    }
+
+    private var refundAmountValue: Double {
+        Double(refundAmountText) ?? 0
+    }
+
+    private var paymentFormIsValid: Bool {
+        guard Double(amountText) != nil else { return false }
+        guard selectedMethod == .card, processCardWithQuickBooks else { return true }
+        return !cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            cardNumber.filter(\.isNumber).count >= 12 &&
+            expirationMonth.filter(\.isNumber).count >= 1 &&
+            expirationYear.filter(\.isNumber).count == 4 &&
+            cardCVC.filter(\.isNumber).count >= 3
     }
 
     private var isQuickBooksConnected: Bool {
@@ -364,25 +484,109 @@ struct PaymentsAndReceiptsView: View {
         cardLast4 = ""
         authorizationReference = ""
         paymentNotes = ""
+        processCardWithQuickBooks = isQuickBooksConnected && preferredMethod == .card
+        cardholderName = invoice.customer.name
+        cardNumber = ""
+        expirationMonth = ""
+        expirationYear = ""
+        cardCVC = ""
+        billingPostalCode = ""
     }
 
-    private func savePaymentRecord() {
-        guard let invoice = selectedInvoice, let amount = Double(amountText), amount > 0 else {
-            return
-        }
+    private func prepareRefundForm(for payment: Payment) {
+        refundPaymentID = payment.id
+        refundAmountText = String(format: "%.2f", payment.amount)
+        refundNotes = payment.notes ?? ""
+    }
+
+    private func saveLocalPayment(
+        invoice: Invoice,
+        amount: Double,
+        quickBooksPaymentID: String? = nil,
+        quickBooksChargeID: String? = nil,
+        quickBooksClientTransID: String? = nil,
+        processorOverride: String? = nil
+    ) {
         modelContext.insert(
             Payment(
                 invoice: invoice,
+                quickBooksID: quickBooksPaymentID,
+                quickBooksChargeID: quickBooksChargeID,
+                quickBooksClientTransID: quickBooksClientTransID,
                 amount: amount,
                 method: selectedMethod.apiValue,
                 cardLast4: cardLast4.nilIfBlank,
                 authorizationReference: authorizationReference.nilIfBlank,
                 notes: paymentNotes.nilIfBlank,
-                processor: selectedMethod == .card ? (authorizationReference.nilIfBlank == nil ? "manual-entry" : selectedProcessor.rawValue) : nil
+                processor: processorOverride ?? (selectedMethod == .card ? (authorizationReference.nilIfBlank == nil ? "manual-entry" : selectedProcessor.rawValue) : nil)
             )
         )
-        let updatedBalance = max(outstandingBalance(for: invoice) - amount, 0)
+    }
+
+    private func updateInvoiceStatusAfterPayment(_ invoice: Invoice) {
+        let updatedBalance = max(outstandingBalance(for: invoice), 0)
         invoice.status = updatedBalance == 0 ? "paid" : "partial"
+    }
+
+    private func quickBooksCardInput(for invoice: Invoice) -> QuickBooksPaymentsCardInput {
+        QuickBooksPaymentsCardInput(
+            cardholderName: cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? invoice.customer.name : cardholderName.trimmingCharacters(in: .whitespacesAndNewlines),
+            cardNumber: cardNumber.filter(\.isNumber),
+            expMonth: expirationMonth.filter(\.isNumber),
+            expYear: expirationYear.filter(\.isNumber),
+            cvc: cardCVC.filter(\.isNumber),
+            postalCode: billingPostalCode.nilIfBlank,
+            addressLine: invoice.customer.address,
+            city: nil,
+            region: nil,
+            country: "US"
+        )
+    }
+
+    private func savePaymentRecord() async {
+        guard let invoice = selectedInvoice, let amount = Double(amountText), amount > 0 else {
+            return
+        }
+
+        if selectedMethod == .card, processCardWithQuickBooks {
+            isProcessingQuickBooksPayment = true
+            defer { isProcessingQuickBooksPayment = false }
+
+            do {
+                let result = try await QuickBooksPaymentsService.shared.processCardPayment(
+                    invoice: invoice,
+                    amount: amount,
+                    cardInput: quickBooksCardInput(for: invoice),
+                    note: paymentNotes.nilIfBlank
+                )
+                if let masked = result.charge.card?.number?.suffix(4), cardLast4.nilIfBlank == nil {
+                    cardLast4 = String(masked)
+                }
+                authorizationReference = result.charge.authCode ?? authorizationReference
+                saveLocalPayment(
+                    invoice: invoice,
+                    amount: amount,
+                    quickBooksPaymentID: result.accountingPayment?.Id,
+                    quickBooksChargeID: result.charge.id,
+                    quickBooksClientTransID: result.charge.resolvedClientTransID,
+                    processorOverride: OnsitePaymentProcessor.quickBooksPayments.rawValue
+                )
+                updateInvoiceStatusAfterPayment(invoice)
+                if let accountingError = result.accountingError {
+                    actionMessage = "Charge captured in QuickBooks Payments, but accounting sync still needs attention: \(accountingError)"
+                } else {
+                    actionMessage = "QuickBooks payment processed for \(invoice.customer.name)."
+                }
+                resetPaymentForm()
+                showingRecordPaymentSheet = false
+            } catch {
+                actionMessage = "QuickBooks payment failed: \(error.localizedDescription)"
+            }
+            return
+        }
+
+        saveLocalPayment(invoice: invoice, amount: amount)
+        updateInvoiceStatusAfterPayment(invoice)
         actionMessage = "Payment recorded for \(invoice.customer.name)."
         resetPaymentForm()
         showingRecordPaymentSheet = false
@@ -536,6 +740,63 @@ GunnAire
         authorizationReference = ""
         paymentNotes = ""
         tapToPayMessage = ""
+        processCardWithQuickBooks = false
+        cardholderName = ""
+        cardNumber = ""
+        expirationMonth = ""
+        expirationYear = ""
+        cardCVC = ""
+        billingPostalCode = ""
+    }
+
+    private func resetRefundForm() {
+        refundPaymentID = nil
+        refundAmountText = ""
+        refundNotes = ""
+    }
+
+    private func submitRefund() async {
+        guard let payment = selectedRefundPayment, refundAmountValue > 0 else {
+            return
+        }
+
+        isProcessingQuickBooksRefund = true
+        defer { isProcessingQuickBooksRefund = false }
+
+        do {
+            let result = try await QuickBooksPaymentsService.shared.refundPayment(
+                payment: payment,
+                amount: refundAmountValue,
+                note: refundNotes.nilIfBlank
+            )
+
+            modelContext.insert(
+                Payment(
+                    invoice: payment.invoice,
+                    quickBooksChargeID: result.refund.id,
+                    quickBooksClientTransID: result.refund.resolvedClientTransID,
+                    quickBooksRefundReceiptID: result.refundReceipt?.Id,
+                    amount: -refundAmountValue,
+                    method: payment.method,
+                    cardLast4: payment.cardLast4,
+                    authorizationReference: result.refund.id,
+                    notes: refundNotes.nilIfBlank,
+                    processor: OnsitePaymentProcessor.quickBooksPayments.rawValue,
+                    isRefund: true,
+                    refundedPaymentID: payment.id
+                )
+            )
+            payment.invoice.status = outstandingBalance(for: payment.invoice) > 0 ? "partial" : "paid"
+            if let accountingError = result.accountingError {
+                actionMessage = "Refund issued, but refund receipt sync still needs attention: \(accountingError)"
+            } else {
+                actionMessage = "Refund recorded for \(payment.invoice.customer.name)."
+            }
+            resetRefundForm()
+            showingRefundSheet = false
+        } catch {
+            actionMessage = "Refund failed: \(error.localizedDescription)"
+        }
     }
 
     @ViewBuilder

@@ -308,35 +308,37 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         request.httpBody = params.percentEncoded().data(using: .utf8)
 
         URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error {
-                completion(.failure(error))
-                return
+            Task { @MainActor in
+                if let error {
+                    completion(.failure(error))
+                    return
+                }
+                guard let http = response as? HTTPURLResponse else {
+                    completion(.failure(GoogleAuthError.unknown))
+                    return
+                }
+                guard let data else {
+                    completion(.failure(GoogleAuthError.noData))
+                    return
+                }
+                guard (200...299).contains(http.statusCode) else {
+                    completion(.failure(self.parseProviderError(data: data, fallbackStatus: http.statusCode)))
+                    return
+                }
+                guard
+                    let payload = try? JSONDecoder().decode(GoogleTokenResponse.self, from: data)
+                else {
+                    completion(.failure(GoogleAuthError.decoding))
+                    return
+                }
+                let tokens = GoogleOAuthTokens(
+                    accessToken: payload.access_token,
+                    refreshToken: payload.refresh_token,
+                    idToken: payload.id_token,
+                    expiration: Date().addingTimeInterval(payload.expires_in)
+                )
+                completion(.success(tokens))
             }
-            guard let http = response as? HTTPURLResponse else {
-                completion(.failure(GoogleAuthError.unknown))
-                return
-            }
-            guard let data else {
-                completion(.failure(GoogleAuthError.noData))
-                return
-            }
-            guard (200...299).contains(http.statusCode) else {
-                completion(.failure(self.parseProviderError(data: data, fallbackStatus: http.statusCode)))
-                return
-            }
-            guard
-                let payload = try? JSONDecoder().decode(GoogleTokenResponse.self, from: data)
-            else {
-                completion(.failure(GoogleAuthError.decoding))
-                return
-            }
-            let tokens = GoogleOAuthTokens(
-                accessToken: payload.access_token,
-                refreshToken: payload.refresh_token,
-                idToken: payload.id_token,
-                expiration: Date().addingTimeInterval(payload.expires_in)
-            )
-            completion(.success(tokens))
         }.resume()
     }
 
@@ -371,34 +373,34 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         ].percentEncoded().data(using: .utf8)
 
         URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error {
-                completion(.failure(error))
-                return
-            }
-            guard let http = response as? HTTPURLResponse else {
-                completion(.failure(GoogleAuthError.unknown))
-                return
-            }
-            guard let data else {
-                completion(.failure(GoogleAuthError.noData))
-                return
-            }
-            guard (200...299).contains(http.statusCode) else {
-                completion(.failure(self.parseProviderError(data: data, fallbackStatus: http.statusCode)))
-                return
-            }
-            guard let payload = try? JSONDecoder().decode(GoogleRefreshResponse.self, from: data) else {
-                completion(.failure(GoogleAuthError.decoding))
-                return
-            }
+            Task { @MainActor in
+                if let error {
+                    completion(.failure(error))
+                    return
+                }
+                guard let http = response as? HTTPURLResponse else {
+                    completion(.failure(GoogleAuthError.unknown))
+                    return
+                }
+                guard let data else {
+                    completion(.failure(GoogleAuthError.noData))
+                    return
+                }
+                guard (200...299).contains(http.statusCode) else {
+                    completion(.failure(self.parseProviderError(data: data, fallbackStatus: http.statusCode)))
+                    return
+                }
+                guard let payload = try? JSONDecoder().decode(GoogleRefreshResponse.self, from: data) else {
+                    completion(.failure(GoogleAuthError.decoding))
+                    return
+                }
 
-            let merged = GoogleOAuthTokens(
-                accessToken: payload.access_token,
-                refreshToken: self.refreshToken,
-                idToken: payload.id_token ?? self.idToken,
-                expiration: Date().addingTimeInterval(payload.expires_in)
-            )
-            DispatchQueue.main.async {
+                let merged = GoogleOAuthTokens(
+                    accessToken: payload.access_token,
+                    refreshToken: self.refreshToken,
+                    idToken: payload.id_token ?? self.idToken,
+                    expiration: Date().addingTimeInterval(payload.expires_in)
+                )
                 self.storeTokens(merged)
                 completion(.success(()))
             }

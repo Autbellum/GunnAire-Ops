@@ -32,6 +32,13 @@ final class QuickBooksDataAPI: ObservableObject {
         return "https://quickbooks.api.intuit.com/v3/company/"
     }
 
+    private var paymentsBaseURL: String {
+        if Config.QuickBooks.environment.lowercased() == "sandbox" {
+            return "https://sandbox.api.intuit.com/quickbooks/v4/payments"
+        }
+        return "https://api.intuit.com/quickbooks/v4/payments"
+    }
+
     var realmID: String? {
         storedRealmID
     }
@@ -178,6 +185,32 @@ final class QuickBooksDataAPI: ObservableObject {
         authorizedRequest(path: "query", queryItems: [URLQueryItem(name: "query", value: sql)])
     }
 
+    private func authorizedPaymentsRequest(
+        path: String,
+        method: String = "GET",
+        body: Data? = nil,
+        contentType: String? = nil
+    ) -> URLRequest? {
+        guard let tokens else {
+            return nil
+        }
+
+        let trimmedPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        guard let url = URL(string: "\(paymentsBaseURL)/\(trimmedPath)") else {
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let contentType {
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        }
+        request.httpBody = body
+        return request
+    }
+
     private func resolveHTTPError(data: Data?, response: URLResponse?) -> QBError? {
         guard let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) else {
             return nil
@@ -187,6 +220,27 @@ final class QuickBooksDataAPI: ObservableObject {
            let apiError = try? JSONDecoder().decode(QuickBooksFaultEnvelope.self, from: data),
            let firstError = apiError.Fault.Error.first {
             return .api(statusCode: http.statusCode, detail: "\(firstError.Message): \(firstError.Detail)")
+        }
+
+        if let data,
+           let raw = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty {
+            return .httpDetail(statusCode: http.statusCode, detail: raw)
+        }
+
+        return .http(statusCode: http.statusCode)
+    }
+
+    private func resolvePaymentsHTTPError(data: Data?, response: URLResponse?) -> QBError? {
+        guard let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) else {
+            return nil
+        }
+
+        if let data,
+           let apiError = try? JSONDecoder().decode(QuickBooksPaymentsErrorEnvelope.self, from: data),
+           let description = apiError.firstProblemDescription {
+            return .httpDetail(statusCode: http.statusCode, detail: description)
         }
 
         if let data,
@@ -217,6 +271,41 @@ final class QuickBooksDataAPI: ObservableObject {
                         return
                     }
                     if let httpError = self.resolveHTTPError(data: data, response: response) {
+                        completion(.failure(httpError))
+                        return
+                    }
+                    guard let data else {
+                        completion(.failure(QBError.noData))
+                        return
+                    }
+                    guard let decoded = try? JSONDecoder().decode(T.self, from: data) else {
+                        completion(.failure(QBError.decoding))
+                        return
+                    }
+                    completion(.success(decoded))
+                }
+            }.resume()
+        }
+    }
+
+    private func performPaymentsDecodingRequest<T: Decodable>(
+        _ requestBuilder: @escaping () -> URLRequest?,
+        decode type: T.Type,
+        completion: @escaping (Result<T, Error>) -> Void
+    ) {
+        refreshTokensIfNeeded { ok in
+            guard ok, let request = requestBuilder() else {
+                completion(.failure(QBError.unauthorized))
+                return
+            }
+
+            URLSession.shared.dataTask(with: request) { data, response, error in
+                Task { @MainActor in
+                    if let error {
+                        completion(.failure(error))
+                        return
+                    }
+                    if let httpError = self.resolvePaymentsHTTPError(data: data, response: response) {
                         completion(.failure(httpError))
                         return
                     }
@@ -364,6 +453,58 @@ final class QuickBooksDataAPI: ObservableObject {
             decode: QuickBooksPaymentResponse.self
         ) { result in
             completion(result.map(\.Payment))
+        }
+    }
+
+    func createCardToken(_ tokenRequest: QuickBooksPaymentsTokenCreateRequest, completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void) {
+        let body = try? JSONEncoder().encode(tokenRequest)
+        performPaymentsDecodingRequest(
+            { self.authorizedPaymentsRequest(path: "tokens", method: "POST", body: body, contentType: "application/json") },
+            decode: QuickBooksPaymentsTokenResponse.self,
+            completion: completion
+        )
+    }
+
+    func createCharge(_ charge: QuickBooksPaymentsChargeCreate, completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void) {
+        let body = try? JSONEncoder().encode(charge)
+        performPaymentsDecodingRequest(
+            { self.authorizedPaymentsRequest(path: "charges", method: "POST", body: body, contentType: "application/json") },
+            decode: QuickBooksPaymentsChargeResponse.self,
+            completion: completion
+        )
+    }
+
+    func captureCharge(id: String, amount: Double, completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void) {
+        let body = try? JSONEncoder().encode(QuickBooksPaymentsChargeCaptureRequest(amount: amount))
+        performPaymentsDecodingRequest(
+            { self.authorizedPaymentsRequest(path: "charges/\(id)/capture", method: "POST", body: body, contentType: "application/json") },
+            decode: QuickBooksPaymentsChargeResponse.self,
+            completion: completion
+        )
+    }
+
+    func refundCharge(id: String, amount: Double, description: String?, completion: @escaping (Result<QuickBooksPaymentsRefundResponse, Error>) -> Void) {
+        let body = try? JSONEncoder().encode(
+            QuickBooksPaymentsRefundRequest(
+                amount: amount,
+                description: description,
+                context: QuickBooksPaymentsChargeContext.defaultForApp
+            )
+        )
+        performPaymentsDecodingRequest(
+            { self.authorizedPaymentsRequest(path: "charges/\(id)/refunds", method: "POST", body: body, contentType: "application/json") },
+            decode: QuickBooksPaymentsRefundResponse.self,
+            completion: completion
+        )
+    }
+
+    func createRefundReceipt(_ receipt: QuickBooksRefundReceiptCreate, completion: @escaping (Result<QuickBooksRefundReceipt, Error>) -> Void) {
+        let body = try? JSONEncoder().encode(receipt)
+        performAuthorizedDecodingRequest(
+            { self.authorizedRequest(path: "refundreceipt", method: "POST", body: body, contentType: "application/json") },
+            decode: QuickBooksRefundReceiptResponse.self
+        ) { result in
+            completion(result.map(\.RefundReceipt))
         }
     }
 
@@ -877,6 +1018,168 @@ struct QuickBooksPaymentResponse: Codable {
     let Payment: QuickBooksPayment
 }
 
+struct QuickBooksPaymentsCardAddress: Codable {
+    let region: String?
+    let postalCode: String?
+    let streetAddress: String?
+    let country: String?
+    let city: String?
+}
+
+struct QuickBooksPaymentsCard: Codable {
+    let expYear: String
+    let expMonth: String
+    let address: QuickBooksPaymentsCardAddress?
+    let name: String
+    let cvc: String
+    let number: String
+}
+
+struct QuickBooksPaymentsTokenCreateRequest: Codable {
+    let card: QuickBooksPaymentsCard
+}
+
+struct QuickBooksPaymentsTokenResponse: Codable {
+    let value: String
+}
+
+struct QuickBooksPaymentsDeviceInfo: Codable {
+    let id: String?
+    let type: String?
+    let macAddress: String?
+    let ipAddress: String?
+    let longitude: String?
+    let latitude: String?
+    let phoneNumber: String?
+}
+
+struct QuickBooksPaymentsChargeContext: Codable {
+    let deviceInfo: QuickBooksPaymentsDeviceInfo?
+    let recurring: Bool?
+    let tax: Double?
+
+    static var defaultForApp: QuickBooksPaymentsChargeContext {
+        QuickBooksPaymentsChargeContext(
+            deviceInfo: QuickBooksPaymentsDeviceInfo(
+                id: "GunnAire-Ops",
+                type: "iOS",
+                macAddress: nil,
+                ipAddress: nil,
+                longitude: nil,
+                latitude: nil,
+                phoneNumber: nil
+            ),
+            recurring: false,
+            tax: 0
+        )
+    }
+}
+
+struct QuickBooksPaymentsChargeCreate: Codable {
+    let amount: String
+    let currency: String
+    let capture: Bool
+    let token: String
+    let description: String?
+    let context: QuickBooksPaymentsChargeContext?
+}
+
+struct QuickBooksPaymentsChargeCaptureRequest: Codable {
+    let amount: Double
+}
+
+struct QuickBooksPaymentsMaskedCard: Codable {
+    let number: String?
+    let name: String?
+    let expMonth: String?
+    let expYear: String?
+    let address: QuickBooksPaymentsCardAddress?
+}
+
+struct QuickBooksPaymentsChargeCaptureDetail: Codable {
+    let created: String?
+    let amount: String?
+    let context: QuickBooksPaymentsChargeContext?
+}
+
+struct QuickBooksPaymentsChargeResponse: Codable {
+    let created: String?
+    let status: String?
+    let amount: String?
+    let currency: String?
+    let token: String?
+    let capture: Bool?
+    let id: String
+    let authCode: String?
+    let clientTransID: String?
+    let card: QuickBooksPaymentsMaskedCard?
+    let context: QuickBooksPaymentsResponseContext?
+    let captureDetail: QuickBooksPaymentsChargeCaptureDetail?
+
+    var resolvedClientTransID: String? {
+        clientTransID ?? context?.clientTransID
+    }
+}
+
+struct QuickBooksPaymentsResponseContext: Codable {
+    let tax: String?
+    let recurring: Bool?
+    let paymentGroupingCode: String?
+    let txnAuthorizationStamp: String?
+    let clientTransID: String?
+    let mobile: Bool?
+    let deviceInfo: QuickBooksPaymentsDeviceInfo?
+}
+
+struct QuickBooksPaymentsRefundRequest: Codable {
+    let amount: Double
+    let description: String?
+    let context: QuickBooksPaymentsChargeContext?
+}
+
+struct QuickBooksPaymentsRefundResponse: Codable {
+    let created: String?
+    let status: String?
+    let amount: String?
+    let description: String?
+    let id: String
+    let context: QuickBooksPaymentsResponseContext?
+    let type: String?
+
+    var resolvedClientTransID: String? {
+        context?.clientTransID
+    }
+}
+
+struct QuickBooksCreditChargeInfo: Codable {
+    let ProcessPayment: String
+}
+
+struct QuickBooksCreditChargeResponse: Codable {
+    let CCTransId: String
+}
+
+struct QuickBooksCreditCardPayment: Codable {
+    let CreditChargeInfo: QuickBooksCreditChargeInfo
+    let CreditChargeResponse: QuickBooksCreditChargeResponse
+}
+
+struct QuickBooksRefundReceiptCreate: Codable {
+    let Line: [QuickBooksLineItem]
+    let CustomerRef: QuickBooksReference
+    let CreditCardPayment: QuickBooksCreditCardPayment
+    let TxnSource: String
+    let PrivateNote: String?
+}
+
+struct QuickBooksRefundReceiptResponse: Codable {
+    let RefundReceipt: QuickBooksRefundReceipt
+}
+
+struct QuickBooksRefundReceipt: Codable {
+    let Id: String
+}
+
 struct QuickBooksFaultEnvelope: Codable {
     let Fault: QuickBooksFault
 }
@@ -888,6 +1191,27 @@ struct QuickBooksFault: Codable {
 struct QuickBooksFaultError: Codable {
     let Message: String
     let Detail: String
+}
+
+struct QuickBooksPaymentsErrorEnvelope: Codable {
+    let RestResponse: QuickBooksPaymentsRestResponse?
+
+    var firstProblemDescription: String? {
+        RestResponse?.Error?.Problem?.Desc ?? RestResponse?.Error?.Problem?.Message
+    }
+}
+
+struct QuickBooksPaymentsRestResponse: Codable {
+    let Error: QuickBooksPaymentsRestError?
+}
+
+struct QuickBooksPaymentsRestError: Codable {
+    let Problem: QuickBooksPaymentsProblem?
+}
+
+struct QuickBooksPaymentsProblem: Codable {
+    let Message: String?
+    let Desc: String?
 }
 
 struct QuickBooksUploadMetadata: Codable {

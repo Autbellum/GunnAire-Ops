@@ -1137,6 +1137,14 @@ private struct RecordInvoicePaymentView: View {
     @State private var paymentNotes = ""
     @State private var tapToPayMessage = ""
     @State private var didTriggerAutoTapToPay = false
+    @State private var isProcessingQuickBooksPayment = false
+    @State private var processCardWithQuickBooks = false
+    @State private var cardholderName = ""
+    @State private var cardNumber = ""
+    @State private var expirationMonth = ""
+    @State private var expirationYear = ""
+    @State private var cardCVC = ""
+    @State private var billingPostalCode = ""
 
     init(invoice: Invoice, autoStartTapToPay: Bool = false) {
         self.invoice = invoice
@@ -1167,6 +1175,16 @@ private struct RecordInvoicePaymentView: View {
 
     private var selectedProcessor: OnsitePaymentProcessor {
         OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
+    }
+
+    private var closeoutPaymentFormIsValid: Bool {
+        guard shouldRecordPayment else { return true }
+        guard method == "card", processCardWithQuickBooks else { return true }
+        return !cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            cardNumber.filter(\.isNumber).count >= 12 &&
+            expirationMonth.filter(\.isNumber).count >= 1 &&
+            expirationYear.filter(\.isNumber).count == 4 &&
+            cardCVC.filter(\.isNumber).count >= 3
     }
 
     var body: some View {
@@ -1247,6 +1265,29 @@ private struct RecordInvoicePaymentView: View {
                             TextField("Card last 4", text: $cardLast4)
                                 .keyboardType(.numberPad)
                             TextField("Authorization ref", text: $authorizationCode)
+
+                            if QuickBooksDataAPI.shared.isAuthenticated {
+                                Toggle("Process with QuickBooks Payments", isOn: $processCardWithQuickBooks)
+
+                                if processCardWithQuickBooks {
+                                    TextField("Cardholder name", text: $cardholderName)
+                                    TextField("Card number", text: $cardNumber)
+                                        .keyboardType(.numberPad)
+                                    HStack {
+                                        TextField("Exp MM", text: $expirationMonth)
+                                            .keyboardType(.numberPad)
+                                        TextField("Exp YYYY", text: $expirationYear)
+                                            .keyboardType(.numberPad)
+                                        TextField("CVC", text: $cardCVC)
+                                            .keyboardType(.numberPad)
+                                    }
+                                    TextField("Billing ZIP", text: $billingPostalCode)
+                                        .keyboardType(.numbersAndPunctuation)
+                                    Text("Card details are only used to create a QuickBooks Payments token for this transaction and are not saved locally.")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
                         }
                         TextField("Payment notes", text: $paymentNotes, axis: .vertical)
                             .lineLimit(2...4)
@@ -1272,11 +1313,14 @@ private struct RecordInvoicePaymentView: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(shouldRecordPayment ? "Save" : "Finalize") {
-                        savePayment()
+                    Button(isProcessingQuickBooksPayment ? "Processing..." : (shouldRecordPayment ? "Save" : "Finalize")) {
+                        Task {
+                            await savePayment()
+                        }
                     }
                     .disabled(
-                        (shouldRecordPayment && Double(amount) == nil) ||
+                        (shouldRecordPayment && (!closeoutPaymentFormIsValid || Double(amount) == nil)) ||
+                        isProcessingQuickBooksPayment ||
                         (requireCustomerSignature &&
                          (signatureName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !hasCapturedSignature))
                     )
@@ -1289,6 +1333,8 @@ private struct RecordInvoicePaymentView: View {
         if shouldRecordPayment {
             amount = String(format: "%.2f", balanceDue > 0 ? balanceDue : invoice.amount)
         }
+        cardholderName = invoice.customer.name
+        processCardWithQuickBooks = QuickBooksDataAPI.shared.isAuthenticated && method == "card"
     }
 
     private func runTapToPay() async {
@@ -1318,7 +1364,7 @@ private struct RecordInvoicePaymentView: View {
         }
     }
 
-    private func savePayment() {
+    private func savePayment() async {
         let paidAmount = shouldRecordPayment ? (Double(amount) ?? 0) : 0
         guard !shouldRecordPayment || paidAmount > 0 else { return }
         let trimmedSignatureName = signatureName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1326,6 +1372,7 @@ private struct RecordInvoicePaymentView: View {
         let trimmedCardLast4 = cardLast4.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedAuthorization = authorizationCode.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedPaymentNotes = paymentNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBillingPostalCode = billingPostalCode.trimmingCharacters(in: .whitespacesAndNewlines)
 
         invoice.customerSignatureName = trimmedSignatureName.isEmpty ? nil : trimmedSignatureName
         invoice.customerSignatureImageBase64 = signatureImageBase64()
@@ -1334,6 +1381,61 @@ private struct RecordInvoicePaymentView: View {
         invoice.finalizedAt = Date()
 
         if shouldRecordPayment {
+            if method == "card", processCardWithQuickBooks {
+                isProcessingQuickBooksPayment = true
+                defer { isProcessingQuickBooksPayment = false }
+
+                do {
+                    let result = try await QuickBooksPaymentsService.shared.processCardPayment(
+                        invoice: invoice,
+                        amount: paidAmount,
+                        cardInput: QuickBooksPaymentsCardInput(
+                            cardholderName: cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? invoice.customer.name : cardholderName.trimmingCharacters(in: .whitespacesAndNewlines),
+                            cardNumber: cardNumber.filter(\.isNumber),
+                            expMonth: expirationMonth.filter(\.isNumber),
+                            expYear: expirationYear.filter(\.isNumber),
+                            cvc: cardCVC.filter(\.isNumber),
+                            postalCode: trimmedBillingPostalCode.isEmpty ? nil : trimmedBillingPostalCode,
+                            addressLine: invoice.customer.address,
+                            city: nil,
+                            region: nil,
+                            country: "US"
+                        ),
+                        note: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes
+                    )
+
+                    let resolvedCardLast4: String?
+                    if !trimmedCardLast4.isEmpty {
+                        resolvedCardLast4 = trimmedCardLast4
+                    } else if let masked = result.charge.card?.number?.suffix(4) {
+                        resolvedCardLast4 = String(masked)
+                    } else {
+                        resolvedCardLast4 = nil
+                    }
+
+                    modelContext.insert(
+                        Payment(
+                            invoice: invoice,
+                            quickBooksID: result.accountingPayment?.Id,
+                            quickBooksChargeID: result.charge.id,
+                            quickBooksClientTransID: result.charge.resolvedClientTransID,
+                            amount: paidAmount,
+                            method: "card",
+                            cardLast4: resolvedCardLast4,
+                            authorizationReference: result.charge.authCode ?? (trimmedAuthorization.isEmpty ? nil : trimmedAuthorization),
+                            notes: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
+                            processor: OnsitePaymentProcessor.quickBooksPayments.rawValue
+                        )
+                    )
+
+                    if let accountingError = result.accountingError {
+                        tapToPayMessage = "Charge captured, but accounting sync still needs attention: \(accountingError)"
+                    }
+                } catch {
+                    tapToPayMessage = error.localizedDescription
+                    return
+                }
+            } else {
             let recordedMethod: String
             if method == "card", !trimmedCardLast4.isEmpty {
                 recordedMethod = trimmedAuthorization.isEmpty ? "card ••••\(trimmedCardLast4)" : "card ••••\(trimmedCardLast4) auth \(trimmedAuthorization)"
@@ -1354,6 +1456,7 @@ private struct RecordInvoicePaymentView: View {
                         : "onsite-recorded"
                 )
             )
+            }
         }
 
         let totalPaid = paidAmountRecorded + paidAmount
