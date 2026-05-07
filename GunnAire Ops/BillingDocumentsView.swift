@@ -31,6 +31,7 @@ struct BillingDocumentsView: View {
     @State private var isImportingQuickBooksItems = false
     @State private var didLoadInitialContext = false
     @State private var openCloseoutAfterInvoiceCreation = false
+    @State private var didAttemptInitialCatalogImport = false
 
     init(initialServiceCall: ServiceCall? = nil) {
         self.initialServiceCall = initialServiceCall
@@ -393,6 +394,8 @@ struct BillingDocumentsView: View {
             selectedCustomerID = firstCustomer.id
             populateCustomerFields(from: firstCustomer)
         }
+
+        importQuickBooksItemsIfNeeded()
     }
 
     private func populateCustomerFields(from customer: Customer) {
@@ -461,6 +464,13 @@ struct BillingDocumentsView: View {
                 }
             }
         }
+    }
+
+    private func importQuickBooksItemsIfNeeded() {
+        guard !didAttemptInitialCatalogImport else { return }
+        didAttemptInitialCatalogImport = true
+        guard isQuickBooksConnected, items.isEmpty else { return }
+        importQuickBooksItems()
     }
 
     private func recommendedItemIDs(for call: ServiceCall) -> Set<UUID> {
