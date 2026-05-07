@@ -435,6 +435,28 @@ struct ScheduleView: View {
             .foregroundColor(.secondary)
 
             HStack(spacing: 10) {
+                if let phoneURL = phoneURL(for: call) {
+                    Button {
+                        openURL(phoneURL)
+                    } label: {
+                        Label("Call", systemImage: "phone")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundColor(Color.brandGold)
+                }
+
+                if let emailURL = emailURL(for: call) {
+                    Button {
+                        openURL(emailURL)
+                    } label: {
+                        Label("Email", systemImage: "envelope")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundColor(Color.brandGold)
+                }
+
                 if hasNavigableAddress(for: call) {
                     Button {
                         openMaps(for: call)
@@ -516,6 +538,22 @@ struct ScheduleView: View {
         let address = (call.siteAddress ?? call.customer.address)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return !(address?.isEmpty ?? true)
+    }
+
+    private func phoneURL(for call: ServiceCall) -> URL? {
+        guard let phone = call.customer.phone?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !phone.isEmpty else { return nil }
+        let digits = phone.filter(\.isNumber)
+        guard !digits.isEmpty else { return nil }
+        return URL(string: "tel://\(digits)")
+    }
+
+    private func emailURL(for call: ServiceCall) -> URL? {
+        guard let email = call.customer.email?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        return URL(string: "mailto:\(email)")
     }
 
     private func invoice(for call: ServiceCall) -> Invoice? {

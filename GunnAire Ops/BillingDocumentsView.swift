@@ -110,6 +110,20 @@ struct BillingDocumentsView: View {
         return components?.url
     }
 
+    private var phoneURL: URL? {
+        let phone = customerPhone.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !phone.isEmpty else { return nil }
+        let digits = phone.filter(\.isNumber)
+        guard !digits.isEmpty else { return nil }
+        return URL(string: "tel://\(digits)")
+    }
+
+    private var emailURL: URL? {
+        let email = customerEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !email.isEmpty else { return nil }
+        return URL(string: "mailto:\(email)")
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -322,13 +336,33 @@ struct BillingDocumentsView: View {
                     TextField("Customer name", text: $customerName)
                     TextField("Address", text: $customerAddress, axis: .vertical)
                         .lineLimit(2...3)
-                    if let mapsURL {
-                        Button {
-                            openURL(mapsURL)
-                        } label: {
-                            Label("Open Address in Maps", systemImage: "map")
+                    if mapsURL != nil || phoneURL != nil || emailURL != nil {
+                        HStack {
+                            if let phoneURL {
+                                Button {
+                                    openURL(phoneURL)
+                                } label: {
+                                    Label("Call", systemImage: "phone")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            if let emailURL {
+                                Button {
+                                    openURL(emailURL)
+                                } label: {
+                                    Label("Email", systemImage: "envelope")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            if let mapsURL {
+                                Button {
+                                    openURL(mapsURL)
+                                } label: {
+                                    Label("Open Address in Maps", systemImage: "map")
+                                }
+                                .buttonStyle(.bordered)
+                            }
                         }
-                        .buttonStyle(.bordered)
                     }
                     TextField("Phone", text: $customerPhone)
                         .keyboardType(.phonePad)

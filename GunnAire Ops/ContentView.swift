@@ -293,6 +293,20 @@ struct ServiceCallDetailView: View {
         return components?.url
     }
 
+    private var phoneURL: URL? {
+        guard let phone = call.customer.phone?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !phone.isEmpty else { return nil }
+        let digits = phone.filter(\.isNumber)
+        guard !digits.isEmpty else { return nil }
+        return URL(string: "tel://\(digits)")
+    }
+
+    private var emailURL: URL? {
+        guard let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        return URL(string: "mailto:\(email)")
+    }
+
     private var linkedPayments: [Payment] {
         guard let invoiceID = call.linkedInvoiceID else { return [] }
         return payments.filter { $0.invoice.id == invoiceID }
@@ -372,6 +386,43 @@ struct ServiceCallDetailView: View {
                         }
                     }
                     .foregroundColor(.primary)
+
+                    if phoneURL != nil || emailURL != nil || mapsURL != nil {
+                        GroupBox("Customer Contact") {
+                            HStack(spacing: 12) {
+                                if let phoneURL {
+                                    Button {
+                                        openURL(phoneURL)
+                                    } label: {
+                                        Label("Call", systemImage: "phone")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+
+                                if let emailURL {
+                                    Button {
+                                        openURL(emailURL)
+                                    } label: {
+                                        Label("Email", systemImage: "envelope")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+
+                                if let mapsURL {
+                                    Button {
+                                        openURL(mapsURL)
+                                    } label: {
+                                        Label("Navigate", systemImage: "map")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                            .tint(Color.brandGold)
+                        }
+                    }
 
                     GroupBox("Documentation") {
                         VStack(alignment: .leading, spacing: 8) {
