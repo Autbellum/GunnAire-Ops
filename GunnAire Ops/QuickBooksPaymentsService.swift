@@ -110,6 +110,74 @@ final class QuickBooksPaymentsService {
         )
     }
 
+    func retryAccountingSync(for payment: Payment) async throws -> QuickBooksPayment {
+        guard !payment.isRefund else {
+            throw QuickBooksPaymentsServiceError.invalidRetryTarget
+        }
+        guard let customerQBID = payment.invoice.customer.quickBooksID, !customerQBID.isEmpty else {
+            throw QuickBooksPaymentsServiceError.customerNotSynced
+        }
+
+        let payload = quickBooksPaymentPayload(
+            invoice: payment.invoice,
+            customerQBID: customerQBID,
+            amount: payment.amount,
+            note: payment.notes,
+            paymentRef: payment.quickBooksClientTransID.nilIfBlank ?? payment.quickBooksChargeID.nilIfBlank ?? payment.id.uuidString
+        )
+
+        return try await withCheckedThrowingContinuation { continuation in
+            api.createPayment(payload) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
+    func retryRefundReceiptSync(for refundPayment: Payment) async throws -> QuickBooksRefundReceipt {
+        guard refundPayment.isRefund else {
+            throw QuickBooksPaymentsServiceError.invalidRetryTarget
+        }
+        guard let customerQBID = refundPayment.invoice.customer.quickBooksID, !customerQBID.isEmpty else {
+            throw QuickBooksPaymentsServiceError.customerNotSynced
+        }
+        guard let refundID = refundPayment.quickBooksChargeID.nilIfBlank else {
+            throw QuickBooksPaymentsServiceError.chargeNotSynced
+        }
+        guard let salesItemRef = resolvedSalesItemRef else {
+            throw QuickBooksPaymentsServiceError.missingSalesItemReference
+        }
+
+        let description = refundPayment.invoice.lineItemSummary.isEmpty ? "Refund" : refundPayment.invoice.lineItemSummary
+        let receipt = QuickBooksRefundReceiptCreate(
+            Line: [
+                QuickBooksLineItem(
+                    Amount: abs(refundPayment.amount),
+                    DetailType: "SalesItemLineDetail",
+                    Description: description,
+                    SalesItemLineDetail: QuickBooksSalesItemLineDetail(
+                        ItemRef: QuickBooksReference(value: salesItemRef, name: nil)
+                    )
+                )
+            ],
+            CustomerRef: QuickBooksReference(value: customerQBID, name: refundPayment.invoice.customer.name),
+            CreditCardPayment: QuickBooksCreditCardPayment(
+                CreditChargeInfo: QuickBooksCreditChargeInfo(ProcessPayment: "true"),
+                CreditChargeResponse: QuickBooksCreditChargeResponse(CCTransId: refundID)
+            ),
+            TxnSource: "IntuitPayment",
+            PrivateNote: accountingNote(
+                baseNote: refundPayment.notes,
+                clientTransactionID: refundPayment.quickBooksClientTransID.nilIfBlank ?? refundID
+            )
+        )
+
+        return try await withCheckedThrowingContinuation { continuation in
+            api.createRefundReceipt(receipt) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
     private var resolvedSalesItemRef: String? {
         guard Config.QuickBooks.hasExplicitDefaultSalesItemRef else { return nil }
         let trimmed = Config.QuickBooks.defaultSalesItemRef.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -197,24 +265,13 @@ final class QuickBooksPaymentsService {
         charge: QuickBooksPaymentsChargeResponse,
         clientTransactionID: String
     ) async -> (payment: QuickBooksPayment?, error: String?) {
-        let lines: [QuickBooksPaymentLine]?
-        if let invoiceQBID = invoice.quickBooksID, !invoiceQBID.isEmpty {
-            lines = [
-                QuickBooksPaymentLine(
-                    Amount: amount,
-                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoiceQBID, TxnType: "Invoice")]
-                )
-            ]
-        } else {
-            lines = nil
-        }
-
-        let payload = QuickBooksPaymentCreate(
-            CustomerRef: QuickBooksReference(value: customerQBID, name: invoice.customer.name),
-            TotalAmt: amount,
-            PrivateNote: accountingNote(baseNote: note, clientTransactionID: clientTransactionID),
-            PaymentRefNum: charge.resolvedClientTransID ?? charge.id,
-            Line: lines
+        let payload = quickBooksPaymentPayload(
+            invoice: invoice,
+            customerQBID: customerQBID,
+            amount: amount,
+            note: note,
+            paymentRef: charge.resolvedClientTransID ?? charge.id,
+            clientTransactionID: clientTransactionID
         )
 
         do {
@@ -292,12 +349,42 @@ final class QuickBooksPaymentsService {
         }
         return identifierLine
     }
+
+    private func quickBooksPaymentPayload(
+        invoice: Invoice,
+        customerQBID: String,
+        amount: Double,
+        note: String?,
+        paymentRef: String,
+        clientTransactionID: String? = nil
+    ) -> QuickBooksPaymentCreate {
+        let lines: [QuickBooksPaymentLine]?
+        if let invoiceQBID = invoice.quickBooksID, !invoiceQBID.isEmpty {
+            lines = [
+                QuickBooksPaymentLine(
+                    Amount: amount,
+                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoiceQBID, TxnType: "Invoice")]
+                )
+            ]
+        } else {
+            lines = nil
+        }
+
+        return QuickBooksPaymentCreate(
+            CustomerRef: QuickBooksReference(value: customerQBID, name: invoice.customer.name),
+            TotalAmt: amount,
+            PrivateNote: clientTransactionID == nil ? note : accountingNote(baseNote: note, clientTransactionID: clientTransactionID!),
+            PaymentRefNum: paymentRef,
+            Line: lines
+        )
+    }
 }
 
 enum QuickBooksPaymentsServiceError: LocalizedError {
     case customerNotSynced
     case chargeNotSynced
     case missingSalesItemReference
+    case invalidRetryTarget
 
     var errorDescription: String? {
         switch self {
@@ -307,6 +394,17 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
             return "This payment does not have a QuickBooks Payments charge ID to refund."
         case .missingSalesItemReference:
             return "Set QB_DEFAULT_ITEM_REF before creating QuickBooks refund receipts."
+        case .invalidRetryTarget:
+            return "This QuickBooks sync retry target is not valid for the requested recovery action."
         }
+    }
+}
+
+private extension Optional<String> {
+    var nilIfBlank: String? {
+        guard let value = self?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value
     }
 }

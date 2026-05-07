@@ -240,6 +240,13 @@ struct PaymentsAndReceiptsView: View {
                                         }
                                         .buttonStyle(.bordered)
                                         .disabled(payment.quickBooksID != nil || syncingPaymentID != nil || !isQuickBooksConnected || payment.isRefund || payment.amount <= 0)
+                                        if payment.needsQuickBooksAttention {
+                                            Button("Retry QB Sync") {
+                                                retryQuickBooksFollowUp(for: payment)
+                                            }
+                                            .buttonStyle(.borderedProminent)
+                                            .disabled(syncingPaymentID != nil || !isQuickBooksConnected)
+                                        }
                                     }
                                     if let cardLast4 = payment.cardLast4, !cardLast4.isEmpty {
                                         Text("Card ending in \(cardLast4)")
@@ -753,6 +760,45 @@ GunnAire
                     actionMessage = "Payment synced to QuickBooks: \(quickBooksPayment.Id)."
                 case .failure(let error):
                     actionMessage = "QuickBooks payment sync failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func retryQuickBooksFollowUp(for payment: Payment) {
+        guard isQuickBooksConnected else {
+            actionMessage = "Connect QuickBooks before retrying QuickBooks follow-up."
+            return
+        }
+
+        syncingPaymentID = payment.id
+        Task {
+            do {
+                if payment.isRefund {
+                    let receipt = try await QuickBooksPaymentsService.shared.retryRefundReceiptSync(for: payment)
+                    await MainActor.run {
+                        payment.quickBooksRefundReceiptID = receipt.Id
+                        payment.quickBooksAccountingSyncStatus = "synced"
+                        payment.quickBooksAccountingSyncDetail = nil
+                        syncingPaymentID = nil
+                        actionMessage = "QuickBooks refund receipt sync completed."
+                    }
+                } else {
+                    let accountingPayment = try await QuickBooksPaymentsService.shared.retryAccountingSync(for: payment)
+                    await MainActor.run {
+                        payment.quickBooksID = accountingPayment.Id
+                        payment.quickBooksAccountingSyncStatus = "synced"
+                        payment.quickBooksAccountingSyncDetail = nil
+                        syncingPaymentID = nil
+                        actionMessage = "QuickBooks accounting payment sync completed."
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    payment.quickBooksAccountingSyncStatus = "needs_attention"
+                    payment.quickBooksAccountingSyncDetail = error.localizedDescription
+                    syncingPaymentID = nil
+                    actionMessage = "QuickBooks follow-up retry failed: \(error.localizedDescription)"
                 }
             }
         }
