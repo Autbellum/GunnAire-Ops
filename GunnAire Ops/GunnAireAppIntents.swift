@@ -200,6 +200,55 @@ private enum GunnAireIntentStore {
         let descriptor = FetchDescriptor<Payment>(sortBy: [SortDescriptor(\.date, order: .reverse)])
         return try context.fetch(descriptor)
     }
+
+    @MainActor
+    static func nextActionableServiceCall() throws -> ServiceCall? {
+        let calls = try serviceCalls()
+        let now = Date()
+        return calls
+            .filter { $0.status != .completed && $0.status != .cancelled }
+            .sorted { lhs, rhs in
+                let lhsUpcoming = lhs.scheduledDate >= now
+                let rhsUpcoming = rhs.scheduledDate >= now
+                if lhsUpcoming != rhsUpcoming { return lhsUpcoming }
+
+                let lhsStarted = lhs.documentationStartedAt != nil
+                let rhsStarted = rhs.documentationStartedAt != nil
+                if lhsStarted != rhsStarted { return lhsStarted }
+
+                let lhsDistance = abs(lhs.scheduledDate.timeIntervalSince(now))
+                let rhsDistance = abs(rhs.scheduledDate.timeIntervalSince(now))
+                if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+                return lhs.customer.name.localizedCaseInsensitiveCompare(rhs.customer.name) == .orderedAscending
+            }
+            .first
+    }
+
+    @MainActor
+    static func nextCollectibleInvoice() throws -> Invoice? {
+        let invoices = try invoices()
+        let payments = try payments()
+        return invoices
+            .sorted { lhs, rhs in
+                let lhsBalance = outstandingBalance(for: lhs, payments: payments)
+                let rhsBalance = outstandingBalance(for: rhs, payments: payments)
+                let lhsCollectible = lhsBalance > 0
+                let rhsCollectible = rhsBalance > 0
+                if lhsCollectible != rhsCollectible { return lhsCollectible }
+                if lhsBalance != rhsBalance { return lhsBalance > rhsBalance }
+                return lhs.createdAt < rhs.createdAt
+            }
+            .first(where: { outstandingBalance(for: $0, payments: payments) > 0 })
+    }
+
+    nonisolated static func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
+        let netPayments = payments
+            .filter { $0.invoice.id == invoice.id }
+            .reduce(0) { partial, payment in
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
+            }
+        return max(invoice.amount - netPayments, 0)
+    }
 }
 
 struct GunnAireCustomerEntity: AppEntity, Identifiable {
@@ -372,8 +421,8 @@ struct GunnAireInvoiceQuery: EntityStringQuery {
 
     private func rankInvoices(_ invoices: [Invoice], payments: [Payment], search: String) -> [Invoice] {
         invoices.sorted { lhs, rhs in
-            let lhsBalance = outstandingBalance(for: lhs, payments: payments)
-            let rhsBalance = outstandingBalance(for: rhs, payments: payments)
+            let lhsBalance = GunnAireIntentStore.outstandingBalance(for: lhs, payments: payments)
+            let rhsBalance = GunnAireIntentStore.outstandingBalance(for: rhs, payments: payments)
             let lhsCollectible = lhsBalance > 0
             let rhsCollectible = rhsBalance > 0
             if lhsCollectible != rhsCollectible { return lhsCollectible }
@@ -387,15 +436,6 @@ struct GunnAireInvoiceQuery: EntityStringQuery {
 
             return lhs.createdAt > rhs.createdAt
         }
-    }
-
-    private func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
-        let netPayments = payments
-            .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
-            }
-        return max(invoice.amount - netPayments, 0)
     }
 }
 
@@ -557,6 +597,34 @@ struct CollectInvoicePaymentIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
         return .result(dialog: "Opening payment collection for \(invoice.customerName).")
+    }
+}
+
+struct OpenNextJobDocumentationIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Next Job Documentation"
+    static let description = IntentDescription("Open GunnAire Ops to the next actionable job documentation flow.")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard let call = try await GunnAireIntentStore.nextActionableServiceCall() else {
+            return .result(dialog: "There are no actionable jobs right now.")
+        }
+        GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
+        return .result(dialog: "Opening documentation for \(call.customer.name).")
+    }
+}
+
+struct CollectNextOutstandingInvoiceIntent: AppIntent {
+    static let title: LocalizedStringResource = "Collect Next Outstanding Invoice"
+    static let description = IntentDescription("Open GunnAire Ops to collect the next outstanding invoice balance.")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard let invoice = try await GunnAireIntentStore.nextCollectibleInvoice() else {
+            return .result(dialog: "There are no collectible invoices right now.")
+        }
+        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+        return .result(dialog: "Opening payment collection for \(invoice.customer.name).")
     }
 }
 
