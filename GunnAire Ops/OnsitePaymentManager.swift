@@ -59,11 +59,14 @@ final class OnsitePaymentManager: ObservableObject {
     static let shared = OnsitePaymentManager()
 
     @Published private(set) var isProcessing = false
+    private let quickBooksBridge: any QuickBooksTapToPayBridge
 
-    private init() {}
+    private init() {
+        self.quickBooksBridge = UnavailableQuickBooksTapToPayBridge()
+    }
 
     var tapToPayAvailableInCurrentBuild: Bool {
-        false
+        quickBooksBridge.isAvailableInCurrentBuild
     }
 
     func availableProcessors() -> [OnsitePaymentProcessor] {
@@ -126,7 +129,12 @@ final class OnsitePaymentManager: ObservableObject {
             guard QuickBooksDataAPI.shared.tokens != nil, QuickBooksDataAPI.shared.realmID != nil else {
                 throw OnsitePaymentError.quickBooksAuthenticationRequired
             }
-            throw OnsitePaymentError.quickBooksSDKNotIntegrated
+            return try await quickBooksBridge.startCharge(
+                QuickBooksTapToPayChargeRequest(
+                    amount: amount,
+                    customerName: customerName
+                )
+            )
         }
         throw OnsitePaymentError.processorUnavailable
     }
