@@ -6,6 +6,9 @@ struct ScheduleView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: [SortDescriptor(\ServiceCall.scheduledDate)]) private var serviceCalls: [ServiceCall]
     @Query private var recurringContracts: [RecurringMaintenanceContract]
+    @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
+    @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
+    @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     
@@ -288,8 +291,19 @@ struct ScheduleView: View {
                 if call.googleEventID != nil {
                     Label("Google", systemImage: "calendar.badge.checkmark")
                 }
-                if call.linkedEstimateID != nil || call.linkedInvoiceID != nil {
-                    Label("Docs", systemImage: "doc.text.fill")
+                if call.documentationStartedAt != nil {
+                    Label("Started", systemImage: "doc.text")
+                }
+                if let estimate = estimate(for: call) {
+                    Label(estimate.status.capitalized, systemImage: "list.clipboard.fill")
+                }
+                if let invoice = invoice(for: call) {
+                    Label(invoice.status.capitalized, systemImage: invoice.status == "paid" ? "checkmark.circle.fill" : "creditcard.fill")
+                }
+                if let balanceDue = balanceDue(for: call), balanceDue > 0 {
+                    Text("Due \(balanceDue, format: .currency(code: "USD"))")
+                } else if call.linkedInvoiceID != nil {
+                    Text("Paid")
                 }
             }
             .font(.caption2)
@@ -354,6 +368,24 @@ struct ScheduleView: View {
         let address = (call.siteAddress ?? call.customer.address)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return !(address?.isEmpty ?? true)
+    }
+
+    private func invoice(for call: ServiceCall) -> Invoice? {
+        guard let invoiceID = call.linkedInvoiceID else { return nil }
+        return invoices.first { $0.id == invoiceID }
+    }
+
+    private func estimate(for call: ServiceCall) -> Estimate? {
+        guard let estimateID = call.linkedEstimateID else { return nil }
+        return estimates.first { $0.id == estimateID }
+    }
+
+    private func balanceDue(for call: ServiceCall) -> Double? {
+        guard let invoice = invoice(for: call) else { return nil }
+        let paid = payments
+            .filter { $0.invoice.id == invoice.id }
+            .reduce(0) { $0 + $1.amount }
+        return max(invoice.amount - paid, 0)
     }
 }
 
