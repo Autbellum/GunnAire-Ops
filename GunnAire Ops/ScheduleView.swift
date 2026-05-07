@@ -110,7 +110,7 @@ struct ScheduleView: View {
     private var tapToPayReady: Bool {
         enableOnsitePayments &&
         selectedProcessor.supportsTapToPay &&
-        (selectedProcessor == .simulated || onsitePaymentProcessorReady)
+        OnsitePaymentManager.shared.processorReady()
     }
 
     private var isAdminUser: Bool {

@@ -47,10 +47,8 @@ extension Payment {
         switch processor {
         case OnsitePaymentProcessor.simulated.rawValue:
             return OnsitePaymentProcessor.simulated.displayName
-        case OnsitePaymentProcessor.stripeTerminal.rawValue:
-            return OnsitePaymentProcessor.stripeTerminal.displayName
-        case OnsitePaymentProcessor.square.rawValue:
-            return OnsitePaymentProcessor.square.displayName
+        case OnsitePaymentProcessor.quickBooksPayments.rawValue:
+            return OnsitePaymentProcessor.quickBooksPayments.displayName
         case "manual-entry":
             return "Manual Card Entry"
         case "onsite-recorded":

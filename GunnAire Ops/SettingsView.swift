@@ -262,9 +262,9 @@ struct SettingsView: View {
                                 Toggle("Processor Ready on This Device", isOn: $onsitePaymentProcessorReady)
 
                                 let selectedProcessor = OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
-                                Text(selectedProcessor == .simulated
-                                     ? "Simulator mode is enabled for Tap to Pay workflow testing."
-                                     : "Select the live processor SDK you intend to use and mark the device ready once it is configured.")
+                                Text(selectedProcessor == .none
+                                     ? "Select either the simulator or QuickBooks Payments for Tap to Pay."
+                                     : OnsitePaymentManager.shared.processorStatusDetail())
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }

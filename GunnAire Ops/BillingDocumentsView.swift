@@ -1251,9 +1251,7 @@ private struct RecordInvoicePaymentView: View {
                         TextField("Payment notes", text: $paymentNotes, axis: .vertical)
                             .lineLimit(2...4)
                         if enableOnsitePayments {
-                            Text(selectedProcessor == .simulated
-                                 ? "Tap to Pay simulator is active for field workflow testing."
-                                 : "This device is prepared for a live Tap to Pay processor once its SDK bridge is added.")
+                            Text(onsitePaymentManager.processorStatusDetail())
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }

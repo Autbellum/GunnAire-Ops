@@ -378,7 +378,7 @@ GunnAire
     private var tapToPayReady: Bool {
         enableOnsitePayments &&
         selectedProcessor.supportsTapToPay &&
-        (selectedProcessor == .simulated || onsitePaymentProcessorReady)
+        OnsitePaymentManager.shared.processorReady()
     }
 
     private var checklistIsComplete: Bool {

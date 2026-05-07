@@ -91,9 +91,7 @@ struct PaymentsAndReceiptsView: View {
                             .foregroundColor(isQuickBooksConnected ? .green : .secondary)
                         Text("Tap to Pay: \(processorIsReady ? selectedProcessor.displayName : "Not Ready")")
                             .foregroundColor(processorIsReady ? .green : .secondary)
-                        Text(selectedProcessor == .simulated && processorIsReady
-                             ? "The simulator is active, so field staff can test card-present collection without leaving the workflow."
-                             : "The app includes a Tap to Pay workflow layer. A live provider SDK still needs to back the selected processor before real card-present payments can be accepted.")
+                        Text(onsitePaymentManager.processorStatusDetail())
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -317,9 +315,7 @@ struct PaymentsAndReceiptsView: View {
                         .lineLimit(2...4)
 
                     if selectedMethod == .card, enableOnsitePayments {
-                        Text(selectedProcessor == .simulated && processorIsReady
-                             ? "Tap to Pay simulator is active for payment-center testing."
-                             : "Pick a live processor in Settings and mark this device ready before using Tap to Pay in the field.")
+                        Text(onsitePaymentManager.processorStatusDetail())
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }

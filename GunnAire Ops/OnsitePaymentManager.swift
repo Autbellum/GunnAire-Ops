@@ -4,8 +4,7 @@ import Combine
 enum OnsitePaymentProcessor: String, CaseIterable, Identifiable {
     case none = "none"
     case simulated = "simulated"
-    case stripeTerminal = "stripe_terminal"
-    case square = "square"
+    case quickBooksPayments = "quickbooks_payments"
 
     var id: String { rawValue }
 
@@ -15,15 +14,21 @@ enum OnsitePaymentProcessor: String, CaseIterable, Identifiable {
             return "Not Connected"
         case .simulated:
             return "Tap to Pay Simulator"
-        case .stripeTerminal:
-            return "Stripe Terminal"
-        case .square:
-            return "Square"
+        case .quickBooksPayments:
+            return "QuickBooks Payments"
         }
     }
 
     var supportsTapToPay: Bool {
         self != .none
+    }
+
+    var usesSimulator: Bool {
+        self == .simulated
+    }
+
+    var requiresQuickBooksSession: Bool {
+        self == .quickBooksPayments
     }
 }
 
@@ -39,6 +44,8 @@ struct OnsitePaymentCaptureResult {
 enum OnsitePaymentError: LocalizedError {
     case processorUnavailable
     case invalidAmount
+    case quickBooksAuthenticationRequired
+    case quickBooksSDKNotIntegrated
 
     var errorDescription: String? {
         switch self {
@@ -46,6 +53,10 @@ enum OnsitePaymentError: LocalizedError {
             return "No Tap to Pay processor is configured on this device."
         case .invalidAmount:
             return "Enter a valid payment amount before starting Tap to Pay."
+        case .quickBooksAuthenticationRequired:
+            return "QuickBooks Payments requires an active QuickBooks connection before Tap to Pay can start."
+        case .quickBooksSDKNotIntegrated:
+            return "QuickBooks Payments is selected, but the live Intuit Tap to Pay SDK bridge is not integrated in this build yet."
         }
     }
 }
@@ -65,10 +76,34 @@ final class OnsitePaymentManager: ObservableObject {
 
     func processorReady() -> Bool {
         let processor = configuredProcessor()
-        if processor == .simulated {
+        if processor.usesSimulator {
             return true
         }
-        return UserDefaults.standard.bool(forKey: "onsitePaymentProcessorReady")
+        guard UserDefaults.standard.bool(forKey: "onsitePaymentProcessorReady") else {
+            return false
+        }
+        if processor.requiresQuickBooksSession {
+            return QuickBooksDataAPI.shared.tokens != nil && QuickBooksDataAPI.shared.realmID != nil
+        }
+        return true
+    }
+
+    func processorStatusDetail() -> String {
+        let processor = configuredProcessor()
+        switch processor {
+        case .none:
+            return "No on-device payment processor is selected."
+        case .simulated:
+            return "Simulator mode is enabled for Tap to Pay workflow testing."
+        case .quickBooksPayments:
+            if QuickBooksDataAPI.shared.tokens == nil || QuickBooksDataAPI.shared.realmID == nil {
+                return "Connect QuickBooks first, then mark this device ready for the Intuit Tap to Pay bridge."
+            }
+            if !UserDefaults.standard.bool(forKey: "onsitePaymentProcessorReady") {
+                return "QuickBooks Payments is connected. Mark this device ready after the Intuit Tap to Pay bridge is installed."
+            }
+            return "QuickBooks Payments is selected. This build still needs the Intuit Tap to Pay SDK bridge before live card-present capture can run."
+        }
     }
 
     func startTapToPay(amount: Double, customerName: String) async throws -> OnsitePaymentCaptureResult {
@@ -80,6 +115,13 @@ final class OnsitePaymentManager: ObservableObject {
 
         isProcessing = true
         defer { isProcessing = false }
+
+        if processor.requiresQuickBooksSession {
+            guard QuickBooksDataAPI.shared.tokens != nil, QuickBooksDataAPI.shared.realmID != nil else {
+                throw OnsitePaymentError.quickBooksAuthenticationRequired
+            }
+            throw OnsitePaymentError.quickBooksSDKNotIntegrated
+        }
 
         // This app-side layer is ready for a real processor SDK. Until one is added,
         // the simulator provides a deterministic card-present workflow for field testing.
