@@ -254,16 +254,18 @@ struct SettingsView: View {
 
                             if enableOnsitePayments {
                                 Picker("Tap to Pay Processor", selection: $onsitePaymentProcessor) {
-                                    ForEach(OnsitePaymentProcessor.allCases) { processor in
+                                    ForEach(OnsitePaymentManager.shared.availableProcessors()) { processor in
                                         Text(processor.displayName).tag(processor.rawValue)
                                     }
                                 }
+                                .disabled(!OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild)
 
                                 Toggle("Processor Ready on This Device", isOn: $onsitePaymentProcessorReady)
+                                    .disabled(!OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild)
 
                                 let selectedProcessor = OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
                                 Text(selectedProcessor == .none
-                                     ? "Select either the simulator or QuickBooks Payments for Tap to Pay."
+                                     ? "Tap to Pay is hidden until the Intuit iOS bridge is added to this build."
                                      : OnsitePaymentManager.shared.processorStatusDetail())
                                     .font(.caption)
                                     .foregroundColor(.secondary)

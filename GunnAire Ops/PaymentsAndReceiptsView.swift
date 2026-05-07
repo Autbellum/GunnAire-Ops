@@ -89,11 +89,13 @@ struct PaymentsAndReceiptsView: View {
                     Section("Payment Status") {
                         Text("QuickBooks: \(isQuickBooksConnected ? "Connected" : "Not Connected")")
                             .foregroundColor(isQuickBooksConnected ? .green : .secondary)
-                        Text("Tap to Pay: \(processorIsReady ? selectedProcessor.displayName : "Not Ready")")
-                            .foregroundColor(processorIsReady ? .green : .secondary)
-                        Text(onsitePaymentManager.processorStatusDetail())
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        if OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild {
+                            Text("Tap to Pay: \(processorIsReady ? selectedProcessor.displayName : "Not Ready")")
+                                .foregroundColor(processorIsReady ? .green : .secondary)
+                            Text(onsitePaymentManager.processorStatusDetail())
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     Section("Outstanding Invoices") {
@@ -288,7 +290,7 @@ struct PaymentsAndReceiptsView: View {
                     }
 
                     if selectedMethod == .card {
-                        if enableOnsitePayments {
+                        if enableOnsitePayments && OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild {
                             Button(onsitePaymentManager.isProcessing ? "Processing Tap to Pay..." : "Start Tap to Pay") {
                                 Task {
                                     await runTapToPay()
@@ -314,7 +316,7 @@ struct PaymentsAndReceiptsView: View {
                     TextField("Payment notes", text: $paymentNotes, axis: .vertical)
                         .lineLimit(2...4)
 
-                    if selectedMethod == .card, enableOnsitePayments {
+                    if selectedMethod == .card, enableOnsitePayments, OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild {
                         Text(onsitePaymentManager.processorStatusDetail())
                             .font(.caption)
                             .foregroundColor(.secondary)

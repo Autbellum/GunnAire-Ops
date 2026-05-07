@@ -3,7 +3,6 @@ import Combine
 
 enum OnsitePaymentProcessor: String, CaseIterable, Identifiable {
     case none = "none"
-    case simulated = "simulated"
     case quickBooksPayments = "quickbooks_payments"
 
     var id: String { rawValue }
@@ -12,19 +11,13 @@ enum OnsitePaymentProcessor: String, CaseIterable, Identifiable {
         switch self {
         case .none:
             return "Not Connected"
-        case .simulated:
-            return "Tap to Pay Simulator"
         case .quickBooksPayments:
             return "QuickBooks Payments"
         }
     }
 
     var supportsTapToPay: Bool {
-        self != .none
-    }
-
-    var usesSimulator: Bool {
-        self == .simulated
+        self == .quickBooksPayments
     }
 
     var requiresQuickBooksSession: Bool {
@@ -69,16 +62,23 @@ final class OnsitePaymentManager: ObservableObject {
 
     private init() {}
 
+    var tapToPayAvailableInCurrentBuild: Bool {
+        false
+    }
+
+    func availableProcessors() -> [OnsitePaymentProcessor] {
+        tapToPayAvailableInCurrentBuild ? [.none, .quickBooksPayments] : [.none]
+    }
+
     func configuredProcessor() -> OnsitePaymentProcessor {
         let storedValue = UserDefaults.standard.string(forKey: "onsitePaymentProcessor") ?? OnsitePaymentProcessor.none.rawValue
-        return OnsitePaymentProcessor(rawValue: storedValue) ?? .none
+        let processor = OnsitePaymentProcessor(rawValue: storedValue) ?? .none
+        return availableProcessors().contains(processor) ? processor : .none
     }
 
     func processorReady() -> Bool {
         let processor = configuredProcessor()
-        if processor.usesSimulator {
-            return true
-        }
+        guard tapToPayAvailableInCurrentBuild else { return false }
         guard UserDefaults.standard.bool(forKey: "onsitePaymentProcessorReady") else {
             return false
         }
@@ -92,10 +92,13 @@ final class OnsitePaymentManager: ObservableObject {
         let processor = configuredProcessor()
         switch processor {
         case .none:
-            return "No on-device payment processor is selected."
-        case .simulated:
-            return "Simulator mode is enabled for Tap to Pay workflow testing."
+            return tapToPayAvailableInCurrentBuild
+                ? "No on-device payment processor is selected."
+                : "Tap to Pay is hidden in this build until the Intuit iOS bridge is integrated."
         case .quickBooksPayments:
+            guard tapToPayAvailableInCurrentBuild else {
+                return "Tap to Pay is hidden in this build until the Intuit iOS bridge is integrated."
+            }
             if QuickBooksDataAPI.shared.tokens == nil || QuickBooksDataAPI.shared.realmID == nil {
                 return "Connect QuickBooks first, then mark this device ready for the Intuit Tap to Pay bridge."
             }
@@ -108,6 +111,9 @@ final class OnsitePaymentManager: ObservableObject {
 
     func startTapToPay(amount: Double, customerName: String) async throws -> OnsitePaymentCaptureResult {
         guard amount > 0 else { throw OnsitePaymentError.invalidAmount }
+        guard tapToPayAvailableInCurrentBuild else {
+            throw OnsitePaymentError.quickBooksSDKNotIntegrated
+        }
         let processor = configuredProcessor()
         guard processor.supportsTapToPay, processorReady() else {
             throw OnsitePaymentError.processorUnavailable
@@ -122,22 +128,6 @@ final class OnsitePaymentManager: ObservableObject {
             }
             throw OnsitePaymentError.quickBooksSDKNotIntegrated
         }
-
-        // This app-side layer is ready for a real processor SDK. Until one is added,
-        // the simulator provides a deterministic card-present workflow for field testing.
-        try await Task.sleep(nanoseconds: 1_500_000_000)
-
-        let auth = String(UUID().uuidString.prefix(8)).uppercased()
-        let ref = String(UUID().uuidString.prefix(12)).uppercased()
-        let last4 = String(Int.random(in: 1000...9999))
-
-        return OnsitePaymentCaptureResult(
-            amount: amount,
-            cardLast4: last4,
-            authorizationCode: auth,
-            processorReference: ref,
-            processorName: processor.displayName,
-            paymentSummary: "Tap to Pay approved for \(customerName). Ref \(ref)."
-        )
+        throw OnsitePaymentError.processorUnavailable
     }
 }

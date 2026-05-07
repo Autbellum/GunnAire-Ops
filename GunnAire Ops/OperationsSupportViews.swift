@@ -139,7 +139,6 @@ struct SyncIntegrationsView: View {
                 Section("Sync Status") {
                     statusRow("QuickBooks", value: quickBooksConnected ? "Connected" : "Disconnected")
                     statusRow("Google", value: googleAuth.isAuthenticated ? "Connected" : "Disconnected")
-                    statusRow("QuickBooks Time", value: Config.QuickBooksTime.enabled ? "Configured" : "Not Configured")
                 }
 
                 Section("Google Calendar Diagnostics") {
@@ -230,16 +229,6 @@ struct SyncIntegrationsView: View {
                             .foregroundColor(.secondary)
                     }
                 }
-
-                Section("QuickBooks Time") {
-                    Text(Config.QuickBooksTime.notes)
-                    Text("Endpoint: \(Config.QuickBooksTime.graphqlEndpoint)")
-                    Text("Required partner tier: \(Config.QuickBooksTime.requiredPartnerTier)")
-                    Text("Restricted scope: \(Config.QuickBooksTime.requiredScope)")
-                    Text("The current app can route service calls to employee Google calendars. QuickBooks Time sync requires separate Intuit partner onboarding and production credentials.")
-                }
-                .font(.caption)
-                .foregroundColor(.secondary)
 
                 Section("Operational Notes") {
                     Text("QuickBooks sync is managed from the QuickBooks Management screen.")

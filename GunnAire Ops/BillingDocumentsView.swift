@@ -1226,7 +1226,7 @@ private struct RecordInvoicePaymentView: View {
                             Text("Check").tag("check")
                         }
                         if method == "card" {
-                            if enableOnsitePayments {
+                            if enableOnsitePayments && OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild {
                                 Button(onsitePaymentManager.isProcessing ? "Processing Tap to Pay..." : "Start Tap to Pay") {
                                     Task {
                                         await runTapToPay()
@@ -1250,7 +1250,7 @@ private struct RecordInvoicePaymentView: View {
                         }
                         TextField("Payment notes", text: $paymentNotes, axis: .vertical)
                             .lineLimit(2...4)
-                        if enableOnsitePayments {
+                        if enableOnsitePayments && OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild {
                             Text(onsitePaymentManager.processorStatusDetail())
                                 .font(.caption)
                                 .foregroundColor(.secondary)

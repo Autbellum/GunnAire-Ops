@@ -45,8 +45,6 @@ extension Payment {
     var processorDisplayName: String? {
         guard let processor, !processor.isEmpty else { return nil }
         switch processor {
-        case OnsitePaymentProcessor.simulated.rawValue:
-            return OnsitePaymentProcessor.simulated.displayName
         case OnsitePaymentProcessor.quickBooksPayments.rawValue:
             return OnsitePaymentProcessor.quickBooksPayments.displayName
         case "manual-entry":
