@@ -30,6 +30,7 @@ struct BillingDocumentsView: View {
     @State private var isCreatingDocument = false
     @State private var isImportingQuickBooksItems = false
     @State private var didLoadInitialContext = false
+    @State private var openCloseoutAfterInvoiceCreation = false
 
     init(initialServiceCall: ServiceCall? = nil) {
         self.initialServiceCall = initialServiceCall
@@ -146,6 +147,10 @@ struct BillingDocumentsView: View {
 
                     Text("Total: \(selectedTotal, format: .currency(code: "USD"))")
                         .font(.headline)
+
+                    if initialServiceCall != nil && selectedDocumentKind == .invoice {
+                        Toggle("Open Closeout After Invoice Creation", isOn: $openCloseoutAfterInvoiceCreation)
+                    }
 
                     Button(isCreatingDocument ? "Creating..." : "Create \(selectedDocumentKind.rawValue)") {
                         createDocument()
@@ -383,6 +388,7 @@ struct BillingDocumentsView: View {
             if selectedItems.isEmpty {
                 selectedItems = recommendedItemIDs(for: call)
             }
+            openCloseoutAfterInvoiceCreation = true
         } else if let firstCustomer = customers.first {
             selectedCustomerID = firstCustomer.id
             populateCustomerFields(from: firstCustomer)
@@ -580,6 +586,9 @@ struct BillingDocumentsView: View {
             initialServiceCall?.status = .invoiced
             actionMessage = isQuickBooksConnected ? "Invoice created locally. Syncing to QuickBooks..." : "Invoice created locally."
             syncInvoiceIfNeeded(invoice, customer: customer, items: selectedLineItems)
+            if openCloseoutAfterInvoiceCreation {
+                paymentInvoice = invoice
+            }
         }
 
         selectedItems.removeAll()
