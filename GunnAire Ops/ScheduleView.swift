@@ -10,7 +10,6 @@ struct ScheduleView: View {
     
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showingAddCallSheet = false
-    @State private var selectedCall: ServiceCall?
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
     
@@ -68,144 +67,59 @@ struct ScheduleView: View {
         ZStack {
             WatermarkBackground()
             NavigationStack {
-                VStack(spacing: 16) {
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Your Upcoming Jobs (Next 7 Days):")
-                                .font(.headline)
-                                .foregroundColor(Color.brandGold)
-                            if upcomingJobs.isEmpty {
-                                Text("No upcoming jobs.")
-                                    .foregroundColor(.secondary)
-                                    .italic()
-                            } else {
-                                ForEach(upcomingJobs.prefix(3)) { job in
-                                    HStack {
-                                        Text(job.customer.name)
-                                            .font(.subheadline)
-                                            .foregroundColor(.primary)
-                                        Spacer()
-                                        Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
-                                            .foregroundColor(.secondary)
-                                            .font(.caption)
-                                    }
-                                }
-                                if upcomingJobs.count > 3 {
-                                    Text("And \(upcomingJobs.count - 3) more...")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            Divider()
-                            Text("Active Recurring Contracts:")
-                                .font(.headline)
-                                .foregroundColor(Color.brandGold)
-                            if activeRecurringContracts.isEmpty {
-                                Text("No active contracts.")
-                                    .foregroundColor(.secondary)
-                                    .italic()
-                            } else {
-                                ForEach(activeRecurringContracts.prefix(3)) { contract in
-                                    HStack {
-                                        Text(contract.customer.name)
-                                            .font(.subheadline)
-                                            .foregroundColor(.primary)
-                                        Spacer()
-                                        Text("Next Due: \(contract.nextDate.formatted(date: .abbreviated, time: .omitted))")
-                                            .foregroundColor(.secondary)
-                                            .font(.caption)
-                                    }
-                                }
-                                if activeRecurringContracts.count > 3 {
-                                    Text("And \(activeRecurringContracts.count - 3) more...")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
+                List {
+                    Section("Dashboard") {
+                        dashboardSection
+                    }
+
+                    Section("Calendar") {
+                        DatePicker(
+                            "Select Date",
+                            selection: $selectedDate,
+                            displayedComponents: [.date]
+                        )
+                        .datePickerStyle(.graphical)
+                    }
+
+                    Section {
+                        Picker("View Mode", selection: $viewMode) {
+                            ForEach(ViewMode.allCases) { mode in
+                                Text(mode.rawValue).bold()
+                                    .tag(mode)
                             }
                         }
-                        .padding(.vertical, 4)
-                    } label: {
-                        Text("Dashboard")
-                            .foregroundColor(Color.brandGold)
+                        .pickerStyle(.segmented)
                     }
-                    .padding(.horizontal)
-                    
-                    DatePicker(
-                        "Select Date",
-                        selection: $selectedDate,
-                        displayedComponents: [.date]
-                    )
-                    .datePickerStyle(.graphical)
-                    .padding(.horizontal)
-                    
-                    Picker("View Mode", selection: $viewMode) {
-                        ForEach(ViewMode.allCases) { mode in
-                            Text(mode.rawValue).bold()
-                                .tag(mode)
-                        }
-                    }
-                    .pickerStyle(SegmentedPickerStyle())
-                    .padding(.horizontal)
-                    
-                    List(selection: $selectedCall) {
+
+                    Section(filteredCalls.isEmpty ? "No Jobs Scheduled" : "Scheduled Jobs") {
                         ForEach(filteredCalls) { call in
                             NavigationLink(value: call) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack {
-                                        Text(call.type.rawValue.capitalized)
-                                            .font(.headline)
-                                            .foregroundColor(Color.brandGold)
-                                        Text("- ")
-                                            .foregroundColor(.primary)
-                                        Text(call.customer.name)
-                                            .font(.subheadline)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Text("Time: \(call.scheduledDate.formatted(date: .omitted, time: .shortened)) - \(call.status.rawValue.capitalized)")
-                                        .font(.caption)
-                                        .foregroundColor(.gray)
-                                    if let address = call.siteAddress ?? call.customer.address,
-                                       !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                        Text(address)
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                    }
-                                    HStack(spacing: 8) {
-                                        if call.googleEventID != nil {
-                                            Label("Google", systemImage: "calendar.badge.checkmark")
-                                        }
-                                        if call.linkedEstimateID != nil || call.linkedInvoiceID != nil {
-                                            Label("Docs", systemImage: "doc.text.fill")
-                                        }
-                                    }
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                }
+                                serviceCallRow(for: call)
                             }
                         }
                         .onDelete(perform: deleteCalls)
                     }
-                    .listStyle(.insetGrouped)
-                    .scrollContentBackground(.hidden)
-                    .background(Color.primaryBlack)
 
                     if let syncMessage {
-                        Text(syncMessage)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal)
+                        Section("Sync Status") {
+                            Text(syncMessage)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     if googleAuth.isAuthenticated {
-                        Text("If Google Calendar sync was connected before the calendar permission update, disconnect Google in Settings and reconnect it once so Google can issue a new token with calendar access.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal)
+                        Section("Google Calendar") {
+                            Text("If Google Calendar sync was connected before the calendar permission update, disconnect Google in Settings and reconnect it once so Google can issue a new token with calendar access.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
+                .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+                .background(Color.clear)
                 .navigationTitle("Schedule")
-                .foregroundColor(Color.brandGold)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         HStack {
@@ -241,6 +155,106 @@ struct ScheduleView: View {
                         .tint(Color.brandGold)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var dashboardSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Your Upcoming Jobs (Next 7 Days)")
+                    .font(.headline)
+                    .foregroundColor(Color.brandGold)
+                if upcomingJobs.isEmpty {
+                    Text("No upcoming jobs.")
+                        .foregroundColor(.secondary)
+                        .italic()
+                } else {
+                    ForEach(upcomingJobs.prefix(3)) { job in
+                        HStack {
+                            Text(job.customer.name)
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                        }
+                    }
+                    if upcomingJobs.count > 3 {
+                        Text("And \(upcomingJobs.count - 3) more...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Active Recurring Contracts")
+                    .font(.headline)
+                    .foregroundColor(Color.brandGold)
+                if activeRecurringContracts.isEmpty {
+                    Text("No active contracts.")
+                        .foregroundColor(.secondary)
+                        .italic()
+                } else {
+                    ForEach(activeRecurringContracts.prefix(3)) { contract in
+                        HStack {
+                            Text(contract.customer.name)
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Text("Next Due: \(contract.nextDate.formatted(date: .abbreviated, time: .omitted))")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                        }
+                    }
+                    if activeRecurringContracts.count > 3 {
+                        Text("And \(activeRecurringContracts.count - 3) more...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func serviceCallRow(for call: ServiceCall) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(call.type.rawValue.capitalized)
+                    .font(.headline)
+                    .foregroundColor(Color.brandGold)
+                Text("- ")
+                    .foregroundColor(.primary)
+                Text(call.customer.name)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            Text("Time: \(call.scheduledDate.formatted(date: .omitted, time: .shortened)) - \(call.status.rawValue.capitalized)")
+                .font(.caption)
+                .foregroundColor(.gray)
+            if let address = call.siteAddress ?? call.customer.address,
+               !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(address)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            HStack(spacing: 8) {
+                if call.googleEventID != nil {
+                    Label("Google", systemImage: "calendar.badge.checkmark")
+                }
+                if call.linkedEstimateID != nil || call.linkedInvoiceID != nil {
+                    Label("Docs", systemImage: "doc.text.fill")
+                }
+            }
+            .font(.caption2)
+            .foregroundColor(.secondary)
         }
     }
     

@@ -50,7 +50,14 @@ struct ContentView: View {
 
     private var visibleSidebarItems: [SidebarItem] {
         SidebarItem.allCases.filter { item in
-            isAdminUser || (item != .quickBooksManagement && item != .syncIntegrations)
+            switch item {
+            case .quickBooksManagement:
+                return isAdminUser
+            case .syncIntegrations:
+                return true
+            default:
+                return true
+            }
         }
     }
 
@@ -64,8 +71,13 @@ struct ContentView: View {
             .filter { visibleSidebarItems.contains($0) }
     }
 
+    private var integrationItems: [SidebarItem] {
+        [.syncIntegrations]
+            .filter { visibleSidebarItems.contains($0) }
+    }
+
     private var adminItems: [SidebarItem] {
-        [.quickBooksManagement, .syncIntegrations]
+        [.quickBooksManagement]
             .filter { visibleSidebarItems.contains($0) }
     }
     
@@ -78,6 +90,12 @@ struct ContentView: View {
 
                 Section("Back Office") {
                     sidebarRows(for: backOfficeItems)
+                }
+
+                if !integrationItems.isEmpty {
+                    Section("Integrations") {
+                        sidebarRows(for: integrationItems)
+                    }
                 }
 
                 if isAdminUser, !adminItems.isEmpty {
@@ -156,6 +174,7 @@ struct ContentView: View {
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.tokens != nil && QuickBooksDataAPI.shared.realmID != nil
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
             ensurePrimaryAdminExists()
+            refreshGoogleAccountIdentityIfNeeded()
             if let selectedSidebarItem, !visibleSidebarItems.contains(selectedSidebarItem) {
                 self.selectedSidebarItem = .timeClock
             }
@@ -892,14 +911,40 @@ extension ContentView {
         GoogleAuthManager.shared.startSignIn(presentationContext: authPresentationContextProvider) { result in
             switch result {
             case .success:
-                fetchAndSyncGoogleData()
-                DispatchQueue.main.async {
-                    isGoogleAuthenticated = true
-                    googleOAuthState = nil
+                GoogleAuthManager.shared.validateSignedInDomain { validationResult in
+                    switch validationResult {
+                    case .success:
+                        DispatchQueue.main.async {
+                            isGoogleAuthenticated = true
+                            googleOAuthState = nil
+                            fetchAndSyncGoogleData()
+                        }
+                    case .failure(let error):
+                        DispatchQueue.main.async {
+                            isGoogleAuthenticated = false
+                            presentAuthAlert(title: "Google Auth Failed", message: error.localizedDescription)
+                        }
+                    }
                 }
             case .failure(let error):
                 DispatchQueue.main.async {
                     presentAuthAlert(title: "Google Auth Failed", message: error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func refreshGoogleAccountIdentityIfNeeded() {
+        guard GoogleAuthManager.shared.isAuthenticated, GoogleAuthManager.shared.signedInEmail == nil else {
+            return
+        }
+        GoogleAuthManager.shared.validateSignedInDomain { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    isGoogleAuthenticated = true
+                case .failure:
+                    isGoogleAuthenticated = false
                 }
             }
         }

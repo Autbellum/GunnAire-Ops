@@ -133,45 +133,7 @@ struct SettingsView: View {
                         }
 
                     case .integrations:
-                        Section("Administrator Sync Accounts") {
-                            Text("QuickBooks and Google sync are configured only from an administrator account. Standard users operate under this app access list.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
-                        Section("QuickBooks") {
-                            connectionStatusRow(title: "Status", isConnected: isQuickBooksAuthenticated)
-                            
-                            if isQuickBooksAuthenticated {
-                                Button("Disconnect QuickBooks", role: .destructive) {
-                                    disconnectQuickBooks()
-                                    isQuickBooksAuthenticated = false
-                                }
-                            } else {
-                                Button {
-                                    authenticateQuickBooks()
-                                } label: {
-                                    Label("Connect QuickBooks", systemImage: "link")
-                                }
-                            }
-                        }
-                        
-                        Section("Google") {
-                            connectionStatusRow(title: "Status", isConnected: isGoogleAuthenticated)
-                            
-                            if isGoogleAuthenticated {
-                                Button("Disconnect Google", role: .destructive) {
-                                    disconnectGoogle()
-                                    isGoogleAuthenticated = false
-                                }
-                            } else {
-                                Button {
-                                    authenticateGoogle()
-                                } label: {
-                                    Label("Connect Google", systemImage: "link")
-                                }
-                            }
-                        }
+                        integrationsSections
 
                     case .users:
                         Section("Application Users") {
@@ -227,10 +189,12 @@ struct SettingsView: View {
                 } else {
                     Section("Account") {
                         Text(currentUserEmail ?? "Signed in")
-                        Text("Sync accounts are managed by the administrator.")
+                        Text("Google and QuickBooks connections can be managed here. Company workflow and user management remain admin-only.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
+
+                    integrationsSections
                 }
 
                 Section("Application") {
@@ -255,6 +219,57 @@ struct SettingsView: View {
     private func settingsToggle(_ title: String, systemImage: String, isOn: Binding<Bool>) -> some View {
         Toggle(isOn: isOn) {
             Label(title, systemImage: systemImage)
+        }
+    }
+
+    @ViewBuilder
+    private var integrationsSections: some View {
+        if isAdminUser {
+            Section("Administrator Sync Accounts") {
+                Text("QuickBooks and Google sync are configured from this screen.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        } else {
+            Section("Sync Accounts") {
+                Text("These connection settings are editable regardless of app role because the underlying Google and QuickBooks access is granted by the connected account.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+
+        Section("QuickBooks") {
+            connectionStatusRow(title: "Status", isConnected: isQuickBooksAuthenticated)
+
+            if isQuickBooksAuthenticated {
+                Button("Disconnect QuickBooks", role: .destructive) {
+                    disconnectQuickBooks()
+                    isQuickBooksAuthenticated = false
+                }
+            } else {
+                Button {
+                    authenticateQuickBooks()
+                } label: {
+                    Label("Connect QuickBooks", systemImage: "link")
+                }
+            }
+        }
+
+        Section("Google") {
+            connectionStatusRow(title: "Status", isConnected: isGoogleAuthenticated)
+
+            if isGoogleAuthenticated {
+                Button("Disconnect Google", role: .destructive) {
+                    disconnectGoogle()
+                    isGoogleAuthenticated = false
+                }
+            } else {
+                Button {
+                    authenticateGoogle()
+                } label: {
+                    Label("Connect Google", systemImage: "link")
+                }
+            }
         }
     }
 

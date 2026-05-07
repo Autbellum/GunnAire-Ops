@@ -18,6 +18,7 @@ enum GoogleCalendarScheduleSync {
                 completion(.failure(error))
             case .success(let calendars):
                 let availableCalendarIDs = Set(["primary"] + calendars.map(\.id))
+                let writableCalendarIDs = Set(["primary"] + calendars.filter(\.isWritable).map(\.id))
                 fetchEvents(
                     auth: auth,
                     calendarIDs: Array(availableCalendarIDs),
@@ -41,12 +42,14 @@ enum GoogleCalendarScheduleSync {
                                     signedInEmail: signedInEmail,
                                     isAdminUser: isAdminUser,
                                     availableCalendarIDs: availableCalendarIDs
+                                    ,
+                                    writableCalendarIDs: writableCalendarIDs
                                 ) { exportResult in
                                     switch exportResult {
                                     case .failure(let error):
                                         completion(.failure(error))
-                                    case .success(let exportedCount):
-                                        completion(.success("Imported \(importedCount) Google events and exported \(exportedCount) service calls."))
+                                    case .success(let exportSummary):
+                                        completion(.success("Imported \(importedCount) Google events. \(exportSummary)"))
                                     }
                                 }
                             } catch {
@@ -144,7 +147,8 @@ enum GoogleCalendarScheduleSync {
         signedInEmail: String?,
         isAdminUser: Bool,
         availableCalendarIDs: Set<String>,
-        completion: @escaping (Result<Int, Error>) -> Void
+        writableCalendarIDs: Set<String>,
+        completion: @escaping (Result<String, Error>) -> Void
     ) {
         do {
             let calls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
@@ -164,10 +168,12 @@ enum GoogleCalendarScheduleSync {
             exportNext(
                 index: 0,
                 exportedCount: 0,
+                skippedCount: 0,
                 calls: calls,
                 auth: auth,
                 modelContext: modelContext,
                 availableCalendarIDs: availableCalendarIDs,
+                writableCalendarIDs: writableCalendarIDs,
                 completion: completion
             )
         } catch {
@@ -178,21 +184,49 @@ enum GoogleCalendarScheduleSync {
     private static func exportNext(
         index: Int,
         exportedCount: Int,
+        skippedCount: Int,
         calls: [ServiceCall],
         auth: GoogleAuthManager,
         modelContext: ModelContext,
         availableCalendarIDs: Set<String>,
-        completion: @escaping (Result<Int, Error>) -> Void
+        writableCalendarIDs: Set<String>,
+        completion: @escaping (Result<String, Error>) -> Void
     ) {
         guard index < calls.count else {
             try? modelContext.save()
-            completion(.success(exportedCount))
+            let message: String
+            if skippedCount > 0 {
+                message = "Exported \(exportedCount) service calls and skipped \(skippedCount) calls on read-only Google calendars."
+            } else {
+                message = "Exported \(exportedCount) service calls."
+            }
+            completion(.success(message))
             return
         }
 
         let call = calls[index]
+        let targetCalendarID = preferredCalendarID(
+            for: call,
+            availableCalendarIDs: availableCalendarIDs,
+            writableCalendarIDs: writableCalendarIDs
+        )
+
+        guard let targetCalendarID else {
+            exportNext(
+                index: index + 1,
+                exportedCount: exportedCount,
+                skippedCount: skippedCount + 1,
+                calls: calls,
+                auth: auth,
+                modelContext: modelContext,
+                availableCalendarIDs: availableCalendarIDs,
+                writableCalendarIDs: writableCalendarIDs,
+                completion: completion
+            )
+            return
+        }
+
         let event = makeGoogleEvent(for: call)
-        let targetCalendarID = preferredCalendarID(for: call, availableCalendarIDs: availableCalendarIDs)
         let finish: (Result<GoogleCalendarEvent, Error>) -> Void = { result in
             Task { @MainActor in
                 switch result {
@@ -204,19 +238,27 @@ enum GoogleCalendarScheduleSync {
                     exportNext(
                         index: index + 1,
                         exportedCount: exportedCount + 1,
+                        skippedCount: skippedCount,
                         calls: calls,
                         auth: auth,
                         modelContext: modelContext,
                         availableCalendarIDs: availableCalendarIDs,
+                        writableCalendarIDs: writableCalendarIDs,
                         completion: completion
                     )
                 }
             }
         }
 
-        if let eventID = call.googleEventID, !eventID.isEmpty {
+        if let eventID = call.googleEventID,
+           !eventID.isEmpty,
+           writableCalendarIDs.contains((call.googleCalendarID ?? targetCalendarID).lowercased()) ||
+            writableCalendarIDs.contains(call.googleCalendarID ?? targetCalendarID) {
             auth.updateCalendarEvent(calendarID: call.googleCalendarID ?? targetCalendarID, eventID: eventID, event: event, completion: finish)
         } else {
+            if call.googleCalendarID != nil, call.googleCalendarID != targetCalendarID {
+                call.googleEventID = nil
+            }
             auth.createCalendarEvent(calendarID: targetCalendarID, event: event, completion: finish)
         }
     }
@@ -308,21 +350,32 @@ enum GoogleCalendarScheduleSync {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    private static func preferredCalendarID(for call: ServiceCall, availableCalendarIDs: Set<String>) -> String {
+    private static func preferredCalendarID(
+        for call: ServiceCall,
+        availableCalendarIDs: Set<String>,
+        writableCalendarIDs: Set<String>
+    ) -> String? {
         if let existingCalendarID = call.googleCalendarID,
-           availableCalendarIDs.contains(existingCalendarID) {
+           contains(existingCalendarID, in: writableCalendarIDs) {
             return existingCalendarID
         }
         if let technicianCalendarID = call.assignedTechnician?.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines),
            !technicianCalendarID.isEmpty {
-            if availableCalendarIDs.contains(technicianCalendarID) {
+            if contains(technicianCalendarID, in: writableCalendarIDs) {
                 return technicianCalendarID
             }
-            if availableCalendarIDs.contains(technicianCalendarID.lowercased()) {
+            if contains(technicianCalendarID.lowercased(), in: writableCalendarIDs) {
                 return technicianCalendarID.lowercased()
             }
         }
-        return "primary"
+        if contains("primary", in: writableCalendarIDs) {
+            return "primary"
+        }
+        return nil
+    }
+
+    private static func contains(_ calendarID: String, in calendarIDs: Set<String>) -> Bool {
+        calendarIDs.contains(calendarID) || calendarIDs.contains(calendarID.lowercased())
     }
 
     private static func fetchEvents(

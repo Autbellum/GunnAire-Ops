@@ -28,6 +28,20 @@ struct GoogleCalendar: Codable, Identifiable {
     let id: String
     let summary: String?
     let timeZone: String?
+    let accessRole: String?
+
+    var normalizedID: String {
+        id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var isWritable: Bool {
+        switch accessRole?.lowercased() {
+        case "owner", "writer":
+            return true
+        default:
+            return id == "primary"
+        }
+    }
 }
 
 struct GoogleCalendarEventsResponse: Codable {
@@ -134,6 +148,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     @Published private(set) var tokenExpiry: Date?
     @Published private(set) var signedInEmail: String?
 
+    private static let signedInEmailStorageKey = "SignedInGoogleEmail"
+
     private var activeAuthSession: ASWebAuthenticationSession?
     private var pendingOAuthState: String?
     private var pendingCodeVerifier: String?
@@ -157,7 +173,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         activeAuthSession = nil
         try? KeychainStore.remove(account: keychainAccount)
         UserDefaults.standard.removeObject(forKey: tokenStorageKey)
-        UserDefaults.standard.removeObject(forKey: "SignedInGoogleEmail")
+        UserDefaults.standard.removeObject(forKey: Self.signedInEmailStorageKey)
     }
 
     func startSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -390,7 +406,17 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func fetchUserProfile(completion: @escaping (Result<GoogleUserProfile, Error>) -> Void) {
-        authorizedGET("https://www.googleapis.com/oauth2/v3/userinfo", completion: completion)
+        authorizedGET("https://www.googleapis.com/oauth2/v3/userinfo") { (result: Result<GoogleUserProfile, Error>) in
+            switch result {
+            case .success(let profile):
+                DispatchQueue.main.async {
+                    self.rememberSignedInEmail(profile.email)
+                    completion(.success(profile))
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
     }
 
     func validateSignedInDomain(completion: @escaping (Result<GoogleUserProfile, Error>) -> Void) {
@@ -403,10 +429,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         completion(.failure(GoogleAuthError.domainNotAllowed(Config.Google.allowedHostedDomain)))
                         return
                     }
-                    self.signedInEmail = profile.email
-                    if let email = profile.email {
-                        UserDefaults.standard.set(email, forKey: "SignedInGoogleEmail")
-                    }
+                    self.rememberSignedInEmail(profile.email)
                     completion(.success(profile))
                 case .failure(let error):
                     completion(.failure(error))
@@ -696,7 +719,39 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         idToken = tokens.idToken
         tokenExpiry = tokens.expiration
         isAuthenticated = true
-        signedInEmail = UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        let restoredEmail = UserDefaults.standard.string(forKey: Self.signedInEmailStorageKey)
+            ?? Self.extractEmail(fromIDToken: tokens.idToken)
+        rememberSignedInEmail(restoredEmail)
+    }
+
+    private func rememberSignedInEmail(_ email: String?) {
+        let normalizedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        signedInEmail = normalizedEmail
+        if let normalizedEmail, !normalizedEmail.isEmpty {
+            UserDefaults.standard.set(normalizedEmail, forKey: Self.signedInEmailStorageKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.signedInEmailStorageKey)
+        }
+    }
+
+    private static func extractEmail(fromIDToken token: String?) -> String? {
+        guard let token else { return nil }
+        let segments = token.split(separator: ".")
+        guard segments.count >= 2 else { return nil }
+        var payload = String(segments[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let remainder = payload.count % 4
+        if remainder != 0 {
+            payload += String(repeating: "=", count: 4 - remainder)
+        }
+        guard
+            let data = Data(base64Encoded: payload),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        return object["email"] as? String
     }
 
     private func isAllowed(profile: GoogleUserProfile) -> Bool {

@@ -128,6 +128,10 @@ struct SyncIntegrationsView: View {
         Set(availableCalendars.map(\.id) + ["primary"])
     }
 
+    private var writableCalendarIDs: Set<String> {
+        Set(availableCalendars.filter(\.isWritable).map(\.normalizedID) + ["primary"])
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -283,20 +287,26 @@ struct SyncIntegrationsView: View {
         guard let email = technician.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty else {
             return "No email"
         }
-        if availableCalendarIDs.contains(email) || availableCalendarIDs.contains(email.lowercased()) {
-            return "Accessible"
+        let normalizedEmail = email.lowercased()
+        if writableCalendarIDs.contains(normalizedEmail) {
+            return "Writable"
+        }
+        if availableCalendarIDs.contains(email) || availableCalendarIDs.contains(normalizedEmail) {
+            return "Read-only"
         }
         return "Not shared"
     }
 
     private func calendarAccessColor(for technician: Technician) -> Color {
         switch calendarAccessLabel(for: technician) {
-        case "Accessible":
+        case "Writable":
             return .green
+        case "Read-only":
+            return .orange
         case "No email":
             return .secondary
         default:
-            return .orange
+            return .red
         }
     }
 
