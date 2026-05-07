@@ -139,6 +139,23 @@ private struct VideoSplashView: View {
 }
 
 enum SplashVideoLocator {
+    enum Source {
+        case custom
+        case bundled
+        case fallback
+
+        var description: String {
+            switch self {
+            case .custom:
+                return "Custom Loading.mp4"
+            case .bundled:
+                return "Bundled Loading.mp4"
+            case .fallback:
+                return "Logo Fallback"
+            }
+        }
+    }
+
     struct VideoDetails {
         let filename: String
         let fileSizeDescription: String
@@ -166,6 +183,17 @@ enum SplashVideoLocator {
         let bundledURL = Bundle.main.url(forResource: "Loading", withExtension: "mp4")
         let storedCandidates = storedCandidateURLs(fileManager: fileManager)
         return preferredURL(bundledURL: bundledURL, storedCandidates: storedCandidates, fileManager: fileManager)
+    }
+
+    static func currentSource(fileManager: FileManager = .default) -> Source {
+        if let storedURL = storedCandidateURLs(fileManager: fileManager).first,
+           fileManager.fileExists(atPath: storedURL.path) {
+            return .custom
+        }
+        if Bundle.main.url(forResource: "Loading", withExtension: "mp4") != nil {
+            return .bundled
+        }
+        return .fallback
     }
 
     static func preferredURL(
@@ -214,17 +242,11 @@ enum SplashVideoLocator {
     }
 
     static func currentSourceDescription(fileManager: FileManager = .default) -> String {
-        if let storedURL = storedCandidateURLs(fileManager: fileManager).first,
-           fileManager.fileExists(atPath: storedURL.path) {
-            return "Custom Loading.mp4"
-        }
-        if Bundle.main.url(forResource: "Loading", withExtension: "mp4") != nil {
-            return "Bundled Loading.mp4"
-        }
-        return "Logo Fallback"
+        currentSource(fileManager: fileManager).description
     }
 
     static func currentStoredVideoDetails(fileManager: FileManager = .default) -> VideoDetails? {
+        guard currentSource(fileManager: fileManager) == .custom else { return nil }
         guard let storedURL = storedCandidateURLs(fileManager: fileManager).first,
               fileManager.fileExists(atPath: storedURL.path),
               let attributes = try? fileManager.attributesOfItem(atPath: storedURL.path) else {
@@ -246,6 +268,11 @@ enum SplashVideoLocator {
             resolutionDescription: describe(size: videoMetrics?.pixelSize),
             advisoryMessage: advisoryMessage(forDuration: videoMetrics?.durationSeconds)
         )
+    }
+
+    static func currentResolvedVideoDetails(fileManager: FileManager = .default) -> VideoDetails? {
+        guard let resolvedURL = resolveURL(fileManager: fileManager) else { return nil }
+        return try? inspectVideo(at: resolvedURL, fileManager: fileManager)
     }
 
     static func preferredFinishDelay(for url: URL, maximumDuration: TimeInterval = 6.0) -> TimeInterval {

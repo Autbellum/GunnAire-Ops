@@ -116,4 +116,10 @@ struct GunnAire_OpsTests {
         #expect(SplashVideoLocator.preferredFinishDelay(durationSeconds: 12, maximumDuration: 4.5) == 4.5)
     }
 
+    @Test func splashVideoSourceDescriptionMatchesExpectedCases() async throws {
+        #expect(SplashVideoLocator.Source.custom.description == "Custom Loading.mp4")
+        #expect(SplashVideoLocator.Source.bundled.description == "Bundled Loading.mp4")
+        #expect(SplashVideoLocator.Source.fallback.description == "Logo Fallback")
+    }
+
 }

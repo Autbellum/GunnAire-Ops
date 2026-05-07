@@ -25,8 +25,8 @@ struct SettingsView: View {
     @State private var showingSplashVideoPreview = false
     @State private var showingSplashLaunchSimulation = false
     @State private var splashVideoMessage: String?
-    @State private var splashVideoStatus = SplashVideoLocator.currentSourceDescription()
-    @State private var splashVideoDetails = SplashVideoLocator.currentStoredVideoDetails()
+    @State private var splashVideoStatus = SplashVideoLocator.currentSource()
+    @State private var splashVideoDetails = SplashVideoLocator.currentResolvedVideoDetails()
 
     @AppStorage("companyName") private var companyName = "GunnAire"
     @AppStorage("dispatchStartHour") private var dispatchStartHour = 8
@@ -61,6 +61,16 @@ struct SettingsView: View {
 
     private var isAdminUser: Bool {
         AppAccess.isAdmin(email: currentUserEmail, users: users)
+    }
+
+    private var splashLaunchBehaviorDescription: String {
+        guard enableSplashVideo else { return "Disabled. The app will open straight to the main UI." }
+        guard let resolvedURL = SplashVideoLocator.resolveURL() else { return "No MP4 found. The app will show the logo briefly." }
+        let effectiveDelay = SplashVideoLocator.preferredFinishDelay(
+            for: resolvedURL,
+            maximumDuration: maximumSplashDurationSeconds
+        )
+        return "Plays \(splashVideoStatus.description) for about \(effectiveDelay.formatted(.number.precision(.fractionLength(0...1)))) seconds at launch."
     }
     
     var body: some View {
@@ -123,7 +133,15 @@ struct SettingsView: View {
                             HStack {
                                 Text("Current Splash")
                                 Spacer()
-                                Text(splashVideoStatus)
+                                Text(splashVideoStatus.description)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            HStack(alignment: .top) {
+                                Text("Launch Behavior")
+                                Spacer()
+                                Text(splashLaunchBehaviorDescription)
+                                    .multilineTextAlignment(.trailing)
                                     .foregroundColor(.secondary)
                             }
 
@@ -176,7 +194,12 @@ struct SettingsView: View {
                             Button("Remove Custom Splash Video", role: .destructive) {
                                 removeSplashVideo()
                             }
-                            .disabled(splashVideoStatus != "Custom Loading.mp4")
+                            .disabled(splashVideoStatus != .custom)
+
+                            Button("Reset Splash Settings") {
+                                resetSplashVideoSettings()
+                            }
+                            .buttonStyle(.bordered)
 
                             Text("The app will play `Loading.mp4` from app storage first, then a bundled video if one exists, and finally fall back to the logo.")
                                 .font(.caption)
@@ -467,9 +490,16 @@ struct SettingsView: View {
         }
     }
 
+    private func resetSplashVideoSettings() {
+        enableSplashVideo = true
+        maximumSplashDurationSeconds = 6.0
+        refreshSplashVideoState()
+        splashVideoMessage = "Splash playback settings were reset to defaults."
+    }
+
     private func refreshSplashVideoState() {
-        splashVideoStatus = SplashVideoLocator.currentSourceDescription()
-        splashVideoDetails = SplashVideoLocator.currentStoredVideoDetails()
+        splashVideoStatus = SplashVideoLocator.currentSource()
+        splashVideoDetails = SplashVideoLocator.currentResolvedVideoDetails()
     }
 
     private func deleteUsers(offsets: IndexSet) {
