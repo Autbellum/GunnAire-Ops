@@ -15,9 +15,28 @@ import AppIntents
 @main
 struct GunnAire_OpsApp: App {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "GunnAireOps", category: "AppStartup")
+    private let startupState: StartupState
 
-    // Define schema with all model types
-    var sharedModelContainer: ModelContainer = {
+    init() {
+        self.startupState = Self.buildStartupState()
+        Task { @MainActor in
+            GunnAireAppShortcuts.updateAppShortcutParameters()
+        }
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            switch startupState {
+            case .ready(let sharedModelContainer):
+                AppRootView()
+                    .modelContainer(sharedModelContainer)
+            case .failed(let message):
+                StartupFailureView(message: message)
+            }
+        }
+    }
+
+    private static func buildStartupState() -> StartupState {
         let schema = Schema([
             Item.self,
             ServiceCall.self,
@@ -33,37 +52,26 @@ struct GunnAire_OpsApp: App {
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            return .ready(try ModelContainer(for: schema, configurations: [modelConfiguration]))
         } catch {
             logger.error("Primary SwiftData store load failed: \(error.localizedDescription, privacy: .public)")
             resetKnownStoreArtifacts()
             do {
-                return try ModelContainer(for: schema, configurations: [modelConfiguration])
+                return .ready(try ModelContainer(for: schema, configurations: [modelConfiguration]))
             } catch {
                 logger.error("Persistent SwiftData retry failed: \(error.localizedDescription, privacy: .public)")
                 do {
                     logger.notice("Falling back to in-memory SwiftData store for this launch.")
                     let inMemoryConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-                    return try ModelContainer(for: schema, configurations: [inMemoryConfiguration])
+                    return .ready(try ModelContainer(for: schema, configurations: [inMemoryConfiguration]))
                 } catch {
                     logger.fault("In-memory SwiftData fallback failed: \(error.localizedDescription, privacy: .public)")
-                    fatalError("Could not create any ModelContainer: \(error)")
+                    return .failed(
+                        "The app could not start its local data store. Restart the app, then free device storage or reinstall if the problem continues."
+                    )
                 }
             }
         }
-    }()
-
-    init() {
-        Task { @MainActor in
-            GunnAireAppShortcuts.updateAppShortcutParameters()
-        }
-    }
-
-    var body: some Scene {
-        WindowGroup {
-            AppRootView()
-        }
-        .modelContainer(sharedModelContainer)
     }
 
     private static func resetKnownStoreArtifacts() {
@@ -94,6 +102,50 @@ struct GunnAire_OpsApp: App {
                     logger.error("Failed removing SwiftData store artifact at \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 }
             }
+        }
+    }
+
+    private enum StartupState {
+        case ready(ModelContainer)
+        case failed(String)
+    }
+}
+
+private struct StartupFailureView: View {
+    let message: String
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(red: 0.09, green: 0.12, blue: 0.18), Color(red: 0.04, green: 0.05, blue: 0.08)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 20) {
+                Image("AppLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 110, height: 110)
+
+                Text("Startup Issue")
+                    .font(.title.bold())
+                    .foregroundStyle(.white)
+
+                Text(message)
+                    .font(.body)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white.opacity(0.88))
+                    .frame(maxWidth: 380)
+
+                Text("No data was changed. Once storage is available again, relaunch the app.")
+                    .font(.footnote)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white.opacity(0.68))
+                    .frame(maxWidth: 380)
+            }
+            .padding(32)
         }
     }
 }

@@ -6,14 +6,35 @@ struct QuickBooksTapToPayChargeRequest: Sendable {
 }
 
 protocol QuickBooksTapToPayBridge: Sendable {
-    var isAvailableInCurrentBuild: Bool { get }
-    func startCharge(_ request: QuickBooksTapToPayChargeRequest) async throws -> OnsitePaymentCaptureResult
+    nonisolated var isAvailableInCurrentBuild: Bool { get }
+    nonisolated func startCharge(_ request: QuickBooksTapToPayChargeRequest) async throws -> OnsitePaymentCaptureResult
+}
+
+enum QuickBooksTapToPayBridgeRegistry {
+    private static let queue = DispatchQueue(label: "GunnAireOps.QuickBooksTapToPayBridgeRegistry")
+    private static var factory: @Sendable () -> any QuickBooksTapToPayBridge = {
+        UnavailableQuickBooksTapToPayBridge()
+    }
+
+    static func register(_ factory: @escaping @Sendable () -> any QuickBooksTapToPayBridge) {
+        queue.sync {
+            self.factory = factory
+        }
+    }
+
+    static func makeBridge() -> any QuickBooksTapToPayBridge {
+        queue.sync {
+            factory()
+        }
+    }
 }
 
 struct UnavailableQuickBooksTapToPayBridge: QuickBooksTapToPayBridge {
-    let isAvailableInCurrentBuild = false
+    nonisolated let isAvailableInCurrentBuild = false
+    
+    nonisolated init() {}
 
-    func startCharge(_ request: QuickBooksTapToPayChargeRequest) async throws -> OnsitePaymentCaptureResult {
+    nonisolated func startCharge(_ request: QuickBooksTapToPayChargeRequest) async throws -> OnsitePaymentCaptureResult {
         throw OnsitePaymentError.quickBooksSDKNotIntegrated
     }
 }

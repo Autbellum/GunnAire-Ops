@@ -25,7 +25,7 @@ enum OnsitePaymentProcessor: String, CaseIterable, Identifiable {
     }
 }
 
-struct OnsitePaymentCaptureResult {
+struct OnsitePaymentCaptureResult: Sendable {
     let amount: Double
     let cardLast4: String
     let authorizationCode: String
@@ -49,7 +49,7 @@ enum OnsitePaymentError: LocalizedError {
         case .quickBooksAuthenticationRequired:
             return "QuickBooks Payments requires an active QuickBooks connection before Tap to Pay can start."
         case .quickBooksSDKNotIntegrated:
-            return "QuickBooks Payments is selected, but the live Intuit Tap to Pay SDK bridge is not integrated in this build yet."
+            return "QuickBooks Payments is selected, but the Tap to Pay support package is not installed in this build."
         }
     }
 }
@@ -62,7 +62,7 @@ final class OnsitePaymentManager: ObservableObject {
     private let quickBooksBridge: any QuickBooksTapToPayBridge
 
     private init() {
-        self.quickBooksBridge = UnavailableQuickBooksTapToPayBridge()
+        self.quickBooksBridge = QuickBooksTapToPayBridgeRegistry.makeBridge()
     }
 
     var tapToPayAvailableInCurrentBuild: Bool {
@@ -97,18 +97,18 @@ final class OnsitePaymentManager: ObservableObject {
         case .none:
             return tapToPayAvailableInCurrentBuild
                 ? "No on-device payment processor is selected."
-                : "Tap to Pay is hidden in this build until the Intuit iOS bridge is integrated."
+                : "Tap to Pay is hidden in this build until the QuickBooks Tap to Pay support package is installed."
         case .quickBooksPayments:
             guard tapToPayAvailableInCurrentBuild else {
-                return "Tap to Pay is hidden in this build until the Intuit iOS bridge is integrated."
+                return "Tap to Pay is hidden in this build until the QuickBooks Tap to Pay support package is installed."
             }
             if QuickBooksDataAPI.shared.tokens == nil || QuickBooksDataAPI.shared.realmID == nil {
-                return "Connect QuickBooks first, then mark this device ready for the Intuit Tap to Pay bridge."
+                return "Connect QuickBooks first, then mark this device ready for Tap to Pay."
             }
             if !UserDefaults.standard.bool(forKey: "onsitePaymentProcessorReady") {
-                return "QuickBooks Payments is connected. Mark this device ready after the Intuit Tap to Pay bridge is installed."
+                return "QuickBooks Payments is connected. Mark this device ready after the Tap to Pay support package is installed."
             }
-            return "QuickBooks Payments is selected. This build still needs the Intuit Tap to Pay SDK bridge before live card-present capture can run."
+            return "QuickBooks Payments is selected and ready for live Tap to Pay capture."
         }
     }
 
