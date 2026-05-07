@@ -63,6 +63,14 @@ struct QuickBooksManagementView: View {
         localPayments.filter { $0.quickBooksChargeID?.isEmpty == false }
     }
 
+    private var collectibleQuickBooksInvoices: [QuickBooksInvoice] {
+        invoices.filter { outstandingQuickBooksBalance(for: $0) > 0 }
+    }
+
+    private var collectibleLocalInvoices: [Invoice] {
+        localInvoices.filter { localOutstandingBalance(for: $0) > 0 }
+    }
+
     private var quickBooksCompanyURL: URL? {
         guard let realmID = QuickBooksDataAPI.shared.realmID else { return nil }
         return URL(string: "https://app.qbo.intuit.com/app/homepage?companyId=\(realmID)")
@@ -338,7 +346,7 @@ struct QuickBooksManagementView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || invoices.isEmpty)
+                            .disabled(!isAuthenticated || collectibleQuickBooksInvoices.isEmpty)
                     }
 
                     Section(header: Text("QuickBooks Payments API").foregroundColor(Color.brandGold)) {
@@ -361,7 +369,7 @@ struct QuickBooksManagementView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(Color.brandGold)
                         .foregroundStyle(Color.primaryBlack)
-                        .disabled(!isAuthenticated || localInvoices.isEmpty)
+                        .disabled(!isAuthenticated || collectibleLocalInvoices.isEmpty)
 
                         if quickBooksChargePayments.isEmpty {
                             Text("No local QuickBooks Payments charges have been processed yet.")
@@ -476,14 +484,14 @@ struct QuickBooksManagementView: View {
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingNewPaymentSheet) {
-                    QuickBooksPaymentComposeView(invoices: invoices.filter { outstandingQuickBooksBalance(for: $0) > 0 }) { invoice, amount, note in
+                    QuickBooksPaymentComposeView(invoices: collectibleQuickBooksInvoices) { invoice, amount, note in
                         createPayment(for: invoice, amount: amount, note: note)
                     }
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingProcessCardPaymentSheet) {
                     QuickBooksCardChargeComposeView(
-                        invoices: localInvoices.filter { localOutstandingBalance(for: $0) > 0 },
+                        invoices: collectibleLocalInvoices,
                         payments: localPayments
                     ) { invoice, amount, cardInput, note in
                         processCardCharge(for: invoice, amount: amount, cardInput: cardInput, note: note)
