@@ -2,8 +2,11 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 import UIKit
+import os
 
 struct ReceiptsAndBillsView: View {
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "GunnAireOps", category: "ReceiptsAndBills")
+
     private struct LegacyPendingUploadRecord: Codable {
         let id: UUID
         let filePath: String
@@ -424,7 +427,7 @@ struct ReceiptsAndBillsView: View {
                     receiptImportMessage = "Failed to read file: \(error.localizedDescription)"
                 }
             case .failure(let error):
-                print("Receipt file import error: \(error.localizedDescription)")
+                Self.logger.error("Receipt file import error: \(error.localizedDescription, privacy: .public)")
             }
         }
         .fileImporter(isPresented: $showingBillPicker,
@@ -439,7 +442,7 @@ struct ReceiptsAndBillsView: View {
                     billImportMessage = "Failed to read file: \(error.localizedDescription)"
                 }
             case .failure(let error):
-                print("Bill file import error: \(error.localizedDescription)")
+                Self.logger.error("Bill file import error: \(error.localizedDescription, privacy: .public)")
             }
         }
         .sheet(isPresented: $showingReceiptCamera) {

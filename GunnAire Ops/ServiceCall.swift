@@ -97,6 +97,8 @@ final class ServiceCall {
     }
 
     var checklistTotalCount: Int { 5 }
-    
-    // Future extension: sync with QuickBooks or Google Calendar
+
+    var isExternallyLinked: Bool {
+        googleEventID != nil || googleCalendarID != nil || linkedEstimateID != nil || linkedInvoiceID != nil
+    }
 }

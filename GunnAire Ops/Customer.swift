@@ -11,6 +11,9 @@ final class Customer {
     var phone: String?
     var email: String?
     var address: String?
+    @Relationship(inverse: \RecurringMaintenanceContract.customer) var recurringContracts: [RecurringMaintenanceContract] = []
+    @Relationship(inverse: \ServiceCall.customer) var serviceCalls: [ServiceCall] = []
+    @Relationship(inverse: \Invoice.customer) var invoices: [Invoice] = []
     
     init(id: UUID = UUID(), quickBooksID: String? = nil, name: String, phone: String? = nil, email: String? = nil, address: String? = nil) {
         self.id = id
@@ -21,11 +24,9 @@ final class Customer {
         self.address = address
     }
 }
-// Extension for syncing contact info with Google Contacts or QuickBooks
+
 extension Customer {
-    /// TODO: Return the number of active contracts for this customer
     var activeContractsCount: Int {
-        return 0
+        recurringContracts.filter(\.active).count
     }
 }
-

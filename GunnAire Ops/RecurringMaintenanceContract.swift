@@ -24,6 +24,8 @@ final class RecurringMaintenanceContract {
         let thirtyDaysAhead = Calendar.current.date(byAdding: .day, value: 30, to: now)!
         return nextDate >= now && nextDate <= thirtyDaysAhead
     }
-    
-    // Future extension: Link contracts with Google Calendar or reminders
+
+    var reminderDate: Date {
+        Calendar.current.date(byAdding: .day, value: -7, to: nextDate) ?? nextDate
+    }
 }
