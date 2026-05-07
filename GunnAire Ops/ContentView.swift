@@ -1315,9 +1315,8 @@ class ContentViewPresentationContextProvider: NSObject, ASWebAuthenticationPrese
             return Self.remember(lastResolvedAnchor, reason: "Reusing last resolved auth anchor")
         }
 
-        let detachedWindow = UIWindow(frame: .zero)
-        detachedWindow.isHidden = true
-        return Self.remember(detachedWindow, reason: "Using detached zero-frame auth anchor as final fallback")
+        Self.dlog("No UIWindowScene available for auth anchor; this indicates sign-in was requested before the app had an active scene.")
+        preconditionFailure("No UIWindowScene available for ASWebAuthenticationSession presentation anchor.")
     }
 }
 
