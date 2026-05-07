@@ -209,6 +209,30 @@ final class QuickBooksPaymentsService {
         }
     }
 
+    func syncManualAccountingPayment(for payment: Payment) async throws -> QuickBooksPayment {
+        guard !payment.isRefund else {
+            throw QuickBooksPaymentsServiceError.invalidRetryTarget
+        }
+        guard let customerQBID = payment.invoice.customer.quickBooksID, !customerQBID.isEmpty else {
+            throw QuickBooksPaymentsServiceError.customerNotSynced
+        }
+
+        let payload = await quickBooksPaymentPayload(
+            invoice: payment.invoice,
+            customerQBID: customerQBID,
+            amount: payment.amount,
+            note: payment.notes,
+            paymentRef: payment.authorizationReference.nilIfBlank ?? "Payment for invoice #\(payment.invoice.id.uuidString.prefix(8)) from \(payment.invoice.customer.name)",
+            paymentKind: .manual(methodName: payment.method)
+        )
+
+        return try await withCheckedThrowingContinuation { continuation in
+            api.createPayment(payload) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
     func retryRefundReceiptSync(for refundPayment: Payment) async throws -> QuickBooksRefundReceipt {
         guard refundPayment.isRefund else {
             throw QuickBooksPaymentsServiceError.invalidRetryTarget

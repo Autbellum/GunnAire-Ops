@@ -837,36 +837,17 @@ GunnAire
         }
 
         syncingPaymentID = payment.id
-        // Build payment lines linking to the invoice in QuickBooks when available
-        let paymentLines: [QuickBooksPaymentLine]?
-        if let invoiceQBID = payment.invoice.quickBooksID, !invoiceQBID.isEmpty {
-            paymentLines = [
-                QuickBooksPaymentLine(
-                    Amount: payment.amount,
-                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoiceQBID, TxnType: "Invoice")]
-                )
-            ]
-        } else {
-            // No QuickBooks invoice ID; create an unapplied payment linked only to the customer
-            paymentLines = nil
-        }
-        let payload = QuickBooksPaymentCreate(
-            CustomerRef: QuickBooksReference(value: customerID, name: payment.invoice.customer.name),
-            TotalAmt: payment.amount,
-            PrivateNote: nil,
-            PaymentRefNum: "Payment for invoice #\(payment.invoice.id.uuidString.prefix(8)) from \(payment.invoice.customer.name)",
-            Line: paymentLines,
-            PaymentMethodRef: nil,
-            CreditCardPayment: nil
-        )
-        liveAPI.createPayment(payload) { result in
-            DispatchQueue.main.async {
-                syncingPaymentID = nil
-                switch result {
-                case .success(let quickBooksPayment):
+        Task {
+            do {
+                let quickBooksPayment = try await QuickBooksPaymentsService.shared.syncManualAccountingPayment(for: payment)
+                await MainActor.run {
+                    syncingPaymentID = nil
                     payment.quickBooksID = quickBooksPayment.Id
                     actionMessage = "Payment synced to QuickBooks: \(quickBooksPayment.Id)."
-                case .failure(let error):
+                }
+            } catch {
+                await MainActor.run {
+                    syncingPaymentID = nil
                     actionMessage = "QuickBooks payment sync failed: \(error.localizedDescription)"
                 }
             }
