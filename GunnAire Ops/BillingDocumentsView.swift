@@ -285,6 +285,13 @@ struct BillingDocumentsView: View {
                     TextField("Notes", text: $notes, axis: .vertical)
                         .lineLimit(2...5)
 
+                    if initialServiceCall != nil {
+                        Button("Save Notes Back To Job") {
+                            syncNotesToJob()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
                     Text("Total: \(selectedTotal, format: .currency(code: "USD"))")
                         .font(.headline)
 
@@ -587,6 +594,12 @@ struct BillingDocumentsView: View {
         actionMessage = "\(customer.name) saved locally."
     }
 
+    private func syncNotesToJob() {
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        initialServiceCall?.notes = trimmedNotes.isEmpty ? nil : trimmedNotes
+        actionMessage = trimmedNotes.isEmpty ? "Cleared job notes." : "Saved documentation notes back to the job."
+    }
+
     private func addItem() {
         guard let price = Double(newItemPrice) else { return }
         let item = Item(
@@ -833,8 +846,10 @@ struct BillingDocumentsView: View {
 
         isCreatingDocument = true
         let customer = resolveCustomerForDocument()
+        let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         selectedCustomerID = customer.id
         initialServiceCall?.customer = customer
+        initialServiceCall?.notes = trimmedNotes.isEmpty ? initialServiceCall?.notes : trimmedNotes
         if let trimmedAddress = customer.address?.trimmingCharacters(in: .whitespacesAndNewlines),
            !trimmedAddress.isEmpty {
             initialServiceCall?.siteAddress = trimmedAddress
@@ -847,7 +862,7 @@ struct BillingDocumentsView: View {
                 customer: customer,
                 lineItemSummary: selectedSummary,
                 amount: selectedTotal,
-                notes: notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes
+                notes: trimmedNotes.isEmpty ? nil : trimmedNotes
             )
             modelContext.insert(estimate)
             initialServiceCall?.linkedEstimateID = estimate.id
@@ -868,7 +883,7 @@ struct BillingDocumentsView: View {
                 lineItemSummary: selectedSummary,
                 amount: selectedTotal,
                 status: "unpaid",
-                notes: notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes
+                notes: trimmedNotes.isEmpty ? nil : trimmedNotes
             )
             modelContext.insert(invoice)
             initialServiceCall?.linkedInvoiceID = invoice.id
@@ -1249,6 +1264,9 @@ private struct RecordInvoicePaymentView: View {
             call.workCompletedChecklist = true
             call.paymentCollectedChecklist = totalPaid > 0
             call.status = invoice.status == "paid" ? .completed : .invoiced
+            if !trimmedCompletionNotes.isEmpty {
+                call.notes = mergedJobNotes(existing: call.notes, completionNotes: trimmedCompletionNotes)
+            }
         }
 
         dismiss()
@@ -1257,6 +1275,17 @@ private struct RecordInvoicePaymentView: View {
     private func signatureImageBase64() -> String? {
         guard let image = SignatureRenderer.image(from: signatureStrokes) else { return invoice.customerSignatureImageBase64 }
         return image.pngData()?.base64EncodedString()
+    }
+
+    private func mergedJobNotes(existing: String?, completionNotes: String) -> String {
+        let trimmedExisting = existing?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmedExisting.isEmpty {
+            return completionNotes
+        }
+        if trimmedExisting.localizedCaseInsensitiveContains(completionNotes) {
+            return trimmedExisting
+        }
+        return "\(trimmedExisting)\n\nCloseout Notes:\n\(completionNotes)"
     }
 }
 
