@@ -36,6 +36,8 @@ struct SettingsView: View {
     @AppStorage("enablePricebook") private var enablePricebook = true
     @AppStorage("enableGoodBetterBestEstimates") private var enableGoodBetterBestEstimates = true
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
+    @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
+    @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
     @AppStorage("enableFinancing") private var enableFinancing = false
     @AppStorage("enablePhotoDocumentation") private var enablePhotoDocumentation = true
     @AppStorage("enableOfflineMode") private var enableOfflineMode = false
@@ -126,7 +128,18 @@ struct SettingsView: View {
                             settingsToggle("Customer Portal", systemImage: "person.text.rectangle", isOn: $enableCustomerPortal)
 
                             if enableOnsitePayments {
-                                Text("A payment processor still needs to be connected before devices can accept card-present payments.")
+                                Picker("Tap to Pay Processor", selection: $onsitePaymentProcessor) {
+                                    ForEach(OnsitePaymentProcessor.allCases) { processor in
+                                        Text(processor.displayName).tag(processor.rawValue)
+                                    }
+                                }
+
+                                Toggle("Processor Ready on This Device", isOn: $onsitePaymentProcessorReady)
+
+                                let selectedProcessor = OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
+                                Text(selectedProcessor == .simulated
+                                     ? "Simulator mode is enabled for Tap to Pay workflow testing."
+                                     : "Select the live processor SDK you intend to use and mark the device ready once it is configured.")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }

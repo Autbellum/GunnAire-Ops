@@ -1102,6 +1102,7 @@ struct BillingDocumentsView: View {
 private struct RecordInvoicePaymentView: View {
     @AppStorage("requireCustomerSignature") private var requireCustomerSignature = true
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
+    @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -1109,6 +1110,7 @@ private struct RecordInvoicePaymentView: View {
     @Query private var payments: [Payment]
 
     let invoice: Invoice
+    @StateObject private var onsitePaymentManager = OnsitePaymentManager.shared
     @State private var amount: String
     @State private var shouldRecordPayment: Bool
     @State private var method = "card"
@@ -1118,6 +1120,7 @@ private struct RecordInvoicePaymentView: View {
     @State private var cardLast4 = ""
     @State private var authorizationCode = ""
     @State private var paymentNotes = ""
+    @State private var tapToPayMessage = ""
 
     init(invoice: Invoice) {
         self.invoice = invoice
@@ -1143,6 +1146,10 @@ private struct RecordInvoicePaymentView: View {
         payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { $0 + $1.amount }
+    }
+
+    private var selectedProcessor: OnsitePaymentProcessor {
+        OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
     }
 
     var body: some View {
@@ -1202,6 +1209,24 @@ private struct RecordInvoicePaymentView: View {
                             Text("Check").tag("check")
                         }
                         if method == "card" {
+                            if enableOnsitePayments {
+                                Button(onsitePaymentManager.isProcessing ? "Processing Tap to Pay..." : "Start Tap to Pay") {
+                                    Task {
+                                        await runTapToPay()
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(Color.brandGold)
+                                .foregroundStyle(Color.primaryBlack)
+                                .disabled(onsitePaymentManager.isProcessing || Double(amount) == nil || selectedProcessor == .none)
+
+                                if !tapToPayMessage.isEmpty {
+                                    Text(tapToPayMessage)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+
                             TextField("Card last 4", text: $cardLast4)
                                 .keyboardType(.numberPad)
                             TextField("Authorization ref", text: $authorizationCode)
@@ -1209,7 +1234,9 @@ private struct RecordInvoicePaymentView: View {
                         TextField("Payment notes", text: $paymentNotes, axis: .vertical)
                             .lineLimit(2...4)
                         if enableOnsitePayments {
-                            Text("Tap to Pay and keyed card processing still need a payment processor SDK. This screen finalizes the invoice, stores the signature, and records the payment result.")
+                            Text(selectedProcessor == .simulated
+                                 ? "Tap to Pay simulator is active for field workflow testing."
+                                 : "This device is prepared for a live Tap to Pay processor once its SDK bridge is added.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -1246,6 +1273,23 @@ private struct RecordInvoicePaymentView: View {
         }
     }
 
+    private func runTapToPay() async {
+        guard let amountValue = Double(amount), amountValue > 0 else {
+            tapToPayMessage = "Enter a valid amount before starting Tap to Pay."
+            return
+        }
+
+        do {
+            let result = try await onsitePaymentManager.startTapToPay(amount: amountValue, customerName: invoice.customer.name)
+            cardLast4 = result.cardLast4
+            authorizationCode = result.authorizationCode
+            paymentNotes = result.paymentSummary
+            tapToPayMessage = "\(result.processorName) approved \(result.amount.formatted(.currency(code: "USD")))."
+        } catch {
+            tapToPayMessage = error.localizedDescription
+        }
+    }
+
     private func savePayment() {
         let paidAmount = shouldRecordPayment ? (Double(amount) ?? 0) : 0
         guard !shouldRecordPayment || paidAmount > 0 else { return }
@@ -1277,7 +1321,9 @@ private struct RecordInvoicePaymentView: View {
                     cardLast4: trimmedCardLast4.isEmpty ? nil : trimmedCardLast4,
                     authorizationReference: trimmedAuthorization.isEmpty ? nil : trimmedAuthorization,
                     notes: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
-                    processor: method == "card" ? "manual-entry" : "onsite-recorded"
+                    processor: method == "card"
+                        ? (authorizationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "manual-entry" : selectedProcessor.rawValue)
+                        : "onsite-recorded"
                 )
             )
         }

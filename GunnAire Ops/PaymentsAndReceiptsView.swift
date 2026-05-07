@@ -13,6 +13,9 @@ struct PaymentsAndReceiptsView: View {
     }
 
     @Environment(\.modelContext) private var modelContext
+    @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
+    @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
+    @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
 
@@ -33,6 +36,10 @@ struct PaymentsAndReceiptsView: View {
         return invoices.first { $0.id == selectedInvoiceID }
     }
 
+    private var selectedProcessor: OnsitePaymentProcessor {
+        OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
+    }
+
     var body: some View {
         ZStack {
             WatermarkBackground()
@@ -41,7 +48,9 @@ struct PaymentsAndReceiptsView: View {
                     Section("Payment Status") {
                         Text("QuickBooks: \(isQuickBooksConnected ? "Connected" : "Not Connected")")
                             .foregroundColor(isQuickBooksConnected ? .green : .secondary)
-                        Text("The QuickBooks Online accounting API records payments against customers and invoices. It does not run card-present Tap to Pay on this device.")
+                        Text("Tap to Pay: \(enableOnsitePayments && onsitePaymentProcessorReady ? selectedProcessor.displayName : "Not Ready")")
+                            .foregroundColor(enableOnsitePayments && onsitePaymentProcessorReady ? .green : .secondary)
+                        Text("The app now includes a Tap to Pay workflow layer. A live provider SDK still needs to back the selected processor before real card-present payments can be accepted.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
