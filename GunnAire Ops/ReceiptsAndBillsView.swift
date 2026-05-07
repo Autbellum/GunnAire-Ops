@@ -1043,6 +1043,44 @@ private extension ReceiptsAndBillsView {
                     }
                 }
             }
+        case .salesReceipt:
+            QuickBooksDataAPI.shared.fetchSalesReceipts { result in
+                DispatchQueue.main.async {
+                    isLoadingAttachTargets = false
+                    switch result {
+                    case .success(let salesReceipts):
+                        attachTargetOptions = salesReceipts.map {
+                            let customer = $0.CustomerRef?.displayName ?? "Walk-in customer"
+                            return AttachTargetOption(
+                                idValue: $0.Id,
+                                label: "Sales Receipt \($0.Id) • \(customer) • \(currencyString($0.TotalAmt))"
+                            )
+                        }
+                        attachLookupMessage = attachTargetOptions.isEmpty ? "No sales receipts found." : "Loaded \(attachTargetOptions.count) sales receipt ID(s)."
+                    case .failure(let error):
+                        attachLookupMessage = "Failed to load sales receipts: \(error.localizedDescription)"
+                    }
+                }
+            }
+        case .purchase:
+            QuickBooksDataAPI.shared.fetchPurchases { result in
+                DispatchQueue.main.async {
+                    isLoadingAttachTargets = false
+                    switch result {
+                    case .success(let purchases):
+                        attachTargetOptions = purchases.map {
+                            let vendor = $0.EntityRef?.displayName ?? "Expense purchase"
+                            return AttachTargetOption(
+                                idValue: $0.Id,
+                                label: "Purchase \($0.Id) • \(vendor) • \(currencyString($0.TotalAmt))"
+                            )
+                        }
+                        attachLookupMessage = attachTargetOptions.isEmpty ? "No purchases found." : "Loaded \(attachTargetOptions.count) purchase ID(s)."
+                    case .failure(let error):
+                        attachLookupMessage = "Failed to load purchases: \(error.localizedDescription)"
+                    }
+                }
+            }
         }
     }
 

@@ -1560,6 +1560,8 @@ enum QuickBooksAttachableEntityType: String, CaseIterable {
     case invoice = "Invoice"
     case bill = "Bill"
     case payment = "Payment"
+    case salesReceipt = "SalesReceipt"
+    case purchase = "Purchase"
 }
 
 struct QuickBooksAttachableReference: Codable {
