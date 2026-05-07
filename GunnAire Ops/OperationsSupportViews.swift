@@ -119,6 +119,7 @@ struct SyncIntegrationsView: View {
     @State private var newTechnicianName = ""
     @State private var newTechnicianCalendarEmail = ""
     @State private var selectedTechnician: Technician?
+    @State private var technicianMessage: String?
 
     private var quickBooksConnected: Bool {
         QuickBooksDataAPI.shared.isAuthenticated
@@ -194,7 +195,15 @@ struct SyncIntegrationsView: View {
                     } label: {
                         Label("Add Technician", systemImage: "person.badge.plus")
                     }
-                    .disabled(newTechnicianName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.brandGold)
+                    .foregroundStyle(Color.primaryBlack)
+
+                    if let technicianMessage {
+                        Text(technicianMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
 
                     if technicians.isEmpty {
                         Text("No technicians added yet.")
@@ -316,11 +325,19 @@ struct SyncIntegrationsView: View {
 
     private func addTechnician() {
         let name = newTechnicianName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
-        let email = newTechnicianCalendarEmail.nilIfBlank
+        guard !name.isEmpty else {
+            technicianMessage = "Enter a technician name first."
+            return
+        }
+        let email = newTechnicianCalendarEmail.nilIfBlank?.lowercased()
+        if let email, technicians.contains(where: { $0.contactInfo?.lowercased() == email }) {
+            technicianMessage = "A technician with that calendar email already exists."
+            return
+        }
         modelContext.insert(Technician(name: name, contactInfo: email))
         newTechnicianName = ""
         newTechnicianCalendarEmail = ""
+        technicianMessage = "Added \(name)."
     }
 }
 

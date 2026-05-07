@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 
 struct ScheduleView: View {
+    @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
     @Query(sort: [SortDescriptor(\ServiceCall.scheduledDate)]) private var serviceCalls: [ServiceCall]
     @Query private var recurringContracts: [RecurringMaintenanceContract]
@@ -10,6 +11,7 @@ struct ScheduleView: View {
     
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showingAddCallSheet = false
+    @State private var documentationCall: ServiceCall?
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
     
@@ -96,6 +98,24 @@ struct ScheduleView: View {
                             NavigationLink(value: call) {
                                 serviceCallRow(for: call)
                             }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button {
+                                    documentationCall = call
+                                } label: {
+                                    Label("Start Docs", systemImage: "doc.text")
+                                }
+                                .tint(Color.brandGold)
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                if hasNavigableAddress(for: call) {
+                                    Button {
+                                        openMaps(for: call)
+                                    } label: {
+                                        Label("Navigate", systemImage: "map")
+                                    }
+                                    .tint(.blue)
+                                }
+                            }
                         }
                         .onDelete(perform: deleteCalls)
                     }
@@ -153,6 +173,12 @@ struct ScheduleView: View {
                 .sheet(isPresented: $showingAddCallSheet) {
                     AddServiceCallView(selectedDate: selectedDate)
                         .tint(Color.brandGold)
+                }
+                .sheet(item: $documentationCall) { call in
+                    NavigationStack {
+                        BillingDocumentsView(initialServiceCall: call)
+                            .tint(Color.brandGold)
+                    }
                 }
             }
         }
@@ -240,10 +266,21 @@ struct ScheduleView: View {
                 .foregroundColor(.gray)
             if let address = call.siteAddress ?? call.customer.address,
                !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(address)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
+                HStack(alignment: .top, spacing: 8) {
+                    Text(address)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Button {
+                        openMaps(for: call)
+                    } label: {
+                        Label("Navigate", systemImage: "map")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundColor(Color.brandGold)
+                }
             }
             HStack(spacing: 8) {
                 if call.googleEventID != nil {
@@ -298,6 +335,23 @@ struct ScheduleView: View {
                 }
             }
         }
+    }
+
+    private func openMaps(for call: ServiceCall) {
+        let address = (call.siteAddress ?? call.customer.address)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let address, !address.isEmpty else { return }
+        var components = URLComponents(string: "http://maps.apple.com/")
+        components?.queryItems = [URLQueryItem(name: "q", value: address)]
+        if let url = components?.url {
+            openURL(url)
+        }
+    }
+
+    private func hasNavigableAddress(for call: ServiceCall) -> Bool {
+        let address = (call.siteAddress ?? call.customer.address)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return !(address?.isEmpty ?? true)
     }
 }
 

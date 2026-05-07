@@ -353,7 +353,14 @@ struct ServiceCallDetailView: View {
                             Text("Calendar: \(calendarID == "primary" ? "Primary Calendar" : calendarID)")
                         }
                         if let resolvedAddress {
-                            Text("Address: \(resolvedAddress)")
+                            Button {
+                                if let mapsURL {
+                                    openURL(mapsURL)
+                                }
+                            } label: {
+                                Label(resolvedAddress, systemImage: "map")
+                            }
+                            .buttonStyle(.plain)
                         }
                         if let notes = call.notes, !notes.isEmpty {
                             Text("Notes: \(notes)")

@@ -154,7 +154,9 @@ struct SettingsView: View {
                             } label: {
                                 Label("Add User", systemImage: "person.badge.plus")
                             }
-                            .disabled(!canAddUser)
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
 
                             if let userAdminMessage {
                                 Text(userAdminMessage)
@@ -297,13 +299,12 @@ struct SettingsView: View {
         }
     }
 
-    private var canAddUser: Bool {
-        let email = AppAccess.normalizedEmail(newUserEmail)
-        return email.hasSuffix("@gunnaire.com") && !users.contains { $0.email == email }
-    }
-
     private func addUser() {
         let email = AppAccess.normalizedEmail(newUserEmail)
+        guard !email.isEmpty else {
+            userAdminMessage = "Enter an email address first."
+            return
+        }
         guard email.hasSuffix("@gunnaire.com") else {
             userAdminMessage = "Users must have a gunnaire.com email address."
             return

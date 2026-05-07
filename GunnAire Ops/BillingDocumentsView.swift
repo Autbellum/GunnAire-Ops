@@ -3,6 +3,7 @@ import SwiftData
 import UIKit
 
 struct BillingDocumentsView: View {
+    @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
@@ -27,6 +28,7 @@ struct BillingDocumentsView: View {
     @State private var paymentInvoice: Invoice?
     @State private var actionMessage = ""
     @State private var isCreatingDocument = false
+    @State private var isImportingQuickBooksItems = false
     @State private var didLoadInitialContext = false
 
     init(initialServiceCall: ServiceCall? = nil) {
@@ -70,6 +72,16 @@ struct BillingDocumentsView: View {
         liveAPI.isAuthenticated
     }
 
+    private var mapsURL: URL? {
+        let address = customerAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? selectedJobAddress
+            : customerAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let address, !address.isEmpty else { return nil }
+        var components = URLComponents(string: "http://maps.apple.com/")
+        components?.queryItems = [URLQueryItem(name: "q", value: address)]
+        return components?.url
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -82,8 +94,15 @@ struct BillingDocumentsView: View {
                         Text("Job Type: \(call.type.rawValue.capitalized)")
                             .foregroundColor(.secondary)
                         if let selectedJobAddress {
-                            Text(selectedJobAddress)
-                                .foregroundColor(.secondary)
+                            Button {
+                                if let mapsURL {
+                                    openURL(mapsURL)
+                                }
+                            } label: {
+                                Label(selectedJobAddress, systemImage: "map")
+                                    .foregroundColor(Color.brandGold)
+                            }
+                            .buttonStyle(.plain)
                         }
                         if let notes = call.notes, !notes.isEmpty {
                             Text(notes)
@@ -106,6 +125,14 @@ struct BillingDocumentsView: View {
                         ForEach(customers) { customer in
                             Text(customer.name).tag(UUID?.some(customer.id))
                         }
+                    }
+
+                    if let call = initialServiceCall {
+                        Button(selectedCustomerID == call.customer.id ? "Using Job Customer" : "Use Job Customer") {
+                            selectedCustomerID = call.customer.id
+                            populateCustomerFields(from: call.customer)
+                        }
+                        .disabled(selectedCustomerID == call.customer.id)
                     }
 
                     if customers.isEmpty {
@@ -139,6 +166,14 @@ struct BillingDocumentsView: View {
                     TextField("Customer name", text: $customerName)
                     TextField("Address", text: $customerAddress, axis: .vertical)
                         .lineLimit(2...3)
+                    if let mapsURL {
+                        Button {
+                            openURL(mapsURL)
+                        } label: {
+                            Label("Open Address in Maps", systemImage: "map")
+                        }
+                        .buttonStyle(.bordered)
+                    }
                     TextField("Phone", text: $customerPhone)
                         .keyboardType(.phonePad)
                     TextField("Email", text: $customerEmail)
@@ -189,6 +224,13 @@ struct BillingDocumentsView: View {
                             }
                             .buttonStyle(.plain)
                         }
+                    }
+
+                    if isQuickBooksConnected {
+                        Button(isImportingQuickBooksItems ? "Importing QuickBooks Items..." : "Load QuickBooks Catalog") {
+                            importQuickBooksItems()
+                        }
+                        .disabled(isImportingQuickBooksItems)
                     }
 
                     TextField("New item", text: $newItemName)
@@ -369,6 +411,44 @@ struct BillingDocumentsView: View {
         newItemName = ""
         newItemDescription = ""
         newItemPrice = ""
+    }
+
+    private func importQuickBooksItems() {
+        guard isQuickBooksConnected else { return }
+        isImportingQuickBooksItems = true
+        actionMessage = "Loading QuickBooks catalog..."
+        liveAPI.fetchItems { result in
+            DispatchQueue.main.async {
+                isImportingQuickBooksItems = false
+                switch result {
+                case .failure(let error):
+                    actionMessage = "QuickBooks catalog sync failed: \(error.localizedDescription)"
+                case .success(let quickBooksItems):
+                    var imported = 0
+                    for quickBooksItem in quickBooksItems {
+                        let normalizedID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if let existing = items.first(where: { $0.quickBooksID == normalizedID }) {
+                            existing.name = quickBooksItem.Name
+                            existing.unitPrice = quickBooksItem.UnitPrice ?? existing.unitPrice
+                            existing.itemDescription = quickBooksItem.Description ?? existing.itemDescription
+                            continue
+                        }
+
+                        let localItem = Item(
+                            quickBooksID: normalizedID,
+                            name: quickBooksItem.Name,
+                            unitPrice: quickBooksItem.UnitPrice ?? 0,
+                            itemDescription: quickBooksItem.Description
+                        )
+                        modelContext.insert(localItem)
+                        imported += 1
+                    }
+                    actionMessage = imported == 0
+                        ? "QuickBooks catalog is already up to date."
+                        : "Imported \(imported) catalog items from QuickBooks."
+                }
+            }
+        }
     }
 
     private func toggleItem(_ item: Item) {
