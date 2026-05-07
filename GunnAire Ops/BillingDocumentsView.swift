@@ -51,6 +51,16 @@ struct BillingDocumentsView: View {
         items.filter { selectedItems.contains($0.id) }
     }
 
+    private var currentJobEstimate: Estimate? {
+        guard let estimateID = initialServiceCall?.linkedEstimateID else { return nil }
+        return estimates.first { $0.id == estimateID }
+    }
+
+    private var currentJobInvoice: Invoice? {
+        guard let invoiceID = initialServiceCall?.linkedInvoiceID else { return nil }
+        return invoices.first { $0.id == invoiceID }
+    }
+
     private var selectedSummary: String {
         selectedLineItems
             .map { item in
@@ -110,6 +120,47 @@ struct BillingDocumentsView: View {
                             Text(notes)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                if currentJobEstimate != nil || currentJobInvoice != nil {
+                    Section("Current Job Documents") {
+                        if let estimate = currentJobEstimate {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Estimate")
+                                    .font(.headline)
+                                Text("\(estimate.amount, format: .currency(code: "USD")) • \(estimate.status.capitalized)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(estimate.lineItemSummary)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 2)
+                        }
+
+                        if let invoice = currentJobInvoice {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Invoice")
+                                    .font(.headline)
+                                Text("\(invoice.amount, format: .currency(code: "USD")) • \(invoice.status.capitalized)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                if let quickBooksID = invoice.quickBooksID, !quickBooksID.isEmpty {
+                                    Text("QuickBooks ID: \(quickBooksID)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Button(invoice.status == "paid" ? "Invoice Paid" : "Open Closeout") {
+                                    paymentInvoice = invoice
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(Color.brandGold)
+                                .foregroundStyle(Color.primaryBlack)
+                                .disabled(invoice.status == "paid")
+                            }
+                            .padding(.vertical, 2)
                         }
                     }
                 }
