@@ -46,6 +46,31 @@ struct ScheduleView: View {
             .sorted { $0.scheduledDate < $1.scheduledDate }
     }
 
+    private var jobsNeedingDocumentation: [ServiceCall] {
+        callsForSignedInUser
+            .filter { call in
+                call.status != .cancelled &&
+                (call.documentationStartedAt == nil || (call.linkedEstimateID == nil && call.linkedInvoiceID == nil))
+            }
+            .sorted { $0.scheduledDate < $1.scheduledDate }
+    }
+
+    private var jobsNeedingPayment: [ServiceCall] {
+        callsForSignedInUser
+            .filter { call in
+                guard let invoice = invoice(for: call) else { return false }
+                return invoice.status != "paid"
+            }
+            .sorted { lhs, rhs in
+                let lhsBalance = balanceDue(for: lhs) ?? 0
+                let rhsBalance = balanceDue(for: rhs) ?? 0
+                if lhsBalance == rhsBalance {
+                    return lhs.scheduledDate < rhs.scheduledDate
+                }
+                return lhsBalance > rhsBalance
+            }
+    }
+
     private var callsForSignedInUser: [ServiceCall] {
         guard let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") else {
             return serviceCalls
@@ -223,6 +248,88 @@ struct ScheduleView: View {
                     }
                     if upcomingJobs.count > 3 {
                         Text("And \(upcomingJobs.count - 3) more...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Needs Documentation")
+                    .font(.headline)
+                    .foregroundColor(Color.brandGold)
+                if jobsNeedingDocumentation.isEmpty {
+                    Text("No jobs are waiting on documentation.")
+                        .foregroundColor(.secondary)
+                        .italic()
+                } else {
+                    ForEach(jobsNeedingDocumentation.prefix(3)) { job in
+                        Button {
+                            documentationCall = job
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(job.customer.name)
+                                        .font(.subheadline)
+                                        .foregroundColor(.primary)
+                                    Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Text("Open Docs")
+                                    .font(.caption)
+                                    .foregroundColor(Color.brandGold)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if jobsNeedingDocumentation.count > 3 {
+                        Text("And \(jobsNeedingDocumentation.count - 3) more...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Needs Payment")
+                    .font(.headline)
+                    .foregroundColor(Color.brandGold)
+                if jobsNeedingPayment.isEmpty {
+                    Text("No jobs currently have an open invoice balance.")
+                        .foregroundColor(.secondary)
+                        .italic()
+                } else {
+                    ForEach(jobsNeedingPayment.prefix(3)) { job in
+                        Button {
+                            documentationCall = job
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(job.customer.name)
+                                        .font(.subheadline)
+                                        .foregroundColor(.primary)
+                                    Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                if let balanceDue = balanceDue(for: job) {
+                                    Text(balanceDue, format: .currency(code: "USD"))
+                                        .font(.caption)
+                                        .foregroundColor(Color.brandGold)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if jobsNeedingPayment.count > 3 {
+                        Text("And \(jobsNeedingPayment.count - 3) more...")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
