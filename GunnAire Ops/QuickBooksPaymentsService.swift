@@ -104,6 +104,10 @@ final class QuickBooksPaymentsService {
         )
     }
 
+    func createStandaloneCardToken(_ input: QuickBooksPaymentsCardInput) async throws -> QuickBooksPaymentsTokenResponse {
+        try await createCardToken(input)
+    }
+
     func processBankPayment(
         invoice: Invoice,
         amount: Double,

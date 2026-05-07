@@ -12,11 +12,14 @@ struct QuickBooksManagementView: View {
     @State private var estimates: [QuickBooksEstimate] = []
     @State private var invoices: [QuickBooksInvoice] = []
     @State private var bills: [QuickBooksBill] = []
+    @State private var purchases: [QuickBooksPurchase] = []
     @State private var vendors: [QuickBooksVendor] = []
     @State private var payments: [QuickBooksPayment] = []
     @State private var salesReceipts: [QuickBooksSalesReceipt] = []
     @State private var deposits: [QuickBooksDeposit] = []
     @State private var paymentMethods: [QuickBooksPaymentMethod] = []
+    @State private var storedCards: [QuickBooksPaymentsCardRecord] = []
+    @State private var paymentReceipts: [String: QuickBooksPaymentsPaymentReceipt] = [:]
 
     @State private var showingNewCustomerSheet = false
     @State private var showingNewCatalogItemSheet = false
@@ -24,10 +27,12 @@ struct QuickBooksManagementView: View {
     @State private var showingNewInvoiceSheet = false
     @State private var showingNewSalesReceiptSheet = false
     @State private var showingNewBillSheet = false
+    @State private var showingNewPurchaseSheet = false
     @State private var showingNewVendorSheet = false
     @State private var showingNewPaymentSheet = false
     @State private var showingProcessCardPaymentSheet = false
     @State private var showingRefundPaymentSheet = false
+    @State private var showingStoreCardSheet = false
 
     @State private var isLoading = false
     @State private var statusMessage = "Connect QuickBooks in Settings to start live sync."
@@ -57,6 +62,10 @@ struct QuickBooksManagementView: View {
 
     private var totalBillAmount: Double {
         bills.reduce(0) { $0 + $1.TotalAmt }
+    }
+
+    private var totalPurchaseAmount: Double {
+        purchases.reduce(0) { $0 + $1.TotalAmt }
     }
 
     private var totalPaymentAmount: Double {
@@ -142,11 +151,13 @@ struct QuickBooksManagementView: View {
                         summaryRow(title: "Estimates", count: estimates.count, amount: totalEstimateAmount)
                         summaryRow(title: "Invoices", count: invoices.count, amount: totalInvoiceAmount)
                         summaryRow(title: "Bills", count: bills.count, amount: totalBillAmount)
+                        summaryRow(title: "Purchases", count: purchases.count, amount: totalPurchaseAmount)
                         summaryRow(title: "Vendors", count: vendors.count)
                         summaryRow(title: "Payments", count: payments.count, amount: totalPaymentAmount)
                         summaryRow(title: "Sales Receipts", count: salesReceipts.count, amount: totalSalesReceiptAmount)
                         summaryRow(title: "Deposits", count: deposits.count, amount: totalDepositAmount)
                         summaryRow(title: "Payment Methods", count: paymentMethods.count)
+                        summaryRow(title: "Stored Cards", count: storedCards.count)
                     }
 
                     Section(header: Text("Customers").foregroundColor(Color.brandGold)) {
@@ -357,6 +368,40 @@ struct QuickBooksManagementView: View {
                             .disabled(!isAuthenticated || vendors.isEmpty || Config.QuickBooks.defaultExpenseAccountRef.isEmpty)
                     }
 
+                    Section(header: Text("Purchases").foregroundColor(Color.brandGold)) {
+                        if purchases.isEmpty {
+                            emptyState("No QuickBooks purchases loaded.")
+                        } else {
+                            ForEach(purchases) { purchase in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    transactionBlock(
+                                        title: purchase.Id,
+                                        name: purchase.EntityRef?.displayName ?? "Expense purchase",
+                                        amount: purchase.TotalAmt,
+                                        dateText: purchase.TxnDate
+                                    )
+                                    if let paymentType = purchase.PaymentType, !paymentType.isEmpty {
+                                        Text("Payment type: \(paymentType)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                        }
+
+                        if Config.QuickBooks.defaultExpenseAccountRef.isEmpty {
+                            Text("Set `QB_DEFAULT_EXPENSE_ACCOUNT_REF` before creating live purchases.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Button("Create Purchase") { showingNewPurchaseSheet = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(!isAuthenticated || vendors.isEmpty || Config.QuickBooks.defaultExpenseAccountRef.isEmpty)
+                    }
+
                     Section(header: Text("Vendors").foregroundColor(Color.brandGold)) {
                         if vendors.isEmpty {
                             emptyState("No QuickBooks vendors loaded.")
@@ -490,6 +535,36 @@ struct QuickBooksManagementView: View {
                         .foregroundStyle(Color.primaryBlack)
                         .disabled(!isAuthenticated || collectibleLocalInvoices.isEmpty)
 
+                        Button("Store Card") {
+                            showingStoreCardSheet = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.brandGold)
+                        .foregroundStyle(Color.primaryBlack)
+                        .disabled(!isAuthenticated)
+
+                        if storedCards.isEmpty {
+                            Text("No stored QuickBooks payment cards loaded.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(storedCards.prefix(10)) { card in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(card.name ?? "Stored Card")
+                                        .font(.headline)
+                                    Text(card.number ?? "Masked number unavailable")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    if let cardType = card.cardType, !cardType.isEmpty {
+                                        Text(cardType)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+
                         if quickBooksChargePayments.isEmpty {
                             Text("No local QuickBooks Payments charges have been processed yet.")
                                 .font(.caption)
@@ -518,6 +593,25 @@ struct QuickBooksManagementView: View {
                                         Text("Refund receipt ID: \(refundReceiptID)")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
+                                    }
+                                    if let chargeID = payment.quickBooksChargeID,
+                                       let receipt = paymentReceipts[chargeID] {
+                                        if let amount = receipt.amount, !amount.isEmpty {
+                                            Text("Receipt amount: \(amount)")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        if let link = receipt.links?.first(where: { ($0.rel ?? "").localizedCaseInsensitiveContains("receipt") || ($0.rel ?? "").localizedCaseInsensitiveContains("self") }),
+                                           let href = link.href,
+                                           let url = URL(string: href) {
+                                            Link("Open Payment Receipt", destination: url)
+                                                .font(.caption2)
+                                        }
+                                    } else if payment.quickBooksChargeID?.isEmpty == false {
+                                        Button("Load Payment Receipt") {
+                                            loadPaymentReceipt(for: payment)
+                                        }
+                                        .buttonStyle(.bordered)
                                     }
                                     if payment.needsQuickBooksAttention,
                                        let detail = payment.quickBooksAccountingSyncDetail,
@@ -620,6 +714,12 @@ struct QuickBooksManagementView: View {
                     }
                     .tint(Color.brandGold)
                 }
+                .sheet(isPresented: $showingNewPurchaseSheet) {
+                    QuickBooksPurchaseComposeView(vendorRefs: vendors.map(\.reference)) { vendorRef, amount, note, paymentType in
+                        createPurchase(vendorRef: vendorRef, amount: amount, note: note, paymentType: paymentType)
+                    }
+                    .tint(Color.brandGold)
+                }
                 .sheet(isPresented: $showingNewVendorSheet) {
                     QuickBooksVendorComposeView { name, email, phone in
                         createVendor(name: name, email: email, phone: phone)
@@ -654,6 +754,12 @@ struct QuickBooksManagementView: View {
                         .tint(Color.brandGold)
                     }
                 }
+                .sheet(isPresented: $showingStoreCardSheet) {
+                    QuickBooksStoreCardComposeView { input in
+                        storeCard(input)
+                    }
+                    .tint(Color.brandGold)
+                }
                 .onAppear {
                     QuickBooksDataAPI.shared.loadTokens()
                     if !quickBooksConfigReady {
@@ -680,7 +786,7 @@ struct QuickBooksManagementView: View {
 
         isLoading = true
         actionMessage = nil
-        statusMessage = "Syncing customers, catalog, estimates, invoices, sales receipts, bills, vendors, payments, payment methods, and deposits from QuickBooks..."
+        statusMessage = "Syncing customers, catalog, estimates, invoices, sales receipts, bills, purchases, vendors, payments, payment methods, stored cards, and deposits from QuickBooks..."
 
         let group = DispatchGroup()
         var failures: [String] = []
@@ -751,6 +857,19 @@ struct QuickBooksManagementView: View {
         }
 
         group.enter()
+        liveAPI.fetchPurchases { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    purchases = records
+                case .failure(let error):
+                    failures.append("Purchases: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
+        }
+
+        group.enter()
         liveAPI.fetchVendors { result in
             DispatchQueue.main.async {
                 switch result {
@@ -784,6 +903,19 @@ struct QuickBooksManagementView: View {
                     paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
                 case .failure(let error):
                     failures.append("Payment Methods: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
+        }
+
+        group.enter()
+        liveAPI.fetchCards { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    storedCards = records
+                case .failure(let error):
+                    failures.append("Stored Cards: \(error.localizedDescription)")
                 }
                 group.leave()
             }
@@ -831,7 +963,7 @@ struct QuickBooksManagementView: View {
                 failures.append("Local app sync: \(error.localizedDescription)")
             }
             if failures.isEmpty {
-                statusMessage = "Sync complete. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, and \(deposits.count) deposits."
+                statusMessage = "Sync complete. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, \(storedCards.count) stored cards, and \(deposits.count) deposits."
             } else {
                 statusMessage = failures.joined(separator: "\n")
             }
@@ -975,6 +1107,32 @@ struct QuickBooksManagementView: View {
                         syncAllQuickBooksData()
                     case .failure(let error):
                         actionMessage = "Bill creation failed: \(error.localizedDescription)"
+                        isLoading = false
+                    }
+                }
+            }
+        }
+    }
+
+    private func createPurchase(vendorRef: QuickBooksReference, amount: Double, note: String?, paymentType: String) {
+        let expenseAccount = QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil)
+        let payload = QuickBooksPurchaseCreate(
+            AccountRef: expenseAccount,
+            EntityRef: vendorRef,
+            Line: [QuickBooksBillLine(amount: amount, description: note, accountRef: expenseAccount)],
+            PaymentType: paymentType,
+            PrivateNote: note
+        )
+
+        performAction(message: "Creating purchase in QuickBooks...") {
+            liveAPI.createPurchase(payload) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let purchase):
+                        actionMessage = "Purchase created: \(purchase.Id)"
+                        syncAllQuickBooksData()
+                    case .failure(let error):
+                        actionMessage = "Purchase creation failed: \(error.localizedDescription)"
                         isLoading = false
                     }
                 }
@@ -1165,6 +1323,30 @@ struct QuickBooksManagementView: View {
         }
     }
 
+    private func storeCard(_ input: QuickBooksPaymentsCardInput) {
+        performAction(message: "Storing QuickBooks card...") {
+            Task {
+                do {
+                    let token = try await QuickBooksPaymentsService.shared.createStandaloneCardToken(input)
+                    let card = try await withCheckedThrowingContinuation { continuation in
+                        liveAPI.createStoredCard(QuickBooksPaymentsStoredCardCreateRequest(value: token.value)) { result in
+                            continuation.resume(with: result)
+                        }
+                    }
+                    await MainActor.run {
+                        actionMessage = "Stored QuickBooks card: \(card.number ?? card.id)"
+                        syncAllQuickBooksData()
+                    }
+                } catch {
+                    await MainActor.run {
+                        actionMessage = "Store card failed: \(error.localizedDescription)"
+                        isLoading = false
+                    }
+                }
+            }
+        }
+    }
+
     private func refundPayment(_ payment: Payment, amount: Double, note: String?) {
         performAction(message: "Refunding QuickBooks payment...") {
             Task {
@@ -1245,6 +1427,28 @@ struct QuickBooksManagementView: View {
                         actionMessage = "QuickBooks follow-up retry failed: \(error.localizedDescription)"
                         isLoading = false
                     }
+                }
+            }
+        }
+    }
+
+    private func loadPaymentReceipt(for payment: Payment) {
+        guard let chargeID = payment.quickBooksChargeID?.trimmingCharacters(in: .whitespacesAndNewlines), !chargeID.isEmpty else {
+            actionMessage = "This payment does not have a QuickBooks charge ID."
+            return
+        }
+
+        performAction(message: "Loading QuickBooks payment receipt...") {
+            liveAPI.fetchPaymentReceipt(id: chargeID) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let receipt):
+                        paymentReceipts[chargeID] = receipt
+                        actionMessage = "Payment receipt loaded."
+                    case .failure(let error):
+                        actionMessage = "Payment receipt lookup failed: \(error.localizedDescription)"
+                    }
+                    isLoading = false
                 }
             }
         }
@@ -1446,6 +1650,61 @@ private struct QuickBooksBillComposeView: View {
     }
 }
 
+private struct QuickBooksPurchaseComposeView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let vendorRefs: [QuickBooksReference]
+    let onCreate: (QuickBooksReference, Double, String?, String) -> Void
+
+    @State private var selectedVendorIndex = 0
+    @State private var amountText = ""
+    @State private var note = ""
+    @State private var paymentType = "Cash"
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Create Purchase") {
+                    if vendorRefs.isEmpty {
+                        Text("Sync QuickBooks vendors first.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        Picker("Vendor", selection: $selectedVendorIndex) {
+                            ForEach(vendorRefs.indices, id: \.self) { index in
+                                Text(vendorRefs[index].displayName).tag(index)
+                            }
+                        }
+                    }
+
+                    Picker("Payment Type", selection: $paymentType) {
+                        Text("Cash").tag("Cash")
+                        Text("Check").tag("Check")
+                        Text("Credit Card").tag("CreditCard")
+                    }
+
+                    TextField("Amount", text: $amountText)
+                        .keyboardType(.decimalPad)
+                    TextField("Notes", text: $note)
+                }
+            }
+            .navigationTitle("Create Purchase")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        guard !vendorRefs.isEmpty, let amount = Double(amountText), amount > 0 else { return }
+                        onCreate(vendorRefs[selectedVendorIndex], amount, note.isEmpty ? nil : note, paymentType)
+                        dismiss()
+                    }
+                    .disabled(vendorRefs.isEmpty || Double(amountText) == nil)
+                }
+            }
+        }
+    }
+}
+
 private struct QuickBooksPaymentComposeView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -1515,6 +1774,71 @@ private struct QuickBooksPaymentComposeView: View {
                 guard invoices.indices.contains(newValue) else { return }
                 let invoice = invoices[newValue]
                 amountText = String(format: "%.2f", max(invoice.Balance ?? invoice.TotalAmt, 0))
+            }
+        }
+    }
+}
+
+private struct QuickBooksStoreCardComposeView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let onStore: (QuickBooksPaymentsCardInput) -> Void
+
+    @State private var cardholderName = ""
+    @State private var cardNumber = ""
+    @State private var expirationMonth = ""
+    @State private var expirationYear = ""
+    @State private var cvc = ""
+    @State private var streetAddress = ""
+    @State private var city = ""
+    @State private var region = ""
+    @State private var postalCode = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Store Card") {
+                    TextField("Cardholder name", text: $cardholderName)
+                    TextField("Card number", text: $cardNumber)
+                        .keyboardType(.numberPad)
+                    TextField("Exp MM", text: $expirationMonth)
+                        .keyboardType(.numberPad)
+                    TextField("Exp YYYY", text: $expirationYear)
+                        .keyboardType(.numberPad)
+                    TextField("CVC", text: $cvc)
+                        .keyboardType(.numberPad)
+                    TextField("Street Address", text: $streetAddress)
+                    TextField("City", text: $city)
+                    TextField("State", text: $region)
+                    TextField("Postal Code", text: $postalCode)
+                        .keyboardType(.numbersAndPunctuation)
+                }
+            }
+            .navigationTitle("Store Card")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Store") {
+                        onStore(
+                            QuickBooksPaymentsCardInput(
+                                cardholderName: cardholderName,
+                                cardNumber: cardNumber,
+                                expMonth: expirationMonth,
+                                expYear: expirationYear,
+                                cvc: cvc,
+                                postalCode: postalCode.nilIfBlank,
+                                addressLine: streetAddress.nilIfBlank,
+                                city: city.nilIfBlank,
+                                region: region.nilIfBlank,
+                                country: "US"
+                            )
+                        )
+                        dismiss()
+                    }
+                    .disabled(cardholderName.isEmpty || cardNumber.isEmpty || expirationMonth.isEmpty || expirationYear.isEmpty || cvc.isEmpty)
+                }
             }
         }
     }
