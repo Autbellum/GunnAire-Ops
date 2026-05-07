@@ -234,9 +234,16 @@ struct BillingDocumentsView: View {
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                     ForEach(currentJobPayments.prefix(3)) { payment in
-                                        Text("\(payment.amount, format: .currency(code: "USD")) • \(payment.method) • \(payment.date.formatted(date: .abbreviated, time: .shortened))")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("\(payment.amount, format: .currency(code: "USD")) • \(payment.methodSummary) • \(payment.date.formatted(date: .abbreviated, time: .shortened))")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                            if let processorDisplayName = payment.processorDisplayName {
+                                                Text("Processor: \(processorDisplayName)")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                        }
                                     }
                                 }
                                 if let quickBooksID = invoice.quickBooksID, !quickBooksID.isEmpty {
@@ -530,9 +537,14 @@ struct BillingDocumentsView: View {
                             HStack {
                                 VStack(alignment: .leading) {
                                     Text(payment.invoice.customer.name)
-                                    Text("\(payment.method.capitalized) - \(payment.date.formatted(date: .abbreviated, time: .shortened))")
+                                    Text("\(payment.methodSummary) - \(payment.date.formatted(date: .abbreviated, time: .shortened))")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
+                                    if let processorDisplayName = payment.processorDisplayName {
+                                        Text("Processor: \(processorDisplayName)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
                                 Spacer()
                                 Text(payment.amount, format: .currency(code: "USD"))

@@ -478,6 +478,11 @@ struct ServiceCallDetailView: View {
                                 Text("Payments recorded: \(linkedPayments.count)")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                if let latestPayment = linkedPayments.sorted(by: { $0.date > $1.date }).first {
+                                    Text("Latest payment: \(latestPayment.methodSummary)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
                                 if let balanceLabel {
                                     Text("Remaining balance: \(balanceLabel)")
                                         .font(.caption)

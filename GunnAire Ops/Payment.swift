@@ -40,3 +40,30 @@ final class Payment {
         self.processor = processor
     }
 }
+
+extension Payment {
+    var processorDisplayName: String? {
+        guard let processor, !processor.isEmpty else { return nil }
+        switch processor {
+        case OnsitePaymentProcessor.simulated.rawValue:
+            return OnsitePaymentProcessor.simulated.displayName
+        case OnsitePaymentProcessor.stripeTerminal.rawValue:
+            return OnsitePaymentProcessor.stripeTerminal.displayName
+        case OnsitePaymentProcessor.square.rawValue:
+            return OnsitePaymentProcessor.square.displayName
+        case "manual-entry":
+            return "Manual Card Entry"
+        case "onsite-recorded":
+            return "On-Site Collection"
+        default:
+            return processor.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+
+    var methodSummary: String {
+        if let processorDisplayName {
+            return "\(method.capitalized) via \(processorDisplayName)"
+        }
+        return method.capitalized
+    }
+}

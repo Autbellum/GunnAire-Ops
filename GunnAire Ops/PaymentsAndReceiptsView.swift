@@ -158,7 +158,7 @@ struct PaymentsAndReceiptsView: View {
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(payment.invoice.customer.name)
                                                 .font(.headline)
-                                            Text("\(payment.method.capitalized) - \(payment.date.formatted(date: .abbreviated, time: .shortened))")
+                                            Text("\(payment.methodSummary) - \(payment.date.formatted(date: .abbreviated, time: .shortened))")
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
                                         }
@@ -184,6 +184,11 @@ struct PaymentsAndReceiptsView: View {
                                     }
                                     if let authorizationReference = payment.authorizationReference, !authorizationReference.isEmpty {
                                         Text("Authorization: \(authorizationReference)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if let processorDisplayName = payment.processorDisplayName {
+                                        Text("Processor: \(processorDisplayName)")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
