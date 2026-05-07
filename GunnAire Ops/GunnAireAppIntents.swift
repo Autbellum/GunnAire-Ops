@@ -192,6 +192,14 @@ private enum GunnAireIntentStore {
         let descriptor = FetchDescriptor<Invoice>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
         return try context.fetch(descriptor)
     }
+
+    @MainActor
+    static func payments() throws -> [Payment] {
+        guard let container else { return [] }
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<Payment>(sortBy: [SortDescriptor(\.date, order: .reverse)])
+        return try context.fetch(descriptor)
+    }
 }
 
 struct GunnAireCustomerEntity: AppEntity, Identifiable {
@@ -223,7 +231,16 @@ struct GunnAireCustomerQuery: EntityStringQuery {
             $0.name.localizedCaseInsensitiveContains(normalized) ||
             ($0.email?.localizedCaseInsensitiveContains(normalized) ?? false)
         }
-        return matches.prefix(20).map { GunnAireCustomerEntity(id: $0.id, name: $0.name, email: $0.email) }
+        let ranked = matches.sorted { lhs, rhs in
+            let lhsExact = lhs.name.caseInsensitiveCompare(normalized) == .orderedSame
+            let rhsExact = rhs.name.caseInsensitiveCompare(normalized) == .orderedSame
+            if lhsExact != rhsExact { return lhsExact }
+            let lhsEmailMatch = lhs.email?.localizedCaseInsensitiveContains(normalized) == true
+            let rhsEmailMatch = rhs.email?.localizedCaseInsensitiveContains(normalized) == true
+            if lhsEmailMatch != rhsEmailMatch { return lhsEmailMatch }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+        return ranked.prefix(20).map { GunnAireCustomerEntity(id: $0.id, name: $0.name, email: $0.email) }
     }
 
     func suggestedEntities() async throws -> [GunnAireCustomerEntity] {
@@ -266,15 +283,41 @@ struct GunnAireServiceCallQuery: EntityStringQuery {
             ($0.siteAddress?.localizedCaseInsensitiveContains(normalized) ?? false) ||
             ($0.notes?.localizedCaseInsensitiveContains(normalized) ?? false)
         }
-        return matches.prefix(20).map {
+        let ranked = rankServiceCalls(matches, search: normalized)
+        return ranked.prefix(20).map {
             GunnAireServiceCallEntity(id: $0.id, customerName: $0.customer.name, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue)
         }
     }
 
     func suggestedEntities() async throws -> [GunnAireServiceCallEntity] {
-        try await GunnAireIntentStore.serviceCalls()
+        let ranked = rankServiceCalls(try await GunnAireIntentStore.serviceCalls(), search: "")
+        return ranked
             .prefix(20)
             .map { GunnAireServiceCallEntity(id: $0.id, customerName: $0.customer.name, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue) }
+    }
+
+    private func rankServiceCalls(_ calls: [ServiceCall], search: String) -> [ServiceCall] {
+        let now = Date()
+        return calls.sorted { lhs, rhs in
+            let lhsUpcoming = lhs.scheduledDate >= now
+            let rhsUpcoming = rhs.scheduledDate >= now
+            if lhsUpcoming != rhsUpcoming { return lhsUpcoming }
+
+            let lhsActionable = lhs.status != .completed && lhs.status != .cancelled
+            let rhsActionable = rhs.status != .completed && rhs.status != .cancelled
+            if lhsActionable != rhsActionable { return lhsActionable }
+
+            if !search.isEmpty {
+                let lhsExact = lhs.customer.name.caseInsensitiveCompare(search) == .orderedSame
+                let rhsExact = rhs.customer.name.caseInsensitiveCompare(search) == .orderedSame
+                if lhsExact != rhsExact { return lhsExact }
+            }
+
+            let lhsDistance = abs(lhs.scheduledDate.timeIntervalSince(now))
+            let rhsDistance = abs(rhs.scheduledDate.timeIntervalSince(now))
+            if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+            return lhs.customer.name.localizedCaseInsensitiveCompare(rhs.customer.name) == .orderedAscending
+        }
     }
 }
 
@@ -306,20 +349,53 @@ struct GunnAireInvoiceQuery: EntityStringQuery {
 
     func entities(matching string: String) async throws -> [GunnAireInvoiceEntity] {
         let normalized = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        let matches = try await GunnAireIntentStore.invoices().filter {
+        let invoices = try await GunnAireIntentStore.invoices()
+        let payments = try await GunnAireIntentStore.payments()
+        let matches = invoices.filter {
             normalized.isEmpty ||
             $0.customer.name.localizedCaseInsensitiveContains(normalized) ||
             $0.lineItemSummary.localizedCaseInsensitiveContains(normalized)
         }
-        return matches.prefix(20).map {
+        let ranked = rankInvoices(matches, payments: payments, search: normalized)
+        return ranked.prefix(20).map {
             GunnAireInvoiceEntity(id: $0.id, customerName: $0.customer.name, amount: $0.amount, status: $0.status, createdAt: $0.createdAt)
         }
     }
 
     func suggestedEntities() async throws -> [GunnAireInvoiceEntity] {
-        try await GunnAireIntentStore.invoices()
+        let invoices = try await GunnAireIntentStore.invoices()
+        let payments = try await GunnAireIntentStore.payments()
+        return rankInvoices(invoices, payments: payments, search: "")
             .prefix(20)
             .map { GunnAireInvoiceEntity(id: $0.id, customerName: $0.customer.name, amount: $0.amount, status: $0.status, createdAt: $0.createdAt) }
+    }
+
+    private func rankInvoices(_ invoices: [Invoice], payments: [Payment], search: String) -> [Invoice] {
+        invoices.sorted { lhs, rhs in
+            let lhsBalance = outstandingBalance(for: lhs, payments: payments)
+            let rhsBalance = outstandingBalance(for: rhs, payments: payments)
+            let lhsCollectible = lhsBalance > 0
+            let rhsCollectible = rhsBalance > 0
+            if lhsCollectible != rhsCollectible { return lhsCollectible }
+            if lhsBalance != rhsBalance { return lhsBalance > rhsBalance }
+
+            if !search.isEmpty {
+                let lhsExact = lhs.customer.name.caseInsensitiveCompare(search) == .orderedSame
+                let rhsExact = rhs.customer.name.caseInsensitiveCompare(search) == .orderedSame
+                if lhsExact != rhsExact { return lhsExact }
+            }
+
+            return lhs.createdAt > rhs.createdAt
+        }
+    }
+
+    private func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
+        let netPayments = payments
+            .filter { $0.invoice.id == invoice.id }
+            .reduce(0) { partial, payment in
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
+            }
+        return max(invoice.amount - netPayments, 0)
     }
 }
 
