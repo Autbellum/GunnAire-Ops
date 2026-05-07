@@ -73,4 +73,36 @@ struct GunnAire_OpsTests {
         #expect(bodyString.contains("--\(boundary)--"))
     }
 
+    @Test func splashVideoLocatorPrefersStoredVideoOverBundledVideo() async throws {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        let storedURL = tempDirectory.appendingPathComponent("Loading.mp4")
+        try Data([0x00, 0x01, 0x02]).write(to: storedURL)
+
+        let bundledURL = URL(fileURLWithPath: "/tmp/bundled/Loading.mp4")
+        let resolved = SplashVideoLocator.preferredURL(
+            bundledURL: bundledURL,
+            storedCandidates: [storedURL],
+            fileManager: .default
+        )
+
+        #expect(resolved == storedURL)
+    }
+
+    @Test func splashVideoLocatorFallsBackToBundledVideoWhenStoredVideoMissing() async throws {
+        let missingStoredURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("Loading.mp4")
+        let bundledURL = URL(fileURLWithPath: "/tmp/bundled/Loading.mp4")
+
+        let resolved = SplashVideoLocator.preferredURL(
+            bundledURL: bundledURL,
+            storedCandidates: [missingStoredURL],
+            fileManager: .default
+        )
+
+        #expect(resolved == bundledURL)
+    }
+
 }

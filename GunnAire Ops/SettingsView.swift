@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
@@ -19,6 +20,9 @@ struct SettingsView: View {
     @State private var newUserRole: AppUserRole = .standard
     @State private var userAdminMessage: String?
     @State private var selectedSettingsPage: SettingsPage = .company
+    @State private var showingSplashVideoImporter = false
+    @State private var splashVideoMessage: String?
+    @State private var splashVideoStatus = SplashVideoLocator.currentSourceDescription()
 
     @AppStorage("companyName") private var companyName = "GunnAire"
     @AppStorage("dispatchStartHour") private var dispatchStartHour = 8
@@ -98,6 +102,37 @@ struct SettingsView: View {
                             readinessRow(title: "Pricebook enabled", isComplete: enablePricebook)
                             readinessRow(title: "Technician workflow configured", isComplete: requireTechnicianClockIn && requireJobCompletionChecklist)
                             readinessRow(title: "Payments configured", isComplete: !enableOnsitePayments || isQuickBooksAuthenticated)
+                        }
+
+                        Section("App Loading Video") {
+                            HStack {
+                                Text("Current Splash")
+                                Spacer()
+                                Text(splashVideoStatus)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Button("Load Splash MP4") {
+                                showingSplashVideoImporter = true
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+
+                            Button("Remove Custom Splash Video", role: .destructive) {
+                                removeSplashVideo()
+                            }
+                            .disabled(splashVideoStatus != "Custom Loading.mp4")
+
+                            Text("The app will play `Loading.mp4` from app storage first, then a bundled video if one exists, and finally fall back to the logo.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            if let splashVideoMessage {
+                                Text(splashVideoMessage)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
 
                     case .workflow:
@@ -227,6 +262,13 @@ struct SettingsView: View {
                     }
                 }
             }
+            .fileImporter(
+                isPresented: $showingSplashVideoImporter,
+                allowedContentTypes: [.mpeg4Movie, .movie],
+                allowsMultipleSelection: false
+            ) { result in
+                handleSplashVideoImport(result)
+            }
         }
     }
 
@@ -330,6 +372,35 @@ struct SettingsView: View {
         userAdminMessage = "Added \(email) as \(newUserRole.rawValue)."
         newUserEmail = ""
         newUserRole = .standard
+    }
+
+    private func handleSplashVideoImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else {
+                splashVideoMessage = "No splash video was selected."
+                return
+            }
+            do {
+                try SplashVideoLocator.installVideo(from: url)
+                splashVideoStatus = SplashVideoLocator.currentSourceDescription()
+                splashVideoMessage = "Splash MP4 loaded successfully."
+            } catch {
+                splashVideoMessage = "Failed to load splash MP4: \(error.localizedDescription)"
+            }
+        case .failure(let error):
+            splashVideoMessage = "Splash video import failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func removeSplashVideo() {
+        do {
+            try SplashVideoLocator.removeStoredVideo()
+            splashVideoStatus = SplashVideoLocator.currentSourceDescription()
+            splashVideoMessage = "Custom splash MP4 removed."
+        } catch {
+            splashVideoMessage = "Failed to remove splash MP4: \(error.localizedDescription)"
+        }
     }
 
     private func deleteUsers(offsets: IndexSet) {
