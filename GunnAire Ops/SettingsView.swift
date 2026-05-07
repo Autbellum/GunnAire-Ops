@@ -253,22 +253,24 @@ struct SettingsView: View {
                             settingsToggle("Customer Portal", systemImage: "person.text.rectangle", isOn: $enableCustomerPortal)
 
                             if enableOnsitePayments {
-                                Picker("Tap to Pay Processor", selection: $onsitePaymentProcessor) {
-                                    ForEach(OnsitePaymentManager.shared.availableProcessors()) { processor in
-                                        Text(processor.displayName).tag(processor.rawValue)
+                                if OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild {
+                                    Picker("Tap to Pay Processor", selection: $onsitePaymentProcessor) {
+                                        ForEach(OnsitePaymentManager.shared.availableProcessors()) { processor in
+                                            Text(processor.displayName).tag(processor.rawValue)
+                                        }
                                     }
+                                    Toggle("Processor Ready on This Device", isOn: $onsitePaymentProcessorReady)
+                                    let selectedProcessor = OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
+                                    Text(selectedProcessor == .none
+                                         ? "Choose the live processor for Tap to Pay."
+                                         : OnsitePaymentManager.shared.processorStatusDetail())
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Text("Card and check payments can still be recorded from the app. Tap to Pay stays hidden until the Intuit iOS bridge is added to this build.")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
                                 }
-                                .disabled(!OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild)
-
-                                Toggle("Processor Ready on This Device", isOn: $onsitePaymentProcessorReady)
-                                    .disabled(!OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild)
-
-                                let selectedProcessor = OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
-                                Text(selectedProcessor == .none
-                                     ? "Tap to Pay is hidden until the Intuit iOS bridge is added to this build."
-                                     : OnsitePaymentManager.shared.processorStatusDetail())
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
                             }
                         }
 

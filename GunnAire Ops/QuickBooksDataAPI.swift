@@ -107,30 +107,32 @@ final class QuickBooksDataAPI: ObservableObject {
         request.httpBody = "grant_type=refresh_token&refresh_token=\(escapedToken)".data(using: .utf8)
 
         URLSession.shared.dataTask(with: request) { data, response, error in
-            if error != nil {
-                self.completeOnMain(completion, value: false)
-                return
-            }
+            Task { @MainActor in
+                if error != nil {
+                    self.completeOnMain(completion, value: false)
+                    return
+                }
 
-            guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-                self.completeOnMain(completion, value: false)
-                return
-            }
+                guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+                    self.completeOnMain(completion, value: false)
+                    return
+                }
 
-            guard let data,
-                  let payload = try? JSONDecoder().decode(QuickBooksRefreshTokenResponse.self, from: data),
-                  let realmID = self.realmID else {
-                self.completeOnMain(completion, value: false)
-                return
-            }
+                guard let data,
+                      let payload = try? JSONDecoder().decode(QuickBooksRefreshTokenResponse.self, from: data),
+                      let realmID = self.realmID else {
+                    self.completeOnMain(completion, value: false)
+                    return
+                }
 
-            let refreshed = QuickBooksOAuthTokens(
-                accessToken: payload.access_token,
-                refreshToken: payload.refresh_token,
-                expiration: Date().addingTimeInterval(payload.expires_in)
-            )
-            self.storeTokens(refreshed, realmID: realmID)
-            self.completeOnMain(completion, value: true)
+                let refreshed = QuickBooksOAuthTokens(
+                    accessToken: payload.access_token,
+                    refreshToken: payload.refresh_token,
+                    expiration: Date().addingTimeInterval(payload.expires_in)
+                )
+                self.storeTokens(refreshed, realmID: realmID)
+                self.completeOnMain(completion, value: true)
+            }
         }.resume()
     }
 
@@ -498,7 +500,7 @@ final class QuickBooksDataAPI: ObservableObject {
             case .unauthorized:
                 return "QuickBooks access token is missing or expired. Reconnect QuickBooks in Settings."
             case .missingConfiguration:
-                return "QuickBooks client credentials are not configured on this Mac. Set QB_CLIENT_ID and QB_CLIENT_SECRET in Config/Local.xcconfig."
+                return "QuickBooks client credentials are not configured on this Mac. Set QB_CLIENT_ID and QB_CLIENT_SECRET in Config/Local.xcconfig before reconnecting or refreshing the QuickBooks session."
             case .noData:
                 return "QuickBooks returned no data."
             case .decoding:

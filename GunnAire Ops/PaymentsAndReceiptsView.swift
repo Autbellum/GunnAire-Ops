@@ -95,6 +95,10 @@ struct PaymentsAndReceiptsView: View {
                             Text(onsitePaymentManager.processorStatusDetail())
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                        } else {
+                            Text("Card, check, and cash payments can still be recorded from this screen.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                     }
 

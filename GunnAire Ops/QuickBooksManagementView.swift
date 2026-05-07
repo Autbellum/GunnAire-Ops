@@ -85,9 +85,13 @@ struct QuickBooksManagementView: View {
                         }
 
                         if !quickBooksConfigReady {
-                            Text("QuickBooks credentials are not configured on this Mac. Update `QB_CLIENT_ID` and `QB_CLIENT_SECRET` in `Config/Local.xcconfig`.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            Text(
+                                isAuthenticated
+                                ? "QuickBooks is connected with a saved session. Reconnecting or refreshing this connection on this Mac still requires `QB_CLIENT_ID` and `QB_CLIENT_SECRET` in `Config/Local.xcconfig`."
+                                : "QuickBooks credentials are not configured on this Mac. Update `QB_CLIENT_ID` and `QB_CLIENT_SECRET` in `Config/Local.xcconfig` before connecting."
+                            )
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                         }
                     }
 
