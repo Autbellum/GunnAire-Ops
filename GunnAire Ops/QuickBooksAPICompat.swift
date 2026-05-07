@@ -85,8 +85,20 @@ final class QuickBooksAPI: ObservableObject {
         data.captureCharge(id: id, amount: amount, completion: completion)
     }
 
-    func refundCharge(id: String, amount: Double, description: String?, completion: @escaping (Result<QuickBooksPaymentsRefundResponse, Error>) -> Void) {
-        data.refundCharge(id: id, amount: amount, description: description, completion: completion)
+    func refundCharge(
+        id: String,
+        amount: Double,
+        description: String?,
+        clientTransactionID: String? = nil,
+        completion: @escaping (Result<QuickBooksPaymentsRefundResponse, Error>) -> Void
+    ) {
+        data.refundCharge(
+            id: id,
+            amount: amount,
+            description: description,
+            clientTransactionID: clientTransactionID,
+            completion: completion
+        )
     }
 
     func createRefundReceipt(_ receipt: QuickBooksRefundReceiptCreate, completion: @escaping (Result<QuickBooksRefundReceipt, Error>) -> Void) {

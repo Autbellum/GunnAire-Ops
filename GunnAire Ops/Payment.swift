@@ -11,6 +11,8 @@ final class Payment {
     var quickBooksChargeID: String?
     var quickBooksClientTransID: String?
     var quickBooksRefundReceiptID: String?
+    var quickBooksAccountingSyncStatus: String?
+    var quickBooksAccountingSyncDetail: String?
     var amount: Double
     var date: Date
     var method: String // cash, check, card
@@ -28,6 +30,8 @@ final class Payment {
         quickBooksChargeID: String? = nil,
         quickBooksClientTransID: String? = nil,
         quickBooksRefundReceiptID: String? = nil,
+        quickBooksAccountingSyncStatus: String? = nil,
+        quickBooksAccountingSyncDetail: String? = nil,
         amount: Double,
         date: Date = Date(),
         method: String = "cash",
@@ -44,6 +48,8 @@ final class Payment {
         self.quickBooksChargeID = quickBooksChargeID
         self.quickBooksClientTransID = quickBooksClientTransID
         self.quickBooksRefundReceiptID = quickBooksRefundReceiptID
+        self.quickBooksAccountingSyncStatus = quickBooksAccountingSyncStatus
+        self.quickBooksAccountingSyncDetail = quickBooksAccountingSyncDetail
         self.amount = amount
         self.date = date
         self.method = method
@@ -76,5 +82,9 @@ extension Payment {
             return "\(method.capitalized) via \(processorDisplayName)"
         }
         return method.capitalized
+    }
+
+    var needsQuickBooksAttention: Bool {
+        quickBooksAccountingSyncStatus == "needs_attention"
     }
 }

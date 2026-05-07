@@ -400,6 +400,13 @@ struct QuickBooksManagementView: View {
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
+                                    if payment.needsQuickBooksAttention,
+                                       let detail = payment.quickBooksAccountingSyncDetail,
+                                       !detail.isEmpty {
+                                        Text("Needs follow-up: \(detail)")
+                                            .font(.caption2)
+                                            .foregroundColor(.orange)
+                                    }
                                     if !payment.isRefund, payment.amount > 0 {
                                         Button("Refund This Payment") {
                                             paymentToRefund = payment
@@ -877,7 +884,9 @@ struct QuickBooksManagementView: View {
                                 invoice: invoice,
                                 quickBooksID: result.accountingPayment?.Id,
                                 quickBooksChargeID: result.charge.id,
-                                quickBooksClientTransID: result.charge.resolvedClientTransID,
+                                quickBooksClientTransID: result.clientTransactionID,
+                                quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
+                                quickBooksAccountingSyncDetail: result.accountingError,
                                 amount: amount,
                                 method: "card",
                                 cardLast4: resolvedCardLast4,
@@ -919,8 +928,10 @@ struct QuickBooksManagementView: View {
                             Payment(
                                 invoice: payment.invoice,
                                 quickBooksChargeID: result.refund.id,
-                                quickBooksClientTransID: result.refund.resolvedClientTransID,
+                                quickBooksClientTransID: result.clientTransactionID,
                                 quickBooksRefundReceiptID: result.refundReceipt?.Id,
+                                quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
+                                quickBooksAccountingSyncDetail: result.accountingError,
                                 amount: -amount,
                                 method: payment.method,
                                 cardLast4: payment.cardLast4,

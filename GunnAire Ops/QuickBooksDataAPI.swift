@@ -483,12 +483,18 @@ final class QuickBooksDataAPI: ObservableObject {
         )
     }
 
-    func refundCharge(id: String, amount: Double, description: String?, completion: @escaping (Result<QuickBooksPaymentsRefundResponse, Error>) -> Void) {
+    func refundCharge(
+        id: String,
+        amount: Double,
+        description: String?,
+        clientTransactionID: String? = nil,
+        completion: @escaping (Result<QuickBooksPaymentsRefundResponse, Error>) -> Void
+    ) {
         let body = try? JSONEncoder().encode(
             QuickBooksPaymentsRefundRequest(
                 amount: amount,
                 description: description,
-                context: QuickBooksPaymentsChargeContext.defaultForApp
+                context: QuickBooksPaymentsChargeContext.forClientTransactionID(clientTransactionID)
             )
         )
         performPaymentsDecodingRequest(
@@ -1059,8 +1065,9 @@ struct QuickBooksPaymentsChargeContext: Codable {
     let deviceInfo: QuickBooksPaymentsDeviceInfo?
     let recurring: Bool?
     let tax: Double?
+    let clientTransID: String?
 
-    static var defaultForApp: QuickBooksPaymentsChargeContext {
+    static func forClientTransactionID(_ clientTransID: String?) -> QuickBooksPaymentsChargeContext {
         QuickBooksPaymentsChargeContext(
             deviceInfo: QuickBooksPaymentsDeviceInfo(
                 id: "GunnAire-Ops",
@@ -1072,7 +1079,8 @@ struct QuickBooksPaymentsChargeContext: Codable {
                 phoneNumber: nil
             ),
             recurring: false,
-            tax: 0
+            tax: 0,
+            clientTransID: clientTransID
         )
     }
 }

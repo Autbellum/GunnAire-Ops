@@ -17,12 +17,14 @@ struct QuickBooksProcessedPaymentResult {
     let charge: QuickBooksPaymentsChargeResponse
     let accountingPayment: QuickBooksPayment?
     let accountingError: String?
+    let clientTransactionID: String?
 }
 
 struct QuickBooksProcessedRefundResult {
     let refund: QuickBooksPaymentsRefundResponse
     let refundReceipt: QuickBooksRefundReceipt?
     let accountingError: String?
+    let clientTransactionID: String?
 }
 
 final class QuickBooksPaymentsService {
@@ -42,21 +44,29 @@ final class QuickBooksPaymentsService {
             throw QuickBooksPaymentsServiceError.customerNotSynced
         }
 
+        let clientTransactionID = Self.chargeClientTransactionID(for: invoice, amount: amount)
         let token = try await createCardToken(cardInput)
-        let authorized = try await createAuthorization(amount: amount, token: token.value, note: note)
+        let authorized = try await createAuthorization(
+            amount: amount,
+            token: token.value,
+            note: note,
+            clientTransactionID: clientTransactionID
+        )
         let charge = try await captureCharge(id: authorized.id, amount: amount)
         let accountingPayment = await syncAccountingPayment(
             invoice: invoice,
             customerQBID: customerQBID,
             amount: amount,
             note: note,
-            charge: charge
+            charge: charge,
+            clientTransactionID: clientTransactionID
         )
 
         return QuickBooksProcessedPaymentResult(
             charge: charge,
             accountingPayment: accountingPayment.payment,
-            accountingError: accountingPayment.error
+            accountingError: accountingPayment.error,
+            clientTransactionID: charge.resolvedClientTransID ?? clientTransactionID
         )
     }
 
@@ -75,20 +85,28 @@ final class QuickBooksPaymentsService {
             throw QuickBooksPaymentsServiceError.missingSalesItemReference
         }
 
-        let refund = try await refundCharge(id: chargeID, amount: amount, note: note)
+        let clientTransactionID = Self.refundClientTransactionID(for: payment, amount: amount)
+        let refund = try await refundCharge(
+            id: chargeID,
+            amount: amount,
+            note: note,
+            clientTransactionID: clientTransactionID
+        )
         let refundReceipt = await syncRefundReceipt(
             payment: payment,
             customerQBID: customerQBID,
             salesItemRef: salesItemRef,
             amount: amount,
             note: note,
-            refund: refund
+            refund: refund,
+            clientTransactionID: clientTransactionID
         )
 
         return QuickBooksProcessedRefundResult(
             refund: refund,
             refundReceipt: refundReceipt.receipt,
-            accountingError: refundReceipt.error
+            accountingError: refundReceipt.error,
+            clientTransactionID: refund.resolvedClientTransID ?? clientTransactionID
         )
     }
 
@@ -123,14 +141,19 @@ final class QuickBooksPaymentsService {
         }
     }
 
-    private func createAuthorization(amount: Double, token: String, note: String?) async throws -> QuickBooksPaymentsChargeResponse {
+    private func createAuthorization(
+        amount: Double,
+        token: String,
+        note: String?,
+        clientTransactionID: String
+    ) async throws -> QuickBooksPaymentsChargeResponse {
         let charge = QuickBooksPaymentsChargeCreate(
             amount: Self.currencyString(amount),
             currency: "USD",
             capture: false,
             token: token,
             description: note,
-            context: QuickBooksPaymentsChargeContext.defaultForApp
+            context: QuickBooksPaymentsChargeContext.forClientTransactionID(clientTransactionID)
         )
 
         return try await withCheckedThrowingContinuation { continuation in
@@ -148,9 +171,19 @@ final class QuickBooksPaymentsService {
         }
     }
 
-    private func refundCharge(id: String, amount: Double, note: String?) async throws -> QuickBooksPaymentsRefundResponse {
+    private func refundCharge(
+        id: String,
+        amount: Double,
+        note: String?,
+        clientTransactionID: String
+    ) async throws -> QuickBooksPaymentsRefundResponse {
         try await withCheckedThrowingContinuation { continuation in
-            api.refundCharge(id: id, amount: amount, description: note) { result in
+            api.refundCharge(
+                id: id,
+                amount: amount,
+                description: note,
+                clientTransactionID: clientTransactionID
+            ) { result in
                 continuation.resume(with: result)
             }
         }
@@ -161,7 +194,8 @@ final class QuickBooksPaymentsService {
         customerQBID: String,
         amount: Double,
         note: String?,
-        charge: QuickBooksPaymentsChargeResponse
+        charge: QuickBooksPaymentsChargeResponse,
+        clientTransactionID: String
     ) async -> (payment: QuickBooksPayment?, error: String?) {
         let lines: [QuickBooksPaymentLine]?
         if let invoiceQBID = invoice.quickBooksID, !invoiceQBID.isEmpty {
@@ -178,7 +212,7 @@ final class QuickBooksPaymentsService {
         let payload = QuickBooksPaymentCreate(
             CustomerRef: QuickBooksReference(value: customerQBID, name: invoice.customer.name),
             TotalAmt: amount,
-            PrivateNote: note,
+            PrivateNote: accountingNote(baseNote: note, clientTransactionID: clientTransactionID),
             PaymentRefNum: charge.resolvedClientTransID ?? charge.id,
             Line: lines
         )
@@ -201,7 +235,8 @@ final class QuickBooksPaymentsService {
         salesItemRef: String,
         amount: Double,
         note: String?,
-        refund: QuickBooksPaymentsRefundResponse
+        refund: QuickBooksPaymentsRefundResponse,
+        clientTransactionID: String
     ) async -> (receipt: QuickBooksRefundReceipt?, error: String?) {
         let description = payment.invoice.lineItemSummary.isEmpty ? "Refund" : payment.invoice.lineItemSummary
         let receipt = QuickBooksRefundReceiptCreate(
@@ -221,7 +256,7 @@ final class QuickBooksPaymentsService {
                 CreditChargeResponse: QuickBooksCreditChargeResponse(CCTransId: refund.id)
             ),
             TxnSource: "IntuitPayment",
-            PrivateNote: note
+            PrivateNote: accountingNote(baseNote: note, clientTransactionID: clientTransactionID)
         )
 
         do {
@@ -238,6 +273,24 @@ final class QuickBooksPaymentsService {
 
     private static func currencyString(_ amount: Double) -> String {
         String(format: "%.2f", amount)
+    }
+
+    private static func chargeClientTransactionID(for invoice: Invoice, amount: Double) -> String {
+        let cents = Int((amount * 100).rounded())
+        return "ga-charge-\(invoice.id.uuidString.lowercased())-\(cents)-\(UUID().uuidString.lowercased())"
+    }
+
+    private static func refundClientTransactionID(for payment: Payment, amount: Double) -> String {
+        let cents = Int((amount * 100).rounded())
+        return "ga-refund-\(payment.id.uuidString.lowercased())-\(cents)-\(UUID().uuidString.lowercased())"
+    }
+
+    private func accountingNote(baseNote: String?, clientTransactionID: String) -> String {
+        let identifierLine = "Client transaction ID: \(clientTransactionID)"
+        if let trimmed = baseNote?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty {
+            return "\(trimmed)\n\(identifierLine)"
+        }
+        return identifierLine
     }
 }
 

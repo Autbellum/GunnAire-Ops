@@ -266,6 +266,13 @@ struct PaymentsAndReceiptsView: View {
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
+                                    if payment.needsQuickBooksAttention,
+                                       let detail = payment.quickBooksAccountingSyncDetail,
+                                       !detail.isEmpty {
+                                        Text("QuickBooks follow-up: \(detail)")
+                                            .font(.caption2)
+                                            .foregroundColor(.orange)
+                                    }
                                     if let notes = payment.notes, !notes.isEmpty {
                                         Text(notes)
                                             .font(.caption2)
@@ -518,6 +525,8 @@ struct PaymentsAndReceiptsView: View {
         quickBooksPaymentID: String? = nil,
         quickBooksChargeID: String? = nil,
         quickBooksClientTransID: String? = nil,
+        quickBooksAccountingSyncStatus: String? = nil,
+        quickBooksAccountingSyncDetail: String? = nil,
         processorOverride: String? = nil
     ) {
         modelContext.insert(
@@ -526,6 +535,8 @@ struct PaymentsAndReceiptsView: View {
                 quickBooksID: quickBooksPaymentID,
                 quickBooksChargeID: quickBooksChargeID,
                 quickBooksClientTransID: quickBooksClientTransID,
+                quickBooksAccountingSyncStatus: quickBooksAccountingSyncStatus,
+                quickBooksAccountingSyncDetail: quickBooksAccountingSyncDetail,
                 amount: amount,
                 method: selectedMethod.apiValue,
                 cardLast4: cardLast4.nilIfBlank,
@@ -581,7 +592,9 @@ struct PaymentsAndReceiptsView: View {
                     amount: amount,
                     quickBooksPaymentID: result.accountingPayment?.Id,
                     quickBooksChargeID: result.charge.id,
-                    quickBooksClientTransID: result.charge.resolvedClientTransID,
+                    quickBooksClientTransID: result.clientTransactionID,
+                    quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
+                    quickBooksAccountingSyncDetail: result.accountingError,
                     processorOverride: OnsitePaymentProcessor.quickBooksPayments.rawValue
                 )
                 updateInvoiceStatusAfterPayment(invoice)
@@ -787,8 +800,10 @@ GunnAire
                 Payment(
                     invoice: payment.invoice,
                     quickBooksChargeID: result.refund.id,
-                    quickBooksClientTransID: result.refund.resolvedClientTransID,
+                    quickBooksClientTransID: result.clientTransactionID,
                     quickBooksRefundReceiptID: result.refundReceipt?.Id,
+                    quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
+                    quickBooksAccountingSyncDetail: result.accountingError,
                     amount: -refundAmountValue,
                     method: payment.method,
                     cardLast4: payment.cardLast4,
