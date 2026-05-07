@@ -12,6 +12,7 @@ struct BillingDocumentsView: View {
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
 
     private let initialServiceCall: ServiceCall?
+    private let openCloseoutOnAppear: Bool
     private let liveAPI = QuickBooksDataAPI.shared
 
     @State private var selectedDocumentKind: BillingDocumentKind
@@ -34,9 +35,11 @@ struct BillingDocumentsView: View {
     @State private var didAttemptInitialCatalogImport = false
     @State private var openInvoiceAfterEstimateCreation = false
     @State private var didLoadLinkedDocumentContext = false
+    @State private var didTriggerInitialCloseout = false
 
-    init(initialServiceCall: ServiceCall? = nil) {
+    init(initialServiceCall: ServiceCall? = nil, openCloseoutOnAppear: Bool = false) {
         self.initialServiceCall = initialServiceCall
+        self.openCloseoutOnAppear = openCloseoutOnAppear
         _selectedDocumentKind = State(initialValue: initialServiceCall?.type == .estimate ? .estimate : .invoice)
     }
 
@@ -504,6 +507,9 @@ struct BillingDocumentsView: View {
                 guard let newValue, let customer = customers.first(where: { $0.id == newValue }) else { return }
                 populateCustomerFields(from: customer)
             }
+            .onChange(of: currentJobInvoice?.id) { _, _ in
+                triggerInitialCloseoutIfNeeded()
+            }
         }
     }
 
@@ -540,6 +546,14 @@ struct BillingDocumentsView: View {
         }
 
         importQuickBooksItemsIfNeeded()
+        triggerInitialCloseoutIfNeeded()
+    }
+
+    private func triggerInitialCloseoutIfNeeded() {
+        guard openCloseoutOnAppear, !didTriggerInitialCloseout else { return }
+        guard let invoice = currentJobInvoice, invoice.status != "paid" else { return }
+        didTriggerInitialCloseout = true
+        paymentInvoice = invoice
     }
 
     private func loadLinkedDocumentContextIfNeeded() {

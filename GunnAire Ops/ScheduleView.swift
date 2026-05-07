@@ -15,6 +15,7 @@ struct ScheduleView: View {
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showingAddCallSheet = false
     @State private var documentationCall: ServiceCall?
+    @State private var openDocumentationInCloseout = false
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
     
@@ -129,6 +130,7 @@ struct ScheduleView: View {
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 if let invoice = invoice(for: call), invoice.status != "paid" {
                                     Button {
+                                        openDocumentationInCloseout = true
                                         documentationCall = call
                                     } label: {
                                         Label("Take Payment", systemImage: "creditcard")
@@ -137,6 +139,7 @@ struct ScheduleView: View {
                                 }
 
                                 Button {
+                                    openDocumentationInCloseout = false
                                     documentationCall = call
                                 } label: {
                                     Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Continue Docs" : "Start Docs", systemImage: "doc.text")
@@ -209,14 +212,18 @@ struct ScheduleView: View {
                 }
                 .sheet(isPresented: $showingAddCallSheet) {
                     AddServiceCallView(selectedDate: selectedDate) { createdCall in
+                        openDocumentationInCloseout = false
                         documentationCall = createdCall
                     }
                         .tint(Color.brandGold)
                 }
                 .sheet(item: $documentationCall) { call in
                     NavigationStack {
-                        BillingDocumentsView(initialServiceCall: call)
+                        BillingDocumentsView(initialServiceCall: call, openCloseoutOnAppear: openDocumentationInCloseout)
                             .tint(Color.brandGold)
+                    }
+                    .onDisappear {
+                        openDocumentationInCloseout = false
                     }
                 }
             }
@@ -267,6 +274,7 @@ struct ScheduleView: View {
                 } else {
                     ForEach(jobsNeedingDocumentation.prefix(3)) { job in
                         Button {
+                            openDocumentationInCloseout = false
                             documentationCall = job
                         } label: {
                             HStack {
@@ -307,6 +315,7 @@ struct ScheduleView: View {
                 } else {
                     ForEach(jobsNeedingPayment.prefix(3)) { job in
                         Button {
+                            openDocumentationInCloseout = true
                             documentationCall = job
                         } label: {
                             HStack {
@@ -438,6 +447,7 @@ struct ScheduleView: View {
                 }
 
                 Button {
+                    openDocumentationInCloseout = false
                     documentationCall = call
                 } label: {
                     Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Continue Docs" : "Start Docs", systemImage: "doc.text")
