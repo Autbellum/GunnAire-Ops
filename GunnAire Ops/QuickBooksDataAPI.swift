@@ -1043,8 +1043,17 @@ struct QuickBooksPaymentsCard: Codable {
     let number: String
 }
 
+struct QuickBooksPaymentsBankAccount: Codable {
+    let name: String
+    let accountNumber: String
+    let phone: String
+    let routingNumber: String
+    let accountType: String
+}
+
 struct QuickBooksPaymentsTokenCreateRequest: Codable {
-    let card: QuickBooksPaymentsCard
+    let card: QuickBooksPaymentsCard?
+    let bankAccount: QuickBooksPaymentsBankAccount?
 }
 
 struct QuickBooksPaymentsTokenResponse: Codable {
@@ -1087,11 +1096,13 @@ struct QuickBooksPaymentsChargeContext: Codable {
 
 struct QuickBooksPaymentsChargeCreate: Codable {
     let amount: String
-    let currency: String
-    let capture: Bool
+    let currency: String?
+    let capture: Bool?
     let token: String
     let description: String?
     let context: QuickBooksPaymentsChargeContext?
+    let paymentMode: String?
+    let checkNumber: String?
 }
 
 struct QuickBooksPaymentsChargeCaptureRequest: Codable {

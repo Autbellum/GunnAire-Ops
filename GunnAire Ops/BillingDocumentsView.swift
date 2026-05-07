@@ -1164,6 +1164,12 @@ private struct RecordInvoicePaymentView: View {
     @State private var expirationYear = ""
     @State private var cardCVC = ""
     @State private var billingPostalCode = ""
+    @State private var achAccountHolderName = ""
+    @State private var achAccountNumber = ""
+    @State private var achRoutingNumber = ""
+    @State private var achPhone = ""
+    @State private var achCheckNumber = ""
+    @State private var achAccountType: QuickBooksBankAccountType = .businessChecking
 
     init(invoice: Invoice, autoStartTapToPay: Bool = false) {
         self.invoice = invoice
@@ -1198,12 +1204,20 @@ private struct RecordInvoicePaymentView: View {
 
     private var closeoutPaymentFormIsValid: Bool {
         guard shouldRecordPayment else { return true }
-        guard method == "card", processCardWithQuickBooks else { return true }
-        return !cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            cardNumber.filter(\.isNumber).count >= 12 &&
-            expirationMonth.filter(\.isNumber).count >= 1 &&
-            expirationYear.filter(\.isNumber).count == 4 &&
-            cardCVC.filter(\.isNumber).count >= 3
+        if method == "card", processCardWithQuickBooks {
+            return !cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                cardNumber.filter(\.isNumber).count >= 12 &&
+                expirationMonth.filter(\.isNumber).count >= 1 &&
+                expirationYear.filter(\.isNumber).count == 4 &&
+                cardCVC.filter(\.isNumber).count >= 3
+        }
+        if method == "ach", QuickBooksDataAPI.shared.isAuthenticated {
+            return !achAccountHolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                achAccountNumber.filter(\.isNumber).count >= 4 &&
+                achRoutingNumber.filter(\.isNumber).count == 9 &&
+                achPhone.filter(\.isNumber).count >= 10
+        }
+        return true
     }
 
     var body: some View {
@@ -1308,6 +1322,25 @@ private struct RecordInvoicePaymentView: View {
                                 }
                             }
                         }
+                        if method == "ach", QuickBooksDataAPI.shared.isAuthenticated {
+                            TextField("Account holder name", text: $achAccountHolderName)
+                            TextField("Bank account number", text: $achAccountNumber)
+                                .keyboardType(.numberPad)
+                            TextField("Routing number", text: $achRoutingNumber)
+                                .keyboardType(.numberPad)
+                            TextField("Phone", text: $achPhone)
+                                .keyboardType(.phonePad)
+                            Picker("Account type", selection: $achAccountType) {
+                                ForEach(QuickBooksBankAccountType.allCases) { type in
+                                    Text(type.displayName).tag(type)
+                                }
+                            }
+                            TextField("Check number (optional)", text: $achCheckNumber)
+                                .keyboardType(.numbersAndPunctuation)
+                            Text("Bank details are only used to create a QuickBooks Payments token for this ACH/eCheck transaction and are not saved locally.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                         TextField("Payment notes", text: $paymentNotes, axis: .vertical)
                             .lineLimit(2...4)
                         if enableOnsitePayments && OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild {
@@ -1354,6 +1387,12 @@ private struct RecordInvoicePaymentView: View {
         }
         cardholderName = invoice.customer.name
         processCardWithQuickBooks = QuickBooksDataAPI.shared.isAuthenticated && method == "card"
+        achAccountHolderName = invoice.customer.name
+        achAccountNumber = ""
+        achRoutingNumber = ""
+        achPhone = invoice.customer.phone ?? ""
+        achCheckNumber = ""
+        achAccountType = .businessChecking
     }
 
     private func runTapToPay() async {
@@ -1451,6 +1490,48 @@ private struct RecordInvoicePaymentView: View {
 
                     if let accountingError = result.accountingError {
                         tapToPayMessage = "Charge captured, but accounting sync still needs attention: \(accountingError)"
+                    }
+                } catch {
+                    tapToPayMessage = error.localizedDescription
+                    return
+                }
+            } else if method == "ach", QuickBooksDataAPI.shared.isAuthenticated {
+                isProcessingQuickBooksPayment = true
+                defer { isProcessingQuickBooksPayment = false }
+
+                do {
+                    let result = try await QuickBooksPaymentsService.shared.processBankPayment(
+                        invoice: invoice,
+                        amount: paidAmount,
+                        bankInput: QuickBooksPaymentsBankAccountInput(
+                            accountHolderName: achAccountHolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? invoice.customer.name : achAccountHolderName.trimmingCharacters(in: .whitespacesAndNewlines),
+                            accountNumber: achAccountNumber.filter(\.isNumber),
+                            routingNumber: achRoutingNumber.filter(\.isNumber),
+                            phone: achPhone.filter(\.isNumber),
+                            accountType: achAccountType,
+                            checkNumber: achCheckNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : achCheckNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                        ),
+                        note: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes
+                    )
+
+                    modelContext.insert(
+                        Payment(
+                            invoice: invoice,
+                            quickBooksID: result.accountingPayment?.Id,
+                            quickBooksChargeID: result.charge.id,
+                            quickBooksClientTransID: result.clientTransactionID,
+                            quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
+                            quickBooksAccountingSyncDetail: result.accountingError,
+                            amount: paidAmount,
+                            method: "ach",
+                            authorizationReference: result.charge.authCode ?? (trimmedAuthorization.isEmpty ? nil : trimmedAuthorization),
+                            notes: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
+                            processor: OnsitePaymentProcessor.quickBooksPayments.rawValue
+                        )
+                    )
+
+                    if let accountingError = result.accountingError {
+                        tapToPayMessage = "ACH payment submitted, but accounting sync still needs attention: \(accountingError)"
                     }
                 } catch {
                     tapToPayMessage = error.localizedDescription

@@ -13,6 +13,33 @@ struct QuickBooksPaymentsCardInput {
     let country: String?
 }
 
+enum QuickBooksBankAccountType: String, CaseIterable, Identifiable {
+    case businessChecking = "BUSINESS_CHECKING"
+    case personalChecking = "PERSONAL_CHECKING"
+    case businessSavings = "BUSINESS_SAVINGS"
+    case personalSavings = "PERSONAL_SAVINGS"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .businessChecking: return "Business Checking"
+        case .personalChecking: return "Personal Checking"
+        case .businessSavings: return "Business Savings"
+        case .personalSavings: return "Personal Savings"
+        }
+    }
+}
+
+struct QuickBooksPaymentsBankAccountInput {
+    let accountHolderName: String
+    let accountNumber: String
+    let routingNumber: String
+    let phone: String
+    let accountType: QuickBooksBankAccountType
+    let checkNumber: String?
+}
+
 struct QuickBooksProcessedPaymentResult {
     let charge: QuickBooksPaymentsChargeResponse
     let accountingPayment: QuickBooksPayment?
@@ -53,6 +80,42 @@ final class QuickBooksPaymentsService {
             clientTransactionID: clientTransactionID
         )
         let charge = try await captureCharge(id: authorized.id, amount: amount)
+        let accountingPayment = await syncAccountingPayment(
+            invoice: invoice,
+            customerQBID: customerQBID,
+            amount: amount,
+            note: note,
+            charge: charge,
+            clientTransactionID: clientTransactionID
+        )
+
+        return QuickBooksProcessedPaymentResult(
+            charge: charge,
+            accountingPayment: accountingPayment.payment,
+            accountingError: accountingPayment.error,
+            clientTransactionID: charge.resolvedClientTransID ?? clientTransactionID
+        )
+    }
+
+    func processBankPayment(
+        invoice: Invoice,
+        amount: Double,
+        bankInput: QuickBooksPaymentsBankAccountInput,
+        note: String?
+    ) async throws -> QuickBooksProcessedPaymentResult {
+        guard let customerQBID = invoice.customer.quickBooksID, !customerQBID.isEmpty else {
+            throw QuickBooksPaymentsServiceError.customerNotSynced
+        }
+
+        let clientTransactionID = Self.chargeClientTransactionID(for: invoice, amount: amount)
+        let token = try await createBankAccountToken(bankInput)
+        let charge = try await createBankCharge(
+            amount: amount,
+            token: token.value,
+            note: note,
+            clientTransactionID: clientTransactionID,
+            checkNumber: bankInput.checkNumber
+        )
         let accountingPayment = await syncAccountingPayment(
             invoice: invoice,
             customerQBID: customerQBID,
@@ -199,6 +262,26 @@ final class QuickBooksPaymentsService {
                 name: input.cardholderName,
                 cvc: input.cvc,
                 number: input.cardNumber
+            ),
+            bankAccount: nil
+        )
+
+        return try await withCheckedThrowingContinuation { continuation in
+            api.createCardToken(tokenRequest) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
+    private func createBankAccountToken(_ input: QuickBooksPaymentsBankAccountInput) async throws -> QuickBooksPaymentsTokenResponse {
+        let tokenRequest = QuickBooksPaymentsTokenCreateRequest(
+            card: nil,
+            bankAccount: QuickBooksPaymentsBankAccount(
+                name: input.accountHolderName,
+                accountNumber: input.accountNumber,
+                phone: input.phone,
+                routingNumber: input.routingNumber,
+                accountType: input.accountType.rawValue
             )
         )
 
@@ -221,7 +304,9 @@ final class QuickBooksPaymentsService {
             capture: false,
             token: token,
             description: note,
-            context: QuickBooksPaymentsChargeContext.forClientTransactionID(clientTransactionID)
+            context: QuickBooksPaymentsChargeContext.forClientTransactionID(clientTransactionID),
+            paymentMode: nil,
+            checkNumber: nil
         )
 
         return try await withCheckedThrowingContinuation { continuation in
@@ -234,6 +319,33 @@ final class QuickBooksPaymentsService {
     private func captureCharge(id: String, amount: Double) async throws -> QuickBooksPaymentsChargeResponse {
         try await withCheckedThrowingContinuation { continuation in
             api.captureCharge(id: id, amount: amount) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
+    private func createBankCharge(
+        amount: Double,
+        token: String,
+        note: String?,
+        clientTransactionID: String,
+        checkNumber: String?
+    ) async throws -> QuickBooksPaymentsChargeResponse {
+        let charge = QuickBooksPaymentsChargeCreate(
+            amount: Self.currencyString(amount),
+            currency: nil,
+            capture: nil,
+            token: token,
+            description: note,
+            context: QuickBooksPaymentsChargeContext.forClientTransactionID(clientTransactionID),
+            paymentMode: "WEB",
+            checkNumber: checkNumber?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? checkNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
+                : nil
+        )
+
+        return try await withCheckedThrowingContinuation { continuation in
+            api.createCharge(charge) { result in
                 continuation.resume(with: result)
             }
         }

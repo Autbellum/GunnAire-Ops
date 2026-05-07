@@ -43,6 +43,12 @@ struct PaymentsAndReceiptsView: View {
     @State private var expirationYear = ""
     @State private var cardCVC = ""
     @State private var billingPostalCode = ""
+    @State private var achAccountHolderName = ""
+    @State private var achAccountNumber = ""
+    @State private var achRoutingNumber = ""
+    @State private var achPhone = ""
+    @State private var achCheckNumber = ""
+    @State private var achAccountType: QuickBooksBankAccountType = .businessChecking
     @State private var didLoadPendingIntentInvoice = false
 
     private let liveAPI = QuickBooksDataAPI.shared
@@ -397,6 +403,25 @@ struct PaymentsAndReceiptsView: View {
                             }
                         }
                     }
+                    if selectedMethod == .ach, isQuickBooksConnected {
+                        TextField("Account holder name", text: $achAccountHolderName)
+                        TextField("Bank account number", text: $achAccountNumber)
+                            .keyboardType(.numberPad)
+                        TextField("Routing number", text: $achRoutingNumber)
+                            .keyboardType(.numberPad)
+                        TextField("Phone", text: $achPhone)
+                            .keyboardType(.phonePad)
+                        Picker("Account type", selection: $achAccountType) {
+                            ForEach(QuickBooksBankAccountType.allCases) { type in
+                                Text(type.displayName).tag(type)
+                            }
+                        }
+                        TextField("Check number (optional)", text: $achCheckNumber)
+                            .keyboardType(.numbersAndPunctuation)
+                        Text("Bank details are only used to create a QuickBooks Payments token for this ACH/eCheck transaction and are not saved locally.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
 
                     TextField("Payment notes", text: $paymentNotes, axis: .vertical)
                         .lineLimit(2...4)
@@ -474,12 +499,20 @@ struct PaymentsAndReceiptsView: View {
 
     private var paymentFormIsValid: Bool {
         guard Double(amountText) != nil else { return false }
-        guard selectedMethod == .card, processCardWithQuickBooks else { return true }
-        return !cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            cardNumber.filter(\.isNumber).count >= 12 &&
-            expirationMonth.filter(\.isNumber).count >= 1 &&
-            expirationYear.filter(\.isNumber).count == 4 &&
-            cardCVC.filter(\.isNumber).count >= 3
+        if selectedMethod == .card, processCardWithQuickBooks {
+            return !cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                cardNumber.filter(\.isNumber).count >= 12 &&
+                expirationMonth.filter(\.isNumber).count >= 1 &&
+                expirationYear.filter(\.isNumber).count == 4 &&
+                cardCVC.filter(\.isNumber).count >= 3
+        }
+        if selectedMethod == .ach, isQuickBooksConnected {
+            return !achAccountHolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                achAccountNumber.filter(\.isNumber).count >= 4 &&
+                achRoutingNumber.filter(\.isNumber).count == 9 &&
+                achPhone.filter(\.isNumber).count >= 10
+        }
+        return true
     }
 
     private var isQuickBooksConnected: Bool {
@@ -518,6 +551,12 @@ struct PaymentsAndReceiptsView: View {
         expirationYear = ""
         cardCVC = ""
         billingPostalCode = ""
+        achAccountHolderName = invoice.customer.name
+        achAccountNumber = ""
+        achRoutingNumber = ""
+        achPhone = invoice.customer.phone ?? ""
+        achCheckNumber = ""
+        achAccountType = .businessChecking
     }
 
     private func prepareRefundForm(for payment: Payment) {
@@ -614,6 +653,49 @@ struct PaymentsAndReceiptsView: View {
                 showingRecordPaymentSheet = false
             } catch {
                 actionMessage = "QuickBooks payment failed: \(error.localizedDescription)"
+            }
+            return
+        }
+
+        if selectedMethod == .ach, isQuickBooksConnected {
+            isProcessingQuickBooksPayment = true
+            defer { isProcessingQuickBooksPayment = false }
+
+            do {
+                let result = try await QuickBooksPaymentsService.shared.processBankPayment(
+                    invoice: invoice,
+                    amount: amount,
+                    bankInput: QuickBooksPaymentsBankAccountInput(
+                        accountHolderName: achAccountHolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? invoice.customer.name : achAccountHolderName.trimmingCharacters(in: .whitespacesAndNewlines),
+                        accountNumber: achAccountNumber.filter(\.isNumber),
+                        routingNumber: achRoutingNumber.filter(\.isNumber),
+                        phone: achPhone.filter(\.isNumber),
+                        accountType: achAccountType,
+                        checkNumber: achCheckNumber.nilIfBlank
+                    ),
+                    note: paymentNotes.nilIfBlank
+                )
+                authorizationReference = result.charge.authCode ?? authorizationReference
+                saveLocalPayment(
+                    invoice: invoice,
+                    amount: amount,
+                    quickBooksPaymentID: result.accountingPayment?.Id,
+                    quickBooksChargeID: result.charge.id,
+                    quickBooksClientTransID: result.clientTransactionID,
+                    quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
+                    quickBooksAccountingSyncDetail: result.accountingError,
+                    processorOverride: OnsitePaymentProcessor.quickBooksPayments.rawValue
+                )
+                updateInvoiceStatusAfterPayment(invoice)
+                if let accountingError = result.accountingError {
+                    actionMessage = "ACH payment submitted, but accounting sync still needs attention: \(accountingError)"
+                } else {
+                    actionMessage = "QuickBooks ACH payment processed for \(invoice.customer.name)."
+                }
+                resetPaymentForm()
+                showingRecordPaymentSheet = false
+            } catch {
+                actionMessage = "QuickBooks ACH payment failed: \(error.localizedDescription)"
             }
             return
         }
@@ -819,6 +901,12 @@ GunnAire
         expirationYear = ""
         cardCVC = ""
         billingPostalCode = ""
+        achAccountHolderName = ""
+        achAccountNumber = ""
+        achRoutingNumber = ""
+        achPhone = ""
+        achCheckNumber = ""
+        achAccountType = .businessChecking
     }
 
     private func resetRefundForm() {
