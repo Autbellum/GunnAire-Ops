@@ -23,6 +23,7 @@ struct SettingsView: View {
     @State private var showingSplashVideoImporter = false
     @State private var splashVideoMessage: String?
     @State private var splashVideoStatus = SplashVideoLocator.currentSourceDescription()
+    @State private var splashVideoDetails = SplashVideoLocator.currentStoredVideoDetails()
 
     @AppStorage("companyName") private var companyName = "GunnAire"
     @AppStorage("dispatchStartHour") private var dispatchStartHour = 8
@@ -110,6 +111,19 @@ struct SettingsView: View {
                                 Spacer()
                                 Text(splashVideoStatus)
                                     .foregroundColor(.secondary)
+                            }
+
+                            if let splashVideoDetails {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(splashVideoDetails.filename)
+                                        .font(.subheadline)
+                                    Text("Size: \(splashVideoDetails.fileSizeDescription)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Text("Updated: \(splashVideoDetails.modifiedDescription)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
                             }
 
                             Button("Load Splash MP4") {
@@ -383,7 +397,7 @@ struct SettingsView: View {
             }
             do {
                 try SplashVideoLocator.installVideo(from: url)
-                splashVideoStatus = SplashVideoLocator.currentSourceDescription()
+                refreshSplashVideoState()
                 splashVideoMessage = "Splash MP4 loaded successfully."
             } catch {
                 splashVideoMessage = "Failed to load splash MP4: \(error.localizedDescription)"
@@ -396,11 +410,16 @@ struct SettingsView: View {
     private func removeSplashVideo() {
         do {
             try SplashVideoLocator.removeStoredVideo()
-            splashVideoStatus = SplashVideoLocator.currentSourceDescription()
+            refreshSplashVideoState()
             splashVideoMessage = "Custom splash MP4 removed."
         } catch {
             splashVideoMessage = "Failed to remove splash MP4: \(error.localizedDescription)"
         }
+    }
+
+    private func refreshSplashVideoState() {
+        splashVideoStatus = SplashVideoLocator.currentSourceDescription()
+        splashVideoDetails = SplashVideoLocator.currentStoredVideoDetails()
     }
 
     private func deleteUsers(offsets: IndexSet) {

@@ -123,6 +123,12 @@ private struct VideoSplashView: View {
 }
 
 enum SplashVideoLocator {
+    struct VideoDetails {
+        let filename: String
+        let fileSizeDescription: String
+        let modifiedDescription: String
+    }
+
     static func resolveURL(fileManager: FileManager = .default) -> URL? {
         let bundledURL = Bundle.main.url(forResource: "Loading", withExtension: "mp4")
         let storedCandidates = storedCandidateURLs(fileManager: fileManager)
@@ -181,6 +187,26 @@ enum SplashVideoLocator {
             return "Bundled Loading.mp4"
         }
         return "Logo Fallback"
+    }
+
+    static func currentStoredVideoDetails(fileManager: FileManager = .default) -> VideoDetails? {
+        guard let storedURL = storedCandidateURLs(fileManager: fileManager).first,
+              fileManager.fileExists(atPath: storedURL.path),
+              let attributes = try? fileManager.attributesOfItem(atPath: storedURL.path) else {
+            return nil
+        }
+
+        let byteCount = attributes[.size] as? NSNumber
+        let modifiedDate = attributes[.modificationDate] as? Date
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB]
+        formatter.countStyle = .file
+
+        return VideoDetails(
+            filename: storedURL.lastPathComponent,
+            fileSizeDescription: formatter.string(fromByteCount: byteCount?.int64Value ?? 0),
+            modifiedDescription: modifiedDate?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown"
+        )
     }
 
     private static func ensureStorageURL(fileManager: FileManager) throws -> URL {

@@ -1259,12 +1259,19 @@ extension ContentView {
 // Provide a presentation anchor for ASWebAuthenticationSession
 class ContentViewPresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "App", category: "AuthAnchor")
+    private static weak var lastResolvedAnchor: UIWindow?
     
     @inline(__always)
     private static func dlog(_ message: String) {
         #if DEBUG
         logger.debug("\(message, privacy: .public)")
         #endif
+    }
+
+    private static func remember(_ window: UIWindow, reason: String) -> ASPresentationAnchor {
+        lastResolvedAnchor = window
+        dlog(reason)
+        return window
     }
     
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
@@ -1275,50 +1282,42 @@ class ContentViewPresentationContextProvider: NSObject, ASWebAuthenticationPrese
             
             // If there's an existing key window, return it
             if let keyWindow = windowScene.windows.first(where: { $0.isKeyWindow }) {
-                Self.dlog("Returning keyWindow from foreground scene")
-                return keyWindow
+                return Self.remember(keyWindow, reason: "Returning keyWindow from foreground scene")
             }
             // Fallback: return the first available window in the scene
             if let anyWindow = windowScene.windows.first {
-                Self.dlog("Returning first window from foreground scene")
-                return anyWindow
+                return Self.remember(anyWindow, reason: "Returning first window from foreground scene")
             }
             // As a last resort, create a temporary window attached to the scene using the non-deprecated initializer
-            Self.dlog("Creating temp window from foreground scene via init(windowScene:)")
             let tempWindow = UIWindow(windowScene: windowScene)
-            return tempWindow
+            return Self.remember(tempWindow, reason: "Creating temp window from foreground scene via init(windowScene:)")
         }
 
         // If no suitable window was found above, try to create one from any foreground scene first.
         if let fgScene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }) {
-            Self.dlog("Creating temp window from foreground scene (fallback)")
             let tempWindow = UIWindow(windowScene: fgScene)
-            return tempWindow
+            return Self.remember(tempWindow, reason: "Creating temp window from foreground scene (fallback)")
         }
 
         // As a broader fallback, use any available scene.
         if let anyScene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first {
-            Self.dlog("Creating temp window from any available scene (broad fallback)")
             let tempWindow = UIWindow(windowScene: anyScene)
-            return tempWindow
+            return Self.remember(tempWindow, reason: "Creating temp window from any available scene (broad fallback)")
         }
 
-        // Preview/runtime fallback: avoid terminating the process when no scene is available yet.
-        // On iOS 26+, avoid deprecated ASPresentationAnchor init(); prefer a temp window from any scene if possible.
-        if let anyScene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first {
-            Self.dlog("Creating temp window from any available scene (ultimate fallback)")
-            let tempWindow = UIWindow(windowScene: anyScene)
-            return tempWindow
+        // If no scenes exist yet, keep using the most recent valid anchor rather than
+        // creating a deprecated empty presentation anchor.
+        if let lastResolvedAnchor = Self.lastResolvedAnchor {
+            return Self.remember(lastResolvedAnchor, reason: "Reusing last resolved auth anchor")
         }
-        // If no scenes exist yet (e.g. previews or very early startup), return an empty anchor until a scene is available.
-        Self.dlog("No UIWindowScene available; returning empty ASPresentationAnchor fallback")
-        return ASPresentationAnchor()
+
+        let detachedWindow = UIWindow(frame: .zero)
+        detachedWindow.isHidden = true
+        return Self.remember(detachedWindow, reason: "Using detached zero-frame auth anchor as final fallback")
     }
 }
 
