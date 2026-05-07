@@ -63,6 +63,17 @@ struct BillingDocumentsView: View {
         return invoices.first { $0.id == invoiceID }
     }
 
+    private var currentJobPayments: [Payment] {
+        guard let invoice = currentJobInvoice else { return [] }
+        return payments.filter { $0.invoice.id == invoice.id }
+    }
+
+    private var currentJobBalanceDue: Double? {
+        guard let invoice = currentJobInvoice else { return nil }
+        let paid = currentJobPayments.reduce(0) { $0 + $1.amount }
+        return max(invoice.amount - paid, 0)
+    }
+
     private var selectedSummary: String {
         selectedLineItems
             .map { item in
@@ -124,6 +135,38 @@ struct BillingDocumentsView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
+
+                    Section("Job Progress") {
+                        Toggle("Work Completed", isOn: Binding(
+                            get: { call.workCompletedChecklist },
+                            set: { call.workCompletedChecklist = $0 }
+                        ))
+                        Toggle("Documentation Completed", isOn: Binding(
+                            get: { call.documentationChecklist },
+                            set: { call.documentationChecklist = $0 }
+                        ))
+                        Toggle("Payment Collected", isOn: Binding(
+                            get: { call.paymentCollectedChecklist },
+                            set: { call.paymentCollectedChecklist = $0 }
+                        ))
+
+                        Text("Checklist: \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        if call.status == .scheduled || call.status == .inProgress {
+                            Button(call.status == .scheduled ? "Mark Job In Progress" : "Mark Job Completed") {
+                                if call.status == .scheduled {
+                                    call.status = .inProgress
+                                    call.documentationStartedAt = call.documentationStartedAt ?? Date()
+                                } else {
+                                    call.status = call.linkedInvoiceID == nil ? .completed : .invoiced
+                                    call.documentationCompletedAt = Date()
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
                 }
 
                 if currentJobEstimate != nil || currentJobInvoice != nil {
@@ -162,6 +205,11 @@ struct BillingDocumentsView: View {
                                 Text("\(invoice.amount, format: .currency(code: "USD")) • \(invoice.status.capitalized)")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                if let currentJobBalanceDue {
+                                    Text("Balance due: \(currentJobBalanceDue, format: .currency(code: "USD"))")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
                                 if let quickBooksID = invoice.quickBooksID, !quickBooksID.isEmpty {
                                     Text("QuickBooks ID: \(quickBooksID)")
                                         .font(.caption2)
