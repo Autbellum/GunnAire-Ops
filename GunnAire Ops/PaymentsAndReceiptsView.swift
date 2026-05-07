@@ -50,6 +50,7 @@ struct PaymentsAndReceiptsView: View {
     @State private var achCheckNumber = ""
     @State private var achAccountType: QuickBooksBankAccountType = .businessChecking
     @State private var didLoadPendingIntentInvoice = false
+    @State private var quickBooksPaymentReceipts: [String: QuickBooksPaymentsPaymentReceipt] = [:]
 
     private let liveAPI = QuickBooksDataAPI.shared
 
@@ -291,6 +292,20 @@ struct PaymentsAndReceiptsView: View {
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
+                                    if let chargeID = payment.quickBooksChargeID,
+                                       let receipt = quickBooksPaymentReceipts[chargeID] {
+                                        if let amount = receipt.amount, !amount.isEmpty {
+                                            Text("Receipt amount: \(amount)")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        if let link = receipt.links?.first(where: { ($0.rel ?? "").localizedCaseInsensitiveContains("receipt") || ($0.rel ?? "").localizedCaseInsensitiveContains("self") }),
+                                           let href = link.href,
+                                           let url = URL(string: href) {
+                                            Link("Open QB Receipt", destination: url)
+                                                .font(.caption2)
+                                        }
+                                    }
 
                                     HStack {
                                         if let receiptURL = receiptEmailURL(for: payment) {
@@ -316,6 +331,15 @@ struct PaymentsAndReceiptsView: View {
                                             }
                                             .buttonStyle(.borderedProminent)
                                             .tint(.red)
+                                        }
+
+                                        if payment.quickBooksChargeID?.isEmpty == false,
+                                           quickBooksPaymentReceipts[payment.quickBooksChargeID ?? ""] == nil {
+                                            Button("Load QB Receipt") {
+                                                loadQuickBooksPaymentReceipt(for: payment)
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .disabled(syncingPaymentID != nil || !isQuickBooksConnected)
                                         }
                                     }
                                 }
@@ -883,6 +907,31 @@ GunnAire
                     payment.quickBooksAccountingSyncDetail = error.localizedDescription
                     syncingPaymentID = nil
                     actionMessage = "QuickBooks follow-up retry failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func loadQuickBooksPaymentReceipt(for payment: Payment) {
+        guard let chargeID = payment.quickBooksChargeID?.trimmingCharacters(in: .whitespacesAndNewlines), !chargeID.isEmpty else {
+            actionMessage = "This payment does not have a QuickBooks charge ID."
+            return
+        }
+        guard isQuickBooksConnected else {
+            actionMessage = "Connect QuickBooks before loading the payment receipt."
+            return
+        }
+
+        syncingPaymentID = payment.id
+        liveAPI.fetchPaymentReceipt(id: chargeID) { result in
+            DispatchQueue.main.async {
+                syncingPaymentID = nil
+                switch result {
+                case .success(let receipt):
+                    quickBooksPaymentReceipts[chargeID] = receipt
+                    actionMessage = "QuickBooks payment receipt loaded."
+                case .failure(let error):
+                    actionMessage = "QuickBooks payment receipt lookup failed: \(error.localizedDescription)"
                 }
             }
         }
