@@ -2,119 +2,119 @@ import SwiftUI
 import AVKit
 import AVFoundation
 
-struct SplashView: View {
-    @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser: Bool = false
-    @State private var player: AVPlayer? = nil
-    @State private var videoEnded: Bool = false
-    @State private var showNextView: Bool = false
-    @State private var opacity: Double = 1.0
-
-    private let timeout: TimeInterval = 3.0
+struct AppRootView: View {
+    @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
+    @State private var showingSplash = true
 
     var body: some View {
-        Group {
-            if showNextView {
+        ZStack {
+            if showingSplash {
+                VideoSplashView {
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        showingSplash = false
+                    }
+                }
+                .transition(.opacity)
+            } else {
                 if hasAuthenticatedUser {
                     ContentView()
                         .transition(.opacity)
                 } else {
-                    LoginView()
+                    LoginView(hasAuthenticatedUser: $hasAuthenticatedUser)
                         .transition(.opacity)
                 }
+            }
+        }
+    }
+}
+
+private struct VideoSplashView: View {
+    let onFinished: () -> Void
+
+    @State private var player: AVPlayer?
+    @State private var didFinish = false
+    @State private var timeoutWork: DispatchWorkItem?
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let player {
+                PlayerLayerView(player: player)
+                    .ignoresSafeArea()
+                    .accessibilityLabel("Loading")
             } else {
-                ZStack {
-                    if let player = player {
-                        VideoPlayer(player: player)
-                            .onAppear {
-                                player.play()
-                                addObservers(to: player)
-                            }
-                            .onDisappear {
-                                removeObservers()
-                            }
-                            .accessibilityLabel("Loading")
-                            .ignoresSafeArea()
-                            .opacity(opacity)
-                    } else {
-                        Image("AppLogo")
-                            .resizable()
-                            .scaledToFill()
-                            .ignoresSafeArea()
-                            .accessibilityLabel("Loading")
-                            .opacity(opacity)
-                    }
-                }
+                Image("AppLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: 240)
+                    .opacity(0.9)
+                    .accessibilityHidden(true)
+            }
+        }
+        .onAppear(perform: start)
+        .onDisappear(perform: cleanup)
+    }
+
+    private func start() {
+        let finishOnce: () -> Void = {
+            if !didFinish {
+                didFinish = true
+                onFinished()
+            }
+        }
+
+        // Ensure we transition even if the video fails to load
+        let work = DispatchWorkItem {
+            finishOnce()
+        }
+        timeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: work)
+
+        // Load and play the bundled splash video once (muted)
+        if let url = Bundle.main.url(forResource: "Loading", withExtension: "mp4") {
+            let item = AVPlayerItem(url: url)
+            let player = AVPlayer(playerItem: item)
+            player.isMuted = true
+            player.actionAtItemEnd = .pause
+            self.player = player
+
+            NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { _ in
+                finishOnce()
+            }
+
+            player.play()
+        } else {
+            // No video found; briefly show the logo then proceed
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                finishOnce()
             }
         }
     }
 
-    // MARK: - Observers
-
-    private func addObservers(to player: AVPlayer) {
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: player.currentItem,
-            queue: .main
-        ) { _ in
-            videoEnded = true
-            fadeOutAndTransition()
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
-            if !videoEnded {
-                fadeOutAndTransition()
-            }
-        }
-    }
-
-    private func removeObservers() {
+    private func cleanup() {
+        timeoutWork?.cancel()
+        timeoutWork = nil
+        player?.pause()
         NotificationCenter.default.removeObserver(self)
     }
-
-    // MARK: - Transition
-
-    private func fadeOutAndTransition() {
-        withAnimation(.easeOut(duration: 0.6)) {
-            opacity = 0
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            showNextView = true
-        }
-    }
-
-    // MARK: - Init
-
-    init() {
-        if let url = Bundle.main.url(forResource: "Loading", withExtension: "mp4") {
-            let playerItem = AVPlayerItem(url: url)
-            let avPlayer = AVPlayer(playerItem: playerItem)
-            avPlayer.isMuted = true
-            avPlayer.actionAtItemEnd = .pause
-            self._player = State(initialValue: avPlayer)
-        } else {
-            self._player = State(initialValue: nil)
-        }
-    }
 }
 
+private struct PlayerLayerView: UIViewRepresentable {
+    let player: AVPlayer
 
-// Dummy placeholders for LoginView and ContentView to make this file self-contained.
-struct LoginView: View {
-    var body: some View {
-        Text("Login View")
-            .font(.largeTitle)
+    func makeUIView(context: Context) -> PlayerView {
+        let view = PlayerView()
+        view.playerLayer.videoGravity = .resizeAspectFill
+        view.playerLayer.player = player
+        return view
     }
-}
 
-struct ContentView: View {
-    var body: some View {
-        Text("Content View")
-            .font(.largeTitle)
+    func updateUIView(_ uiView: PlayerView, context: Context) {
+        uiView.playerLayer.player = player
     }
-}
 
-struct SplashView_Previews: PreviewProvider {
-    static var previews: some View {
-        SplashView()
+    final class PlayerView: UIView {
+        override static var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
     }
 }

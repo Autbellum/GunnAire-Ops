@@ -13,7 +13,6 @@ import os
 
 @main
 struct GunnAire_OpsApp: App {
-    @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "GunnAireOps", category: "AppStartup")
 
     // Define schema with all model types
@@ -60,13 +59,7 @@ struct GunnAire_OpsApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if hasAuthenticatedUser {
-                ContentView() // Main UI entry point
-            } else {
-                LoginView(
-                    hasAuthenticatedUser: $hasAuthenticatedUser
-                )
-            }
+            AppRootView()
         }
         .modelContainer(sharedModelContainer)
     }
