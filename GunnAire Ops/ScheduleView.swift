@@ -102,10 +102,19 @@ struct ScheduleView: View {
                                 serviceCallRow(for: call)
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                if let invoice = invoice(for: call), invoice.status != "paid" {
+                                    Button {
+                                        documentationCall = call
+                                    } label: {
+                                        Label("Take Payment", systemImage: "creditcard")
+                                    }
+                                    .tint(.green)
+                                }
+
                                 Button {
                                     documentationCall = call
                                 } label: {
-                                    Label("Start Docs", systemImage: "doc.text")
+                                    Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Continue Docs" : "Start Docs", systemImage: "doc.text")
                                 }
                                 .tint(Color.brandGold)
                             }
@@ -308,6 +317,28 @@ struct ScheduleView: View {
             }
             .font(.caption2)
             .foregroundColor(.secondary)
+
+            HStack(spacing: 10) {
+                if hasNavigableAddress(for: call) {
+                    Button {
+                        openMaps(for: call)
+                    } label: {
+                        Label("Navigate", systemImage: "map")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundColor(Color.brandGold)
+                }
+
+                Button {
+                    documentationCall = call
+                } label: {
+                    Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Continue Docs" : "Start Docs", systemImage: "doc.text")
+                        .font(.caption2)
+                }
+                .buttonStyle(.borderless)
+                .foregroundColor(Color.brandGold)
+            }
         }
     }
     
