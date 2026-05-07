@@ -15,10 +15,10 @@ struct PaymentsAndReceiptsView: View {
     @Environment(\.modelContext) private var modelContext
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
-    @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
 
+    @StateObject private var onsitePaymentManager = OnsitePaymentManager.shared
     @State private var showingRecordPaymentSheet = false
     @State private var selectedInvoiceID: UUID?
     @State private var amountText = ""
@@ -26,6 +26,7 @@ struct PaymentsAndReceiptsView: View {
     @State private var cardLast4 = ""
     @State private var authorizationReference = ""
     @State private var paymentNotes = ""
+    @State private var tapToPayMessage = ""
     @State private var actionMessage = ""
     @State private var syncingPaymentID: UUID?
 
@@ -40,6 +41,24 @@ struct PaymentsAndReceiptsView: View {
         OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
     }
 
+    private var processorIsReady: Bool {
+        enableOnsitePayments && selectedProcessor.supportsTapToPay && onsitePaymentManager.processorReady()
+    }
+
+    private var outstandingInvoices: [(invoice: Invoice, balanceDue: Double)] {
+        invoices
+            .compactMap { invoice in
+                let balance = outstandingBalance(for: invoice)
+                return balance > 0 ? (invoice, balance) : nil
+            }
+            .sorted { lhs, rhs in
+                if lhs.balanceDue == rhs.balanceDue {
+                    return lhs.invoice.createdAt > rhs.invoice.createdAt
+                }
+                return lhs.balanceDue > rhs.balanceDue
+            }
+    }
+
     var body: some View {
         ZStack {
             WatermarkBackground()
@@ -48,11 +67,61 @@ struct PaymentsAndReceiptsView: View {
                     Section("Payment Status") {
                         Text("QuickBooks: \(isQuickBooksConnected ? "Connected" : "Not Connected")")
                             .foregroundColor(isQuickBooksConnected ? .green : .secondary)
-                        Text("Tap to Pay: \(enableOnsitePayments && onsitePaymentProcessorReady ? selectedProcessor.displayName : "Not Ready")")
-                            .foregroundColor(enableOnsitePayments && onsitePaymentProcessorReady ? .green : .secondary)
-                        Text("The app now includes a Tap to Pay workflow layer. A live provider SDK still needs to back the selected processor before real card-present payments can be accepted.")
+                        Text("Tap to Pay: \(processorIsReady ? selectedProcessor.displayName : "Not Ready")")
+                            .foregroundColor(processorIsReady ? .green : .secondary)
+                        Text(selectedProcessor == .simulated && processorIsReady
+                             ? "The simulator is active, so field staff can test card-present collection without leaving the workflow."
+                             : "The app includes a Tap to Pay workflow layer. A live provider SDK still needs to back the selected processor before real card-present payments can be accepted.")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    }
+
+                    Section("Outstanding Invoices") {
+                        if outstandingInvoices.isEmpty {
+                            Text("No unpaid or partially paid invoices.")
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(outstandingInvoices, id: \.invoice.id) { entry in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack(alignment: .top) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(entry.invoice.customer.name)
+                                                .font(.headline)
+                                            Text(entry.invoice.lineItemSummary.isEmpty ? "Invoice \(entry.invoice.id.uuidString.prefix(8))" : entry.invoice.lineItemSummary)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Spacer()
+                                        VStack(alignment: .trailing, spacing: 4) {
+                                            Text(entry.balanceDue, format: .currency(code: "USD"))
+                                                .font(.headline)
+                                            Text(entry.invoice.status.capitalized)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+
+                                    HStack {
+                                        Button("Collect") {
+                                            preparePaymentForm(for: entry.invoice)
+                                            showingRecordPaymentSheet = true
+                                        }
+                                        .buttonStyle(.bordered)
+
+                                        if processorIsReady {
+                                            Button("Tap to Pay") {
+                                                preparePaymentForm(for: entry.invoice, preferredMethod: .card)
+                                                showingRecordPaymentSheet = true
+                                            }
+                                            .buttonStyle(.borderedProminent)
+                                            .tint(Color.brandGold)
+                                            .foregroundStyle(Color.primaryBlack)
+                                        }
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
                     }
 
                     Section("Record Payment") {
@@ -159,6 +228,24 @@ struct PaymentsAndReceiptsView: View {
                     }
 
                     if selectedMethod == .card {
+                        if enableOnsitePayments {
+                            Button(onsitePaymentManager.isProcessing ? "Processing Tap to Pay..." : "Start Tap to Pay") {
+                                Task {
+                                    await runTapToPay()
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(onsitePaymentManager.isProcessing || Double(amountText) == nil || !processorIsReady)
+
+                            if !tapToPayMessage.isEmpty {
+                                Text(tapToPayMessage)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
                         TextField("Card last 4", text: $cardLast4)
                             .keyboardType(.numberPad)
                         TextField("Authorization ref", text: $authorizationReference)
@@ -166,6 +253,14 @@ struct PaymentsAndReceiptsView: View {
 
                     TextField("Payment notes", text: $paymentNotes, axis: .vertical)
                         .lineLimit(2...4)
+
+                    if selectedMethod == .card, enableOnsitePayments {
+                        Text(selectedProcessor == .simulated && processorIsReady
+                             ? "Tap to Pay simulator is active for payment-center testing."
+                             : "Pick a live processor in Settings and mark this device ready before using Tap to Pay in the field.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             .navigationTitle("Record Payment")
@@ -193,9 +288,18 @@ struct PaymentsAndReceiptsView: View {
 
     private func preparePaymentForm() {
         if let firstUnpaid = invoices.first(where: { $0.status != "paid" }) ?? invoices.first {
-            selectedInvoiceID = firstUnpaid.id
-            amountText = String(format: "%.2f", firstUnpaid.amount)
+            preparePaymentForm(for: firstUnpaid)
         }
+    }
+
+    private func preparePaymentForm(for invoice: Invoice, preferredMethod: PaymentMethod = .card) {
+        selectedInvoiceID = invoice.id
+        amountText = String(format: "%.2f", outstandingBalance(for: invoice))
+        selectedMethod = preferredMethod
+        tapToPayMessage = ""
+        cardLast4 = ""
+        authorizationReference = ""
+        paymentNotes = ""
     }
 
     private func savePaymentRecord() {
@@ -210,13 +314,42 @@ struct PaymentsAndReceiptsView: View {
                 cardLast4: cardLast4.nilIfBlank,
                 authorizationReference: authorizationReference.nilIfBlank,
                 notes: paymentNotes.nilIfBlank,
-                processor: selectedMethod == .card ? "manual-entry" : nil
+                processor: selectedMethod == .card ? (authorizationReference.nilIfBlank == nil ? "manual-entry" : selectedProcessor.rawValue) : nil
             )
         )
-        invoice.status = amount >= invoice.amount ? "paid" : "partial"
+        let updatedBalance = max(outstandingBalance(for: invoice) - amount, 0)
+        invoice.status = updatedBalance == 0 ? "paid" : "partial"
         actionMessage = "Payment recorded for \(invoice.customer.name)."
         resetPaymentForm()
         showingRecordPaymentSheet = false
+    }
+
+    private func runTapToPay() async {
+        guard let invoice = selectedInvoice else {
+            tapToPayMessage = "Select an invoice before starting Tap to Pay."
+            return
+        }
+        guard let amount = Double(amountText), amount > 0 else {
+            tapToPayMessage = "Enter a valid amount before starting Tap to Pay."
+            return
+        }
+
+        do {
+            let result = try await onsitePaymentManager.startTapToPay(amount: amount, customerName: invoice.customer.name)
+            cardLast4 = result.cardLast4
+            authorizationReference = result.authorizationCode
+            paymentNotes = result.paymentSummary
+            tapToPayMessage = "\(result.processorName) approved \(result.amount.formatted(.currency(code: "USD")))."
+        } catch {
+            tapToPayMessage = error.localizedDescription
+        }
+    }
+
+    private func outstandingBalance(for invoice: Invoice) -> Double {
+        let paid = payments
+            .filter { $0.invoice.id == invoice.id }
+            .reduce(0) { $0 + $1.amount }
+        return max(invoice.amount - paid, 0)
     }
 
     private func syncPaymentToQuickBooks(_ payment: Payment) {
@@ -271,6 +404,7 @@ struct PaymentsAndReceiptsView: View {
         cardLast4 = ""
         authorizationReference = ""
         paymentNotes = ""
+        tapToPayMessage = ""
     }
 }
 
