@@ -313,9 +313,14 @@ struct ServiceCallDetailView: View {
     }
 
     private var balanceLabel: String? {
-        guard let invoice = linkedPayments.first?.invoice else { return nil }
+        guard let invoice = linkedInvoice else { return nil }
         let balance = max(invoice.amount - totalPaid, 0)
         return balance.formatted(.currency(code: "USD"))
+    }
+
+    private var hasOpenInvoiceBalance: Bool {
+        guard let invoice = linkedInvoice else { return false }
+        return invoice.status != "paid" && max(invoice.amount - totalPaid, 0) > 0
     }
 
     private var checklistIsComplete: Bool {
@@ -414,6 +419,10 @@ struct ServiceCallDetailView: View {
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }
+                            } else if let linkedInvoice, linkedInvoice.status != "paid" {
+                                Text("Remaining balance: \(linkedInvoice.amount, format: .currency(code: "USD"))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
                         }
                     }
@@ -526,6 +535,17 @@ struct ServiceCallDetailView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(Color.brandGold)
                     .foregroundStyle(Color.primaryBlack)
+
+                    if hasOpenInvoiceBalance {
+                        NavigationLink {
+                            BillingDocumentsView(initialServiceCall: call, openCloseoutOnAppear: true)
+                        } label: {
+                            Label("Take Payment", systemImage: "creditcard")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                    }
 
                     Spacer(minLength: 0)
                 }
