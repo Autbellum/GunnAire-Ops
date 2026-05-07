@@ -982,6 +982,7 @@ private struct RecordInvoicePaymentView: View {
 
     let invoice: Invoice
     @State private var amount: String
+    @State private var shouldRecordPayment: Bool
     @State private var method = "card"
     @State private var completionNotes = ""
     @State private var signatureName = ""
@@ -993,6 +994,7 @@ private struct RecordInvoicePaymentView: View {
     init(invoice: Invoice) {
         self.invoice = invoice
         _amount = State(initialValue: String(format: "%.2f", invoice.amount))
+        _shouldRecordPayment = State(initialValue: invoice.status != "paid")
         _completionNotes = State(initialValue: invoice.completionNotes ?? "")
         _signatureName = State(initialValue: invoice.customerSignatureName ?? "")
     }
@@ -1061,39 +1063,47 @@ private struct RecordInvoicePaymentView: View {
                 }
 
                 Section("Payment") {
-                    TextField("Amount", text: $amount)
-                        .keyboardType(.decimalPad)
-                    Picker("Method", selection: $method) {
-                        Text("Card").tag("card")
-                        Text("ACH").tag("ach")
-                        Text("Cash").tag("cash")
-                        Text("Check").tag("check")
-                    }
-                    if method == "card" {
-                        TextField("Card last 4", text: $cardLast4)
-                            .keyboardType(.numberPad)
-                        TextField("Authorization ref", text: $authorizationCode)
-                    }
-                    TextField("Payment notes", text: $paymentNotes, axis: .vertical)
-                        .lineLimit(2...4)
-                    if enableOnsitePayments {
-                        Text("Tap to Pay and keyed card processing still need a payment processor SDK. This screen finalizes the invoice, stores the signature, and records the payment result.")
+                    Toggle("Record payment now", isOn: $shouldRecordPayment)
+                    if shouldRecordPayment {
+                        TextField("Amount", text: $amount)
+                            .keyboardType(.decimalPad)
+                        Picker("Method", selection: $method) {
+                            Text("Card").tag("card")
+                            Text("ACH").tag("ach")
+                            Text("Cash").tag("cash")
+                            Text("Check").tag("check")
+                        }
+                        if method == "card" {
+                            TextField("Card last 4", text: $cardLast4)
+                                .keyboardType(.numberPad)
+                            TextField("Authorization ref", text: $authorizationCode)
+                        }
+                        TextField("Payment notes", text: $paymentNotes, axis: .vertical)
+                            .lineLimit(2...4)
+                        if enableOnsitePayments {
+                            Text("Tap to Pay and keyed card processing still need a payment processor SDK. This screen finalizes the invoice, stores the signature, and records the payment result.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    } else {
+                        Text("Finalize the documentation now and leave the invoice open for later collection.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                 }
             }
             .navigationTitle("Finalize Invoice")
+            .onAppear(perform: loadSuggestedCloseoutValues)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button(shouldRecordPayment ? "Save" : "Finalize") {
                         savePayment()
                     }
                     .disabled(
-                        Double(amount) == nil ||
+                        (shouldRecordPayment && Double(amount) == nil) ||
                         (requireCustomerSignature &&
                          (signatureName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !hasCapturedSignature))
                     )
@@ -1102,8 +1112,15 @@ private struct RecordInvoicePaymentView: View {
         }
     }
 
+    private func loadSuggestedCloseoutValues() {
+        if shouldRecordPayment {
+            amount = String(format: "%.2f", balanceDue > 0 ? balanceDue : invoice.amount)
+        }
+    }
+
     private func savePayment() {
-        guard let paidAmount = Double(amount), paidAmount > 0 else { return }
+        let paidAmount = shouldRecordPayment ? (Double(amount) ?? 0) : 0
+        guard !shouldRecordPayment || paidAmount > 0 else { return }
         let trimmedSignatureName = signatureName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCompletionNotes = completionNotes.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCardLast4 = cardLast4.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1116,32 +1133,43 @@ private struct RecordInvoicePaymentView: View {
         invoice.completionNotes = trimmedCompletionNotes.isEmpty ? nil : trimmedCompletionNotes
         invoice.finalizedAt = Date()
 
-        let recordedMethod: String
-        if method == "card", !trimmedCardLast4.isEmpty {
-            recordedMethod = trimmedAuthorization.isEmpty ? "card ••••\(trimmedCardLast4)" : "card ••••\(trimmedCardLast4) auth \(trimmedAuthorization)"
-        } else {
-            recordedMethod = method
+        if shouldRecordPayment {
+            let recordedMethod: String
+            if method == "card", !trimmedCardLast4.isEmpty {
+                recordedMethod = trimmedAuthorization.isEmpty ? "card ••••\(trimmedCardLast4)" : "card ••••\(trimmedCardLast4) auth \(trimmedAuthorization)"
+            } else {
+                recordedMethod = method
+            }
+
+            modelContext.insert(
+                Payment(
+                    invoice: invoice,
+                    amount: paidAmount,
+                    method: recordedMethod,
+                    cardLast4: trimmedCardLast4.isEmpty ? nil : trimmedCardLast4,
+                    authorizationReference: trimmedAuthorization.isEmpty ? nil : trimmedAuthorization,
+                    notes: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
+                    processor: method == "card" ? "manual-entry" : "onsite-recorded"
+                )
+            )
         }
 
-        modelContext.insert(
-            Payment(
-                invoice: invoice,
-                amount: paidAmount,
-                method: recordedMethod,
-                cardLast4: trimmedCardLast4.isEmpty ? nil : trimmedCardLast4,
-                authorizationReference: trimmedAuthorization.isEmpty ? nil : trimmedAuthorization,
-                notes: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
-                processor: method == "card" ? "manual-entry" : "onsite-recorded"
-            )
-        )
-        invoice.status = paidAmount >= invoice.amount ? "paid" : "partial"
+        let totalPaid = paidAmountRecorded + paidAmount
+        if totalPaid >= invoice.amount {
+            invoice.status = "paid"
+        } else if totalPaid > 0 {
+            invoice.status = "partial"
+        } else {
+            invoice.status = "unpaid"
+        }
 
         if let serviceCallID = invoice.serviceCallID,
            let call = serviceCalls.first(where: { $0.id == serviceCallID }) {
             call.documentationCompletedAt = Date()
-            if call.status != .invoiced {
-                call.status = .completed
-            }
+            call.documentationChecklist = true
+            call.workCompletedChecklist = true
+            call.paymentCollectedChecklist = totalPaid > 0
+            call.status = invoice.status == "paid" ? .completed : .invoiced
         }
 
         dismiss()
