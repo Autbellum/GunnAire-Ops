@@ -142,6 +142,15 @@ struct BillingDocumentsView: View {
                                     loadEstimateIntoBuilder(estimate)
                                 }
                                 .buttonStyle(.bordered)
+
+                                if currentJobInvoice == nil {
+                                    Button("Create Invoice From Estimate") {
+                                        prepareInvoiceFromEstimate(estimate)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(Color.brandGold)
+                                    .foregroundStyle(Color.primaryBlack)
+                                }
                             }
                             .padding(.vertical, 2)
                         }
@@ -624,6 +633,17 @@ struct BillingDocumentsView: View {
             preferredKind: .estimate,
             announce: announce
         )
+    }
+
+    private func prepareInvoiceFromEstimate(_ estimate: Estimate) {
+        applyDocumentContext(
+            customer: estimate.customer,
+            notes: estimate.notes,
+            lineItemSummary: estimate.lineItemSummary,
+            preferredKind: .invoice,
+            announce: false
+        )
+        actionMessage = "Estimate loaded into the invoice builder for this job."
     }
 
     private func loadInvoiceIntoBuilder(_ invoice: Invoice, announce: Bool = true) {
