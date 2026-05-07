@@ -408,6 +408,11 @@ struct BillingDocumentsView: View {
     private func saveCustomerProfile() {
         let customer = resolveCustomerForDocument()
         selectedCustomerID = customer.id
+        initialServiceCall?.customer = customer
+        if let trimmedAddress = customer.address?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmedAddress.isEmpty {
+            initialServiceCall?.siteAddress = trimmedAddress
+        }
         actionMessage = "\(customer.name) saved locally."
     }
 
@@ -566,6 +571,11 @@ struct BillingDocumentsView: View {
         isCreatingDocument = true
         let customer = resolveCustomerForDocument()
         selectedCustomerID = customer.id
+        initialServiceCall?.customer = customer
+        if let trimmedAddress = customer.address?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmedAddress.isEmpty {
+            initialServiceCall?.siteAddress = trimmedAddress
+        }
 
         switch selectedDocumentKind {
         case .estimate:
