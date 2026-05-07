@@ -194,6 +194,12 @@ struct SettingsView: View {
                             }
                             .buttonStyle(.bordered)
 
+                            if let splashVideoURL = SplashVideoLocator.resolveURL() {
+                                ShareLink(item: splashVideoURL) {
+                                    Label("Share Splash MP4", systemImage: "square.and.arrow.up")
+                                }
+                            }
+
                             Button("Remove Custom Splash Video", role: .destructive) {
                                 removeSplashVideo()
                             }
