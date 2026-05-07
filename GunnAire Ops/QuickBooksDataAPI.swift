@@ -987,12 +987,13 @@ struct QuickBooksPayment: Codable, Identifiable {
     let TotalAmt: Double
     let TxnDate: String?
     let PrivateNote: String?
+    let PaymentRefNum: String?
     let Line: [QuickBooksPaymentLine]?
 
     var id: String { Id }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, CustomerRef, TotalAmt, TxnDate, PrivateNote, Line
+        case Id, CustomerRef, TotalAmt, TxnDate, PrivateNote, PaymentRefNum, Line
     }
 
     init(from decoder: Decoder) throws {
@@ -1002,6 +1003,7 @@ struct QuickBooksPayment: Codable, Identifiable {
         TotalAmt = try container.decodeIfPresent(Double.self, forKey: .TotalAmt) ?? 0
         TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
         PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
+        PaymentRefNum = try container.decodeIfPresent(String.self, forKey: .PaymentRefNum)
         Line = try container.decodeIfPresent([QuickBooksPaymentLine].self, forKey: .Line)
     }
 }

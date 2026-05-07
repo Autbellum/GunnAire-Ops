@@ -141,16 +141,30 @@ enum QuickBooksLocalSync {
                   let invoice = invoicesByQBID[linkedInvoiceID] else {
                 continue
             }
-            let payment = paymentsByQBID[quickBooksPayment.Id]
-                ?? Payment(invoice: invoice, amount: quickBooksPayment.TotalAmt, method: "quickbooks")
+            let existingPayment = paymentsByQBID[quickBooksPayment.Id]
+            let payment = existingPayment
+                ?? Payment(
+                    invoice: invoice,
+                    amount: quickBooksPayment.TotalAmt,
+                    method: defaultImportedPaymentMethod(for: quickBooksPayment)
+                )
             if payment.modelContext == nil {
                 modelContext.insert(payment)
             }
             payment.quickBooksID = quickBooksPayment.Id
             payment.invoice = invoice
             payment.amount = quickBooksPayment.TotalAmt
-            payment.method = "quickbooks"
+            payment.method = resolvedImportedPaymentMethod(existing: payment, quickBooksPayment: quickBooksPayment)
             payment.date = parseQuickBooksDate(quickBooksPayment.TxnDate) ?? payment.date
+            if payment.notes?.nilIfEmpty == nil {
+                payment.notes = quickBooksPayment.PrivateNote
+            }
+            if payment.authorizationReference?.nilIfEmpty == nil {
+                payment.authorizationReference = quickBooksPayment.PaymentRefNum
+            }
+            if let processor = resolvedImportedProcessor(existing: payment) {
+                payment.processor = processor
+            }
             paymentsByQBID[quickBooksPayment.Id] = payment
         }
 
@@ -189,6 +203,44 @@ enum QuickBooksLocalSync {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
+    private static func defaultImportedPaymentMethod(for quickBooksPayment: QuickBooksPayment) -> String {
+        if isQuickBooksCardPayment(quickBooksPayment) {
+            return "card"
+        }
+        return "quickbooks"
+    }
+
+    private static func resolvedImportedPaymentMethod(existing payment: Payment, quickBooksPayment: QuickBooksPayment) -> String {
+        if let processor = payment.processor,
+           processor == OnsitePaymentProcessor.quickBooksPayments.rawValue || payment.quickBooksChargeID?.nilIfEmpty != nil {
+            return "card"
+        }
+
+        if payment.method == "card" || payment.method.hasPrefix("card ") {
+            return payment.method
+        }
+
+        return defaultImportedPaymentMethod(for: quickBooksPayment)
+    }
+
+    private static func resolvedImportedProcessor(existing payment: Payment) -> String? {
+        if let processor = payment.processor?.nilIfEmpty {
+            return processor
+        }
+        if payment.quickBooksChargeID?.nilIfEmpty != nil {
+            return OnsitePaymentProcessor.quickBooksPayments.rawValue
+        }
+        return nil
+    }
+
+    private static func isQuickBooksCardPayment(_ quickBooksPayment: QuickBooksPayment) -> Bool {
+        guard let ref = quickBooksPayment.PaymentRefNum?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !ref.isEmpty else {
+            return false
+        }
+        return ref.count > 8
+    }
+
     private static func parseQuickBooksDate(_ value: String?) -> Date? {
         guard let value, !value.isEmpty else { return nil }
         let formatter = DateFormatter()
@@ -203,6 +255,6 @@ enum QuickBooksLocalSync {
 
 private extension String {
     var nilIfEmpty: String? {
-        isEmpty ? nil : self
+        trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : self
     }
 }
