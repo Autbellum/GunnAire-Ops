@@ -207,6 +207,9 @@ enum QuickBooksLocalSync {
         if isQuickBooksCardPayment(quickBooksPayment) {
             return "card"
         }
+        if isQuickBooksACHPayment(quickBooksPayment) {
+            return "ach"
+        }
         return "quickbooks"
     }
 
@@ -217,6 +220,9 @@ enum QuickBooksLocalSync {
         }
 
         if payment.method == "card" || payment.method.hasPrefix("card ") {
+            return payment.method
+        }
+        if payment.method == "ach" || payment.method.hasPrefix("ach ") {
             return payment.method
         }
 
@@ -234,11 +240,21 @@ enum QuickBooksLocalSync {
     }
 
     private static func isQuickBooksCardPayment(_ quickBooksPayment: QuickBooksPayment) -> Bool {
-        guard let ref = quickBooksPayment.PaymentRefNum?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !ref.isEmpty else {
+        if quickBooksPayment.CreditCardPayment != nil {
+            return true
+        }
+
+        guard let methodName = quickBooksPayment.PaymentMethodRef?.name?.lowercased() else {
             return false
         }
-        return ref.count > 8
+        return methodName.contains("card") || methodName.contains("visa") || methodName.contains("mastercard") || methodName.contains("amex")
+    }
+
+    private static func isQuickBooksACHPayment(_ quickBooksPayment: QuickBooksPayment) -> Bool {
+        guard let methodName = quickBooksPayment.PaymentMethodRef?.name?.lowercased() else {
+            return false
+        }
+        return methodName.contains("ach") || methodName.contains("bank") || methodName.contains("echeck") || methodName.contains("check")
     }
 
     private static func parseQuickBooksDate(_ value: String?) -> Date? {

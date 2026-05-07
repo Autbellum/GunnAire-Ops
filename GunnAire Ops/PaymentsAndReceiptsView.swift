@@ -831,7 +831,9 @@ GunnAire
             TotalAmt: payment.amount,
             PrivateNote: nil,
             PaymentRefNum: "Payment for invoice #\(payment.invoice.id.uuidString.prefix(8)) from \(payment.invoice.customer.name)",
-            Line: paymentLines
+            Line: paymentLines,
+            PaymentMethodRef: nil,
+            CreditCardPayment: nil
         )
         liveAPI.createPayment(payload) { result in
             DispatchQueue.main.async {

@@ -14,11 +14,14 @@ struct QuickBooksManagementView: View {
     @State private var bills: [QuickBooksBill] = []
     @State private var vendors: [QuickBooksVendor] = []
     @State private var payments: [QuickBooksPayment] = []
+    @State private var salesReceipts: [QuickBooksSalesReceipt] = []
+    @State private var deposits: [QuickBooksDeposit] = []
 
     @State private var showingNewCustomerSheet = false
     @State private var showingNewCatalogItemSheet = false
     @State private var showingNewEstimateSheet = false
     @State private var showingNewInvoiceSheet = false
+    @State private var showingNewSalesReceiptSheet = false
     @State private var showingNewBillSheet = false
     @State private var showingNewVendorSheet = false
     @State private var showingNewPaymentSheet = false
@@ -57,6 +60,14 @@ struct QuickBooksManagementView: View {
 
     private var totalPaymentAmount: Double {
         payments.reduce(0) { $0 + $1.TotalAmt }
+    }
+
+    private var totalSalesReceiptAmount: Double {
+        salesReceipts.reduce(0) { $0 + $1.TotalAmt }
+    }
+
+    private var totalDepositAmount: Double {
+        deposits.reduce(0) { $0 + $1.TotalAmt }
     }
 
     private var quickBooksChargePayments: [Payment] {
@@ -124,6 +135,8 @@ struct QuickBooksManagementView: View {
                         summaryRow(title: "Bills", count: bills.count, amount: totalBillAmount)
                         summaryRow(title: "Vendors", count: vendors.count)
                         summaryRow(title: "Payments", count: payments.count, amount: totalPaymentAmount)
+                        summaryRow(title: "Sales Receipts", count: salesReceipts.count, amount: totalSalesReceiptAmount)
+                        summaryRow(title: "Deposits", count: deposits.count, amount: totalDepositAmount)
                     }
 
                     Section(header: Text("Customers").foregroundColor(Color.brandGold)) {
@@ -271,6 +284,42 @@ struct QuickBooksManagementView: View {
                             .disabled(!isAuthenticated || customers.isEmpty || !salesItemConfigReady)
                     }
 
+                    Section(header: Text("Sales Receipts").foregroundColor(Color.brandGold)) {
+                        if salesReceipts.isEmpty {
+                            emptyState("No QuickBooks sales receipts loaded.")
+                        } else {
+                            ForEach(salesReceipts) { salesReceipt in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    transactionBlock(
+                                        title: salesReceipt.DocNumber ?? salesReceipt.Id,
+                                        name: salesReceipt.CustomerRef?.displayName ?? "Walk-in customer",
+                                        amount: salesReceipt.TotalAmt,
+                                        dateText: salesReceipt.TxnDate
+                                    )
+
+                                    if let paymentMethod = salesReceipt.PaymentMethodRef?.displayName,
+                                       !paymentMethod.isEmpty {
+                                        Text("Payment method: \(paymentMethod)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                        }
+
+                        if !salesItemConfigReady {
+                            Text("Set `QB_DEFAULT_ITEM_REF` to a valid QuickBooks sales item before creating live sales receipts.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Button("Create Sales Receipt") { showingNewSalesReceiptSheet = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(!isAuthenticated || customers.isEmpty || !salesItemConfigReady)
+                    }
+
                     Section(header: Text("Bills").foregroundColor(Color.brandGold)) {
                         if bills.isEmpty {
                             emptyState("No QuickBooks bills loaded.")
@@ -333,12 +382,21 @@ struct QuickBooksManagementView: View {
                             emptyState("No QuickBooks payments loaded.")
                         } else {
                             ForEach(payments) { payment in
-                                transactionBlock(
-                                    title: payment.Id,
-                                    name: payment.CustomerRef?.displayName ?? "Unapplied payment",
-                                    amount: payment.TotalAmt,
-                                    dateText: payment.TxnDate
-                                )
+                                VStack(alignment: .leading, spacing: 6) {
+                                    transactionBlock(
+                                        title: payment.Id,
+                                        name: payment.CustomerRef?.displayName ?? "Unapplied payment",
+                                        amount: payment.TotalAmt,
+                                        dateText: payment.TxnDate
+                                    )
+
+                                    if let paymentMethod = payment.PaymentMethodRef?.displayName,
+                                       !paymentMethod.isEmpty {
+                                        Text("Payment method: \(paymentMethod)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
                             }
                         }
 
@@ -347,6 +405,29 @@ struct QuickBooksManagementView: View {
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
                             .disabled(!isAuthenticated || collectibleQuickBooksInvoices.isEmpty)
+                    }
+
+                    Section(header: Text("Deposits").foregroundColor(Color.brandGold)) {
+                        if deposits.isEmpty {
+                            emptyState("No QuickBooks deposits loaded.")
+                        } else {
+                            ForEach(deposits) { deposit in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    transactionBlock(
+                                        title: deposit.Id,
+                                        name: deposit.DepositToAccountRef?.displayName ?? "Undeposited Funds",
+                                        amount: deposit.TotalAmt,
+                                        dateText: deposit.TxnDate
+                                    )
+
+                                    if let note = deposit.PrivateNote, !note.isEmpty {
+                                        Text(note)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     Section(header: Text("QuickBooks Payments API").foregroundColor(Color.brandGold)) {
@@ -484,6 +565,15 @@ struct QuickBooksManagementView: View {
                     }
                     .tint(Color.brandGold)
                 }
+                .sheet(isPresented: $showingNewSalesReceiptSheet) {
+                    QuickBooksDocumentComposeView(
+                        title: "Create Sales Receipt",
+                        customerRefs: customers.map(\.reference)
+                    ) { customerRef, amount, note in
+                        createSalesReceipt(customerRef: customerRef, amount: amount, note: note)
+                    }
+                    .tint(Color.brandGold)
+                }
                 .sheet(isPresented: $showingNewBillSheet) {
                     QuickBooksBillComposeView(
                         vendorRefs: vendors.map(\.reference)
@@ -549,7 +639,7 @@ struct QuickBooksManagementView: View {
 
         isLoading = true
         actionMessage = nil
-        statusMessage = "Syncing customers, catalog, estimates, invoices, bills, vendors, and payments from QuickBooks..."
+        statusMessage = "Syncing customers, catalog, estimates, invoices, sales receipts, bills, vendors, payments, and deposits from QuickBooks..."
 
         let group = DispatchGroup()
         var failures: [String] = []
@@ -645,6 +735,32 @@ struct QuickBooksManagementView: View {
             }
         }
 
+        group.enter()
+        liveAPI.fetchSalesReceipts { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    salesReceipts = records
+                case .failure(let error):
+                    failures.append("Sales Receipts: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
+        }
+
+        group.enter()
+        liveAPI.fetchDeposits { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    deposits = records
+                case .failure(let error):
+                    failures.append("Deposits: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
+        }
+
         group.notify(queue: .main) {
             isLoading = false
             do {
@@ -661,7 +777,7 @@ struct QuickBooksManagementView: View {
                 failures.append("Local app sync: \(error.localizedDescription)")
             }
             if failures.isEmpty {
-                statusMessage = "Sync complete. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(bills.count) bills, \(vendors.count) vendors, and \(payments.count) payments."
+                statusMessage = "Sync complete. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(vendors.count) vendors, \(payments.count) payments, and \(deposits.count) deposits."
             } else {
                 statusMessage = failures.joined(separator: "\n")
             }
@@ -763,6 +879,31 @@ struct QuickBooksManagementView: View {
         }
     }
 
+    private func createSalesReceipt(customerRef: QuickBooksReference, amount: Double, note: String?) {
+        let payload = QuickBooksSalesReceiptCreate(
+            CustomerRef: customerRef,
+            Line: [salesLineItem(amount: amount, note: note)],
+            PrivateNote: note,
+            PaymentMethodRef: nil,
+            CreditCardPayment: nil
+        )
+
+        performAction(message: "Creating sales receipt in QuickBooks...") {
+            liveAPI.createSalesReceipt(payload) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let salesReceipt):
+                        actionMessage = "Sales receipt created: \(salesReceipt.DocNumber ?? salesReceipt.Id)"
+                        syncAllQuickBooksData()
+                    case .failure(let error):
+                        actionMessage = "Sales receipt creation failed: \(error.localizedDescription)"
+                        isLoading = false
+                    }
+                }
+            }
+        }
+    }
+
     private func createBill(vendorRef: QuickBooksReference, amount: Double, note: String?) {
         let expenseAccount = QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil)
         let payload = QuickBooksBillCreate(
@@ -821,7 +962,9 @@ struct QuickBooksManagementView: View {
                     Amount: amount,
                     LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoice.Id, TxnType: "Invoice")]
                 )
-            ]
+            ],
+            PaymentMethodRef: nil,
+            CreditCardPayment: nil
         )
 
         performAction(message: "Recording payment in QuickBooks...") {
@@ -857,7 +1000,9 @@ struct QuickBooksManagementView: View {
                     Amount: amountDue,
                     LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoice.Id, TxnType: "Invoice")]
                 )
-            ]
+            ],
+            PaymentMethodRef: nil,
+            CreditCardPayment: nil
         )
 
         liveAPI.createPayment(payload) { result in

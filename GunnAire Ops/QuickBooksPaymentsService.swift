@@ -61,6 +61,12 @@ final class QuickBooksPaymentsService {
 
     private init() {}
 
+    private enum AccountingPaymentKind {
+        case card(chargeID: String)
+        case ach(chargeID: String)
+        case manual(methodName: String)
+    }
+
     func processCardPayment(
         invoice: Invoice,
         amount: Double,
@@ -86,7 +92,8 @@ final class QuickBooksPaymentsService {
             amount: amount,
             note: note,
             charge: charge,
-            clientTransactionID: clientTransactionID
+            clientTransactionID: clientTransactionID,
+            paymentKind: .card(chargeID: charge.id)
         )
 
         return QuickBooksProcessedPaymentResult(
@@ -122,7 +129,8 @@ final class QuickBooksPaymentsService {
             amount: amount,
             note: note,
             charge: charge,
-            clientTransactionID: clientTransactionID
+            clientTransactionID: clientTransactionID,
+            paymentKind: .ach(chargeID: charge.id)
         )
 
         return QuickBooksProcessedPaymentResult(
@@ -181,12 +189,13 @@ final class QuickBooksPaymentsService {
             throw QuickBooksPaymentsServiceError.customerNotSynced
         }
 
-        let payload = quickBooksPaymentPayload(
+        let payload = await quickBooksPaymentPayload(
             invoice: payment.invoice,
             customerQBID: customerQBID,
             amount: payment.amount,
             note: payment.notes,
-            paymentRef: payment.quickBooksClientTransID.nilIfBlank ?? payment.quickBooksChargeID.nilIfBlank ?? payment.id.uuidString
+            paymentRef: payment.quickBooksClientTransID.nilIfBlank ?? payment.quickBooksChargeID.nilIfBlank ?? payment.id.uuidString,
+            paymentKind: paymentKind(for: payment)
         )
 
         return try await withCheckedThrowingContinuation { continuation in
@@ -375,15 +384,17 @@ final class QuickBooksPaymentsService {
         amount: Double,
         note: String?,
         charge: QuickBooksPaymentsChargeResponse,
-        clientTransactionID: String
+        clientTransactionID: String,
+        paymentKind: AccountingPaymentKind
     ) async -> (payment: QuickBooksPayment?, error: String?) {
-        let payload = quickBooksPaymentPayload(
+        let payload = await quickBooksPaymentPayload(
             invoice: invoice,
             customerQBID: customerQBID,
             amount: amount,
             note: note,
             paymentRef: charge.resolvedClientTransID ?? charge.id,
-            clientTransactionID: clientTransactionID
+            clientTransactionID: clientTransactionID,
+            paymentKind: paymentKind
         )
 
         do {
@@ -468,8 +479,9 @@ final class QuickBooksPaymentsService {
         amount: Double,
         note: String?,
         paymentRef: String,
-        clientTransactionID: String? = nil
-    ) -> QuickBooksPaymentCreate {
+        clientTransactionID: String? = nil,
+        paymentKind: AccountingPaymentKind
+    ) async -> QuickBooksPaymentCreate {
         let lines: [QuickBooksPaymentLine]?
         if let invoiceQBID = invoice.quickBooksID, !invoiceQBID.isEmpty {
             lines = [
@@ -482,13 +494,75 @@ final class QuickBooksPaymentsService {
             lines = nil
         }
 
+        let paymentMethodRef = await resolvePaymentMethodReference(for: paymentKind)
+        let creditCardPayment: QuickBooksCreditCardPayment?
+        switch paymentKind {
+        case .card(let chargeID), .ach(let chargeID):
+            creditCardPayment = QuickBooksCreditCardPayment(
+                CreditChargeInfo: QuickBooksCreditChargeInfo(ProcessPayment: "true"),
+                CreditChargeResponse: QuickBooksCreditChargeResponse(CCTransId: chargeID)
+            )
+        case .manual:
+            creditCardPayment = nil
+        }
+
         return QuickBooksPaymentCreate(
             CustomerRef: QuickBooksReference(value: customerQBID, name: invoice.customer.name),
             TotalAmt: amount,
             PrivateNote: clientTransactionID == nil ? note : accountingNote(baseNote: note, clientTransactionID: clientTransactionID!),
             PaymentRefNum: paymentRef,
-            Line: lines
+            Line: lines,
+            PaymentMethodRef: paymentMethodRef,
+            CreditCardPayment: creditCardPayment
         )
+    }
+
+    private func resolvePaymentMethodReference(for kind: AccountingPaymentKind) async -> QuickBooksReference? {
+        let methodName: String
+        let methodType: String?
+        switch kind {
+        case .card:
+            methodName = "QuickBooks Card"
+            methodType = "CREDIT_CARD"
+        case .ach:
+            methodName = "QuickBooks ACH"
+            methodType = "NON_CREDIT_CARD"
+        case .manual(let provided):
+            methodName = provided
+            methodType = provided.lowercased().contains("card") ? "CREDIT_CARD" : "NON_CREDIT_CARD"
+        }
+
+        do {
+            let methods = try await withCheckedThrowingContinuation { continuation in
+                api.fetchPaymentMethods { result in
+                    continuation.resume(with: result)
+                }
+            }
+            if let existing = methods.first(where: { $0.Name.caseInsensitiveCompare(methodName) == .orderedSame }) {
+                return existing.reference
+            }
+            let created = try await withCheckedThrowingContinuation { continuation in
+                api.createPaymentMethod(
+                    QuickBooksPaymentMethodCreate(Name: methodName, methodType: methodType)
+                ) { result in
+                    continuation.resume(with: result)
+                }
+            }
+            return created.reference
+        } catch {
+            return nil
+        }
+    }
+
+    private func paymentKind(for payment: Payment) -> AccountingPaymentKind {
+        if payment.quickBooksChargeID.nilIfBlank != nil {
+            if payment.method.lowercased().contains("ach") {
+                return .ach(chargeID: payment.quickBooksChargeID.nilIfBlank ?? payment.id.uuidString)
+            }
+            return .card(chargeID: payment.quickBooksChargeID.nilIfBlank ?? payment.id.uuidString)
+        }
+        let baseMethod = payment.method.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .manual(methodName: baseMethod.isEmpty ? "Manual Payment" : baseMethod.capitalized)
     }
 }
 

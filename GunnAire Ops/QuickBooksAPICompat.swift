@@ -73,6 +73,30 @@ final class QuickBooksAPI: ObservableObject {
         data.createPayment(payment, completion: completion)
     }
 
+    func fetchSalesReceipts(completion: @escaping (Result<[QuickBooksSalesReceipt], Error>) -> Void) {
+        data.fetchSalesReceipts(completion: completion)
+    }
+
+    func createSalesReceipt(_ salesReceipt: QuickBooksSalesReceiptCreate, completion: @escaping (Result<QuickBooksSalesReceipt, Error>) -> Void) {
+        data.createSalesReceipt(salesReceipt, completion: completion)
+    }
+
+    func fetchPaymentMethods(completion: @escaping (Result<[QuickBooksPaymentMethod], Error>) -> Void) {
+        data.fetchPaymentMethods(completion: completion)
+    }
+
+    func createPaymentMethod(_ method: QuickBooksPaymentMethodCreate, completion: @escaping (Result<QuickBooksPaymentMethod, Error>) -> Void) {
+        data.createPaymentMethod(method, completion: completion)
+    }
+
+    func fetchDeposits(completion: @escaping (Result<[QuickBooksDeposit], Error>) -> Void) {
+        data.fetchDeposits(completion: completion)
+    }
+
+    func createDeposit(_ deposit: QuickBooksDepositCreate, completion: @escaping (Result<QuickBooksDeposit, Error>) -> Void) {
+        data.createDeposit(deposit, completion: completion)
+    }
+
     func createCardToken(_ tokenRequest: QuickBooksPaymentsTokenCreateRequest, completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void) {
         data.createCardToken(tokenRequest, completion: completion)
     }

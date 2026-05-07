@@ -456,6 +456,63 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
+    func fetchSalesReceipts(completion: @escaping (Result<[QuickBooksSalesReceipt], Error>) -> Void) {
+        performAuthorizedDecodingRequest(
+            { self.makeQueryRequest("SELECT * FROM SalesReceipt") },
+            decode: QuickBooksSalesReceiptQueryResponse.self
+        ) { result in
+            completion(result.map { $0.QueryResponse.SalesReceipt ?? [] })
+        }
+    }
+
+    func createSalesReceipt(_ salesReceipt: QuickBooksSalesReceiptCreate, completion: @escaping (Result<QuickBooksSalesReceipt, Error>) -> Void) {
+        let body = try? JSONEncoder().encode(salesReceipt)
+        performAuthorizedDecodingRequest(
+            { self.authorizedRequest(path: "salesreceipt", method: "POST", body: body, contentType: "application/json") },
+            decode: QuickBooksSalesReceiptResponse.self
+        ) { result in
+            completion(result.map(\.SalesReceipt))
+        }
+    }
+
+    func fetchPaymentMethods(completion: @escaping (Result<[QuickBooksPaymentMethod], Error>) -> Void) {
+        performAuthorizedDecodingRequest(
+            { self.makeQueryRequest("SELECT * FROM PaymentMethod") },
+            decode: QuickBooksPaymentMethodQueryResponse.self
+        ) { result in
+            completion(result.map { $0.QueryResponse.PaymentMethod ?? [] })
+        }
+    }
+
+    func createPaymentMethod(_ method: QuickBooksPaymentMethodCreate, completion: @escaping (Result<QuickBooksPaymentMethod, Error>) -> Void) {
+        let body = try? JSONEncoder().encode(method)
+        performAuthorizedDecodingRequest(
+            { self.authorizedRequest(path: "paymentmethod", method: "POST", body: body, contentType: "application/json") },
+            decode: QuickBooksPaymentMethodResponse.self
+        ) { result in
+            completion(result.map(\.PaymentMethod))
+        }
+    }
+
+    func fetchDeposits(completion: @escaping (Result<[QuickBooksDeposit], Error>) -> Void) {
+        performAuthorizedDecodingRequest(
+            { self.makeQueryRequest("SELECT * FROM Deposit") },
+            decode: QuickBooksDepositQueryResponse.self
+        ) { result in
+            completion(result.map { $0.QueryResponse.Deposit ?? [] })
+        }
+    }
+
+    func createDeposit(_ deposit: QuickBooksDepositCreate, completion: @escaping (Result<QuickBooksDeposit, Error>) -> Void) {
+        let body = try? JSONEncoder().encode(deposit)
+        performAuthorizedDecodingRequest(
+            { self.authorizedRequest(path: "deposit", method: "POST", body: body, contentType: "application/json") },
+            decode: QuickBooksDepositResponse.self
+        ) { result in
+            completion(result.map(\.Deposit))
+        }
+    }
+
     func createCardToken(_ tokenRequest: QuickBooksPaymentsTokenCreateRequest, completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void) {
         let body = try? JSONEncoder().encode(tokenRequest)
         performPaymentsDecodingRequest(
@@ -995,11 +1052,13 @@ struct QuickBooksPayment: Codable, Identifiable {
     let PrivateNote: String?
     let PaymentRefNum: String?
     let Line: [QuickBooksPaymentLine]?
+    let PaymentMethodRef: QuickBooksReference?
+    let CreditCardPayment: QuickBooksCreditCardPayment?
 
     var id: String { Id }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, CustomerRef, TotalAmt, TxnDate, PrivateNote, PaymentRefNum, Line
+        case Id, CustomerRef, TotalAmt, TxnDate, PrivateNote, PaymentRefNum, Line, PaymentMethodRef, CreditCardPayment
     }
 
     init(from decoder: Decoder) throws {
@@ -1011,6 +1070,8 @@ struct QuickBooksPayment: Codable, Identifiable {
         PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
         PaymentRefNum = try container.decodeIfPresent(String.self, forKey: .PaymentRefNum)
         Line = try container.decodeIfPresent([QuickBooksPaymentLine].self, forKey: .Line)
+        PaymentMethodRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .PaymentMethodRef)
+        CreditCardPayment = try container.decodeIfPresent(QuickBooksCreditCardPayment.self, forKey: .CreditCardPayment)
     }
 }
 
@@ -1020,10 +1081,124 @@ struct QuickBooksPaymentCreate: Codable {
     let PrivateNote: String?
     let PaymentRefNum: String?
     let Line: [QuickBooksPaymentLine]?
+    let PaymentMethodRef: QuickBooksReference?
+    let CreditCardPayment: QuickBooksCreditCardPayment?
 }
 
 struct QuickBooksPaymentResponse: Codable {
     let Payment: QuickBooksPayment
+}
+
+struct QuickBooksSalesReceiptQueryResponse: Codable {
+    let QueryResponse: QuickBooksSalesReceiptList
+}
+
+struct QuickBooksSalesReceiptList: Codable {
+    let SalesReceipt: [QuickBooksSalesReceipt]?
+}
+
+struct QuickBooksSalesReceipt: Codable, Identifiable {
+    let Id: String
+    let DocNumber: String?
+    let CustomerRef: QuickBooksReference?
+    let TotalAmt: Double
+    let TxnDate: String?
+    let PrivateNote: String?
+    let PaymentMethodRef: QuickBooksReference?
+    let CreditCardPayment: QuickBooksCreditCardPayment?
+
+    var id: String { Id }
+}
+
+struct QuickBooksSalesReceiptCreate: Codable {
+    let CustomerRef: QuickBooksReference
+    let Line: [QuickBooksLineItem]
+    let PrivateNote: String?
+    let PaymentMethodRef: QuickBooksReference?
+    let CreditCardPayment: QuickBooksCreditCardPayment?
+}
+
+struct QuickBooksSalesReceiptResponse: Codable {
+    let SalesReceipt: QuickBooksSalesReceipt
+}
+
+struct QuickBooksPaymentMethodQueryResponse: Codable {
+    let QueryResponse: QuickBooksPaymentMethodList
+}
+
+struct QuickBooksPaymentMethodList: Codable {
+    let PaymentMethod: [QuickBooksPaymentMethod]?
+}
+
+struct QuickBooksPaymentMethod: Codable, Identifiable {
+    let Id: String
+    let Name: String
+    let methodType: String?
+    let Active: Bool?
+
+    var id: String { Id }
+    var reference: QuickBooksReference { QuickBooksReference(value: Id, name: Name) }
+
+    private enum CodingKeys: String, CodingKey {
+        case Id, Name, Active
+        case methodType = "Type"
+    }
+}
+
+struct QuickBooksPaymentMethodCreate: Codable {
+    let Name: String
+
+    let methodType: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case Name
+        case methodType = "Type"
+    }
+}
+
+struct QuickBooksPaymentMethodResponse: Codable {
+    let PaymentMethod: QuickBooksPaymentMethod
+}
+
+struct QuickBooksDepositQueryResponse: Codable {
+    let QueryResponse: QuickBooksDepositList
+}
+
+struct QuickBooksDepositList: Codable {
+    let Deposit: [QuickBooksDeposit]?
+}
+
+struct QuickBooksDepositLineDetail: Codable {
+    let LinkedTxn: [QuickBooksLinkedTxn]?
+    let AccountRef: QuickBooksReference?
+}
+
+struct QuickBooksDepositLine: Codable {
+    let Amount: Double
+    let DetailType: String
+    let Description: String?
+    let DepositLineDetail: QuickBooksDepositLineDetail
+}
+
+struct QuickBooksDeposit: Codable, Identifiable {
+    let Id: String
+    let TxnDate: String?
+    let TotalAmt: Double
+    let PrivateNote: String?
+    let DepositToAccountRef: QuickBooksReference?
+    let Line: [QuickBooksDepositLine]?
+
+    var id: String { Id }
+}
+
+struct QuickBooksDepositCreate: Codable {
+    let DepositToAccountRef: QuickBooksReference
+    let Line: [QuickBooksDepositLine]
+    let PrivateNote: String?
+}
+
+struct QuickBooksDepositResponse: Codable {
+    let Deposit: QuickBooksDeposit
 }
 
 struct QuickBooksPaymentsCardAddress: Codable {

@@ -1146,6 +1146,8 @@ extension ContentView {
         var bills: [QuickBooksBill] = []
         var vendors: [QuickBooksVendor] = []
         var payments: [QuickBooksPayment] = []
+        var salesReceipts: [QuickBooksSalesReceipt] = []
+        var deposits: [QuickBooksDeposit] = []
 
         group.enter()
         QuickBooksAPI.shared.fetchCustomers { result in
@@ -1224,6 +1226,28 @@ extension ContentView {
             group.leave()
         }
 
+        group.enter()
+        QuickBooksAPI.shared.fetchSalesReceipts { result in
+            switch result {
+            case .success(let records):
+                salesReceipts = records
+            case .failure(let error):
+                failures.append("Sales Receipts: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
+        QuickBooksAPI.shared.fetchDeposits { result in
+            switch result {
+            case .success(let records):
+                deposits = records
+            case .failure(let error):
+                failures.append("Deposits: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
         group.notify(queue: .main) {
             do {
                 try QuickBooksLocalSync.importSnapshot(
@@ -1242,7 +1266,7 @@ extension ContentView {
             if failures.isEmpty {
                 presentAuthAlert(
                     title: "QuickBooks Sync Complete",
-                    message: "Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(bills.count) bills, \(vendors.count) vendors, and \(payments.count) payments."
+                    message: "Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(vendors.count) vendors, \(payments.count) payments, and \(deposits.count) deposits."
                 )
             } else {
                 presentAuthAlert(
