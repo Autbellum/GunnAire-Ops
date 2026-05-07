@@ -43,6 +43,7 @@ struct PaymentsAndReceiptsView: View {
     @State private var expirationYear = ""
     @State private var cardCVC = ""
     @State private var billingPostalCode = ""
+    @State private var didLoadPendingIntentInvoice = false
 
     private let liveAPI = QuickBooksDataAPI.shared
 
@@ -312,6 +313,7 @@ struct PaymentsAndReceiptsView: View {
         .sheet(isPresented: $showingRefundSheet) {
             refundSheet
         }
+        .onAppear(perform: applyPendingIntentInvoiceIfNeeded)
     }
 
     private var paymentSheet: some View {
@@ -474,6 +476,17 @@ struct PaymentsAndReceiptsView: View {
         if let firstUnpaid = invoices.first(where: { $0.status != "paid" }) ?? invoices.first {
             preparePaymentForm(for: firstUnpaid)
         }
+    }
+
+    private func applyPendingIntentInvoiceIfNeeded() {
+        guard !didLoadPendingIntentInvoice else { return }
+        didLoadPendingIntentInvoice = true
+        guard let pendingInvoiceID = GunnAireAppIntentRouter.consumePendingInvoiceCollectionID(),
+              let invoice = invoices.first(where: { $0.id == pendingInvoiceID }) else {
+            return
+        }
+        preparePaymentForm(for: invoice)
+        showingRecordPaymentSheet = true
     }
 
     private func preparePaymentForm(for invoice: Invoice, preferredMethod: PaymentMethod = .card) {

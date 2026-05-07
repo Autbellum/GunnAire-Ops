@@ -12,6 +12,7 @@ struct CustomersView: View {
     @State private var newCustomerPhone = ""
     @State private var newCustomerAddress = ""
     @State private var selectedCustomer: Customer?
+    @State private var didLoadPendingIntentCustomer = false
 
     var body: some View {
         NavigationStack {
@@ -92,10 +93,21 @@ struct CustomersView: View {
                 }
             }
             .navigationTitle("Customers")
+            .onAppear(perform: applyPendingIntentCustomerIfNeeded)
             .sheet(item: $selectedCustomer) { customer in
                 CustomerEditorView(customer: customer)
             }
         }
+    }
+
+    private func applyPendingIntentCustomerIfNeeded() {
+        guard !didLoadPendingIntentCustomer else { return }
+        didLoadPendingIntentCustomer = true
+        guard let pendingID = GunnAireAppIntentRouter.consumePendingCustomerID(),
+              let customer = customers.first(where: { $0.id == pendingID }) else {
+            return
+        }
+        selectedCustomer = customer
     }
 
     private func serviceCallCount(for customer: Customer) -> Int {

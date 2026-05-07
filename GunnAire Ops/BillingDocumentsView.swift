@@ -7,6 +7,7 @@ struct BillingDocumentsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
+    @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
@@ -37,12 +38,21 @@ struct BillingDocumentsView: View {
     @State private var openInvoiceAfterEstimateCreation = false
     @State private var didLoadLinkedDocumentContext = false
     @State private var didTriggerInitialCloseout = false
+    @State private var pendingIntentServiceCallID: UUID?
 
     init(initialServiceCall: ServiceCall? = nil, openCloseoutOnAppear: Bool = false, openTapToPayOnAppear: Bool = false) {
         self.initialServiceCall = initialServiceCall
         self.openCloseoutOnAppear = openCloseoutOnAppear
         self.openTapToPayOnAppear = openTapToPayOnAppear
         _selectedDocumentKind = State(initialValue: initialServiceCall?.type == .estimate ? .estimate : .invoice)
+    }
+
+    private var activeServiceCall: ServiceCall? {
+        if let initialServiceCall {
+            return initialServiceCall
+        }
+        guard let pendingIntentServiceCallID else { return nil }
+        return serviceCalls.first { $0.id == pendingIntentServiceCallID }
     }
 
     private var selectedTotal: Double {
@@ -59,12 +69,12 @@ struct BillingDocumentsView: View {
     }
 
     private var currentJobEstimate: Estimate? {
-        guard let estimateID = initialServiceCall?.linkedEstimateID else { return nil }
+        guard let estimateID = activeServiceCall?.linkedEstimateID else { return nil }
         return estimates.first { $0.id == estimateID }
     }
 
     private var currentJobInvoice: Invoice? {
-        guard let invoiceID = initialServiceCall?.linkedInvoiceID else { return nil }
+        guard let invoiceID = activeServiceCall?.linkedInvoiceID else { return nil }
         return invoices.first { $0.id == invoiceID }
     }
 
@@ -91,7 +101,7 @@ struct BillingDocumentsView: View {
     }
 
     private var selectedJobAddress: String? {
-        let address = initialServiceCall?.siteAddress ?? initialServiceCall?.customer.address
+        let address = activeServiceCall?.siteAddress ?? activeServiceCall?.customer.address
         guard let address, !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
@@ -129,7 +139,7 @@ struct BillingDocumentsView: View {
     var body: some View {
         NavigationStack {
             List {
-                if let call = initialServiceCall {
+                if let call = activeServiceCall {
                     Section("Job") {
                         Text(call.customer.name)
                             .font(.headline)
@@ -291,7 +301,7 @@ struct BillingDocumentsView: View {
                         }
                     }
 
-                    if let call = initialServiceCall {
+                    if let call = activeServiceCall {
                         Button(selectedCustomerID == call.customer.id ? "Using Job Customer" : "Use Job Customer") {
                             selectedCustomerID = call.customer.id
                             populateCustomerFields(from: call.customer)
@@ -308,7 +318,7 @@ struct BillingDocumentsView: View {
                     TextField("Notes", text: $notes, axis: .vertical)
                         .lineLimit(2...5)
 
-                    if initialServiceCall != nil {
+                    if activeServiceCall != nil {
                         Button("Save Notes Back To Job") {
                             syncNotesToJob()
                         }
@@ -318,11 +328,11 @@ struct BillingDocumentsView: View {
                     Text("Total: \(selectedTotal, format: .currency(code: "USD"))")
                         .font(.headline)
 
-                    if initialServiceCall != nil && selectedDocumentKind == .estimate {
+                    if activeServiceCall != nil && selectedDocumentKind == .estimate {
                         Toggle("Open Invoice Builder After Estimate", isOn: $openInvoiceAfterEstimateCreation)
                     }
 
-                    if initialServiceCall != nil && selectedDocumentKind == .invoice {
+                    if activeServiceCall != nil && selectedDocumentKind == .invoice {
                         Toggle("Open Closeout After Invoice Creation", isOn: $openCloseoutAfterInvoiceCreation)
                     }
 
@@ -553,7 +563,7 @@ struct BillingDocumentsView: View {
                     }
                 }
             }
-            .navigationTitle(initialServiceCall == nil ? "Invoices & Estimates" : "Job Documentation")
+            .navigationTitle(activeServiceCall == nil ? "Invoices & Estimates" : "Job Documentation")
             .sheet(item: $paymentInvoice) { invoice in
                 RecordInvoicePaymentView(invoice: invoice, autoStartTapToPay: openTapToPayOnAppear)
             }
@@ -571,8 +581,9 @@ struct BillingDocumentsView: View {
     private func loadInitialContextIfNeeded() {
         guard !didLoadInitialContext else { return }
         didLoadInitialContext = true
+        loadPendingIntentServiceCallIfNeeded()
 
-        if let call = initialServiceCall {
+        if let call = activeServiceCall {
             selectedCustomerID = call.customer.id
             populateCustomerFields(from: call.customer)
             if notes.isEmpty, let callNotes = call.notes {
@@ -634,18 +645,26 @@ struct BillingDocumentsView: View {
     private func saveCustomerProfile() {
         let customer = resolveCustomerForDocument()
         selectedCustomerID = customer.id
-        initialServiceCall?.customer = customer
+        activeServiceCall?.customer = customer
         if let trimmedAddress = customer.address?.trimmingCharacters(in: .whitespacesAndNewlines),
            !trimmedAddress.isEmpty {
-            initialServiceCall?.siteAddress = trimmedAddress
+            activeServiceCall?.siteAddress = trimmedAddress
         }
         actionMessage = "\(customer.name) saved locally."
     }
 
     private func syncNotesToJob() {
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        initialServiceCall?.notes = trimmedNotes.isEmpty ? nil : trimmedNotes
+        activeServiceCall?.notes = trimmedNotes.isEmpty ? nil : trimmedNotes
         actionMessage = trimmedNotes.isEmpty ? "Cleared job notes." : "Saved documentation notes back to the job."
+    }
+
+    private func loadPendingIntentServiceCallIfNeeded() {
+        guard initialServiceCall == nil, pendingIntentServiceCallID == nil else { return }
+        pendingIntentServiceCallID = GunnAireAppIntentRouter.consumePendingServiceCallID()
+        if let call = activeServiceCall {
+            selectedDocumentKind = call.type == .estimate ? .estimate : .invoice
+        }
     }
 
     private func addItem() {
@@ -695,7 +714,7 @@ struct BillingDocumentsView: View {
                     actionMessage = imported == 0
                         ? "QuickBooks catalog is already up to date."
                         : "Imported \(imported) catalog items from QuickBooks."
-                    if let call = initialServiceCall, selectedItems.isEmpty {
+                    if let call = activeServiceCall, selectedItems.isEmpty {
                         selectedItems = recommendedItemIDs(for: call)
                     }
                 }
@@ -812,7 +831,7 @@ struct BillingDocumentsView: View {
         self.notes = notes ?? ""
 
         let restoredItems = matchingItemIDs(from: lineItemSummary)
-        if restoredItems.isEmpty, let call = initialServiceCall {
+        if restoredItems.isEmpty, let call = activeServiceCall {
             selectedItems = recommendedItemIDs(for: call)
         } else {
             selectedItems = restoredItems
@@ -896,24 +915,24 @@ struct BillingDocumentsView: View {
         let customer = resolveCustomerForDocument()
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         selectedCustomerID = customer.id
-        initialServiceCall?.customer = customer
-        initialServiceCall?.notes = trimmedNotes.isEmpty ? initialServiceCall?.notes : trimmedNotes
+        activeServiceCall?.customer = customer
+        activeServiceCall?.notes = trimmedNotes.isEmpty ? activeServiceCall?.notes : trimmedNotes
         if let trimmedAddress = customer.address?.trimmingCharacters(in: .whitespacesAndNewlines),
            !trimmedAddress.isEmpty {
-            initialServiceCall?.siteAddress = trimmedAddress
+            activeServiceCall?.siteAddress = trimmedAddress
         }
 
         switch selectedDocumentKind {
         case .estimate:
             let estimate = Estimate(
-                serviceCallID: initialServiceCall?.id,
+                serviceCallID: activeServiceCall?.id,
                 customer: customer,
                 lineItemSummary: selectedSummary,
                 amount: selectedTotal,
                 notes: trimmedNotes.isEmpty ? nil : trimmedNotes
             )
             modelContext.insert(estimate)
-            initialServiceCall?.linkedEstimateID = estimate.id
+            activeServiceCall?.linkedEstimateID = estimate.id
             actionMessage = isQuickBooksConnected ? "Estimate created locally. Syncing to QuickBooks..." : "Estimate created locally."
             syncEstimateIfNeeded(estimate, customer: customer, items: selectedLineItems)
             if openInvoiceAfterEstimateCreation {
@@ -926,7 +945,7 @@ struct BillingDocumentsView: View {
 
         case .invoice:
             let invoice = Invoice(
-                serviceCallID: initialServiceCall?.id,
+                serviceCallID: activeServiceCall?.id,
                 customer: customer,
                 lineItemSummary: selectedSummary,
                 amount: selectedTotal,
@@ -934,9 +953,9 @@ struct BillingDocumentsView: View {
                 notes: trimmedNotes.isEmpty ? nil : trimmedNotes
             )
             modelContext.insert(invoice)
-            initialServiceCall?.linkedInvoiceID = invoice.id
-            initialServiceCall?.documentationCompletedAt = Date()
-            initialServiceCall?.status = .invoiced
+            activeServiceCall?.linkedInvoiceID = invoice.id
+            activeServiceCall?.documentationCompletedAt = Date()
+            activeServiceCall?.status = .invoiced
             actionMessage = isQuickBooksConnected ? "Invoice created locally. Syncing to QuickBooks..." : "Invoice created locally."
             syncInvoiceIfNeeded(invoice, customer: customer, items: selectedLineItems)
             if openCloseoutAfterInvoiceCreation {

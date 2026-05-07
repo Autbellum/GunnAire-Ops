@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import SwiftData
 
 enum GunnAireAppRoute: String, CaseIterable {
     case timeClock = "timeClock"
@@ -101,6 +102,224 @@ enum GunnAireAppIntentRouter {
         }
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingAppRoute")
         return route
+    }
+
+    nonisolated static func storeCustomerRoute(_ id: UUID) {
+        store(.customers)
+        UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingCustomerID")
+    }
+
+    nonisolated static func consumePendingCustomerID() -> UUID? {
+        guard let rawValue = UserDefaults.standard.string(forKey: "GunnAirePendingCustomerID"),
+              let id = UUID(uuidString: rawValue) else {
+            return nil
+        }
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingCustomerID")
+        return id
+    }
+
+    nonisolated static func storeDocumentationRoute(_ id: UUID) {
+        store(.documentation)
+        UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingServiceCallID")
+    }
+
+    nonisolated static func consumePendingServiceCallID() -> UUID? {
+        guard let rawValue = UserDefaults.standard.string(forKey: "GunnAirePendingServiceCallID"),
+              let id = UUID(uuidString: rawValue) else {
+            return nil
+        }
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingServiceCallID")
+        return id
+    }
+
+    nonisolated static func storePaymentCollectionRoute(_ id: UUID) {
+        store(.payments)
+        UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingInvoiceID")
+        UserDefaults.standard.set(true, forKey: "GunnAirePendingOpenPaymentCollection")
+    }
+
+    nonisolated static func consumePendingInvoiceCollectionID() -> UUID? {
+        guard UserDefaults.standard.bool(forKey: "GunnAirePendingOpenPaymentCollection"),
+              let rawValue = UserDefaults.standard.string(forKey: "GunnAirePendingInvoiceID"),
+              let id = UUID(uuidString: rawValue) else {
+            return nil
+        }
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingInvoiceID")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingOpenPaymentCollection")
+        return id
+    }
+}
+
+private enum GunnAireIntentStore {
+    static let schema = Schema([
+        Item.self,
+        ServiceCall.self,
+        Customer.self,
+        Technician.self,
+        RecurringMaintenanceContract.self,
+        Invoice.self,
+        Estimate.self,
+        Payment.self,
+        TimeEntry.self,
+        AppUser.self,
+    ])
+
+    static let container: ModelContainer? = try? ModelContainer(
+        for: schema,
+        configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)]
+    )
+
+    @MainActor
+    static func customers() throws -> [Customer] {
+        guard let container else { return [] }
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<Customer>(sortBy: [SortDescriptor(\.name, order: .forward)])
+        return try context.fetch(descriptor)
+    }
+
+    @MainActor
+    static func serviceCalls() throws -> [ServiceCall] {
+        guard let container else { return [] }
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<ServiceCall>(sortBy: [SortDescriptor(\.scheduledDate, order: .forward)])
+        return try context.fetch(descriptor)
+    }
+
+    @MainActor
+    static func invoices() throws -> [Invoice] {
+        guard let container else { return [] }
+        let context = ModelContext(container)
+        let descriptor = FetchDescriptor<Invoice>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        return try context.fetch(descriptor)
+    }
+}
+
+struct GunnAireCustomerEntity: AppEntity, Identifiable {
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Customer")
+    static let defaultQuery = GunnAireCustomerQuery()
+
+    let id: UUID
+    let name: String
+    let email: String?
+
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(
+            title: "\(name)",
+            subtitle: email.flatMap { !$0.isEmpty ? "\($0)" : nil }
+        )
+    }
+}
+
+struct GunnAireCustomerQuery: EntityStringQuery {
+    func entities(for identifiers: [UUID]) async throws -> [GunnAireCustomerEntity] {
+        let matches = try await GunnAireIntentStore.customers().filter { identifiers.contains($0.id) }
+        return matches.map { GunnAireCustomerEntity(id: $0.id, name: $0.name, email: $0.email) }
+    }
+
+    func entities(matching string: String) async throws -> [GunnAireCustomerEntity] {
+        let normalized = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matches = try await GunnAireIntentStore.customers().filter {
+            normalized.isEmpty ||
+            $0.name.localizedCaseInsensitiveContains(normalized) ||
+            ($0.email?.localizedCaseInsensitiveContains(normalized) ?? false)
+        }
+        return matches.prefix(20).map { GunnAireCustomerEntity(id: $0.id, name: $0.name, email: $0.email) }
+    }
+
+    func suggestedEntities() async throws -> [GunnAireCustomerEntity] {
+        try await GunnAireIntentStore.customers()
+            .prefix(20)
+            .map { GunnAireCustomerEntity(id: $0.id, name: $0.name, email: $0.email) }
+    }
+}
+
+struct GunnAireServiceCallEntity: AppEntity, Identifiable {
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Service Call")
+    static let defaultQuery = GunnAireServiceCallQuery()
+
+    let id: UUID
+    let customerName: String
+    let scheduledDate: Date
+    let jobType: String
+
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(
+            title: "\(customerName)",
+            subtitle: "\(jobType.capitalized) • \(scheduledDate.formatted(date: .abbreviated, time: .shortened))"
+        )
+    }
+}
+
+struct GunnAireServiceCallQuery: EntityStringQuery {
+    func entities(for identifiers: [UUID]) async throws -> [GunnAireServiceCallEntity] {
+        let matches = try await GunnAireIntentStore.serviceCalls().filter { identifiers.contains($0.id) }
+        return matches.map {
+            GunnAireServiceCallEntity(id: $0.id, customerName: $0.customer.name, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue)
+        }
+    }
+
+    func entities(matching string: String) async throws -> [GunnAireServiceCallEntity] {
+        let normalized = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matches = try await GunnAireIntentStore.serviceCalls().filter {
+            normalized.isEmpty ||
+            $0.customer.name.localizedCaseInsensitiveContains(normalized) ||
+            ($0.siteAddress?.localizedCaseInsensitiveContains(normalized) ?? false) ||
+            ($0.notes?.localizedCaseInsensitiveContains(normalized) ?? false)
+        }
+        return matches.prefix(20).map {
+            GunnAireServiceCallEntity(id: $0.id, customerName: $0.customer.name, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue)
+        }
+    }
+
+    func suggestedEntities() async throws -> [GunnAireServiceCallEntity] {
+        try await GunnAireIntentStore.serviceCalls()
+            .prefix(20)
+            .map { GunnAireServiceCallEntity(id: $0.id, customerName: $0.customer.name, scheduledDate: $0.scheduledDate, jobType: $0.type.rawValue) }
+    }
+}
+
+struct GunnAireInvoiceEntity: AppEntity, Identifiable {
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Invoice")
+    static let defaultQuery = GunnAireInvoiceQuery()
+
+    let id: UUID
+    let customerName: String
+    let amount: Double
+    let status: String
+    let createdAt: Date
+
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(
+            title: "\(customerName) • \(amount.formatted(.currency(code: "USD")))",
+            subtitle: "\(status.capitalized) • \(createdAt.formatted(date: .abbreviated, time: .omitted))"
+        )
+    }
+}
+
+struct GunnAireInvoiceQuery: EntityStringQuery {
+    func entities(for identifiers: [UUID]) async throws -> [GunnAireInvoiceEntity] {
+        let matches = try await GunnAireIntentStore.invoices().filter { identifiers.contains($0.id) }
+        return matches.map {
+            GunnAireInvoiceEntity(id: $0.id, customerName: $0.customer.name, amount: $0.amount, status: $0.status, createdAt: $0.createdAt)
+        }
+    }
+
+    func entities(matching string: String) async throws -> [GunnAireInvoiceEntity] {
+        let normalized = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matches = try await GunnAireIntentStore.invoices().filter {
+            normalized.isEmpty ||
+            $0.customer.name.localizedCaseInsensitiveContains(normalized) ||
+            $0.lineItemSummary.localizedCaseInsensitiveContains(normalized)
+        }
+        return matches.prefix(20).map {
+            GunnAireInvoiceEntity(id: $0.id, customerName: $0.customer.name, amount: $0.amount, status: $0.status, createdAt: $0.createdAt)
+        }
+    }
+
+    func suggestedEntities() async throws -> [GunnAireInvoiceEntity] {
+        try await GunnAireIntentStore.invoices()
+            .prefix(20)
+            .map { GunnAireInvoiceEntity(id: $0.id, customerName: $0.customer.name, amount: $0.amount, status: $0.status, createdAt: $0.createdAt) }
     }
 }
 
@@ -214,6 +433,48 @@ struct OpenQuickBooksManagementIntent: AppIntent {
     }
 }
 
+struct OpenCustomerRecordIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Customer Record"
+    static let description = IntentDescription("Open GunnAire Ops to a specific customer.")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Customer")
+    var customer: GunnAireCustomerEntity
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        GunnAireAppIntentRouter.storeCustomerRoute(customer.id)
+        return .result(dialog: "Opening \(customer.name).")
+    }
+}
+
+struct OpenJobDocumentationIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Job Documentation"
+    static let description = IntentDescription("Open GunnAire Ops to documentation for a specific job.")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Service Call")
+    var serviceCall: GunnAireServiceCallEntity
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        GunnAireAppIntentRouter.storeDocumentationRoute(serviceCall.id)
+        return .result(dialog: "Opening documentation for \(serviceCall.customerName).")
+    }
+}
+
+struct CollectInvoicePaymentIntent: AppIntent {
+    static let title: LocalizedStringResource = "Collect Invoice Payment"
+    static let description = IntentDescription("Open GunnAire Ops to collect payment for a specific invoice.")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Invoice")
+    var invoice: GunnAireInvoiceEntity
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+        return .result(dialog: "Opening payment collection for \(invoice.customerName).")
+    }
+}
+
 struct GunnAireAppShortcuts: AppShortcutsProvider {
     static var shortcutTileColor: ShortcutTileColor = .orange
 
@@ -232,10 +493,10 @@ struct GunnAireAppShortcuts: AppShortcutsProvider {
                 systemImageName: "calendar"
             ),
             AppShortcut(
-                intent: OpenCustomersIntent(),
-                phrases: ["Open customers in \(.applicationName)"],
-                shortTitle: "Customers",
-                systemImageName: "person.3"
+                intent: OpenCustomerRecordIntent(),
+                phrases: ["Open customer in \(.applicationName)"],
+                shortTitle: "Customer Record",
+                systemImageName: "person.crop.circle"
             ),
             AppShortcut(
                 intent: OpenMailIntent(),
@@ -250,10 +511,10 @@ struct GunnAireAppShortcuts: AppShortcutsProvider {
                 systemImageName: "doc.text"
             ),
             AppShortcut(
-                intent: OpenPaymentsIntent(),
-                phrases: ["Open payments in \(.applicationName)"],
-                shortTitle: "Payments",
-                systemImageName: "creditcard"
+                intent: CollectInvoicePaymentIntent(),
+                phrases: ["Collect invoice payment in \(.applicationName)"],
+                shortTitle: "Collect Payment",
+                systemImageName: "dollarsign.circle"
             ),
             AppShortcut(
                 intent: OpenReceiptsBillsIntent(),
@@ -262,10 +523,10 @@ struct GunnAireAppShortcuts: AppShortcutsProvider {
                 systemImageName: "tray.and.arrow.up"
             ),
             AppShortcut(
-                intent: OpenDocumentationIntent(),
-                phrases: ["Open documentation in \(.applicationName)"],
-                shortTitle: "Documentation",
-                systemImageName: "book"
+                intent: OpenJobDocumentationIntent(),
+                phrases: ["Open job documentation in \(.applicationName)"],
+                shortTitle: "Job Docs",
+                systemImageName: "doc.text.magnifyingglass"
             ),
             AppShortcut(
                 intent: OpenSyncIntegrationsIntent(),
