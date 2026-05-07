@@ -650,6 +650,9 @@ struct BillingDocumentsView: View {
             if openInvoiceAfterEstimateCreation {
                 selectedDocumentKind = .invoice
                 actionMessage = "Estimate created. Review and create the invoice when ready."
+            } else {
+                selectedItems.removeAll()
+                notes = ""
             }
 
         case .invoice:
@@ -670,10 +673,9 @@ struct BillingDocumentsView: View {
             if openCloseoutAfterInvoiceCreation {
                 paymentInvoice = invoice
             }
+            selectedItems.removeAll()
+            notes = ""
         }
-
-        selectedItems.removeAll()
-        notes = ""
         isCreatingDocument = false
     }
 
