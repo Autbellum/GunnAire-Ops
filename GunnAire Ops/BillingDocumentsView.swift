@@ -13,6 +13,7 @@ struct BillingDocumentsView: View {
 
     private let initialServiceCall: ServiceCall?
     private let openCloseoutOnAppear: Bool
+    private let openTapToPayOnAppear: Bool
     private let liveAPI = QuickBooksDataAPI.shared
 
     @State private var selectedDocumentKind: BillingDocumentKind
@@ -37,9 +38,10 @@ struct BillingDocumentsView: View {
     @State private var didLoadLinkedDocumentContext = false
     @State private var didTriggerInitialCloseout = false
 
-    init(initialServiceCall: ServiceCall? = nil, openCloseoutOnAppear: Bool = false) {
+    init(initialServiceCall: ServiceCall? = nil, openCloseoutOnAppear: Bool = false, openTapToPayOnAppear: Bool = false) {
         self.initialServiceCall = initialServiceCall
         self.openCloseoutOnAppear = openCloseoutOnAppear
+        self.openTapToPayOnAppear = openTapToPayOnAppear
         _selectedDocumentKind = State(initialValue: initialServiceCall?.type == .estimate ? .estimate : .invoice)
     }
 
@@ -541,7 +543,7 @@ struct BillingDocumentsView: View {
             }
             .navigationTitle(initialServiceCall == nil ? "Invoices & Estimates" : "Job Documentation")
             .sheet(item: $paymentInvoice) { invoice in
-                RecordInvoicePaymentView(invoice: invoice)
+                RecordInvoicePaymentView(invoice: invoice, autoStartTapToPay: openTapToPayOnAppear)
             }
             .onAppear(perform: loadInitialContextIfNeeded)
             .onChange(of: selectedCustomerID) { _, newValue in
@@ -1110,6 +1112,7 @@ private struct RecordInvoicePaymentView: View {
     @Query private var payments: [Payment]
 
     let invoice: Invoice
+    let autoStartTapToPay: Bool
     @StateObject private var onsitePaymentManager = OnsitePaymentManager.shared
     @State private var amount: String
     @State private var shouldRecordPayment: Bool
@@ -1121,9 +1124,11 @@ private struct RecordInvoicePaymentView: View {
     @State private var authorizationCode = ""
     @State private var paymentNotes = ""
     @State private var tapToPayMessage = ""
+    @State private var didTriggerAutoTapToPay = false
 
-    init(invoice: Invoice) {
+    init(invoice: Invoice, autoStartTapToPay: Bool = false) {
         self.invoice = invoice
+        self.autoStartTapToPay = autoStartTapToPay
         _amount = State(initialValue: String(format: "%.2f", invoice.amount))
         _shouldRecordPayment = State(initialValue: invoice.status != "paid")
         _completionNotes = State(initialValue: invoice.completionNotes ?? "")
@@ -1248,7 +1253,10 @@ private struct RecordInvoicePaymentView: View {
                 }
             }
             .navigationTitle("Finalize Invoice")
-            .onAppear(perform: loadSuggestedCloseoutValues)
+            .onAppear {
+                loadSuggestedCloseoutValues()
+                triggerAutoTapToPayIfNeeded()
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -1287,6 +1295,16 @@ private struct RecordInvoicePaymentView: View {
             tapToPayMessage = "\(result.processorName) approved \(result.amount.formatted(.currency(code: "USD")))."
         } catch {
             tapToPayMessage = error.localizedDescription
+        }
+    }
+
+    private func triggerAutoTapToPayIfNeeded() {
+        guard autoStartTapToPay, !didTriggerAutoTapToPay else { return }
+        guard shouldRecordPayment, method == "card" else { return }
+        guard selectedProcessor.supportsTapToPay, onsitePaymentManager.processorReady() else { return }
+        didTriggerAutoTapToPay = true
+        Task {
+            await runTapToPay()
         }
     }
 

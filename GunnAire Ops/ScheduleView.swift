@@ -11,11 +11,15 @@ struct ScheduleView: View {
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
+    @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
+    @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
+    @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
     
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showingAddCallSheet = false
     @State private var documentationCall: ServiceCall?
     @State private var openDocumentationInCloseout = false
+    @State private var openDocumentationInTapToPay = false
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
     
@@ -89,6 +93,16 @@ struct ScheduleView: View {
         return recurringContracts.filter { $0.nextDate >= now }
     }
 
+    private var selectedProcessor: OnsitePaymentProcessor {
+        OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
+    }
+
+    private var tapToPayReady: Bool {
+        enableOnsitePayments &&
+        selectedProcessor.supportsTapToPay &&
+        (selectedProcessor == .simulated || onsitePaymentProcessorReady)
+    }
+
     private var isAdminUser: Bool {
         let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
         return AppAccess.isAdmin(email: email, users: users)
@@ -131,15 +145,17 @@ struct ScheduleView: View {
                                 if let invoice = invoice(for: call), invoice.status != "paid" {
                                     Button {
                                         openDocumentationInCloseout = true
+                                        openDocumentationInTapToPay = tapToPayReady
                                         documentationCall = call
                                     } label: {
-                                        Label("Take Payment", systemImage: "creditcard")
+                                        Label(tapToPayReady ? "Tap to Pay" : "Take Payment", systemImage: "creditcard")
                                     }
                                     .tint(.green)
                                 }
 
                                 Button {
                                     openDocumentationInCloseout = false
+                                    openDocumentationInTapToPay = false
                                     documentationCall = call
                                 } label: {
                                     Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Continue Docs" : "Start Docs", systemImage: "doc.text")
@@ -213,17 +229,23 @@ struct ScheduleView: View {
                 .sheet(isPresented: $showingAddCallSheet) {
                     AddServiceCallView(selectedDate: selectedDate) { createdCall in
                         openDocumentationInCloseout = false
+                        openDocumentationInTapToPay = false
                         documentationCall = createdCall
                     }
                         .tint(Color.brandGold)
                 }
                 .sheet(item: $documentationCall) { call in
                     NavigationStack {
-                        BillingDocumentsView(initialServiceCall: call, openCloseoutOnAppear: openDocumentationInCloseout)
+                        BillingDocumentsView(
+                            initialServiceCall: call,
+                            openCloseoutOnAppear: openDocumentationInCloseout,
+                            openTapToPayOnAppear: openDocumentationInTapToPay
+                        )
                             .tint(Color.brandGold)
                     }
                     .onDisappear {
                         openDocumentationInCloseout = false
+                        openDocumentationInTapToPay = false
                     }
                 }
             }
@@ -275,6 +297,7 @@ struct ScheduleView: View {
                     ForEach(jobsNeedingDocumentation.prefix(3)) { job in
                         Button {
                             openDocumentationInCloseout = false
+                            openDocumentationInTapToPay = false
                             documentationCall = job
                         } label: {
                             HStack {
@@ -316,6 +339,7 @@ struct ScheduleView: View {
                     ForEach(jobsNeedingPayment.prefix(3)) { job in
                         Button {
                             openDocumentationInCloseout = true
+                            openDocumentationInTapToPay = tapToPayReady
                             documentationCall = job
                         } label: {
                             HStack {
@@ -333,6 +357,9 @@ struct ScheduleView: View {
                                         .font(.caption)
                                         .foregroundColor(Color.brandGold)
                                 }
+                                Text(tapToPayReady ? "Tap to Pay" : "Take Payment")
+                                    .font(.caption2)
+                                    .foregroundColor(.green)
                             }
                         }
                         .buttonStyle(.plain)
@@ -470,6 +497,7 @@ struct ScheduleView: View {
 
                 Button {
                     openDocumentationInCloseout = false
+                    openDocumentationInTapToPay = false
                     documentationCall = call
                 } label: {
                     Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Continue Docs" : "Start Docs", systemImage: "doc.text")
@@ -477,6 +505,19 @@ struct ScheduleView: View {
                 }
                 .buttonStyle(.borderless)
                 .foregroundColor(Color.brandGold)
+
+                if let invoice = invoice(for: call), invoice.status != "paid" {
+                    Button {
+                        openDocumentationInCloseout = true
+                        openDocumentationInTapToPay = tapToPayReady
+                        documentationCall = call
+                    } label: {
+                        Label(tapToPayReady ? "Tap to Pay" : "Take Payment", systemImage: "creditcard")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundColor(.green)
+                }
             }
         }
     }

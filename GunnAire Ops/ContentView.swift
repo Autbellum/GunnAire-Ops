@@ -275,6 +275,9 @@ struct ServiceCallDetailView: View {
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
     @AppStorage("enablePhotoDocumentation") private var enablePhotoDocumentation = true
+    @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
+    @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
+    @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
     let call: ServiceCall
     @State private var showingEditSheet = false
 
@@ -335,6 +338,16 @@ struct ServiceCallDetailView: View {
     private var hasOpenInvoiceBalance: Bool {
         guard let invoice = linkedInvoice else { return false }
         return invoice.status != "paid" && max(invoice.amount - totalPaid, 0) > 0
+    }
+
+    private var selectedProcessor: OnsitePaymentProcessor {
+        OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
+    }
+
+    private var tapToPayReady: Bool {
+        enableOnsitePayments &&
+        selectedProcessor.supportsTapToPay &&
+        (selectedProcessor == .simulated || onsitePaymentProcessorReady)
     }
 
     private var checklistIsComplete: Bool {
@@ -589,9 +602,13 @@ struct ServiceCallDetailView: View {
 
                     if hasOpenInvoiceBalance {
                         NavigationLink {
-                            BillingDocumentsView(initialServiceCall: call, openCloseoutOnAppear: true)
+                            BillingDocumentsView(
+                                initialServiceCall: call,
+                                openCloseoutOnAppear: true,
+                                openTapToPayOnAppear: tapToPayReady
+                            )
                         } label: {
-                            Label("Take Payment", systemImage: "creditcard")
+                            Label(tapToPayReady ? "Tap to Pay" : "Take Payment", systemImage: "creditcard")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
