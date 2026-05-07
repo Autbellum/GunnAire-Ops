@@ -171,7 +171,9 @@ struct ScheduleView: View {
                         .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingAddCallSheet) {
-                    AddServiceCallView(selectedDate: selectedDate)
+                    AddServiceCallView(selectedDate: selectedDate) { createdCall in
+                        documentationCall = createdCall
+                    }
                         .tint(Color.brandGold)
                 }
                 .sheet(item: $documentationCall) { call in

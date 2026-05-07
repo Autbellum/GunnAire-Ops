@@ -559,13 +559,17 @@ struct AddServiceCallView: View {
     @State private var notes: String = ""
     @State private var accessibleCalendarIDs: Set<String> = ["primary"]
     @State private var selectedCalendarID: String = "primary"
+    @State private var openDocumentationAfterSave = false
+
+    let onCreated: ((ServiceCall) -> Void)?
     
-    init(selectedDate: Date) {
+    init(selectedDate: Date, onCreated: ((ServiceCall) -> Void)? = nil) {
         let calendar = Calendar.current
         let baseDate = calendar.startOfDay(for: selectedDate)
         let components = DateComponents(hour: 8)
         _scheduledTime = State(initialValue: calendar.date(byAdding: components, to: baseDate) ?? Date())
         _duration = State(initialValue: 90 * 60)
+        self.onCreated = onCreated
     }
     
     var body: some View {
@@ -618,6 +622,7 @@ struct AddServiceCallView: View {
                     Text("Duration: \(Int(duration/60)) min")
                 }
                 TextField("Notes", text: $notes, axis: .vertical)
+                Toggle("Open Documentation After Save", isOn: $openDocumentationAfterSave)
             }
             .scrollContentBackground(.hidden)
             .background(Color.primaryBlack)
@@ -665,6 +670,11 @@ struct AddServiceCallView: View {
         )
         modelContext.insert(call)
         dismiss()
+        if openDocumentationAfterSave {
+            DispatchQueue.main.async {
+                onCreated?(call)
+            }
+        }
     }
 
     private func loadAccessibleCalendarsIfNeeded() {
