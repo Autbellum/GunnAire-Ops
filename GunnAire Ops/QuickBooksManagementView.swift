@@ -510,79 +510,93 @@ struct QuickBooksManagementView: View {
 
         group.enter()
         liveAPI.fetchCustomers { result in
-            switch result {
-            case .success(let records):
-                customers = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
-            case .failure(let error):
-                failures.append("Customers: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    customers = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
+                case .failure(let error):
+                    failures.append("Customers: \(error.localizedDescription)")
+                }
+                group.leave()
             }
-            group.leave()
         }
 
         group.enter()
         liveAPI.fetchItems { result in
-            switch result {
-            case .success(let records):
-                items = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
-            case .failure(let error):
-                failures.append("Catalog: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    items = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
+                case .failure(let error):
+                    failures.append("Catalog: \(error.localizedDescription)")
+                }
+                group.leave()
             }
-            group.leave()
         }
 
         group.enter()
         liveAPI.fetchEstimates { result in
-            switch result {
-            case .success(let records):
-                estimates = records
-            case .failure(let error):
-                failures.append("Estimates: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    estimates = records
+                case .failure(let error):
+                    failures.append("Estimates: \(error.localizedDescription)")
+                }
+                group.leave()
             }
-            group.leave()
         }
 
         group.enter()
         liveAPI.fetchInvoices { result in
-            switch result {
-            case .success(let records):
-                invoices = records
-            case .failure(let error):
-                failures.append("Invoices: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    invoices = records
+                case .failure(let error):
+                    failures.append("Invoices: \(error.localizedDescription)")
+                }
+                group.leave()
             }
-            group.leave()
         }
 
         group.enter()
         liveAPI.fetchBills { result in
-            switch result {
-            case .success(let records):
-                bills = records
-            case .failure(let error):
-                failures.append("Bills: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    bills = records
+                case .failure(let error):
+                    failures.append("Bills: \(error.localizedDescription)")
+                }
+                group.leave()
             }
-            group.leave()
         }
 
         group.enter()
         liveAPI.fetchVendors { result in
-            switch result {
-            case .success(let records):
-                vendors = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
-            case .failure(let error):
-                failures.append("Vendors: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    vendors = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
+                case .failure(let error):
+                    failures.append("Vendors: \(error.localizedDescription)")
+                }
+                group.leave()
             }
-            group.leave()
         }
 
         group.enter()
         liveAPI.fetchPayments { result in
-            switch result {
-            case .success(let records):
-                payments = records
-            case .failure(let error):
-                failures.append("Payments: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    payments = records
+                case .failure(let error):
+                    failures.append("Payments: \(error.localizedDescription)")
+                }
+                group.leave()
             }
-            group.leave()
         }
 
         group.notify(queue: .main) {
@@ -618,13 +632,15 @@ struct QuickBooksManagementView: View {
 
         performAction(message: "Creating customer in QuickBooks...") {
             liveAPI.createCustomer(payload) { result in
-                switch result {
-                case .success(let customer):
-                    actionMessage = "Customer created: \(customer.DisplayName)"
-                    syncAllQuickBooksData()
-                case .failure(let error):
-                    actionMessage = "Customer creation failed: \(error.localizedDescription)"
-                    isLoading = false
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let customer):
+                        actionMessage = "Customer created: \(customer.DisplayName)"
+                        syncAllQuickBooksData()
+                    case .failure(let error):
+                        actionMessage = "Customer creation failed: \(error.localizedDescription)"
+                        isLoading = false
+                    }
                 }
             }
         }
@@ -641,13 +657,15 @@ struct QuickBooksManagementView: View {
 
         performAction(message: "Creating catalog item in QuickBooks...") {
             liveAPI.createItem(payload) { result in
-                switch result {
-                case .success(let item):
-                    actionMessage = "Catalog item created: \(item.Name)"
-                    syncAllQuickBooksData()
-                case .failure(let error):
-                    actionMessage = "Catalog item creation failed: \(error.localizedDescription)"
-                    isLoading = false
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let item):
+                        actionMessage = "Catalog item created: \(item.Name)"
+                        syncAllQuickBooksData()
+                    case .failure(let error):
+                        actionMessage = "Catalog item creation failed: \(error.localizedDescription)"
+                        isLoading = false
+                    }
                 }
             }
         }
@@ -662,13 +680,15 @@ struct QuickBooksManagementView: View {
 
         performAction(message: "Creating estimate in QuickBooks...") {
             liveAPI.createEstimate(payload) { result in
-                switch result {
-                case .success(let estimate):
-                    actionMessage = "Estimate created: \(estimate.DocNumber ?? estimate.Id)"
-                    syncAllQuickBooksData()
-                case .failure(let error):
-                    actionMessage = "Estimate creation failed: \(error.localizedDescription)"
-                    isLoading = false
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let estimate):
+                        actionMessage = "Estimate created: \(estimate.DocNumber ?? estimate.Id)"
+                        syncAllQuickBooksData()
+                    case .failure(let error):
+                        actionMessage = "Estimate creation failed: \(error.localizedDescription)"
+                        isLoading = false
+                    }
                 }
             }
         }
@@ -683,13 +703,15 @@ struct QuickBooksManagementView: View {
 
         performAction(message: "Creating invoice in QuickBooks...") {
             liveAPI.createInvoice(payload) { result in
-                switch result {
-                case .success(let invoice):
-                    actionMessage = "Invoice created: \(invoice.DocNumber ?? invoice.Id)"
-                    syncAllQuickBooksData()
-                case .failure(let error):
-                    actionMessage = "Invoice creation failed: \(error.localizedDescription)"
-                    isLoading = false
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let invoice):
+                        actionMessage = "Invoice created: \(invoice.DocNumber ?? invoice.Id)"
+                        syncAllQuickBooksData()
+                    case .failure(let error):
+                        actionMessage = "Invoice creation failed: \(error.localizedDescription)"
+                        isLoading = false
+                    }
                 }
             }
         }
@@ -705,13 +727,15 @@ struct QuickBooksManagementView: View {
 
         performAction(message: "Creating bill in QuickBooks...") {
             liveAPI.createBill(payload) { result in
-                switch result {
-                case .success(let bill):
-                    actionMessage = "Bill created: \(bill.Id)"
-                    syncAllQuickBooksData()
-                case .failure(let error):
-                    actionMessage = "Bill creation failed: \(error.localizedDescription)"
-                    isLoading = false
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let bill):
+                        actionMessage = "Bill created: \(bill.Id)"
+                        syncAllQuickBooksData()
+                    case .failure(let error):
+                        actionMessage = "Bill creation failed: \(error.localizedDescription)"
+                        isLoading = false
+                    }
                 }
             }
         }
@@ -726,13 +750,15 @@ struct QuickBooksManagementView: View {
 
         performAction(message: "Creating vendor in QuickBooks...") {
             liveAPI.createVendor(payload) { result in
-                switch result {
-                case .success(let vendor):
-                    actionMessage = "Vendor created: \(vendor.DisplayName)"
-                    syncAllQuickBooksData()
-                case .failure(let error):
-                    actionMessage = "Vendor creation failed: \(error.localizedDescription)"
-                    isLoading = false
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let vendor):
+                        actionMessage = "Vendor created: \(vendor.DisplayName)"
+                        syncAllQuickBooksData()
+                    case .failure(let error):
+                        actionMessage = "Vendor creation failed: \(error.localizedDescription)"
+                        isLoading = false
+                    }
                 }
             }
         }
@@ -754,13 +780,15 @@ struct QuickBooksManagementView: View {
 
         performAction(message: "Recording payment in QuickBooks...") {
             liveAPI.createPayment(payload) { result in
-                switch result {
-                case .success(let payment):
-                    actionMessage = "Payment created: \(payment.Id)"
-                    syncAllQuickBooksData()
-                case .failure(let error):
-                    actionMessage = "Payment creation failed: \(error.localizedDescription)"
-                    isLoading = false
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let payment):
+                        actionMessage = "Payment created: \(payment.Id)"
+                        syncAllQuickBooksData()
+                    case .failure(let error):
+                        actionMessage = "Payment creation failed: \(error.localizedDescription)"
+                        isLoading = false
+                    }
                 }
             }
         }
