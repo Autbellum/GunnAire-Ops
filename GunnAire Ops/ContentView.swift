@@ -1174,15 +1174,9 @@ class ContentViewPresentationContextProvider: NSObject, ASWebAuthenticationPrese
             let tempWindow = UIWindow(windowScene: anyScene)
             return tempWindow
         }
-        // If no scenes exist (e.g., SwiftUI previews very early), as a last resort return a minimal anchor.
-        if #available(iOS 26.0, *) {
-            // Avoid deprecated UIWindow.init() on iOS 26+. Return a temporary unattached window to satisfy ASPresentationAnchor.
-            Self.dlog("No UIWindowScene available on iOS 26+; returning temporary UIWindow(frame: .zero) anchor")
-            return UIWindow(frame: .zero)
-        } else {
-            Self.dlog("No UIWindowScene available; returning empty ASPresentationAnchor for iOS < 26")
-            return ASPresentationAnchor()
-        }
+        // If no scenes exist yet (e.g. previews or very early startup), return an empty anchor until a scene is available.
+        Self.dlog("No UIWindowScene available; returning empty ASPresentationAnchor fallback")
+        return ASPresentationAnchor()
     }
 }
 

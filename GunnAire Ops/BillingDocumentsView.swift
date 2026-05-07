@@ -210,6 +210,16 @@ struct BillingDocumentsView: View {
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
+                                if !currentJobPayments.isEmpty {
+                                    Text("Payments recorded: \(currentJobPayments.count)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    ForEach(currentJobPayments.prefix(3)) { payment in
+                                        Text("\(payment.amount, format: .currency(code: "USD")) • \(payment.method) • \(payment.date.formatted(date: .abbreviated, time: .shortened))")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
                                 if let quickBooksID = invoice.quickBooksID, !quickBooksID.isEmpty {
                                     Text("QuickBooks ID: \(quickBooksID)")
                                         .font(.caption2)
@@ -227,6 +237,13 @@ struct BillingDocumentsView: View {
                                     loadInvoiceIntoBuilder(invoice)
                                 }
                                 .buttonStyle(.bordered)
+
+                                if invoice.status != "paid" {
+                                    Button("Record Additional Payment") {
+                                        paymentInvoice = invoice
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
                             }
                             .padding(.vertical, 2)
                         }

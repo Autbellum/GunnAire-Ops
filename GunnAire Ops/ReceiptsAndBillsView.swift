@@ -994,7 +994,7 @@ private extension ReceiptsAndBillsView {
                         attachTargetOptions = invoices.map {
                             AttachTargetOption(
                                 idValue: $0.Id,
-                                label: "Invoice \($0.Id) • \(currencyString($0.TotalAmt)) • \($0.TxnDate)"
+                                label: "Invoice \($0.Id) • \(currencyString($0.TotalAmt)) • \($0.TxnDate ?? "No date")"
                             )
                         }
                         attachLookupMessage = attachTargetOptions.isEmpty ? "No invoices found." : "Loaded \(attachTargetOptions.count) invoice ID(s)."
@@ -1012,7 +1012,7 @@ private extension ReceiptsAndBillsView {
                         attachTargetOptions = bills.map {
                             AttachTargetOption(
                                 idValue: $0.Id,
-                                label: "Bill \($0.Id) • \(currencyString($0.TotalAmt)) • \($0.TxnDate)"
+                                label: "Bill \($0.Id) • \(currencyString($0.TotalAmt)) • \($0.TxnDate ?? "No date")"
                             )
                         }
                         attachLookupMessage = attachTargetOptions.isEmpty ? "No bills found." : "Loaded \(attachTargetOptions.count) bill ID(s)."
