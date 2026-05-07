@@ -3,6 +3,8 @@ import SwiftData
 
 struct QuickBooksManagementView: View {
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Invoice.createdAt, order: .reverse) private var localInvoices: [Invoice]
+    @Query(sort: \Payment.date, order: .reverse) private var localPayments: [Payment]
     private let liveAPI = QuickBooksAPI.shared
 
     @State private var customers: [QuickBooksCustomer] = []
@@ -20,11 +22,14 @@ struct QuickBooksManagementView: View {
     @State private var showingNewBillSheet = false
     @State private var showingNewVendorSheet = false
     @State private var showingNewPaymentSheet = false
+    @State private var showingProcessCardPaymentSheet = false
+    @State private var showingRefundPaymentSheet = false
 
     @State private var isLoading = false
     @State private var statusMessage = "Connect QuickBooks in Settings to start live sync."
     @State private var actionMessage: String?
     @State private var activePaymentInvoiceID: String?
+    @State private var paymentToRefund: Payment?
 
     private var isAuthenticated: Bool {
         QuickBooksDataAPI.shared.isAuthenticated
@@ -48,6 +53,10 @@ struct QuickBooksManagementView: View {
 
     private var totalPaymentAmount: Double {
         payments.reduce(0) { $0 + $1.TotalAmt }
+    }
+
+    private var quickBooksChargePayments: [Payment] {
+        localPayments.filter { $0.quickBooksChargeID?.isEmpty == false }
     }
 
     private var quickBooksCompanyURL: URL? {
@@ -312,6 +321,70 @@ struct QuickBooksManagementView: View {
                             .disabled(!isAuthenticated || invoices.isEmpty)
                     }
 
+                    Section(header: Text("QuickBooks Payments API").foregroundColor(Color.brandGold)) {
+                        HStack {
+                            Text("Connected local charges")
+                            Spacer()
+                            Text("\(quickBooksChargePayments.filter { !$0.isRefund }.count)")
+                                .foregroundColor(.secondary)
+                        }
+                        HStack {
+                            Text("Recorded refunds")
+                            Spacer()
+                            Text("\(quickBooksChargePayments.filter(\.isRefund).count)")
+                                .foregroundColor(.secondary)
+                        }
+
+                        Button("Process Card Charge") {
+                            showingProcessCardPaymentSheet = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.brandGold)
+                        .foregroundStyle(Color.primaryBlack)
+                        .disabled(!isAuthenticated || localInvoices.isEmpty)
+
+                        if quickBooksChargePayments.isEmpty {
+                            Text("No local QuickBooks Payments charges have been processed yet.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(quickBooksChargePayments.prefix(10)) { payment in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(payment.invoice.customer.name)
+                                        .font(.headline)
+                                    Text(payment.isRefund ? "Refund" : "Charge")
+                                        .font(.caption)
+                                        .foregroundColor(payment.isRefund ? .red : .secondary)
+                                    Text(payment.amount, format: .currency(code: "USD"))
+                                        .font(.subheadline)
+                                    if let chargeID = payment.quickBooksChargeID, !chargeID.isEmpty {
+                                        Text("Charge ID: \(chargeID)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if let accountingID = payment.quickBooksID, !accountingID.isEmpty {
+                                        Text("Accounting payment ID: \(accountingID)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if let refundReceiptID = payment.quickBooksRefundReceiptID, !refundReceiptID.isEmpty {
+                                        Text("Refund receipt ID: \(refundReceiptID)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if !payment.isRefund, payment.amount > 0 {
+                                        Button("Refund This Payment") {
+                                            paymentToRefund = payment
+                                            showingRefundPaymentSheet = true
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                    }
+
                     Section(header: Text("Sync Status").foregroundColor(Color.brandGold)) {
                         if isLoading {
                             ProgressView()
@@ -387,6 +460,22 @@ struct QuickBooksManagementView: View {
                         createPayment(for: invoice, amount: amount, note: note)
                     }
                     .tint(Color.brandGold)
+                }
+                .sheet(isPresented: $showingProcessCardPaymentSheet) {
+                    QuickBooksCardChargeComposeView(invoices: localInvoices) { invoice, amount, cardInput, note in
+                        processCardCharge(for: invoice, amount: amount, cardInput: cardInput, note: note)
+                    }
+                    .tint(Color.brandGold)
+                }
+                .sheet(isPresented: $showingRefundPaymentSheet, onDismiss: {
+                    paymentToRefund = nil
+                }) {
+                    if let paymentToRefund {
+                        QuickBooksRefundComposeView(payment: paymentToRefund) { amount, note in
+                            refundPayment(paymentToRefund, amount: amount, note: note)
+                        }
+                        .tint(Color.brandGold)
+                    }
                 }
                 .onAppear {
                     QuickBooksDataAPI.shared.loadTokens()
@@ -707,6 +796,102 @@ struct QuickBooksManagementView: View {
         }
     }
 
+    private func processCardCharge(for invoice: Invoice, amount: Double, cardInput: QuickBooksPaymentsCardInput, note: String?) {
+        performAction(message: "Processing QuickBooks card charge...") {
+            Task {
+                do {
+                    let result = try await QuickBooksPaymentsService.shared.processCardPayment(
+                        invoice: invoice,
+                        amount: amount,
+                        cardInput: cardInput,
+                        note: note
+                    )
+                    let resolvedCardLast4 = result.charge.card?.number.flatMap { String($0.suffix(4)) }
+                    await MainActor.run {
+                        modelContext.insert(
+                            Payment(
+                                invoice: invoice,
+                                quickBooksID: result.accountingPayment?.Id,
+                                quickBooksChargeID: result.charge.id,
+                                quickBooksClientTransID: result.charge.resolvedClientTransID,
+                                amount: amount,
+                                method: "card",
+                                cardLast4: resolvedCardLast4,
+                                authorizationReference: result.charge.authCode,
+                                notes: note,
+                                processor: OnsitePaymentProcessor.quickBooksPayments.rawValue
+                            )
+                        )
+                        let localBalance = max(
+                            invoice.amount - localPayments.filter { $0.invoice.id == invoice.id }.reduce(0) { $0 + $1.amount } - amount,
+                            0
+                        )
+                        invoice.status = localBalance == 0 ? "paid" : "partial"
+                        if let accountingError = result.accountingError {
+                            actionMessage = "Charge captured, but accounting sync still needs attention: \(accountingError)"
+                        } else {
+                            actionMessage = "Card charge captured in QuickBooks Payments."
+                        }
+                        syncAllQuickBooksData()
+                    }
+                } catch {
+                    await MainActor.run {
+                        actionMessage = "QuickBooks card charge failed: \(error.localizedDescription)"
+                        isLoading = false
+                    }
+                }
+            }
+        }
+    }
+
+    private func refundPayment(_ payment: Payment, amount: Double, note: String?) {
+        performAction(message: "Refunding QuickBooks payment...") {
+            Task {
+                do {
+                    let result = try await QuickBooksPaymentsService.shared.refundPayment(
+                        payment: payment,
+                        amount: amount,
+                        note: note
+                    )
+                    await MainActor.run {
+                        modelContext.insert(
+                            Payment(
+                                invoice: payment.invoice,
+                                quickBooksChargeID: result.refund.id,
+                                quickBooksClientTransID: result.refund.resolvedClientTransID,
+                                quickBooksRefundReceiptID: result.refundReceipt?.Id,
+                                amount: -amount,
+                                method: payment.method,
+                                cardLast4: payment.cardLast4,
+                                authorizationReference: result.refund.id,
+                                notes: note,
+                                processor: OnsitePaymentProcessor.quickBooksPayments.rawValue,
+                                isRefund: true,
+                                refundedPaymentID: payment.id
+                            )
+                        )
+                        let localBalance = max(
+                            payment.invoice.amount - localPayments.filter { $0.invoice.id == payment.invoice.id }.reduce(0) { $0 + $1.amount } + amount,
+                            0
+                        )
+                        payment.invoice.status = localBalance == 0 ? "paid" : "partial"
+                        if let accountingError = result.accountingError {
+                            actionMessage = "Refund issued, but refund receipt sync still needs attention: \(accountingError)"
+                        } else {
+                            actionMessage = "QuickBooks refund completed."
+                        }
+                        syncAllQuickBooksData()
+                    }
+                } catch {
+                    await MainActor.run {
+                        actionMessage = "QuickBooks refund failed: \(error.localizedDescription)"
+                        isLoading = false
+                    }
+                }
+            }
+        }
+    }
+
     private func salesLineItem(amount: Double, note: String?) -> QuickBooksLineItem {
         QuickBooksLineItem(
             Amount: amount,
@@ -939,6 +1124,144 @@ private struct QuickBooksPaymentComposeView: View {
                 if let firstInvoice = invoices.first {
                     amountText = String(format: "%.2f", firstInvoice.Balance ?? firstInvoice.TotalAmt)
                 }
+            }
+        }
+    }
+}
+
+private struct QuickBooksCardChargeComposeView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let invoices: [Invoice]
+    let onProcess: (Invoice, Double, QuickBooksPaymentsCardInput, String?) -> Void
+
+    @State private var selectedInvoiceIndex = 0
+    @State private var amountText = ""
+    @State private var note = ""
+    @State private var cardholderName = ""
+    @State private var cardNumber = ""
+    @State private var expirationMonth = ""
+    @State private var expirationYear = ""
+    @State private var cvc = ""
+    @State private var postalCode = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Process Card Charge") {
+                    if invoices.isEmpty {
+                        Text("Create and sync an invoice first.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        Picker("Invoice", selection: $selectedInvoiceIndex) {
+                            ForEach(invoices.indices, id: \.self) { index in
+                                let invoice = invoices[index]
+                                Text("\(invoice.customer.name) · \(invoice.amount.formatted(.currency(code: "USD")))")
+                                    .tag(index)
+                            }
+                        }
+                    }
+
+                    TextField("Amount", text: $amountText)
+                        .keyboardType(.decimalPad)
+                    TextField("Notes", text: $note)
+                    TextField("Cardholder name", text: $cardholderName)
+                    TextField("Card number", text: $cardNumber)
+                        .keyboardType(.numberPad)
+                    HStack {
+                        TextField("Exp MM", text: $expirationMonth)
+                            .keyboardType(.numberPad)
+                        TextField("Exp YYYY", text: $expirationYear)
+                            .keyboardType(.numberPad)
+                        TextField("CVC", text: $cvc)
+                            .keyboardType(.numberPad)
+                    }
+                    TextField("Billing ZIP", text: $postalCode)
+                        .keyboardType(.numbersAndPunctuation)
+                    Text("Card details are only used to create a QuickBooks Payments token for this transaction and are not saved locally.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("Card Charge")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Process") {
+                        guard !invoices.isEmpty, let amount = Double(amountText), amount > 0 else { return }
+                        let invoice = invoices[selectedInvoiceIndex]
+                        let input = QuickBooksPaymentsCardInput(
+                            cardholderName: cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? invoice.customer.name : cardholderName.trimmingCharacters(in: .whitespacesAndNewlines),
+                            cardNumber: cardNumber.filter(\.isNumber),
+                            expMonth: expirationMonth.filter(\.isNumber),
+                            expYear: expirationYear.filter(\.isNumber),
+                            cvc: cvc.filter(\.isNumber),
+                            postalCode: postalCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : postalCode.trimmingCharacters(in: .whitespacesAndNewlines),
+                            addressLine: invoice.customer.address,
+                            city: nil,
+                            region: nil,
+                            country: "US"
+                        )
+                        onProcess(invoice, amount, input, note.nilIfBlank)
+                        dismiss()
+                    }
+                    .disabled(
+                        invoices.isEmpty ||
+                        Double(amountText) == nil ||
+                        cardNumber.filter(\.isNumber).count < 12 ||
+                        expirationYear.filter(\.isNumber).count != 4 ||
+                        cvc.filter(\.isNumber).count < 3
+                    )
+                }
+            }
+            .onAppear {
+                guard let firstInvoice = invoices.first else { return }
+                amountText = String(format: "%.2f", firstInvoice.amount)
+                cardholderName = firstInvoice.customer.name
+            }
+        }
+    }
+}
+
+private struct QuickBooksRefundComposeView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let payment: Payment
+    let onRefund: (Double, String?) -> Void
+
+    @State private var amountText = ""
+    @State private var note = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Refund Payment") {
+                    Text(payment.invoice.customer.name)
+                    Text("Original payment: \(payment.amount.formatted(.currency(code: "USD")))")
+                    TextField("Refund amount", text: $amountText)
+                        .keyboardType(.decimalPad)
+                    TextField("Notes", text: $note)
+                }
+            }
+            .navigationTitle("Refund")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Refund") {
+                        guard let amount = Double(amountText), amount > 0 else { return }
+                        onRefund(amount, note.nilIfBlank)
+                        dismiss()
+                    }
+                    .disabled(Double(amountText) == nil)
+                }
+            }
+            .onAppear {
+                amountText = String(format: "%.2f", payment.amount)
+                note = payment.notes ?? ""
             }
         }
     }
