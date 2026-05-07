@@ -23,6 +23,7 @@ struct SettingsView: View {
     @State private var selectedSettingsPage: SettingsPage = .company
     @State private var showingSplashVideoImporter = false
     @State private var showingSplashVideoPreview = false
+    @State private var showingSplashLaunchSimulation = false
     @State private var splashVideoMessage: String?
     @State private var splashVideoStatus = SplashVideoLocator.currentSourceDescription()
     @State private var splashVideoDetails = SplashVideoLocator.currentStoredVideoDetails()
@@ -166,6 +167,11 @@ struct SettingsView: View {
                             }
                             .buttonStyle(.bordered)
                             .disabled(SplashVideoLocator.resolveURL() == nil)
+
+                            Button("Simulate App Launch") {
+                                showingSplashLaunchSimulation = true
+                            }
+                            .buttonStyle(.bordered)
 
                             Button("Remove Custom Splash Video", role: .destructive) {
                                 removeSplashVideo()
@@ -323,6 +329,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showingSplashVideoPreview) {
                 SplashVideoPreviewSheet()
+            }
+            .fullScreenCover(isPresented: $showingSplashLaunchSimulation) {
+                SplashLaunchSimulationSheet()
             }
         }
     }
@@ -511,6 +520,87 @@ private struct SplashVideoPreviewSheet: View {
                 }
             }
         }
+    }
+}
+
+private struct SplashLaunchSimulationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+    @State private var closeWorkItem: DispatchWorkItem?
+    @AppStorage("enableSplashVideo") private var enableSplashVideo = true
+    @AppStorage("maximumSplashDurationSeconds") private var maximumSplashDurationSeconds = 6.0
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            if enableSplashVideo, let url = SplashVideoLocator.resolveURL() {
+                VideoPlayer(player: player)
+                    .background(Color.black)
+                    .onAppear {
+                        let player = AVPlayer(url: url)
+                        player.isMuted = true
+                        self.player = player
+                        player.play()
+                        scheduleDismiss(
+                            after: SplashVideoLocator.preferredFinishDelay(
+                                for: url,
+                                maximumDuration: maximumSplashDurationSeconds
+                            )
+                        )
+                    }
+                    .onDisappear {
+                        cleanup()
+                    }
+            } else {
+                VStack(spacing: 18) {
+                    Image("AppLogo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 220)
+                    Text(enableSplashVideo ? "Logo fallback launch simulation" : "Splash video disabled")
+                        .foregroundColor(.white.opacity(0.8))
+                        .font(.headline)
+                }
+                .onAppear {
+                    scheduleDismiss(after: 0.8)
+                }
+                .onDisappear {
+                    cleanup()
+                }
+            }
+
+            VStack {
+                HStack {
+                    Spacer()
+                    Button("Close") {
+                        dismiss()
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(.ultraThinMaterial, in: Capsule())
+                }
+                .padding()
+                Spacer()
+            }
+        }
+        .statusBarHidden()
+    }
+
+    private func scheduleDismiss(after delay: TimeInterval) {
+        closeWorkItem?.cancel()
+        let workItem = DispatchWorkItem {
+            dismiss()
+        }
+        closeWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func cleanup() {
+        closeWorkItem?.cancel()
+        closeWorkItem = nil
+        player?.pause()
+        player = nil
     }
 }
 
