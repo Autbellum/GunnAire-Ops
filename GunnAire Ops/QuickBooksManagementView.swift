@@ -460,13 +460,16 @@ struct QuickBooksManagementView: View {
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingNewPaymentSheet) {
-                    QuickBooksPaymentComposeView(invoices: invoices) { invoice, amount, note in
+                    QuickBooksPaymentComposeView(invoices: invoices.filter { outstandingQuickBooksBalance(for: $0) > 0 }) { invoice, amount, note in
                         createPayment(for: invoice, amount: amount, note: note)
                     }
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingProcessCardPaymentSheet) {
-                    QuickBooksCardChargeComposeView(invoices: localInvoices) { invoice, amount, cardInput, note in
+                    QuickBooksCardChargeComposeView(
+                        invoices: localInvoices.filter { localOutstandingBalance(for: $0) > 0 },
+                        payments: localPayments
+                    ) { invoice, amount, cardInput, note in
                         processCardCharge(for: invoice, amount: amount, cardInput: cardInput, note: note)
                     }
                     .tint(Color.brandGold)
@@ -859,10 +862,7 @@ struct QuickBooksManagementView: View {
                                 processor: OnsitePaymentProcessor.quickBooksPayments.rawValue
                             )
                         )
-                        let localBalance = max(
-                            invoice.amount - localPayments.filter { $0.invoice.id == invoice.id }.reduce(0) { $0 + $1.amount } - amount,
-                            0
-                        )
+                        let localBalance = localOutstandingBalance(for: invoice)
                         invoice.status = localBalance == 0 ? "paid" : "partial"
                         if let accountingError = result.accountingError {
                             actionMessage = "Charge captured, but accounting sync still needs attention: \(accountingError)"
@@ -953,6 +953,15 @@ struct QuickBooksManagementView: View {
 
     private func outstandingQuickBooksBalance(for invoice: QuickBooksInvoice) -> Double {
         max(invoice.Balance ?? invoice.TotalAmt, 0)
+    }
+
+    private func localOutstandingBalance(for invoice: Invoice) -> Double {
+        let netPayments = localPayments
+            .filter { $0.invoice.id == invoice.id }
+            .reduce(0) { partial, payment in
+                partial + payment.amount
+            }
+        return max(invoice.amount - netPayments, 0)
     }
 
     private func liveInvoiceURL(for invoice: QuickBooksInvoice) -> URL? {
@@ -1179,6 +1188,7 @@ private struct QuickBooksCardChargeComposeView: View {
     @Environment(\.dismiss) private var dismiss
 
     let invoices: [Invoice]
+    let payments: [Payment]
     let onProcess: (Invoice, Double, QuickBooksPaymentsCardInput, String?) -> Void
 
     @State private var selectedInvoiceIndex = 0
@@ -1264,10 +1274,25 @@ private struct QuickBooksCardChargeComposeView: View {
             }
             .onAppear {
                 guard let firstInvoice = invoices.first else { return }
-                amountText = String(format: "%.2f", firstInvoice.amount)
+                amountText = String(format: "%.2f", outstandingBalance(for: firstInvoice))
                 cardholderName = firstInvoice.customer.name
             }
+            .onChange(of: selectedInvoiceIndex) { _, newValue in
+                guard invoices.indices.contains(newValue) else { return }
+                let invoice = invoices[newValue]
+                amountText = String(format: "%.2f", outstandingBalance(for: invoice))
+                cardholderName = invoice.customer.name
+            }
         }
+    }
+
+    private func outstandingBalance(for invoice: Invoice) -> Double {
+        let netPayments = payments
+            .filter { $0.invoice.id == invoice.id }
+            .reduce(0) { partial, payment in
+                partial + payment.amount
+            }
+        return max(invoice.amount - netPayments, 0)
     }
 }
 
