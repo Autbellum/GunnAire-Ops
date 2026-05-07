@@ -1121,16 +1121,52 @@ extension ContentView {
     func fetchAndSyncQuickBooksData() {
         let group = DispatchGroup()
         var failures: [String] = []
-        var invoiceCount = 0
-        var billCount = 0
-        var vendorCount = 0
-        var paymentCount = 0
+        var customers: [QuickBooksCustomer] = []
+        var items: [QuickBooksItem] = []
+        var estimates: [QuickBooksEstimate] = []
+        var invoices: [QuickBooksInvoice] = []
+        var bills: [QuickBooksBill] = []
+        var vendors: [QuickBooksVendor] = []
+        var payments: [QuickBooksPayment] = []
+
+        group.enter()
+        QuickBooksAPI.shared.fetchCustomers { result in
+            switch result {
+            case .success(let records):
+                customers = records
+            case .failure(let error):
+                failures.append("Customers: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
+        QuickBooksAPI.shared.fetchItems { result in
+            switch result {
+            case .success(let records):
+                items = records
+            case .failure(let error):
+                failures.append("Catalog: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
+        QuickBooksAPI.shared.fetchEstimates { result in
+            switch result {
+            case .success(let records):
+                estimates = records
+            case .failure(let error):
+                failures.append("Estimates: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
 
         group.enter()
         QuickBooksAPI.shared.fetchInvoices { result in
             switch result {
-            case .success(let invoices):
-                invoiceCount = invoices.count
+            case .success(let records):
+                invoices = records
             case .failure(let error):
                 failures.append("Invoices: \(error.localizedDescription)")
             }
@@ -1140,8 +1176,8 @@ extension ContentView {
         group.enter()
         QuickBooksAPI.shared.fetchBills { result in
             switch result {
-            case .success(let bills):
-                billCount = bills.count
+            case .success(let records):
+                bills = records
             case .failure(let error):
                 failures.append("Bills: \(error.localizedDescription)")
             }
@@ -1151,8 +1187,8 @@ extension ContentView {
         group.enter()
         QuickBooksAPI.shared.fetchVendors { result in
             switch result {
-            case .success(let vendors):
-                vendorCount = vendors.count
+            case .success(let records):
+                vendors = records
             case .failure(let error):
                 failures.append("Vendors: \(error.localizedDescription)")
             }
@@ -1162,8 +1198,8 @@ extension ContentView {
         group.enter()
         QuickBooksAPI.shared.fetchPayments { result in
             switch result {
-            case .success(let payments):
-                paymentCount = payments.count
+            case .success(let records):
+                payments = records
             case .failure(let error):
                 failures.append("Payments: \(error.localizedDescription)")
             }
@@ -1171,10 +1207,24 @@ extension ContentView {
         }
 
         group.notify(queue: .main) {
+            do {
+                try QuickBooksLocalSync.importSnapshot(
+                    customers: customers,
+                    items: items,
+                    estimates: estimates,
+                    invoices: invoices,
+                    payments: payments,
+                    vendors: vendors,
+                    into: modelContext
+                )
+            } catch {
+                failures.append("Local app sync: \(error.localizedDescription)")
+            }
+
             if failures.isEmpty {
                 presentAuthAlert(
                     title: "QuickBooks Sync Complete",
-                    message: "Loaded \(invoiceCount) invoices, \(billCount) bills, \(vendorCount) vendors, \(paymentCount) payments."
+                    message: "Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(bills.count) bills, \(vendors.count) vendors, and \(payments.count) payments."
                 )
             } else {
                 presentAuthAlert(
