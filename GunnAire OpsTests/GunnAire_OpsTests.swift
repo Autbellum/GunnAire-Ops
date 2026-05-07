@@ -105,4 +105,14 @@ struct GunnAire_OpsTests {
         #expect(resolved == bundledURL)
     }
 
+    @Test func splashVideoPreferredDelayUsesFallbackForInvalidDuration() async throws {
+        #expect(SplashVideoLocator.preferredFinishDelay(durationSeconds: 0) == 3.0)
+        #expect(SplashVideoLocator.preferredFinishDelay(durationSeconds: .infinity) == 3.0)
+    }
+
+    @Test func splashVideoPreferredDelayCapsLongVideos() async throws {
+        #expect(SplashVideoLocator.preferredFinishDelay(durationSeconds: 2.5) == 2.7)
+        #expect(SplashVideoLocator.preferredFinishDelay(durationSeconds: 12) == 6.0)
+    }
+
 }

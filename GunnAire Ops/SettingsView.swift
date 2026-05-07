@@ -125,6 +125,21 @@ struct SettingsView: View {
                                     Text("Updated: \(splashVideoDetails.modifiedDescription)")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
+                                    if let durationDescription = splashVideoDetails.durationDescription {
+                                        Text("Duration: \(durationDescription)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if let resolutionDescription = splashVideoDetails.resolutionDescription {
+                                        Text("Resolution: \(resolutionDescription)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if let advisoryMessage = splashVideoDetails.advisoryMessage {
+                                        Text(advisoryMessage)
+                                            .font(.caption)
+                                            .foregroundColor(Color.brandGold)
+                                    }
                                 }
                             }
 
@@ -407,9 +422,9 @@ struct SettingsView: View {
                 return
             }
             do {
-                try SplashVideoLocator.installVideo(from: url)
+                let details = try SplashVideoLocator.installVideo(from: url)
                 refreshSplashVideoState()
-                splashVideoMessage = "Splash MP4 loaded successfully."
+                splashVideoMessage = "Splash MP4 loaded successfully: \(details.durationDescription ?? "ready for launch")."
             } catch {
                 splashVideoMessage = "Failed to load splash MP4: \(error.localizedDescription)"
             }

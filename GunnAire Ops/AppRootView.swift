@@ -65,17 +65,19 @@ private struct VideoSplashView: View {
             }
         }
 
-        // Ensure we transition even if the video fails to load
-        let work = DispatchWorkItem {
-            finishOnce()
-        }
-        timeoutWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: work)
-
         // Load and play the first available splash video once (muted).
         // This supports either a bundled asset or a Loading.mp4 dropped into
         // the app's Application Support / Documents directories.
         if let url = SplashVideoLocator.resolveURL() {
+            let work = DispatchWorkItem {
+                finishOnce()
+            }
+            timeoutWork = work
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + SplashVideoLocator.preferredFinishDelay(for: url),
+                execute: work
+            )
+
             let item = AVPlayerItem(url: url)
             let player = AVPlayer(playerItem: item)
             player.isMuted = true
@@ -100,10 +102,12 @@ private struct VideoSplashView: View {
 
             player.play()
         } else {
-            // No video found; briefly show the logo then proceed
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            // Ensure we transition even if no video exists to load.
+            let work = DispatchWorkItem {
                 finishOnce()
             }
+            timeoutWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
         }
     }
 
@@ -127,6 +131,23 @@ enum SplashVideoLocator {
         let filename: String
         let fileSizeDescription: String
         let modifiedDescription: String
+        let durationDescription: String?
+        let resolutionDescription: String?
+        let advisoryMessage: String?
+    }
+
+    enum ValidationError: LocalizedError {
+        case unsupportedFormat
+        case unreadableVideo
+
+        var errorDescription: String? {
+            switch self {
+            case .unsupportedFormat:
+                return "Only MP4 loading videos are supported."
+            case .unreadableVideo:
+                return "The selected video could not be read as a playable splash clip."
+            }
+        }
     }
 
     static func resolveURL(fileManager: FileManager = .default) -> URL? {
@@ -157,7 +178,8 @@ enum SplashVideoLocator {
         return urls
     }
 
-    static func installVideo(from sourceURL: URL, fileManager: FileManager = .default) throws {
+    static func installVideo(from sourceURL: URL, fileManager: FileManager = .default) throws -> VideoDetails {
+        _ = try inspectVideo(at: sourceURL, fileManager: fileManager)
         let destinationURL = try ensureStorageURL(fileManager: fileManager)
         let shouldStopAccessing = sourceURL.startAccessingSecurityScopedResource()
         defer {
@@ -170,6 +192,7 @@ enum SplashVideoLocator {
             try fileManager.removeItem(at: destinationURL)
         }
         try fileManager.copyItem(at: sourceURL, to: destinationURL)
+        return try inspectVideo(at: destinationURL, fileManager: fileManager)
     }
 
     static func removeStoredVideo(fileManager: FileManager = .default) throws {
@@ -201,12 +224,128 @@ enum SplashVideoLocator {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useKB, .useMB]
         formatter.countStyle = .file
+        let videoMetrics = inspectVideoMetrics(at: storedURL)
 
         return VideoDetails(
             filename: storedURL.lastPathComponent,
             fileSizeDescription: formatter.string(fromByteCount: byteCount?.int64Value ?? 0),
-            modifiedDescription: modifiedDate?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown"
+            modifiedDescription: modifiedDate?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown",
+            durationDescription: describe(duration: videoMetrics?.durationSeconds),
+            resolutionDescription: describe(size: videoMetrics?.pixelSize),
+            advisoryMessage: advisoryMessage(forDuration: videoMetrics?.durationSeconds)
         )
+    }
+
+    static func preferredFinishDelay(for url: URL) -> TimeInterval {
+        let durationSeconds = inspectVideoMetrics(at: url)?.durationSeconds ?? 0
+        return preferredFinishDelay(durationSeconds: durationSeconds)
+    }
+
+    static func preferredFinishDelay(durationSeconds: TimeInterval) -> TimeInterval {
+        let fallbackDelay: TimeInterval = 3.0
+        guard durationSeconds.isFinite, durationSeconds > 0 else {
+            return fallbackDelay
+        }
+
+        let paddedDuration = durationSeconds + 0.2
+        return min(max(paddedDuration, 1.2), 6.0)
+    }
+
+    private static func inspectVideo(at url: URL, fileManager: FileManager) throws -> VideoDetails {
+        guard url.pathExtension.lowercased() == "mp4" else {
+            throw ValidationError.unsupportedFormat
+        }
+
+        guard fileManager.fileExists(atPath: url.path) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path) else {
+            throw ValidationError.unreadableVideo
+        }
+
+        guard let videoMetrics = inspectVideoMetrics(at: url) else {
+            throw ValidationError.unreadableVideo
+        }
+
+        let byteCount = attributes[.size] as? NSNumber
+        let modifiedDate = attributes[.modificationDate] as? Date
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB]
+        formatter.countStyle = .file
+
+        return VideoDetails(
+            filename: url.lastPathComponent,
+            fileSizeDescription: formatter.string(fromByteCount: byteCount?.int64Value ?? 0),
+            modifiedDescription: modifiedDate?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown",
+            durationDescription: describe(duration: videoMetrics.durationSeconds),
+            resolutionDescription: describe(size: videoMetrics.pixelSize),
+            advisoryMessage: advisoryMessage(forDuration: videoMetrics.durationSeconds)
+        )
+    }
+
+    private static func inspectVideoMetrics(at url: URL) -> (durationSeconds: TimeInterval, pixelSize: CGSize?)? {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: (durationSeconds: TimeInterval, pixelSize: CGSize?)?
+
+        Task {
+            defer { semaphore.signal() }
+
+            let asset = AVURLAsset(url: url)
+
+            do {
+                let duration = try await asset.load(.duration)
+                let isPlayable = try await asset.load(.isPlayable)
+                let tracks = try await asset.loadTracks(withMediaType: .video)
+
+                guard isPlayable || !tracks.isEmpty else { return }
+
+                let pixelSize: CGSize?
+                if let track = tracks.first {
+                    let naturalSize = try await track.load(.naturalSize)
+                    let preferredTransform = try await track.load(.preferredTransform)
+                    let transformedSize = naturalSize.applying(preferredTransform)
+                    pixelSize = CGSize(
+                        width: abs(transformedSize.width),
+                        height: abs(transformedSize.height)
+                    )
+                } else {
+                    pixelSize = nil
+                }
+
+                let durationSeconds = CMTimeGetSeconds(duration)
+                result = (durationSeconds, pixelSize)
+            } catch {
+                result = nil
+            }
+        }
+
+        semaphore.wait()
+        return result
+    }
+
+    private static func describe(duration: TimeInterval?) -> String? {
+        guard let duration, duration.isFinite, duration > 0 else { return nil }
+        if duration < 10 {
+            return String(format: "%.1f seconds", duration)
+        }
+        return String(format: "%.0f seconds", duration.rounded())
+    }
+
+    private static func describe(size: CGSize?) -> String? {
+        guard let size, size.width > 0, size.height > 0 else { return nil }
+        return "\(Int(size.width.rounded())) x \(Int(size.height.rounded()))"
+    }
+
+    private static func advisoryMessage(forDuration duration: TimeInterval?) -> String? {
+        guard let duration, duration.isFinite, duration > 0 else { return nil }
+        if duration > 6 {
+            return "Long splash videos are trimmed to roughly the first 6 seconds during app launch."
+        }
+        if duration < 1 {
+            return "Very short splash videos may finish before the app is fully visible."
+        }
+        return nil
     }
 
     private static func ensureStorageURL(fileManager: FileManager) throws -> URL {
