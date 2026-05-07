@@ -437,6 +437,9 @@ struct OpenCustomerRecordIntent: AppIntent {
     static let title: LocalizedStringResource = "Open Customer Record"
     static let description = IntentDescription("Open GunnAire Ops to a specific customer.")
     static let openAppWhenRun = true
+    static var parameterSummary: some ParameterSummary {
+        Summary("Open \(\.$customer)")
+    }
 
     @Parameter(title: "Customer")
     var customer: GunnAireCustomerEntity
@@ -451,6 +454,9 @@ struct OpenJobDocumentationIntent: AppIntent {
     static let title: LocalizedStringResource = "Open Job Documentation"
     static let description = IntentDescription("Open GunnAire Ops to documentation for a specific job.")
     static let openAppWhenRun = true
+    static var parameterSummary: some ParameterSummary {
+        Summary("Open documentation for \(\.$serviceCall)")
+    }
 
     @Parameter(title: "Service Call")
     var serviceCall: GunnAireServiceCallEntity
@@ -465,6 +471,9 @@ struct CollectInvoicePaymentIntent: AppIntent {
     static let title: LocalizedStringResource = "Collect Invoice Payment"
     static let description = IntentDescription("Open GunnAire Ops to collect payment for a specific invoice.")
     static let openAppWhenRun = true
+    static var parameterSummary: some ParameterSummary {
+        Summary("Collect payment for \(\.$invoice)")
+    }
 
     @Parameter(title: "Invoice")
     var invoice: GunnAireInvoiceEntity

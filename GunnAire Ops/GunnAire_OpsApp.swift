@@ -10,6 +10,7 @@
 import SwiftUI
 import SwiftData
 import os
+import AppIntents
 
 @main
 struct GunnAire_OpsApp: App {
@@ -53,8 +54,9 @@ struct GunnAire_OpsApp: App {
     }()
 
     init() {
-        // Placeholder for launch-time setup
-        // e.g., onboarding flow, first-run logic, initial data import
+        Task { @MainActor in
+            GunnAireAppShortcuts.updateAppShortcutParameters()
+        }
     }
 
     var body: some Scene {
