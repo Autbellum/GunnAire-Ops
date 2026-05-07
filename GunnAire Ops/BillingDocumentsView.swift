@@ -33,6 +33,7 @@ struct BillingDocumentsView: View {
     @State private var openCloseoutAfterInvoiceCreation = false
     @State private var didAttemptInitialCatalogImport = false
     @State private var openInvoiceAfterEstimateCreation = false
+    @State private var didLoadLinkedDocumentContext = false
 
     init(initialServiceCall: ServiceCall? = nil) {
         self.initialServiceCall = initialServiceCall
@@ -137,6 +138,10 @@ struct BillingDocumentsView: View {
                                 Text(estimate.lineItemSummary)
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
+                                Button("Resume Estimate") {
+                                    loadEstimateIntoBuilder(estimate)
+                                }
+                                .buttonStyle(.bordered)
                             }
                             .padding(.vertical, 2)
                         }
@@ -160,6 +165,11 @@ struct BillingDocumentsView: View {
                                 .tint(Color.brandGold)
                                 .foregroundStyle(Color.primaryBlack)
                                 .disabled(invoice.status == "paid")
+
+                                Button("Resume Invoice") {
+                                    loadInvoiceIntoBuilder(invoice)
+                                }
+                                .buttonStyle(.bordered)
                             }
                             .padding(.vertical, 2)
                         }
@@ -442,6 +452,9 @@ struct BillingDocumentsView: View {
             if customerAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let address = selectedJobAddress {
                 customerAddress = address
             }
+            if !didLoadLinkedDocumentContext {
+                loadLinkedDocumentContextIfNeeded()
+            }
             if selectedItems.isEmpty {
                 selectedItems = recommendedItemIDs(for: call)
             }
@@ -453,6 +466,19 @@ struct BillingDocumentsView: View {
         }
 
         importQuickBooksItemsIfNeeded()
+    }
+
+    private func loadLinkedDocumentContextIfNeeded() {
+        guard !didLoadLinkedDocumentContext else { return }
+        if let invoice = currentJobInvoice {
+            loadInvoiceIntoBuilder(invoice, announce: false)
+            didLoadLinkedDocumentContext = true
+            return
+        }
+        if let estimate = currentJobEstimate {
+            loadEstimateIntoBuilder(estimate, announce: false)
+            didLoadLinkedDocumentContext = true
+        }
     }
 
     private func populateCustomerFields(from customer: Customer) {
@@ -588,6 +614,87 @@ struct BillingDocumentsView: View {
         }
 
         return Array(Set(keywords))
+    }
+
+    private func loadEstimateIntoBuilder(_ estimate: Estimate, announce: Bool = true) {
+        applyDocumentContext(
+            customer: estimate.customer,
+            notes: estimate.notes,
+            lineItemSummary: estimate.lineItemSummary,
+            preferredKind: .estimate,
+            announce: announce
+        )
+    }
+
+    private func loadInvoiceIntoBuilder(_ invoice: Invoice, announce: Bool = true) {
+        applyDocumentContext(
+            customer: invoice.customer,
+            notes: invoice.notes,
+            lineItemSummary: invoice.lineItemSummary,
+            preferredKind: .invoice,
+            announce: announce
+        )
+    }
+
+    private func applyDocumentContext(
+        customer: Customer,
+        notes: String?,
+        lineItemSummary: String,
+        preferredKind: BillingDocumentKind,
+        announce: Bool
+    ) {
+        selectedDocumentKind = preferredKind
+        selectedCustomerID = customer.id
+        populateCustomerFields(from: customer)
+        if customerAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let address = selectedJobAddress {
+            customerAddress = address
+        }
+        self.notes = notes ?? ""
+
+        let restoredItems = matchingItemIDs(from: lineItemSummary)
+        if restoredItems.isEmpty, let call = initialServiceCall {
+            selectedItems = recommendedItemIDs(for: call)
+        } else {
+            selectedItems = restoredItems
+        }
+
+        if announce {
+            actionMessage = "Loaded the saved \(preferredKind.rawValue.lowercased()) back into the builder."
+        }
+    }
+
+    private func matchingItemIDs(from lineItemSummary: String) -> Set<UUID> {
+        let itemNames = lineItemSummary
+            .split(separator: "\n")
+            .map { line in
+                let value = String(line)
+                if let range = value.range(of: " - ") {
+                    return normalizedItemLookupKey(String(value[..<range.lowerBound]))
+                }
+                return normalizedItemLookupKey(value)
+            }
+            .filter { !$0.isEmpty }
+
+        guard !itemNames.isEmpty else { return [] }
+
+        let exactMatches = items.filter { itemNames.contains(normalizedItemLookupKey($0.name)) }
+        if !exactMatches.isEmpty {
+            return Set(exactMatches.map(\.id))
+        }
+
+        let containsMatches = items.filter { item in
+            let normalizedName = normalizedItemLookupKey(item.name)
+            return itemNames.contains { savedName in
+                normalizedName.contains(savedName) || savedName.contains(normalizedName)
+            }
+        }
+        return Set(containsMatches.map(\.id))
+    }
+
+    private func normalizedItemLookupKey(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
     }
 
     private func toggleItem(_ item: Item) {
