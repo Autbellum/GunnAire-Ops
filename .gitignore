@@ -43,3 +43,10 @@ fastlane/test_output
 .DS_Store
 *.swp
 *~
+
+# Local machine secrets / Xcode overrides
+Config/Local.xcconfig
+
+# Xcode user data
+*.xcuserdatad/
+*.xcuserstate

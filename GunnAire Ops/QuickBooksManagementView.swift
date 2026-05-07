@@ -1,36 +1,58 @@
 import SwiftUI
+import SwiftData
 
 struct QuickBooksManagementView: View {
-    private let termsURL = URL(string: "https://gunnaire.com/terms-of-service/")!
-
-    @ObservedObject private var qbAPI = QBStubAPIClient.shared
+    @Environment(\.modelContext) private var modelContext
     private let liveAPI = QuickBooksAPI.shared
 
+    @State private var customers: [QuickBooksCustomer] = []
+    @State private var items: [QuickBooksItem] = []
+    @State private var estimates: [QuickBooksEstimate] = []
+    @State private var invoices: [QuickBooksInvoice] = []
+    @State private var bills: [QuickBooksBill] = []
+    @State private var vendors: [QuickBooksVendor] = []
+    @State private var payments: [QuickBooksPayment] = []
+
+    @State private var showingNewCustomerSheet = false
+    @State private var showingNewCatalogItemSheet = false
+    @State private var showingNewEstimateSheet = false
     @State private var showingNewInvoiceSheet = false
-    @State private var showingLiveInvoiceSheet = false
     @State private var showingNewBillSheet = false
     @State private var showingNewVendorSheet = false
     @State private var showingNewPaymentSheet = false
 
-    @State private var syncStatusMessage: String = "Sandbox ready."
-    @State private var isSyncing = false
-    @State private var useLiveInvoiceAPI = false
-    @State private var isLoadingLiveInvoices = false
-    @State private var liveInvoiceError: String?
-    @State private var liveInvoices: [QuickBooksInvoice] = []
-    @State private var liveActionMessage: String?
+    @State private var isLoading = false
+    @State private var statusMessage = "Connect QuickBooks in Settings to start live sync."
+    @State private var actionMessage: String?
     @State private var activePaymentInvoiceID: String?
 
+    private var isAuthenticated: Bool {
+        QuickBooksDataAPI.shared.isAuthenticated
+    }
+
+    private var quickBooksConfigReady: Bool {
+        Config.QuickBooks.isConfigured
+    }
+
     private var totalInvoiceAmount: Double {
-        qbAPI.invoices.compactMap { $0.TotalAmt }.reduce(0, +)
+        invoices.reduce(0) { $0 + $1.TotalAmt }
+    }
+
+    private var totalEstimateAmount: Double {
+        estimates.reduce(0) { $0 + $1.TotalAmt }
     }
 
     private var totalBillAmount: Double {
-        qbAPI.bills.map(\.totalAmt).reduce(0, +)
+        bills.reduce(0) { $0 + $1.TotalAmt }
     }
 
     private var totalPaymentAmount: Double {
-        qbAPI.payments.map(\.amount).reduce(0, +)
+        payments.reduce(0) { $0 + $1.TotalAmt }
+    }
+
+    private var quickBooksCompanyURL: URL? {
+        guard let realmID = QuickBooksDataAPI.shared.realmID else { return nil }
+        return URL(string: "https://app.qbo.intuit.com/app/homepage?companyId=\(realmID)")
     }
 
     var body: some View {
@@ -38,332 +60,615 @@ struct QuickBooksManagementView: View {
             WatermarkBackground()
             NavigationStack {
                 Form {
-                    Section("QuickBooks Sandbox Summary") {
-                        Text("Invoices: \(qbAPI.invoices.count) | Bills: \(qbAPI.bills.count)")
-                        Text("Vendors: \(qbAPI.vendors.count) | Payments: \(qbAPI.payments.count)")
-                        Text("Invoiced: \(totalInvoiceAmount, format: .currency(code: "USD"))")
-                        Text("Bills Due: \(totalBillAmount, format: .currency(code: "USD"))")
-                        Text("Payments Received: \(totalPaymentAmount, format: .currency(code: "USD"))")
-                    }
+                    Section("Connection") {
+                        connectionRow(
+                            title: "Environment",
+                            value: Config.QuickBooks.environment.capitalized
+                        )
+                        connectionRow(
+                            title: "Company Realm",
+                            value: QuickBooksDataAPI.shared.realmID ?? "Not connected"
+                        )
+                        connectionRow(
+                            title: "Status",
+                            value: isAuthenticated ? "Connected" : "Disconnected"
+                        )
 
-                    Section(header: Text("Invoices").foregroundColor(Color.brandGold)) {
-                        if isLoadingLiveInvoices {
-                            ProgressView()
-                                .tint(Color.brandGold)
-                        } else if let liveInvoiceError {
-                            Text("Live invoice API error: \(liveInvoiceError)")
-                                .foregroundColor(.red)
-                                .italic()
-                        } else if useLiveInvoiceAPI {
-                            if liveInvoices.isEmpty {
-                                Text("No live invoices found.")
-                                    .foregroundColor(.secondary)
-                                    .italic()
-                            } else {
-                                ForEach(liveInvoices) { invoice in
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Invoice #: \(invoice.Id)")
-                                            .font(.headline)
-                                            .foregroundColor(Color.brandGold)
-                                        Text("Customer: \(invoice.CustomerRef.name ?? invoice.CustomerRef.value)")
-                                            .font(.subheadline)
-                                        Text("Total: \(invoice.TotalAmt, format: .currency(code: "USD"))")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                        Text("Date: \(invoice.TxnDate)")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                        Text("Terms: \(termsURL.absoluteString)")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                        HStack {
-                                            Button(activePaymentInvoiceID == invoice.Id ? "Processing..." : "Take Customer Payment") {
-                                                takeLiveCustomerPayment(for: invoice)
-                                            }
-                                            .buttonStyle(.borderedProminent)
-                                            .tint(Color.brandGold)
-                                            .foregroundStyle(Color.primaryBlack)
-                                            .disabled(activePaymentInvoiceID != nil)
+                        if let quickBooksCompanyURL {
+                            Link("Open QuickBooks Online", destination: quickBooksCompanyURL)
+                        }
 
-                                            if let invoiceURL = liveInvoiceURL(for: invoice) {
-                                                Link("Open Invoice PDF", destination: invoiceURL)
-                                                    .font(.caption)
-                                            }
-                                        }
-                                    }
-                                    .padding(.vertical, 2)
-                                }
-                            }
-                        } else if qbAPI.isLoadingInvoices {
-                            ProgressView()
-                                .tint(Color.brandGold)
-                        } else if let error = qbAPI.invoiceError {
-                            Text("Error loading invoices: \(error.localizedDescription)")
-                                .foregroundColor(.red)
-                                .italic()
-                        } else if qbAPI.invoices.isEmpty {
-                            Text("No invoices found.")
+                        if !isAuthenticated {
+                            Text("Open Settings and connect QuickBooks before using live sync.")
+                                .font(.caption)
                                 .foregroundColor(.secondary)
-                                .italic()
-                        } else {
-                            ForEach(qbAPI.invoices, id: \.Id) { invoice in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Invoice #: \(invoice.DocNumber ?? "N/A")")
-                                        .font(.headline)
-                                        .foregroundColor(Color.brandGold)
-                                    Text("Customer: \(invoice.CustomerRef?.name ?? "Unknown")")
-                                        .font(.subheadline)
-                                    Text("Total: \((invoice.TotalAmt ?? 0), format: .currency(code: "USD"))")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    Text("Date: \(invoice.TxnDate ?? "N/A")")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                    Text("Terms: \(termsURL.absoluteString)")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.vertical, 2)
-                            }
                         }
 
-                        Button(useLiveInvoiceAPI ? "Create New Invoice (Live API)" : "Create New Invoice") {
-                            if useLiveInvoiceAPI {
-                                showingLiveInvoiceSheet = true
-                            } else {
-                                showingNewInvoiceSheet = true
-                            }
-                        }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.brandGold)
-                            .foregroundStyle(Color.primaryBlack)
-                        Link("View Terms of Service", destination: termsURL)
-                        if let liveActionMessage {
-                            Text(liveActionMessage)
+                        if !quickBooksConfigReady {
+                            Text("QuickBooks credentials are not configured on this Mac. Update `QB_CLIENT_ID` and `QB_CLIENT_SECRET` in `Config/Local.xcconfig`.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
                     }
 
-                    Section(header: Text("Bills").foregroundColor(Color.brandGold)) {
-                        if qbAPI.bills.isEmpty {
-                            Text("No bills found.")
-                                .foregroundColor(.secondary)
-                                .italic()
+                    Section("Summary") {
+                        summaryRow(title: "Customers", count: customers.count)
+                        summaryRow(title: "Catalog Items", count: items.count)
+                        summaryRow(title: "Estimates", count: estimates.count, amount: totalEstimateAmount)
+                        summaryRow(title: "Invoices", count: invoices.count, amount: totalInvoiceAmount)
+                        summaryRow(title: "Bills", count: bills.count, amount: totalBillAmount)
+                        summaryRow(title: "Vendors", count: vendors.count)
+                        summaryRow(title: "Payments", count: payments.count, amount: totalPaymentAmount)
+                    }
+
+                    Section(header: Text("Customers").foregroundColor(Color.brandGold)) {
+                        if customers.isEmpty {
+                            emptyState("No QuickBooks customers loaded.")
                         } else {
-                            ForEach(qbAPI.bills) { bill in
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(bill.vendorName)
-                                            .font(.headline)
-                                        Text("Due: \(bill.dueDate) | \(bill.status.capitalized)")
+                            ForEach(customers) { customer in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(customer.DisplayName)
+                                        .font(.headline)
+                                    if let email = customer.PrimaryEmailAddr?.Address, !email.isEmpty {
+                                        Text(email)
                                             .font(.caption)
                                             .foregroundColor(.secondary)
                                     }
-                                    Spacer()
-                                    Text(bill.totalAmt, format: .currency(code: "USD"))
-                                        .font(.subheadline)
-                                }
-                            }
-                        }
-
-                        Button("Create New Bill") { showingNewBillSheet = true }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.brandGold)
-                            .foregroundStyle(Color.primaryBlack)
-                    }
-
-                    Section(header: Text("Vendors").foregroundColor(Color.brandGold)) {
-                        if qbAPI.vendors.isEmpty {
-                            Text("No vendors found.")
-                                .foregroundColor(.secondary)
-                                .italic()
-                        } else {
-                            ForEach(qbAPI.vendors) { vendor in
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(vendor.displayName)
-                                        .font(.headline)
-                                    if let email = vendor.email { Text(email).font(.caption).foregroundColor(.secondary) }
-                                    if let phone = vendor.phone { Text(phone).font(.caption2).foregroundColor(.secondary) }
+                                    if let phone = customer.PrimaryPhone?.FreeFormNumber, !phone.isEmpty {
+                                        Text(phone)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
                                 .padding(.vertical, 2)
                             }
                         }
 
-                        Button("Add New Vendor") { showingNewVendorSheet = true }
+                        Button("Add Customer") { showingNewCustomerSheet = true }
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
+                            .disabled(!isAuthenticated)
                     }
 
-                    Section(header: Text("Payments").foregroundColor(Color.brandGold)) {
-                        if qbAPI.payments.isEmpty {
-                            Text("No payments found.")
-                                .foregroundColor(.secondary)
-                                .italic()
+                    Section(header: Text("Product Catalog").foregroundColor(Color.brandGold)) {
+                        if items.isEmpty {
+                            emptyState("No QuickBooks products or services loaded.")
                         } else {
-                            ForEach(qbAPI.payments) { payment in
+                            ForEach(items) { item in
                                 HStack {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(payment.customerName)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.Name)
                                             .font(.headline)
-                                        Text("\(payment.method) | \(payment.paidDate)")
-                                            .font(.caption)
+                                        if let description = item.Description, !description.isEmpty {
+                                            Text(description)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Text(item.ItemType ?? "Unknown")
+                                            .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
                                     Spacer()
-                                    Text(payment.amount, format: .currency(code: "USD"))
-                                        .font(.subheadline)
+                                    if let price = item.UnitPrice {
+                                        Text(price, format: .currency(code: "USD"))
+                                            .font(.subheadline)
+                                    }
                                 }
                             }
                         }
 
-                        Button("Add New Payment") { showingNewPaymentSheet = true }
+                        if Config.QuickBooks.defaultIncomeAccountRef.isEmpty {
+                            Text("Set `QB_DEFAULT_INCOME_ACCOUNT_REF` before creating live catalog items.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Button("Add Catalog Item") { showingNewCatalogItemSheet = true }
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
+                            .disabled(!isAuthenticated || Config.QuickBooks.defaultIncomeAccountRef.isEmpty)
+                    }
+
+                    Section(header: Text("Estimates").foregroundColor(Color.brandGold)) {
+                        if estimates.isEmpty {
+                            emptyState("No QuickBooks estimates loaded.")
+                        } else {
+                            ForEach(estimates) { estimate in
+                                transactionBlock(
+                                    title: estimate.DocNumber ?? estimate.Id,
+                                    name: estimate.CustomerRef.displayName,
+                                    amount: estimate.TotalAmt,
+                                    dateText: estimate.TxnDate
+                                )
+                            }
+                        }
+
+                        Button("Create Estimate") { showingNewEstimateSheet = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(!isAuthenticated || customers.isEmpty)
+                    }
+
+                    Section(header: Text("Invoices").foregroundColor(Color.brandGold)) {
+                        if invoices.isEmpty {
+                            emptyState("No QuickBooks invoices loaded.")
+                        } else {
+                            ForEach(invoices) { invoice in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    transactionBlock(
+                                        title: invoice.DocNumber ?? invoice.Id,
+                                        name: invoice.CustomerRef.displayName,
+                                        amount: invoice.TotalAmt,
+                                        dateText: invoice.TxnDate
+                                    )
+
+                                    HStack {
+                                        Button(activePaymentInvoiceID == invoice.Id ? "Processing..." : "Take Payment") {
+                                            takeLiveCustomerPayment(for: invoice)
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .tint(Color.brandGold)
+                                        .foregroundStyle(Color.primaryBlack)
+                                        .disabled(activePaymentInvoiceID != nil)
+
+                                        if let invoiceURL = liveInvoiceURL(for: invoice) {
+                                            Link("Open in QuickBooks", destination: invoiceURL)
+                                                .font(.caption)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Button("Create Invoice") { showingNewInvoiceSheet = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(!isAuthenticated || customers.isEmpty)
+                    }
+
+                    Section(header: Text("Bills").foregroundColor(Color.brandGold)) {
+                        if bills.isEmpty {
+                            emptyState("No QuickBooks bills loaded.")
+                        } else {
+                            ForEach(bills) { bill in
+                                transactionBlock(
+                                    title: bill.Id,
+                                    name: bill.VendorRef.displayName,
+                                    amount: bill.TotalAmt,
+                                    dateText: bill.DueDate ?? bill.TxnDate
+                                )
+                            }
+                        }
+
+                        if Config.QuickBooks.defaultExpenseAccountRef.isEmpty {
+                            Text("Set `QB_DEFAULT_EXPENSE_ACCOUNT_REF` before creating live bills.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Button("Create Bill") { showingNewBillSheet = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(!isAuthenticated || vendors.isEmpty || Config.QuickBooks.defaultExpenseAccountRef.isEmpty)
+                    }
+
+                    Section(header: Text("Vendors").foregroundColor(Color.brandGold)) {
+                        if vendors.isEmpty {
+                            emptyState("No QuickBooks vendors loaded.")
+                        } else {
+                            ForEach(vendors) { vendor in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(vendor.DisplayName)
+                                        .font(.headline)
+                                    if let email = vendor.PrimaryEmailAddr?.Address, !email.isEmpty {
+                                        Text(email)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if let phone = vendor.PrimaryPhone?.FreeFormNumber, !phone.isEmpty {
+                                        Text(phone)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+
+                        Button("Add Vendor") { showingNewVendorSheet = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(!isAuthenticated)
+                    }
+
+                    Section(header: Text("Payments").foregroundColor(Color.brandGold)) {
+                        if payments.isEmpty {
+                            emptyState("No QuickBooks payments loaded.")
+                        } else {
+                            ForEach(payments) { payment in
+                                transactionBlock(
+                                    title: payment.Id,
+                                    name: payment.CustomerRef?.displayName ?? "Unapplied payment",
+                                    amount: payment.TotalAmt,
+                                    dateText: payment.TxnDate
+                                )
+                            }
+                        }
+
+                        Button("Record Payment") { showingNewPaymentSheet = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(!isAuthenticated || invoices.isEmpty)
                     }
 
                     Section(header: Text("Sync Status").foregroundColor(Color.brandGold)) {
-                        if isSyncing { ProgressView() }
-                        Text(syncStatusMessage)
+                        if isLoading {
+                            ProgressView()
+                        }
+                        Text(statusMessage)
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        Button("Sync All Transactions with QuickBooks") {
-                            syncAllTransactions()
+
+                        if let actionMessage {
+                            Text(actionMessage)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Button("Sync All QuickBooks Data") {
+                            syncAllQuickBooksData()
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(Color.brandGold)
                         .foregroundStyle(Color.primaryBlack)
-                        .disabled(isSyncing)
+                        .disabled(isLoading || !isAuthenticated || !quickBooksConfigReady)
                     }
                 }
                 .scrollContentBackground(.hidden)
                 .background(Color.primaryBlack)
                 .navigationTitle("QuickBooks Management")
-                .sheet(isPresented: $showingNewInvoiceSheet) {
-                    NewInvoiceView(dismiss: {
-                        showingNewInvoiceSheet = false
-                        qbAPI.fetchInvoices()
-                    })
-                    .environmentObject(qbAPI)
+                .sheet(isPresented: $showingNewCustomerSheet) {
+                    QuickBooksCustomerComposeView { name, email, phone in
+                        createCustomer(name: name, email: email, phone: phone)
+                    }
                     .tint(Color.brandGold)
                 }
-                .sheet(isPresented: $showingLiveInvoiceSheet) {
-                    LiveInvoiceCreateView(
-                        customerRefs: liveCustomerRefs,
-                        onCreate: { customerRef, amount, note in
-                            createLiveInvoice(customerRef: customerRef, amount: amount, note: note)
-                        }
-                    )
+                .sheet(isPresented: $showingNewCatalogItemSheet) {
+                    QuickBooksCatalogItemComposeView { name, price, description in
+                        createCatalogItem(name: name, price: price, description: description)
+                    }
+                    .tint(Color.brandGold)
+                }
+                .sheet(isPresented: $showingNewEstimateSheet) {
+                    QuickBooksDocumentComposeView(
+                        title: "Create Estimate",
+                        customerRefs: customers.map(\.reference)
+                    ) { customerRef, amount, note in
+                        createEstimate(customerRef: customerRef, amount: amount, note: note)
+                    }
+                    .tint(Color.brandGold)
+                }
+                .sheet(isPresented: $showingNewInvoiceSheet) {
+                    QuickBooksDocumentComposeView(
+                        title: "Create Invoice",
+                        customerRefs: customers.map(\.reference)
+                    ) { customerRef, amount, note in
+                        createInvoice(customerRef: customerRef, amount: amount, note: note)
+                    }
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingNewBillSheet) {
-                    NewBillView(
-                        dismiss: { showingNewBillSheet = false },
-                        onCreate: { payload in
-                            qbAPI.createBill(payload) { _ in qbAPI.fetchBills() }
-                        }
-                    )
+                    QuickBooksBillComposeView(
+                        vendorRefs: vendors.map(\.reference)
+                    ) { vendorRef, amount, note in
+                        createBill(vendorRef: vendorRef, amount: amount, note: note)
+                    }
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingNewVendorSheet) {
-                    NewVendorView(
-                        dismiss: { showingNewVendorSheet = false },
-                        onAdd: { payload in
-                            qbAPI.createVendor(payload) { _ in qbAPI.fetchVendors() }
-                        }
-                    )
+                    QuickBooksVendorComposeView { name, email, phone in
+                        createVendor(name: name, email: email, phone: phone)
+                    }
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingNewPaymentSheet) {
-                    NewPaymentView(
-                        dismiss: { showingNewPaymentSheet = false },
-                        onAdd: { payload in
-                            qbAPI.createPayment(payload) { _ in qbAPI.fetchPayments() }
-                        }
-                    )
+                    QuickBooksPaymentComposeView(invoices: invoices) { invoice, amount, note in
+                        createPayment(for: invoice, amount: amount, note: note)
+                    }
                     .tint(Color.brandGold)
                 }
                 .onAppear {
                     QuickBooksDataAPI.shared.loadTokens()
-                    useLiveInvoiceAPI = QuickBooksDataAPI.shared.tokens != nil && QuickBooksDataAPI.shared.realmID != nil
-                    qbAPI.fetchInvoices()
-                    qbAPI.fetchBills()
-                    qbAPI.fetchVendors()
-                    qbAPI.fetchPayments()
-                    if useLiveInvoiceAPI {
-                        fetchLiveInvoices()
+                    if !quickBooksConfigReady {
+                        statusMessage = "QuickBooks client credentials are missing on this Mac. Update Config/Local.xcconfig, then reconnect QuickBooks."
+                    } else if isAuthenticated {
+                        syncAllQuickBooksData()
+                    } else {
+                        statusMessage = "QuickBooks is not connected. Open Settings to authenticate."
                     }
                 }
             }
         }
     }
 
-    private func syncAllTransactions() {
-        isSyncing = true
-        if useLiveInvoiceAPI {
-            syncStatusMessage = "Syncing live invoices from QuickBooks API..."
-            fetchLiveInvoices {
-                syncStatusMessage = "Live invoice sync complete. Loaded \(liveInvoices.count) invoice(s)."
-                isSyncing = false
-            }
-        } else {
-            syncStatusMessage = "Syncing transactions with QuickBooks sandbox..."
-            qbAPI.simulateFullSync { summary in
-                syncStatusMessage = summary
-                isSyncing = false
-            }
+    private func syncAllQuickBooksData() {
+        guard quickBooksConfigReady else {
+            statusMessage = "QuickBooks client credentials are missing on this Mac. Update Config/Local.xcconfig, then reconnect QuickBooks."
+            return
         }
-    }
+        guard isAuthenticated else {
+            statusMessage = "QuickBooks is not connected. Open Settings to authenticate."
+            return
+        }
 
-    private func fetchLiveInvoices(completion: (() -> Void)? = nil) {
-        isLoadingLiveInvoices = true
-        liveInvoiceError = nil
+        isLoading = true
+        actionMessage = nil
+        statusMessage = "Syncing customers, catalog, estimates, invoices, bills, vendors, and payments from QuickBooks..."
+
+        let group = DispatchGroup()
+        var failures: [String] = []
+
+        group.enter()
+        liveAPI.fetchCustomers { result in
+            switch result {
+            case .success(let records):
+                customers = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
+            case .failure(let error):
+                failures.append("Customers: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
+        liveAPI.fetchItems { result in
+            switch result {
+            case .success(let records):
+                items = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
+            case .failure(let error):
+                failures.append("Catalog: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
+        liveAPI.fetchEstimates { result in
+            switch result {
+            case .success(let records):
+                estimates = records
+            case .failure(let error):
+                failures.append("Estimates: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
         liveAPI.fetchInvoices { result in
-            DispatchQueue.main.async {
-                isLoadingLiveInvoices = false
-                switch result {
-                case .success(let invoices):
-                    liveInvoices = invoices
-                case .failure(let error):
-                    liveInvoiceError = error.localizedDescription
-                }
-                completion?()
+            switch result {
+            case .success(let records):
+                invoices = records
+            case .failure(let error):
+                failures.append("Invoices: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
+        liveAPI.fetchBills { result in
+            switch result {
+            case .success(let records):
+                bills = records
+            case .failure(let error):
+                failures.append("Bills: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
+        liveAPI.fetchVendors { result in
+            switch result {
+            case .success(let records):
+                vendors = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
+            case .failure(let error):
+                failures.append("Vendors: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.enter()
+        liveAPI.fetchPayments { result in
+            switch result {
+            case .success(let records):
+                payments = records
+            case .failure(let error):
+                failures.append("Payments: \(error.localizedDescription)")
+            }
+            group.leave()
+        }
+
+        group.notify(queue: .main) {
+            isLoading = false
+            do {
+                try QuickBooksLocalSync.importSnapshot(
+                    customers: customers,
+                    items: items,
+                    estimates: estimates,
+                    invoices: invoices,
+                    payments: payments,
+                    vendors: vendors,
+                    into: modelContext
+                )
+            } catch {
+                failures.append("Local app sync: \(error.localizedDescription)")
+            }
+            if failures.isEmpty {
+                statusMessage = "Sync complete. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(bills.count) bills, \(vendors.count) vendors, and \(payments.count) payments."
+            } else {
+                statusMessage = failures.joined(separator: "\n")
             }
         }
     }
 
-    private var liveCustomerRefs: [QuickBooksReference] {
-        var unique: [String: QuickBooksReference] = [:]
-        for invoice in liveInvoices {
-            unique[invoice.CustomerRef.value] = invoice.CustomerRef
+    private func createCustomer(name: String, email: String?, phone: String?) {
+        let payload = QuickBooksCustomerCreate(
+            DisplayName: name,
+            PrimaryPhone: phone.map { QuickBooksPhoneNumber(FreeFormNumber: $0) },
+            PrimaryEmailAddr: email.map { QuickBooksEmailAddress(Address: $0) },
+            BillAddr: nil
+        )
+
+        performAction(message: "Creating customer in QuickBooks...") {
+            liveAPI.createCustomer(payload) { result in
+                switch result {
+                case .success(let customer):
+                    actionMessage = "Customer created: \(customer.DisplayName)"
+                    syncAllQuickBooksData()
+                case .failure(let error):
+                    actionMessage = "Customer creation failed: \(error.localizedDescription)"
+                    isLoading = false
+                }
+            }
         }
-        return unique.values.sorted { ($0.name ?? $0.value) < ($1.name ?? $1.value) }
     }
 
-    private func createLiveInvoice(customerRef: QuickBooksReference, amount: Double, note: String?) {
-        let itemRef = QuickBooksReference(value: Config.QuickBooks.defaultSalesItemRef, name: nil)
-        let lineItem = QuickBooksLineItem(
-            Amount: amount,
-            DetailType: "SalesItemLineDetail",
-            Description: note?.isEmpty == false ? note : nil,
-            SalesItemLineDetail: QuickBooksSalesItemLineDetail(ItemRef: itemRef)
+    private func createCatalogItem(name: String, price: Double, description: String?) {
+        let payload = QuickBooksItemCreate(
+            Name: name,
+            ItemType: "Service",
+            Description: description,
+            UnitPrice: price,
+            IncomeAccountRef: QuickBooksReference(value: Config.QuickBooks.defaultIncomeAccountRef, name: nil)
         )
-        let payload = QuickBooksInvoiceCreate(CustomerRef: customerRef, Line: [lineItem])
 
-        isSyncing = true
-        syncStatusMessage = "Creating invoice via QuickBooks API..."
-        liveAPI.createInvoice(payload) { result in
-            DispatchQueue.main.async {
+        performAction(message: "Creating catalog item in QuickBooks...") {
+            liveAPI.createItem(payload) { result in
+                switch result {
+                case .success(let item):
+                    actionMessage = "Catalog item created: \(item.Name)"
+                    syncAllQuickBooksData()
+                case .failure(let error):
+                    actionMessage = "Catalog item creation failed: \(error.localizedDescription)"
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    private func createEstimate(customerRef: QuickBooksReference, amount: Double, note: String?) {
+        let payload = QuickBooksEstimateCreate(
+            CustomerRef: customerRef,
+            Line: [salesLineItem(amount: amount, note: note)],
+            PrivateNote: note
+        )
+
+        performAction(message: "Creating estimate in QuickBooks...") {
+            liveAPI.createEstimate(payload) { result in
+                switch result {
+                case .success(let estimate):
+                    actionMessage = "Estimate created: \(estimate.DocNumber ?? estimate.Id)"
+                    syncAllQuickBooksData()
+                case .failure(let error):
+                    actionMessage = "Estimate creation failed: \(error.localizedDescription)"
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    private func createInvoice(customerRef: QuickBooksReference, amount: Double, note: String?) {
+        let payload = QuickBooksInvoiceCreate(
+            CustomerRef: customerRef,
+            Line: [salesLineItem(amount: amount, note: note)],
+            PrivateNote: note
+        )
+
+        performAction(message: "Creating invoice in QuickBooks...") {
+            liveAPI.createInvoice(payload) { result in
                 switch result {
                 case .success(let invoice):
-                    liveActionMessage = "Live invoice created: \(invoice.Id)"
-                    fetchLiveInvoices()
+                    actionMessage = "Invoice created: \(invoice.DocNumber ?? invoice.Id)"
+                    syncAllQuickBooksData()
                 case .failure(let error):
-                    liveActionMessage = "Live invoice create failed: \(error.localizedDescription)"
+                    actionMessage = "Invoice creation failed: \(error.localizedDescription)"
+                    isLoading = false
                 }
-                isSyncing = false
+            }
+        }
+    }
+
+    private func createBill(vendorRef: QuickBooksReference, amount: Double, note: String?) {
+        let expenseAccount = QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil)
+        let payload = QuickBooksBillCreate(
+            VendorRef: vendorRef,
+            Line: [QuickBooksBillLine(amount: amount, description: note, accountRef: expenseAccount)],
+            PrivateNote: note
+        )
+
+        performAction(message: "Creating bill in QuickBooks...") {
+            liveAPI.createBill(payload) { result in
+                switch result {
+                case .success(let bill):
+                    actionMessage = "Bill created: \(bill.Id)"
+                    syncAllQuickBooksData()
+                case .failure(let error):
+                    actionMessage = "Bill creation failed: \(error.localizedDescription)"
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    private func createVendor(name: String, email: String?, phone: String?) {
+        let payload = QuickBooksVendorCreate(
+            DisplayName: name,
+            PrimaryEmailAddr: email.map { QuickBooksEmailAddress(Address: $0) },
+            PrimaryPhone: phone.map { QuickBooksPhoneNumber(FreeFormNumber: $0) }
+        )
+
+        performAction(message: "Creating vendor in QuickBooks...") {
+            liveAPI.createVendor(payload) { result in
+                switch result {
+                case .success(let vendor):
+                    actionMessage = "Vendor created: \(vendor.DisplayName)"
+                    syncAllQuickBooksData()
+                case .failure(let error):
+                    actionMessage = "Vendor creation failed: \(error.localizedDescription)"
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    private func createPayment(for invoice: QuickBooksInvoice, amount: Double, note: String?) {
+        let payload = QuickBooksPaymentCreate(
+            CustomerRef: invoice.CustomerRef,
+            TotalAmt: amount,
+            PrivateNote: note,
+            PaymentRefNum: nil,
+            Line: [
+                QuickBooksPaymentLine(
+                    Amount: amount,
+                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoice.Id, TxnType: "Invoice")]
+                )
+            ]
+        )
+
+        performAction(message: "Recording payment in QuickBooks...") {
+            liveAPI.createPayment(payload) { result in
+                switch result {
+                case .success(let payment):
+                    actionMessage = "Payment created: \(payment.Id)"
+                    syncAllQuickBooksData()
+                case .failure(let error):
+                    actionMessage = "Payment creation failed: \(error.localizedDescription)"
+                    isLoading = false
+                }
             }
         }
     }
@@ -373,24 +678,110 @@ struct QuickBooksManagementView: View {
         let payload = QuickBooksPaymentCreate(
             CustomerRef: invoice.CustomerRef,
             TotalAmt: invoice.TotalAmt,
-            Line: nil
+            PrivateNote: "Created from GunnAire Ops for invoice \(invoice.DocNumber ?? invoice.Id)",
+            PaymentRefNum: nil,
+            Line: [
+                QuickBooksPaymentLine(
+                    Amount: invoice.TotalAmt,
+                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoice.Id, TxnType: "Invoice")]
+                )
+            ]
         )
+
         liveAPI.createPayment(payload) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let payment):
-                    liveActionMessage = "Payment created: \(payment.Id) for invoice \(invoice.Id)"
+                    actionMessage = "Payment created: \(payment.Id) for invoice \(invoice.DocNumber ?? invoice.Id)"
+                    syncAllQuickBooksData()
                 case .failure(let error):
-                    liveActionMessage = "Payment failed for invoice \(invoice.Id): \(error.localizedDescription)"
+                    actionMessage = "Payment failed for invoice \(invoice.DocNumber ?? invoice.Id): \(error.localizedDescription)"
+                    isLoading = false
                 }
                 activePaymentInvoiceID = nil
             }
         }
     }
 
+    private func salesLineItem(amount: Double, note: String?) -> QuickBooksLineItem {
+        QuickBooksLineItem(
+            Amount: amount,
+            DetailType: "SalesItemLineDetail",
+            Description: note,
+            SalesItemLineDetail: QuickBooksSalesItemLineDetail(
+                ItemRef: QuickBooksReference(value: Config.QuickBooks.defaultSalesItemRef, name: nil)
+            )
+        )
+    }
+
+    private func performAction(message: String, work: @escaping () -> Void) {
+        guard isAuthenticated else {
+            actionMessage = "QuickBooks is not connected."
+            return
+        }
+        isLoading = true
+        actionMessage = nil
+        statusMessage = message
+        work()
+    }
+
     private func liveInvoiceURL(for invoice: QuickBooksInvoice) -> URL? {
         guard let realmID = QuickBooksDataAPI.shared.realmID else { return nil }
         return URL(string: "https://app.qbo.intuit.com/app/invoice?txnId=\(invoice.Id)&txnType=Invoice&companyId=\(realmID)")
+    }
+
+    @ViewBuilder
+    private func transactionBlock(title: String, name: String, amount: Double, dateText: String?) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                Text(name)
+                    .font(.subheadline)
+                if let dateText, !dateText.isEmpty {
+                    Text(dateText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+            Text(amount, format: .currency(code: "USD"))
+                .font(.subheadline)
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func emptyState(_ text: String) -> some View {
+        Text(text)
+            .foregroundColor(.secondary)
+            .italic()
+    }
+
+    @ViewBuilder
+    private func summaryRow(title: String, count: Int, amount: Double? = nil) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            if let amount {
+                Text("\(count) | \(amount.formatted(.currency(code: "USD")))")
+                    .foregroundColor(.secondary)
+            } else {
+                Text("\(count)")
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func connectionRow(title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.trailing)
+        }
     }
 }
 
@@ -398,9 +789,10 @@ struct QuickBooksManagementView: View {
     QuickBooksManagementView()
 }
 
-private struct LiveInvoiceCreateView: View {
+private struct QuickBooksDocumentComposeView: View {
     @Environment(\.dismiss) private var dismiss
 
+    let title: String
     let customerRefs: [QuickBooksReference]
     let onCreate: (QuickBooksReference, Double, String?) -> Void
 
@@ -411,23 +803,24 @@ private struct LiveInvoiceCreateView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Live Invoice Details") {
+                Section(title) {
                     if customerRefs.isEmpty {
-                        Text("No customers found in live invoices yet. Sync first.")
+                        Text("Sync QuickBooks customers first.")
                             .foregroundColor(.secondary)
                     } else {
                         Picker("Customer", selection: $selectedCustomerIndex) {
                             ForEach(customerRefs.indices, id: \.self) { index in
-                                Text(customerRefs[index].name ?? customerRefs[index].value).tag(index)
+                                Text(customerRefs[index].displayName).tag(index)
                             }
                         }
                     }
+
                     TextField("Amount", text: $amountText)
                         .keyboardType(.decimalPad)
                     TextField("Notes", text: $note)
                 }
             }
-            .navigationTitle("Create Live Invoice")
+            .navigationTitle(title)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -442,5 +835,237 @@ private struct LiveInvoiceCreateView: View {
                 }
             }
         }
+    }
+}
+
+private struct QuickBooksBillComposeView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let vendorRefs: [QuickBooksReference]
+    let onCreate: (QuickBooksReference, Double, String?) -> Void
+
+    @State private var selectedVendorIndex = 0
+    @State private var amountText = ""
+    @State private var note = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Create Bill") {
+                    if vendorRefs.isEmpty {
+                        Text("Sync QuickBooks vendors first.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        Picker("Vendor", selection: $selectedVendorIndex) {
+                            ForEach(vendorRefs.indices, id: \.self) { index in
+                                Text(vendorRefs[index].displayName).tag(index)
+                            }
+                        }
+                    }
+
+                    TextField("Amount", text: $amountText)
+                        .keyboardType(.decimalPad)
+                    TextField("Notes", text: $note)
+                }
+            }
+            .navigationTitle("Create Bill")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        guard !vendorRefs.isEmpty, let amount = Double(amountText), amount > 0 else { return }
+                        onCreate(vendorRefs[selectedVendorIndex], amount, note.isEmpty ? nil : note)
+                        dismiss()
+                    }
+                    .disabled(vendorRefs.isEmpty || Double(amountText) == nil)
+                }
+            }
+        }
+    }
+}
+
+private struct QuickBooksPaymentComposeView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let invoices: [QuickBooksInvoice]
+    let onAdd: (QuickBooksInvoice, Double, String?) -> Void
+
+    @State private var selectedInvoiceIndex = 0
+    @State private var amountText = ""
+    @State private var note = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Record Payment") {
+                    if invoices.isEmpty {
+                        Text("Sync QuickBooks invoices first.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        Picker("Invoice", selection: $selectedInvoiceIndex) {
+                            ForEach(invoices.indices, id: \.self) { index in
+                                let invoice = invoices[index]
+                                Text("\(invoice.DocNumber ?? invoice.Id) · \(invoice.CustomerRef.displayName)").tag(index)
+                            }
+                        }
+                    }
+
+                    TextField("Amount", text: $amountText)
+                        .keyboardType(.decimalPad)
+                    TextField("Notes", text: $note)
+                }
+            }
+            .navigationTitle("Record Payment")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        guard !invoices.isEmpty, let amount = Double(amountText), amount > 0 else { return }
+                        onAdd(invoices[selectedInvoiceIndex], amount, note.isEmpty ? nil : note)
+                        dismiss()
+                    }
+                    .disabled(invoices.isEmpty || Double(amountText) == nil)
+                }
+            }
+            .onAppear {
+                if let firstInvoice = invoices.first {
+                    amountText = String(format: "%.2f", firstInvoice.Balance ?? firstInvoice.TotalAmt)
+                }
+            }
+        }
+    }
+}
+
+private struct QuickBooksVendorComposeView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let onAdd: (String, String?, String?) -> Void
+
+    @State private var name = ""
+    @State private var email = ""
+    @State private var phone = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Vendor") {
+                    TextField("Vendor Name", text: $name)
+                    TextField("Email", text: $email)
+                        .keyboardType(.emailAddress)
+                    TextField("Phone", text: $phone)
+                        .keyboardType(.phonePad)
+                }
+            }
+            .navigationTitle("Add Vendor")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        onAdd(
+                            name.trimmingCharacters(in: .whitespacesAndNewlines),
+                            email.nilIfBlank,
+                            phone.nilIfBlank
+                        )
+                        dismiss()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+private struct QuickBooksCustomerComposeView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let onCreate: (String, String?, String?) -> Void
+
+    @State private var name = ""
+    @State private var email = ""
+    @State private var phone = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Customer") {
+                    TextField("Customer Name", text: $name)
+                    TextField("Email", text: $email)
+                        .keyboardType(.emailAddress)
+                    TextField("Phone", text: $phone)
+                        .keyboardType(.phonePad)
+                }
+            }
+            .navigationTitle("Add Customer")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        onCreate(
+                            name.trimmingCharacters(in: .whitespacesAndNewlines),
+                            email.nilIfBlank,
+                            phone.nilIfBlank
+                        )
+                        dismiss()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+private struct QuickBooksCatalogItemComposeView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let onCreate: (String, Double, String?) -> Void
+
+    @State private var name = ""
+    @State private var price = ""
+    @State private var description = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Catalog Item") {
+                    TextField("Name", text: $name)
+                    TextField("Price", text: $price)
+                        .keyboardType(.decimalPad)
+                    TextField("Description", text: $description)
+                }
+            }
+            .navigationTitle("Add Catalog Item")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        guard let amount = Double(price), amount >= 0 else { return }
+                        onCreate(
+                            name.trimmingCharacters(in: .whitespacesAndNewlines),
+                            amount,
+                            description.nilIfBlank
+                        )
+                        dismiss()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Double(price) == nil)
+                }
+            }
+        }
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

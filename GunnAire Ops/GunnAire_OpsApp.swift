@@ -9,11 +9,12 @@
 
 import SwiftUI
 import SwiftData
+import os
 
 @main
 struct GunnAire_OpsApp: App {
     @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
-    @State private var testingBypassActive = false
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "GunnAireOps", category: "AppStartup")
 
     // Define schema with all model types
     var sharedModelContainer: ModelContainer = {
@@ -34,7 +35,21 @@ struct GunnAire_OpsApp: App {
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            logger.error("Primary SwiftData store load failed: \(error.localizedDescription, privacy: .public)")
+            resetKnownStoreArtifacts()
+            do {
+                return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            } catch {
+                logger.error("Persistent SwiftData retry failed: \(error.localizedDescription, privacy: .public)")
+                do {
+                    logger.notice("Falling back to in-memory SwiftData store for this launch.")
+                    let inMemoryConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+                    return try ModelContainer(for: schema, configurations: [inMemoryConfiguration])
+                } catch {
+                    logger.fault("In-memory SwiftData fallback failed: \(error.localizedDescription, privacy: .public)")
+                    fatalError("Could not create any ModelContainer: \(error)")
+                }
+            }
         }
     }()
 
@@ -45,15 +60,45 @@ struct GunnAire_OpsApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if hasAuthenticatedUser || testingBypassActive {
+            if hasAuthenticatedUser {
                 ContentView() // Main UI entry point
             } else {
                 LoginView(
-                    hasAuthenticatedUser: $hasAuthenticatedUser,
-                    testingBypassActive: $testingBypassActive
+                    hasAuthenticatedUser: $hasAuthenticatedUser
                 )
             }
         }
         .modelContainer(sharedModelContainer)
+    }
+
+    private static func resetKnownStoreArtifacts() {
+        let fileManager = FileManager.default
+        let roots = [
+            fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
+            fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first
+        ]
+        .compactMap { $0 }
+
+        let candidateNames = [
+            "default.store",
+            "default.store-shm",
+            "default.store-wal",
+            "GunnAireOps.store",
+            "GunnAireOps.store-shm",
+            "GunnAireOps.store-wal"
+        ]
+
+        for root in roots {
+            for name in candidateNames {
+                let url = root.appendingPathComponent(name)
+                guard fileManager.fileExists(atPath: url.path) else { continue }
+                do {
+                    try fileManager.removeItem(at: url)
+                    logger.notice("Removed SwiftData store artifact at \(url.path, privacy: .public)")
+                } catch {
+                    logger.error("Failed removing SwiftData store artifact at \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
     }
 }

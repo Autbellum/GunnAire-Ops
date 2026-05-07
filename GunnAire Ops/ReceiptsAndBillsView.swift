@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import UniformTypeIdentifiers
 import UIKit
 
@@ -30,6 +31,10 @@ struct ReceiptsAndBillsView: View {
     private let pendingUploadsStorageKey = "ReceiptsBillsPendingUploads.v1"
     private let maxAutoRetryCount = 8
 
+    @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
+    @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
+    @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
+
     @State private var showingReceiptPicker = false
     @State private var showingBillPicker = false
     @State private var showingReceiptCamera = false
@@ -46,6 +51,8 @@ struct ReceiptsAndBillsView: View {
     @State private var syncMessage: String?
     @State private var selectedAttachEntityType: QuickBooksAttachableEntityType = .invoice
     @State private var attachEntityID: String = ""
+    @State private var selectedServiceCallID: UUID?
+    @State private var selectedJobDocumentStage: JobDocumentStage = .supporting
     @State private var isLoadingAttachTargets = false
     @State private var attachTargetOptions: [AttachTargetOption] = []
     @State private var selectedAttachTargetID: String = ""
@@ -67,6 +74,19 @@ struct ReceiptsAndBillsView: View {
         case retries = "Retries"
         case oldest = "Oldest"
         var id: String { rawValue }
+    }
+
+    private enum JobDocumentStage: String, CaseIterable, Identifiable {
+        case before = "Before Photos"
+        case after = "After Photos"
+        case supporting = "Supporting Docs"
+
+        var id: String { rawValue }
+    }
+
+    private var selectedServiceCall: ServiceCall? {
+        guard let selectedServiceCallID else { return nil }
+        return serviceCalls.first { $0.id == selectedServiceCallID }
     }
 
     private var duePendingUploadsCount: Int {
@@ -179,6 +199,40 @@ struct ReceiptsAndBillsView: View {
                     Section(header: Text("Sync and Transactions")
                         .font(.headline)
                         .foregroundColor(Color.brandGold)) {
+                        Picker("Service Call", selection: $selectedServiceCallID) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(serviceCalls) { call in
+                                Text("\(call.customer.name) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
+                                    .tag(UUID?.some(call.id))
+                            }
+                        }
+
+                        Picker("Documentation Type", selection: $selectedJobDocumentStage) {
+                            ForEach(JobDocumentStage.allCases) { stage in
+                                Text(stage.rawValue).tag(stage)
+                            }
+                        }
+
+                        if let selectedServiceCall {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Linked job: \(selectedServiceCall.customer.name)")
+                                if let address = selectedServiceCall.siteAddress ?? selectedServiceCall.customer.address,
+                                   !address.isEmpty {
+                                    Text(address)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Text("Current photos: \(selectedServiceCall.beforePhotoCount) before • \(selectedServiceCall.afterPhotoCount) after")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                if selectedServiceCall.linkedInvoiceID == nil {
+                                    Text("This job does not have a linked invoice yet. QuickBooks attachment sync may still require a manual entity ID.")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+
                         Picker("Attach To", selection: $selectedAttachEntityType) {
                             ForEach(QuickBooksAttachableEntityType.allCases, id: \.self) { type in
                                 Text(type.rawValue).tag(type)
@@ -403,8 +457,12 @@ struct ReceiptsAndBillsView: View {
             selectedAttachTargetID = ""
             attachLookupMessage = nil
         }
+        .onChange(of: selectedServiceCallID) { _, _ in
+            applyLinkedServiceCallDefaults()
+        }
         .onAppear {
             loadPendingUploads()
+            applyLinkedServiceCallDefaults()
         }
         .sheet(item: $selectedPendingUploadForDetail) { pending in
             PendingUploadDetailSheet(
@@ -569,6 +627,7 @@ private extension ReceiptsAndBillsView {
             // Keep behavior deterministic in local/demo mode when auth has not been completed.
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(1))
+                applyDocumentationProgress(forUploadedFileCount: selectedFiles.count)
                 isSyncing = false
                 syncMessage = "QuickBooks is not connected. \(selectedFiles.count) file(s) prepared locally."
             }
@@ -622,8 +681,12 @@ private extension ReceiptsAndBillsView {
         group.notify(queue: .main) {
             isSyncing = false
             if failures.isEmpty {
+                applyDocumentationProgress(forUploadedFileCount: uploadedIDs.count)
                 syncMessage = "Upload complete. Synced \(uploadedIDs.count) file(s) to QuickBooks."
             } else {
+                if uploadedIDs.count > 0 {
+                    applyDocumentationProgress(forUploadedFileCount: uploadedIDs.count)
+                }
                 appendPendingUploads(failedPendingRecords)
                 syncMessage = "Partial sync: \(uploadedIDs.count) uploaded, \(failures.count) failed.\n\(failures.joined(separator: "\n"))"
             }
@@ -1000,6 +1063,41 @@ private extension ReceiptsAndBillsView {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
         try data.write(to: url, options: .atomic)
         return url
+    }
+
+    func applyLinkedServiceCallDefaults() {
+        guard let selectedServiceCall else { return }
+        if let linkedInvoiceID = selectedServiceCall.linkedInvoiceID,
+           let invoice = invoices.first(where: { $0.id == linkedInvoiceID }),
+           let quickBooksID = invoice.quickBooksID,
+           !quickBooksID.isEmpty {
+            selectedAttachEntityType = .invoice
+            if attachEntityID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                attachEntityID = quickBooksID
+            }
+        } else if let linkedEstimateID = selectedServiceCall.linkedEstimateID,
+                  let estimate = estimates.first(where: { $0.id == linkedEstimateID }),
+                  let quickBooksID = estimate.quickBooksID,
+                  !quickBooksID.isEmpty {
+            selectedAttachEntityType = .invoice
+            if attachEntityID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                attachEntityID = quickBooksID
+            }
+        }
+    }
+
+    func applyDocumentationProgress(forUploadedFileCount uploadedCount: Int) {
+        guard uploadedCount > 0, let selectedServiceCall else { return }
+        switch selectedJobDocumentStage {
+        case .before:
+            selectedServiceCall.beforePhotoCount += uploadedCount
+        case .after:
+            selectedServiceCall.afterPhotoCount += uploadedCount
+        case .supporting:
+            break
+        }
+        selectedServiceCall.documentationChecklist = true
+        selectedServiceCall.documentationStartedAt = selectedServiceCall.documentationStartedAt ?? Date()
     }
 }
 

@@ -6,7 +6,6 @@ struct LoginView: View {
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
 
     @Binding var hasAuthenticatedUser: Bool
-    @Binding var testingBypassActive: Bool
 
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @State private var isAuthenticating = false
@@ -16,8 +15,7 @@ struct LoginView: View {
 
     private var googleConfigReady: Bool {
         !Config.Google.clientID.hasPrefix("YOUR_") &&
-        !Config.Google.clientSecret.hasPrefix("YOUR_") &&
-        !Config.Google.redirectURI.hasPrefix("YOUR_")
+        !Config.Google.reversedClientID.hasPrefix("YOUR_")
     }
 
     var body: some View {
@@ -25,6 +23,13 @@ struct LoginView: View {
             WatermarkBackground()
 
             VStack(spacing: 20) {
+                Image("LoadingEmblem")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 140, height: 140)
+                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                    .shadow(color: .black.opacity(0.18), radius: 18, y: 10)
+
                 Text("GunnAire Ops")
                     .font(.largeTitle)
                     .bold()
@@ -51,19 +56,6 @@ struct LoginView: View {
                 .tint(Color.brandGold)
                 .foregroundStyle(Color.primaryBlack)
                 .disabled(isAuthenticating || !googleConfigReady)
-
-                if Config.AppSecurity.allowTestingBypass {
-                    Button("Continue in Testing Mode (Bypass Login)") {
-                        testingBypassActive = true
-                    }
-                    .buttonStyle(.bordered)
-
-                    Text("Testing bypass is enabled. Disable it before publishing.")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                }
 
                 if !googleConfigReady {
                     Text("Google OAuth credentials are not configured in Config/environment.")
@@ -127,7 +119,6 @@ struct LoginView: View {
 
 #Preview {
     LoginView(
-        hasAuthenticatedUser: .constant(false),
-        testingBypassActive: .constant(false)
+        hasAuthenticatedUser: .constant(false)
     )
 }

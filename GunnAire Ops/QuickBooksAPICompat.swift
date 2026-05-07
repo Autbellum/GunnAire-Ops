@@ -17,6 +17,30 @@ final class QuickBooksAPI: ObservableObject {
     }
     
     // MARK: - Data Forwarding
+    func fetchCustomers(completion: @escaping (Result<[QuickBooksCustomer], Error>) -> Void) {
+        data.fetchCustomers(completion: completion)
+    }
+
+    func createCustomer(_ customer: QuickBooksCustomerCreate, completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void) {
+        data.createCustomer(customer, completion: completion)
+    }
+
+    func fetchItems(completion: @escaping (Result<[QuickBooksItem], Error>) -> Void) {
+        data.fetchItems(completion: completion)
+    }
+
+    func createItem(_ item: QuickBooksItemCreate, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {
+        data.createItem(item, completion: completion)
+    }
+
+    func fetchEstimates(completion: @escaping (Result<[QuickBooksEstimate], Error>) -> Void) {
+        data.fetchEstimates(completion: completion)
+    }
+
+    func createEstimate(_ estimate: QuickBooksEstimateCreate, completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
+        data.createEstimate(estimate, completion: completion)
+    }
+
     func fetchInvoices(completion: @escaping (Result<[QuickBooksInvoice], Error>) -> Void) {
         data.fetchInvoices(completion: completion)
     }

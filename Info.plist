@@ -26,19 +26,20 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>gunnaireops</string>
+				<string>com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e</string>
 			</array>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>GOOGLE_CALLBACK_SCHEME</key>
-	<string>$(GOOGLE_CALLBACK_SCHEME)</string>
+	<string>com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e</string>
 	<key>GOOGLE_CLIENT_ID</key>
-	<string>$(GOOGLE_CLIENT_ID)</string>
-	<key>GOOGLE_CLIENT_SECRET</key>
-	<string>$(GOOGLE_CLIENT_SECRET)</string>
+	<string>539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e.apps.googleusercontent.com</string>
+	<key>GOOGLE_REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e</string>
 	<key>GOOGLE_REDIRECT_URI</key>
-	<string>$(GOOGLE_REDIRECT_URI)</string>
+	<string>com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e:/oauth2redirect</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>
@@ -53,6 +54,10 @@
 	<string>$(QB_CLIENT_SECRET)</string>
 	<key>QB_DEFAULT_ITEM_REF</key>
 	<string>$(QB_DEFAULT_ITEM_REF)</string>
+	<key>QB_DEFAULT_INCOME_ACCOUNT_REF</key>
+	<string>$(QB_DEFAULT_INCOME_ACCOUNT_REF)</string>
+	<key>QB_DEFAULT_EXPENSE_ACCOUNT_REF</key>
+	<string>$(QB_DEFAULT_EXPENSE_ACCOUNT_REF)</string>
 	<key>QB_ENVIRONMENT</key>
 	<string>$(QB_ENVIRONMENT)</string>
 	<key>QB_REDIRECT_URI</key>

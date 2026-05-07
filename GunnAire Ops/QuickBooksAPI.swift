@@ -108,6 +108,7 @@ final class QuickBooksAuthAPI: ObservableObject {
         var components = URLComponents(string: "https://appcenter.intuit.com/connect/oauth2")
         let scopes = [
             "com.intuit.quickbooks.accounting",
+            "com.intuit.quickbooks.payment",
             "openid",
             "profile",
             "email",

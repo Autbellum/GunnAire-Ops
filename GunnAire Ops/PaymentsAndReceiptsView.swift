@@ -20,6 +20,9 @@ struct PaymentsAndReceiptsView: View {
     @State private var selectedInvoiceID: UUID?
     @State private var amountText = ""
     @State private var selectedMethod: PaymentMethod = .card
+    @State private var cardLast4 = ""
+    @State private var authorizationReference = ""
+    @State private var paymentNotes = ""
     @State private var actionMessage = ""
     @State private var syncingPaymentID: UUID?
 
@@ -96,6 +99,21 @@ struct PaymentsAndReceiptsView: View {
                                         .buttonStyle(.bordered)
                                         .disabled(payment.quickBooksID != nil || syncingPaymentID != nil || !isQuickBooksConnected)
                                     }
+                                    if let cardLast4 = payment.cardLast4, !cardLast4.isEmpty {
+                                        Text("Card ending in \(cardLast4)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if let authorizationReference = payment.authorizationReference, !authorizationReference.isEmpty {
+                                        Text("Authorization: \(authorizationReference)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if let notes = payment.notes, !notes.isEmpty {
+                                        Text(notes)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
                                 .padding(.vertical, 4)
                             }
@@ -130,6 +148,15 @@ struct PaymentsAndReceiptsView: View {
                             Text(method.rawValue).tag(method)
                         }
                     }
+
+                    if selectedMethod == .card {
+                        TextField("Card last 4", text: $cardLast4)
+                            .keyboardType(.numberPad)
+                        TextField("Authorization ref", text: $authorizationReference)
+                    }
+
+                    TextField("Payment notes", text: $paymentNotes, axis: .vertical)
+                        .lineLimit(2...4)
                 }
             }
             .navigationTitle("Record Payment")
@@ -166,7 +193,17 @@ struct PaymentsAndReceiptsView: View {
         guard let invoice = selectedInvoice, let amount = Double(amountText), amount > 0 else {
             return
         }
-        modelContext.insert(Payment(invoice: invoice, amount: amount, method: selectedMethod.apiValue))
+        modelContext.insert(
+            Payment(
+                invoice: invoice,
+                amount: amount,
+                method: selectedMethod.apiValue,
+                cardLast4: cardLast4.nilIfBlank,
+                authorizationReference: authorizationReference.nilIfBlank,
+                notes: paymentNotes.nilIfBlank,
+                processor: selectedMethod == .card ? "manual-entry" : nil
+            )
+        )
         invoice.status = amount >= invoice.amount ? "paid" : "partial"
         actionMessage = "Payment recorded for \(invoice.customer.name)."
         resetPaymentForm()
@@ -184,10 +221,25 @@ struct PaymentsAndReceiptsView: View {
         }
 
         syncingPaymentID = payment.id
+        // Build payment lines linking to the invoice in QuickBooks when available
+        let paymentLines: [QuickBooksPaymentLine]?
+        if let invoiceQBID = payment.invoice.quickBooksID, !invoiceQBID.isEmpty {
+            paymentLines = [
+                QuickBooksPaymentLine(
+                    Amount: payment.amount,
+                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoiceQBID, TxnType: "Invoice")]
+                )
+            ]
+        } else {
+            // No QuickBooks invoice ID; create an unapplied payment linked only to the customer
+            paymentLines = nil
+        }
         let payload = QuickBooksPaymentCreate(
             CustomerRef: QuickBooksReference(value: customerID, name: payment.invoice.customer.name),
             TotalAmt: payment.amount,
-            Line: nil
+            PrivateNote: nil,
+            PaymentRefNum: "Payment for invoice #\(payment.invoice.id.uuidString.prefix(8)) from \(payment.invoice.customer.name)",
+            Line: paymentLines
         )
         liveAPI.createPayment(payload) { result in
             DispatchQueue.main.async {
@@ -207,6 +259,16 @@ struct PaymentsAndReceiptsView: View {
         selectedInvoiceID = nil
         amountText = ""
         selectedMethod = .card
+        cardLast4 = ""
+        authorizationReference = ""
+        paymentNotes = ""
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

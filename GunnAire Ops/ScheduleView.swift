@@ -5,11 +5,14 @@ struct ScheduleView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: [SortDescriptor(\ServiceCall.scheduledDate)]) private var serviceCalls: [ServiceCall]
     @Query private var recurringContracts: [RecurringMaintenanceContract]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showingAddCallSheet = false
     @State private var selectedCall: ServiceCall?
+    @State private var isSyncingGoogleCalendar = false
+    @State private var syncMessage: String?
     
     enum ViewMode: String, CaseIterable, Identifiable {
         case day = "Day"
@@ -54,6 +57,11 @@ struct ScheduleView: View {
     var activeRecurringContracts: [RecurringMaintenanceContract] {
         let now = Date()
         return recurringContracts.filter { $0.nextDate >= now }
+    }
+
+    private var isAdminUser: Bool {
+        let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        return AppAccess.isAdmin(email: email, users: users)
     }
     
     var body: some View {
@@ -156,6 +164,23 @@ struct ScheduleView: View {
                                     Text("Time: \(call.scheduledDate.formatted(date: .omitted, time: .shortened)) - \(call.status.rawValue.capitalized)")
                                         .font(.caption)
                                         .foregroundColor(.gray)
+                                    if let address = call.siteAddress ?? call.customer.address,
+                                       !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Text(address)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    HStack(spacing: 8) {
+                                        if call.googleEventID != nil {
+                                            Label("Google", systemImage: "calendar.badge.checkmark")
+                                        }
+                                        if call.linkedEstimateID != nil || call.linkedInvoiceID != nil {
+                                            Label("Docs", systemImage: "doc.text.fill")
+                                        }
+                                    }
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
                                 }
                             }
                         }
@@ -164,18 +189,43 @@ struct ScheduleView: View {
                     .listStyle(.insetGrouped)
                     .scrollContentBackground(.hidden)
                     .background(Color.primaryBlack)
+
+                    if let syncMessage {
+                        Text(syncMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal)
+                    }
+
+                    if googleAuth.isAuthenticated {
+                        Text("If Google Calendar sync was connected before the calendar permission update, disconnect Google in Settings and reconnect it once so Google can issue a new token with calendar access.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal)
+                    }
                 }
                 .navigationTitle("Schedule")
                 .foregroundColor(Color.brandGold)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button {
-                            showingAddCallSheet = true
-                        } label: {
-                            Label("Add Call", systemImage: "plus")
-                                .bold()
+                        HStack {
+                            Button {
+                                syncGoogleCalendar()
+                            } label: {
+                                Label(isSyncingGoogleCalendar ? "Syncing..." : "Sync Google", systemImage: "arrow.triangle.2.circlepath")
+                                    .bold()
+                            }
+                            .disabled(isSyncingGoogleCalendar || !googleAuth.isAuthenticated)
+                            .tint(Color.brandGold)
+
+                            Button {
+                                showingAddCallSheet = true
+                            } label: {
+                                Label("Add Call", systemImage: "plus")
+                                    .bold()
+                            }
+                            .tint(Color.brandGold)
                         }
-                        .tint(Color.brandGold)
                     }
                     ToolbarItem(placement: .navigationBarLeading) {
                         EditButton()
@@ -198,6 +248,40 @@ struct ScheduleView: View {
         withAnimation {
             for index in offsets {
                 modelContext.delete(filteredCalls[index])
+            }
+        }
+    }
+
+    private func syncGoogleCalendar() {
+        guard googleAuth.isAuthenticated else {
+            syncMessage = "Sign in with Google first."
+            return
+        }
+        isSyncingGoogleCalendar = true
+        syncMessage = "Syncing Google Calendar..."
+        let signedInEmail = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        GoogleCalendarScheduleSync.sync(
+            auth: googleAuth,
+            modelContext: modelContext,
+            signedInEmail: signedInEmail
+            ,
+            isAdminUser: isAdminUser
+        ) { result in
+            DispatchQueue.main.async {
+                isSyncingGoogleCalendar = false
+                switch result {
+                case .success(let message):
+                    syncMessage = message
+                case .failure(let error):
+                    let detail = error.localizedDescription
+                    if detail.localizedCaseInsensitiveContains("insufficient") ||
+                        detail.localizedCaseInsensitiveContains("scope") ||
+                        detail.localizedCaseInsensitiveContains("forbidden") {
+                        syncMessage = "Google Calendar sync failed: \(detail) Disconnect Google in Settings and reconnect it so the app can request calendar permission."
+                    } else {
+                        syncMessage = "Google Calendar sync failed: \(detail)"
+                    }
+                }
             }
         }
     }

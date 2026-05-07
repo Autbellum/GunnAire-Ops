@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct BillingDocumentsView: View {
     @Environment(\.modelContext) private var modelContext
@@ -9,19 +10,32 @@ struct BillingDocumentsView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
 
-    @State private var selectedDocumentKind: BillingDocumentKind = .estimate
+    private let initialServiceCall: ServiceCall?
+    private let liveAPI = QuickBooksDataAPI.shared
+
+    @State private var selectedDocumentKind: BillingDocumentKind
     @State private var selectedCustomerID: UUID?
     @State private var selectedItems: Set<UUID> = []
     @State private var notes = ""
-    @State private var newCustomerName = ""
+    @State private var customerName = ""
+    @State private var customerPhone = ""
+    @State private var customerEmail = ""
+    @State private var customerAddress = ""
     @State private var newItemName = ""
+    @State private var newItemDescription = ""
     @State private var newItemPrice = ""
     @State private var paymentInvoice: Invoice?
+    @State private var actionMessage = ""
+    @State private var isCreatingDocument = false
+    @State private var didLoadInitialContext = false
+
+    init(initialServiceCall: ServiceCall? = nil) {
+        self.initialServiceCall = initialServiceCall
+        _selectedDocumentKind = State(initialValue: initialServiceCall?.type == .estimate ? .estimate : .invoice)
+    }
 
     private var selectedTotal: Double {
-        items
-            .filter { selectedItems.contains($0.id) }
-            .reduce(0) { $0 + $1.unitPrice }
+        selectedLineItems.reduce(0) { $0 + $1.unitPrice }
     }
 
     private var selectedCustomer: Customer? {
@@ -29,16 +43,56 @@ struct BillingDocumentsView: View {
         return customers.first { $0.id == selectedCustomerID }
     }
 
+    private var selectedLineItems: [Item] {
+        items.filter { selectedItems.contains($0.id) }
+    }
+
     private var selectedSummary: String {
-        items
-            .filter { selectedItems.contains($0.id) }
-            .map { "\($0.name) - \($0.unitPrice.formatted(.currency(code: "USD")))" }
+        selectedLineItems
+            .map { item in
+                if let description = item.itemDescription, !description.isEmpty {
+                    return "\(item.name) - \(item.unitPrice.formatted(.currency(code: "USD"))) - \(description)"
+                }
+                return "\(item.name) - \(item.unitPrice.formatted(.currency(code: "USD")))"
+            }
             .joined(separator: "\n")
+    }
+
+    private var selectedJobAddress: String? {
+        let address = initialServiceCall?.siteAddress ?? initialServiceCall?.customer.address
+        guard let address, !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return address
+    }
+
+    private var isQuickBooksConnected: Bool {
+        liveAPI.isAuthenticated
     }
 
     var body: some View {
         NavigationStack {
             List {
+                if let call = initialServiceCall {
+                    Section("Job") {
+                        Text(call.customer.name)
+                            .font(.headline)
+                        Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                            .foregroundColor(.secondary)
+                        Text("Job Type: \(call.type.rawValue.capitalized)")
+                            .foregroundColor(.secondary)
+                        if let selectedJobAddress {
+                            Text(selectedJobAddress)
+                                .foregroundColor(.secondary)
+                        }
+                        if let notes = call.notes, !notes.isEmpty {
+                            Text(notes)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
                 Section("Create") {
                     Picker("Document", selection: $selectedDocumentKind) {
                         ForEach(BillingDocumentKind.allCases) { kind in
@@ -66,13 +120,41 @@ struct BillingDocumentsView: View {
                     Text("Total: \(selectedTotal, format: .currency(code: "USD"))")
                         .font(.headline)
 
-                    Button("Create \(selectedDocumentKind.rawValue)") {
+                    Button(isCreatingDocument ? "Creating..." : "Create \(selectedDocumentKind.rawValue)") {
                         createDocument()
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Color.brandGold)
                     .foregroundStyle(Color.primaryBlack)
-                    .disabled(selectedCustomer == nil || selectedItems.isEmpty)
+                    .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
+
+                    if !actionMessage.isEmpty {
+                        Text(actionMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Customer") {
+                    TextField("Customer name", text: $customerName)
+                    TextField("Address", text: $customerAddress, axis: .vertical)
+                        .lineLimit(2...3)
+                    TextField("Phone", text: $customerPhone)
+                        .keyboardType(.phonePad)
+                    TextField("Email", text: $customerEmail)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+
+                    Button(selectedCustomer == nil ? "Save New Customer" : "Update Customer") {
+                        saveCustomerProfile()
+                    }
+                    .disabled(customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    if isQuickBooksConnected {
+                        Text("New customers and items created here will sync to QuickBooks when the document is created.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
 
                 Section("Items") {
@@ -95,6 +177,11 @@ struct BillingDocumentsView: View {
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
                                         }
+                                        if let quickBooksID = item.quickBooksID, !quickBooksID.isEmpty {
+                                            Text("QuickBooks linked")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
                                     }
                                     Spacer()
                                     Text(item.unitPrice, format: .currency(code: "USD"))
@@ -104,29 +191,18 @@ struct BillingDocumentsView: View {
                         }
                     }
 
+                    TextField("New item", text: $newItemName)
+                    TextField("Description", text: $newItemDescription, axis: .vertical)
+                        .lineLimit(2...3)
                     HStack {
-                        TextField("New item", text: $newItemName)
                         TextField("Price", text: $newItemPrice)
                             .keyboardType(.decimalPad)
-                            .frame(maxWidth: 110)
                         Button {
                             addItem()
                         } label: {
                             Label("Add Item", systemImage: "plus")
                         }
                         .disabled(newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Double(newItemPrice) == nil)
-                    }
-                }
-
-                Section("Customers") {
-                    HStack {
-                        TextField("New customer", text: $newCustomerName)
-                        Button {
-                            addCustomer()
-                        } label: {
-                            Label("Add Customer", systemImage: "person.badge.plus")
-                        }
-                        .disabled(newCustomerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
 
@@ -151,6 +227,11 @@ struct BillingDocumentsView: View {
                                 Text(estimate.lineItemSummary)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                if let quickBooksID = estimate.quickBooksID, !quickBooksID.isEmpty {
+                                    Text("QuickBooks ID: \(quickBooksID)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
                                 Button("Convert to Invoice") {
                                     convertEstimate(estimate)
                                 }
@@ -183,7 +264,17 @@ struct BillingDocumentsView: View {
                                 Text(invoice.lineItemSummary)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                Button(invoice.status == "paid" ? "Paid" : "Take Payment") {
+                                if let signatureName = invoice.customerSignatureName, !signatureName.isEmpty {
+                                    Text("Signed by \(signatureName)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                if invoice.finalizedAt != nil {
+                                    Text("Finalized")
+                                        .font(.caption2)
+                                        .foregroundColor(.green)
+                                }
+                                Button(invoice.status == "paid" ? "Paid" : "Finalize & Take Payment") {
                                     paymentInvoice = invoice
                                 }
                                 .buttonStyle(.borderedProminent)
@@ -216,27 +307,67 @@ struct BillingDocumentsView: View {
                     }
                 }
             }
-            .navigationTitle("Invoices & Estimates")
+            .navigationTitle(initialServiceCall == nil ? "Invoices & Estimates" : "Job Documentation")
             .sheet(item: $paymentInvoice) { invoice in
                 RecordInvoicePaymentView(invoice: invoice)
+            }
+            .onAppear(perform: loadInitialContextIfNeeded)
+            .onChange(of: selectedCustomerID) { _, newValue in
+                guard let newValue, let customer = customers.first(where: { $0.id == newValue }) else { return }
+                populateCustomerFields(from: customer)
             }
         }
     }
 
-    private func addCustomer() {
-        let name = newCustomerName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let customer = Customer(name: name)
-        modelContext.insert(customer)
+    private func loadInitialContextIfNeeded() {
+        guard !didLoadInitialContext else { return }
+        didLoadInitialContext = true
+
+        if let call = initialServiceCall {
+            selectedCustomerID = call.customer.id
+            populateCustomerFields(from: call.customer)
+            if notes.isEmpty, let callNotes = call.notes {
+                notes = callNotes
+            }
+            if call.documentationStartedAt == nil {
+                call.documentationStartedAt = Date()
+            }
+            if call.status == .scheduled {
+                call.status = .inProgress
+            }
+            if customerAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let address = selectedJobAddress {
+                customerAddress = address
+            }
+        } else if let firstCustomer = customers.first {
+            selectedCustomerID = firstCustomer.id
+            populateCustomerFields(from: firstCustomer)
+        }
+    }
+
+    private func populateCustomerFields(from customer: Customer) {
+        customerName = customer.name
+        customerPhone = customer.phone ?? ""
+        customerEmail = customer.email ?? ""
+        customerAddress = customer.address ?? ""
+    }
+
+    private func saveCustomerProfile() {
+        let customer = resolveCustomerForDocument()
         selectedCustomerID = customer.id
-        newCustomerName = ""
+        actionMessage = "\(customer.name) saved locally."
     }
 
     private func addItem() {
         guard let price = Double(newItemPrice) else { return }
-        let item = Item(name: newItemName.trimmingCharacters(in: .whitespacesAndNewlines), unitPrice: price)
+        let item = Item(
+            name: newItemName.trimmingCharacters(in: .whitespacesAndNewlines),
+            unitPrice: price,
+            itemDescription: newItemDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : newItemDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         modelContext.insert(item)
         selectedItems.insert(item.id)
         newItemName = ""
+        newItemDescription = ""
         newItemPrice = ""
     }
 
@@ -248,20 +379,221 @@ struct BillingDocumentsView: View {
         }
     }
 
+    private func resolveCustomerForDocument() -> Customer {
+        let trimmedName = customerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPhone = customerPhone.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEmail = customerEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAddress = customerAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let selectedCustomer {
+            selectedCustomer.name = trimmedName
+            selectedCustomer.phone = trimmedPhone.isEmpty ? nil : trimmedPhone
+            selectedCustomer.email = trimmedEmail.isEmpty ? nil : trimmedEmail
+            selectedCustomer.address = trimmedAddress.isEmpty ? nil : trimmedAddress
+            return selectedCustomer
+        }
+
+        let customer = Customer(
+            name: trimmedName,
+            phone: trimmedPhone.isEmpty ? nil : trimmedPhone,
+            email: trimmedEmail.isEmpty ? nil : trimmedEmail,
+            address: trimmedAddress.isEmpty ? nil : trimmedAddress
+        )
+        modelContext.insert(customer)
+        return customer
+    }
+
     private func createDocument() {
-        guard let selectedCustomer else { return }
+        guard !selectedLineItems.isEmpty else { return }
+
+        isCreatingDocument = true
+        let customer = resolveCustomerForDocument()
+        selectedCustomerID = customer.id
+
         switch selectedDocumentKind {
         case .estimate:
-            modelContext.insert(Estimate(customer: selectedCustomer, lineItemSummary: selectedSummary, amount: selectedTotal, notes: notes.isEmpty ? nil : notes))
+            let estimate = Estimate(
+                serviceCallID: initialServiceCall?.id,
+                customer: customer,
+                lineItemSummary: selectedSummary,
+                amount: selectedTotal,
+                notes: notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes
+            )
+            modelContext.insert(estimate)
+            initialServiceCall?.linkedEstimateID = estimate.id
+            actionMessage = isQuickBooksConnected ? "Estimate created locally. Syncing to QuickBooks..." : "Estimate created locally."
+            syncEstimateIfNeeded(estimate, customer: customer, items: selectedLineItems)
+
         case .invoice:
-            modelContext.insert(Invoice(customer: selectedCustomer, lineItemSummary: selectedSummary, amount: selectedTotal, notes: notes.isEmpty ? nil : notes))
+            let invoice = Invoice(
+                serviceCallID: initialServiceCall?.id,
+                customer: customer,
+                lineItemSummary: selectedSummary,
+                amount: selectedTotal,
+                status: "unpaid",
+                notes: notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes
+            )
+            modelContext.insert(invoice)
+            initialServiceCall?.linkedInvoiceID = invoice.id
+            initialServiceCall?.documentationCompletedAt = Date()
+            initialServiceCall?.status = .invoiced
+            actionMessage = isQuickBooksConnected ? "Invoice created locally. Syncing to QuickBooks..." : "Invoice created locally."
+            syncInvoiceIfNeeded(invoice, customer: customer, items: selectedLineItems)
         }
+
         selectedItems.removeAll()
         notes = ""
+        isCreatingDocument = false
+    }
+
+    private func syncEstimateIfNeeded(_ estimate: Estimate, customer: Customer, items: [Item]) {
+        guard isQuickBooksConnected else { return }
+        ensureQuickBooksDocumentInputs(customer: customer, items: items) { result in
+            switch result {
+            case .failure(let error):
+                actionMessage = "Estimate saved locally. QuickBooks sync failed: \(error.localizedDescription)"
+            case .success(let syncedItems):
+                let payload = QuickBooksEstimateCreate(
+                    CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
+                    Line: quickBooksLineItems(for: syncedItems),
+                    PrivateNote: estimate.notes
+                )
+                liveAPI.createEstimate(payload) { apiResult in
+                    DispatchQueue.main.async {
+                        switch apiResult {
+                        case .success(let quickBooksEstimate):
+                            estimate.quickBooksID = quickBooksEstimate.Id
+                            actionMessage = "Estimate created and synced to QuickBooks."
+                        case .failure(let error):
+                            actionMessage = "Estimate saved locally. QuickBooks sync failed: \(error.localizedDescription)"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func syncInvoiceIfNeeded(_ invoice: Invoice, customer: Customer, items: [Item]) {
+        guard isQuickBooksConnected else { return }
+        ensureQuickBooksDocumentInputs(customer: customer, items: items) { result in
+            switch result {
+            case .failure(let error):
+                actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
+            case .success(let syncedItems):
+                let payload = QuickBooksInvoiceCreate(
+                    CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
+                    Line: quickBooksLineItems(for: syncedItems),
+                    PrivateNote: invoice.notes
+                )
+                liveAPI.createInvoice(payload) { apiResult in
+                    DispatchQueue.main.async {
+                        switch apiResult {
+                        case .success(let quickBooksInvoice):
+                            invoice.quickBooksID = quickBooksInvoice.Id
+                            actionMessage = "Invoice created and synced to QuickBooks."
+                        case .failure(let error):
+                            actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func ensureQuickBooksDocumentInputs(
+        customer: Customer,
+        items: [Item],
+        completion: @escaping (Result<[Item], Error>) -> Void
+    ) {
+        ensureQuickBooksCustomer(customer) { customerResult in
+            switch customerResult {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success:
+                ensureQuickBooksItems(items, index: 0, synced: [], completion: completion)
+            }
+        }
+    }
+
+    private func ensureQuickBooksCustomer(_ customer: Customer, completion: @escaping (Result<Void, Error>) -> Void) {
+        if let quickBooksID = customer.quickBooksID, !quickBooksID.isEmpty {
+            completion(.success(()))
+            return
+        }
+
+        let payload = QuickBooksCustomerCreate(
+            DisplayName: customer.name,
+            PrimaryPhone: customer.phone.flatMap { $0.isEmpty ? nil : QuickBooksPhoneNumber(FreeFormNumber: $0) },
+            PrimaryEmailAddr: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
+            BillAddr: customer.address.flatMap { $0.isEmpty ? nil : QuickBooksAddress(Line1: $0) }
+        )
+        liveAPI.createCustomer(payload) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let quickBooksCustomer):
+                    customer.quickBooksID = quickBooksCustomer.Id
+                    completion(.success(()))
+                case .failure(let error):
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    private func ensureQuickBooksItems(
+        _ items: [Item],
+        index: Int,
+        synced: [Item],
+        completion: @escaping (Result<[Item], Error>) -> Void
+    ) {
+        guard index < items.count else {
+            completion(.success(synced))
+            return
+        }
+
+        let item = items[index]
+        if let quickBooksID = item.quickBooksID, !quickBooksID.isEmpty {
+            ensureQuickBooksItems(items, index: index + 1, synced: synced + [item], completion: completion)
+            return
+        }
+
+        let payload = QuickBooksItemCreate(
+            Name: item.name,
+            ItemType: "Service",
+            Description: item.itemDescription,
+            UnitPrice: item.unitPrice,
+            IncomeAccountRef: nil
+        )
+        liveAPI.createItem(payload) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let quickBooksItem):
+                    item.quickBooksID = quickBooksItem.Id
+                    ensureQuickBooksItems(items, index: index + 1, synced: synced + [item], completion: completion)
+                case .failure(let error):
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    private func quickBooksLineItems(for items: [Item]) -> [QuickBooksLineItem] {
+        items.compactMap { item in
+            guard let quickBooksID = item.quickBooksID, !quickBooksID.isEmpty else { return nil }
+            return QuickBooksLineItem(
+                Amount: item.unitPrice,
+                DetailType: "SalesItemLineDetail",
+                Description: item.itemDescription ?? item.name,
+                SalesItemLineDetail: QuickBooksSalesItemLineDetail(
+                    ItemRef: QuickBooksReference(value: quickBooksID, name: item.name)
+                )
+            )
+        }
     }
 
     private func convertEstimate(_ estimate: Estimate) {
         let invoice = Invoice(
+            serviceCallID: estimate.serviceCallID,
             customer: estimate.customer,
             lineItemSummary: estimate.lineItemSummary,
             amount: estimate.amount,
@@ -269,27 +601,106 @@ struct BillingDocumentsView: View {
         )
         estimate.status = "invoiced"
         modelContext.insert(invoice)
+        if let serviceCallID = estimate.serviceCallID,
+           let calls = try? modelContext.fetch(FetchDescriptor<ServiceCall>()),
+           let call = calls.first(where: { $0.id == serviceCallID }) {
+            call.linkedInvoiceID = invoice.id
+            call.status = .invoiced
+            call.documentationCompletedAt = Date()
+        }
     }
 }
 
 private struct RecordInvoicePaymentView: View {
+    @AppStorage("requireCustomerSignature") private var requireCustomerSignature = true
+    @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Query private var serviceCalls: [ServiceCall]
+    @Query private var payments: [Payment]
 
     let invoice: Invoice
     @State private var amount: String
     @State private var method = "card"
+    @State private var completionNotes = ""
+    @State private var signatureName = ""
+    @State private var signatureStrokes: [[CGPoint]] = []
+    @State private var cardLast4 = ""
+    @State private var authorizationCode = ""
+    @State private var paymentNotes = ""
 
     init(invoice: Invoice) {
         self.invoice = invoice
         _amount = State(initialValue: String(format: "%.2f", invoice.amount))
+        _completionNotes = State(initialValue: invoice.completionNotes ?? "")
+        _signatureName = State(initialValue: invoice.customerSignatureName ?? "")
+    }
+
+    private var hasSignatureDrawing: Bool {
+        !signatureStrokes.flatMap { $0 }.isEmpty
+    }
+
+    private var hasCapturedSignature: Bool {
+        hasSignatureDrawing || invoice.customerSignatureImageBase64 != nil
+    }
+
+    private var balanceDue: Double {
+        max(invoice.amount - paidAmountRecorded, 0)
+    }
+
+    private var paidAmountRecorded: Double {
+        payments
+            .filter { $0.invoice.id == invoice.id }
+            .reduce(0) { $0 + $1.amount }
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Payment") {
+                Section("Invoice") {
                     Text(invoice.customer.name)
+                    Text(invoice.amount, format: .currency(code: "USD"))
+                    Text("Balance due: \(balanceDue, format: .currency(code: "USD"))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    if let quickBooksID = invoice.quickBooksID, !quickBooksID.isEmpty {
+                        Text("QuickBooks ID: \(quickBooksID)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Completion") {
+                    TextField("Completion notes", text: $completionNotes, axis: .vertical)
+                        .lineLimit(2...4)
+                    TextField("Customer signature name", text: $signatureName)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Customer signature")
+                            .font(.subheadline)
+                        SignaturePad(strokes: $signatureStrokes)
+                            .frame(height: 180)
+                        HStack {
+                            if invoice.customerSignatureImageBase64 != nil || hasSignatureDrawing {
+                                Text(hasSignatureDrawing ? "Signature captured for this closeout." : "A saved signature already exists for this invoice.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Button("Clear") {
+                                signatureStrokes = []
+                            }
+                            .font(.caption)
+                        }
+                    }
+                    if requireCustomerSignature {
+                        Text("A customer name and signature are required before finalizing this invoice.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Payment") {
                     TextField("Amount", text: $amount)
                         .keyboardType(.decimalPad)
                     Picker("Method", selection: $method) {
@@ -298,23 +709,155 @@ private struct RecordInvoicePaymentView: View {
                         Text("Cash").tag("cash")
                         Text("Check").tag("check")
                     }
+                    if method == "card" {
+                        TextField("Card last 4", text: $cardLast4)
+                            .keyboardType(.numberPad)
+                        TextField("Authorization ref", text: $authorizationCode)
+                    }
+                    TextField("Payment notes", text: $paymentNotes, axis: .vertical)
+                        .lineLimit(2...4)
+                    if enableOnsitePayments {
+                        Text("Tap to Pay and keyed card processing still need a payment processor SDK. This screen finalizes the invoice, stores the signature, and records the payment result.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
-            .navigationTitle("Take Payment")
+            .navigationTitle("Finalize Invoice")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        guard let paidAmount = Double(amount), paidAmount > 0 else { return }
-                        modelContext.insert(Payment(invoice: invoice, amount: paidAmount, method: method))
-                        invoice.status = paidAmount >= invoice.amount ? "paid" : "partial"
-                        dismiss()
+                        savePayment()
                     }
-                    .disabled(Double(amount) == nil)
+                    .disabled(
+                        Double(amount) == nil ||
+                        (requireCustomerSignature &&
+                         (signatureName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !hasCapturedSignature))
+                    )
                 }
             }
+        }
+    }
+
+    private func savePayment() {
+        guard let paidAmount = Double(amount), paidAmount > 0 else { return }
+        let trimmedSignatureName = signatureName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCompletionNotes = completionNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCardLast4 = cardLast4.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAuthorization = authorizationCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPaymentNotes = paymentNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        invoice.customerSignatureName = trimmedSignatureName.isEmpty ? nil : trimmedSignatureName
+        invoice.customerSignatureImageBase64 = signatureImageBase64()
+        invoice.customerSignedAt = invoice.customerSignatureName == nil ? nil : Date()
+        invoice.completionNotes = trimmedCompletionNotes.isEmpty ? nil : trimmedCompletionNotes
+        invoice.finalizedAt = Date()
+
+        let recordedMethod: String
+        if method == "card", !trimmedCardLast4.isEmpty {
+            recordedMethod = trimmedAuthorization.isEmpty ? "card ••••\(trimmedCardLast4)" : "card ••••\(trimmedCardLast4) auth \(trimmedAuthorization)"
+        } else {
+            recordedMethod = method
+        }
+
+        modelContext.insert(
+            Payment(
+                invoice: invoice,
+                amount: paidAmount,
+                method: recordedMethod,
+                cardLast4: trimmedCardLast4.isEmpty ? nil : trimmedCardLast4,
+                authorizationReference: trimmedAuthorization.isEmpty ? nil : trimmedAuthorization,
+                notes: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
+                processor: method == "card" ? "manual-entry" : "onsite-recorded"
+            )
+        )
+        invoice.status = paidAmount >= invoice.amount ? "paid" : "partial"
+
+        if let serviceCallID = invoice.serviceCallID,
+           let call = serviceCalls.first(where: { $0.id == serviceCallID }) {
+            call.documentationCompletedAt = Date()
+            if call.status != .invoiced {
+                call.status = .completed
+            }
+        }
+
+        dismiss()
+    }
+
+    private func signatureImageBase64() -> String? {
+        guard let image = SignatureRenderer.image(from: signatureStrokes) else { return invoice.customerSignatureImageBase64 }
+        return image.pngData()?.base64EncodedString()
+    }
+}
+
+private struct SignaturePad: View {
+    @Binding var strokes: [[CGPoint]]
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(.secondarySystemBackground))
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.secondary.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4]))
+                Path { path in
+                    for stroke in strokes where !stroke.isEmpty {
+                        path.move(to: stroke[0])
+                        for point in stroke.dropFirst() {
+                            path.addLine(to: point)
+                        }
+                    }
+                }
+                .stroke(Color.primary, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let point = CGPoint(
+                            x: min(max(0, value.location.x), geometry.size.width),
+                            y: min(max(0, value.location.y), geometry.size.height)
+                        )
+                        if strokes.isEmpty || value.startLocation == value.location {
+                            strokes.append([point])
+                        } else if let lastIndex = strokes.indices.last {
+                            strokes[lastIndex].append(point)
+                        }
+                    }
+            )
+        }
+    }
+}
+
+private enum SignatureRenderer {
+    static func image(from strokes: [[CGPoint]], size: CGSize = CGSize(width: 600, height: 240)) -> UIImage? {
+        let validStrokes = strokes.filter { !$0.isEmpty }
+        guard !validStrokes.isEmpty else { return nil }
+
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { context in
+            UIColor.clear.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            UIColor.label.setStroke()
+            let bezier = UIBezierPath()
+            bezier.lineWidth = 3
+            bezier.lineCapStyle = .round
+            bezier.lineJoinStyle = .round
+
+            for stroke in validStrokes {
+                guard let first = stroke.first else { continue }
+                let scaledFirst = CGPoint(x: first.x * (size.width / 320), y: first.y * (size.height / 180))
+                bezier.move(to: scaledFirst)
+                for point in stroke.dropFirst() {
+                    let scaledPoint = CGPoint(x: point.x * (size.width / 320), y: point.y * (size.height / 180))
+                    bezier.addLine(to: scaledPoint)
+                }
+            }
+
+            bezier.stroke()
         }
     }
 }
