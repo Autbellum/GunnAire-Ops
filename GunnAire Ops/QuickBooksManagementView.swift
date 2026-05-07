@@ -16,6 +16,7 @@ struct QuickBooksManagementView: View {
     @State private var payments: [QuickBooksPayment] = []
     @State private var salesReceipts: [QuickBooksSalesReceipt] = []
     @State private var deposits: [QuickBooksDeposit] = []
+    @State private var paymentMethods: [QuickBooksPaymentMethod] = []
 
     @State private var showingNewCustomerSheet = false
     @State private var showingNewCatalogItemSheet = false
@@ -68,6 +69,14 @@ struct QuickBooksManagementView: View {
 
     private var totalDepositAmount: Double {
         deposits.reduce(0) { $0 + $1.TotalAmt }
+    }
+
+    private var hasQuickBooksCardMethod: Bool {
+        paymentMethods.contains { $0.Name.caseInsensitiveCompare("QuickBooks Card") == .orderedSame }
+    }
+
+    private var hasQuickBooksACHMethod: Bool {
+        paymentMethods.contains { $0.Name.caseInsensitiveCompare("QuickBooks ACH") == .orderedSame }
     }
 
     private var quickBooksChargePayments: [Payment] {
@@ -137,6 +146,7 @@ struct QuickBooksManagementView: View {
                         summaryRow(title: "Payments", count: payments.count, amount: totalPaymentAmount)
                         summaryRow(title: "Sales Receipts", count: salesReceipts.count, amount: totalSalesReceiptAmount)
                         summaryRow(title: "Deposits", count: deposits.count, amount: totalDepositAmount)
+                        summaryRow(title: "Payment Methods", count: paymentMethods.count)
                     }
 
                     Section(header: Text("Customers").foregroundColor(Color.brandGold)) {
@@ -407,6 +417,34 @@ struct QuickBooksManagementView: View {
                             .disabled(!isAuthenticated || collectibleQuickBooksInvoices.isEmpty)
                     }
 
+                    Section(header: Text("Payment Methods").foregroundColor(Color.brandGold)) {
+                        if paymentMethods.isEmpty {
+                            emptyState("No QuickBooks payment methods loaded.")
+                        } else {
+                            ForEach(paymentMethods) { method in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(method.Name)
+                                        .font(.headline)
+                                    Text(method.methodType ?? "Unspecified")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Text(method.Active == false ? "Inactive" : "Active")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+
+                        Button("Ensure Card and ACH Methods") {
+                            ensureStandardPaymentMethods()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.brandGold)
+                        .foregroundStyle(Color.primaryBlack)
+                        .disabled(!isAuthenticated || (hasQuickBooksCardMethod && hasQuickBooksACHMethod))
+                    }
+
                     Section(header: Text("Deposits").foregroundColor(Color.brandGold)) {
                         if deposits.isEmpty {
                             emptyState("No QuickBooks deposits loaded.")
@@ -639,7 +677,7 @@ struct QuickBooksManagementView: View {
 
         isLoading = true
         actionMessage = nil
-        statusMessage = "Syncing customers, catalog, estimates, invoices, sales receipts, bills, vendors, payments, and deposits from QuickBooks..."
+        statusMessage = "Syncing customers, catalog, estimates, invoices, sales receipts, bills, vendors, payments, payment methods, and deposits from QuickBooks..."
 
         let group = DispatchGroup()
         var failures: [String] = []
@@ -736,6 +774,19 @@ struct QuickBooksManagementView: View {
         }
 
         group.enter()
+        liveAPI.fetchPaymentMethods { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
+                case .failure(let error):
+                    failures.append("Payment Methods: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
+        }
+
+        group.enter()
         liveAPI.fetchSalesReceipts { result in
             DispatchQueue.main.async {
                 switch result {
@@ -777,7 +828,7 @@ struct QuickBooksManagementView: View {
                 failures.append("Local app sync: \(error.localizedDescription)")
             }
             if failures.isEmpty {
-                statusMessage = "Sync complete. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(vendors.count) vendors, \(payments.count) payments, and \(deposits.count) deposits."
+                statusMessage = "Sync complete. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, and \(deposits.count) deposits."
             } else {
                 statusMessage = failures.joined(separator: "\n")
             }
@@ -979,6 +1030,50 @@ struct QuickBooksManagementView: View {
                         isLoading = false
                     }
                 }
+            }
+        }
+    }
+
+    private func ensureStandardPaymentMethods() {
+        performAction(message: "Ensuring QuickBooks payment methods...") {
+            let group = DispatchGroup()
+            var failures: [String] = []
+
+            if !hasQuickBooksCardMethod {
+                group.enter()
+                liveAPI.createPaymentMethod(
+                    QuickBooksPaymentMethodCreate(Name: "QuickBooks Card", methodType: "CREDIT_CARD")
+                ) { result in
+                    DispatchQueue.main.async {
+                        if case .failure(let error) = result {
+                            failures.append("Card method: \(error.localizedDescription)")
+                        }
+                        group.leave()
+                    }
+                }
+            }
+
+            if !hasQuickBooksACHMethod {
+                group.enter()
+                liveAPI.createPaymentMethod(
+                    QuickBooksPaymentMethodCreate(Name: "QuickBooks ACH", methodType: "NON_CREDIT_CARD")
+                ) { result in
+                    DispatchQueue.main.async {
+                        if case .failure(let error) = result {
+                            failures.append("ACH method: \(error.localizedDescription)")
+                        }
+                        group.leave()
+                    }
+                }
+            }
+
+            group.notify(queue: .main) {
+                if failures.isEmpty {
+                    actionMessage = "QuickBooks payment methods are ready."
+                } else {
+                    actionMessage = failures.joined(separator: "\n")
+                }
+                syncAllQuickBooksData()
             }
         }
     }
