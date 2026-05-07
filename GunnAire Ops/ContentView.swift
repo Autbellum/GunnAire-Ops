@@ -80,6 +80,10 @@ struct ContentView: View {
         [.quickBooksManagement]
             .filter { visibleSidebarItems.contains($0) }
     }
+
+    private var pendingAppRoute: GunnAireAppRoute? {
+        GunnAireAppIntentRouter.consumePendingRoute()
+    }
     
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -178,6 +182,7 @@ struct ContentView: View {
             if let selectedSidebarItem, !visibleSidebarItems.contains(selectedSidebarItem) {
                 self.selectedSidebarItem = .timeClock
             }
+            applyPendingAppRouteIfNeeded()
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView(
@@ -208,6 +213,9 @@ struct ContentView: View {
         }, message: {
             Text(authAlertMessage)
         })
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            applyPendingAppRouteIfNeeded()
+        }
         .tint(Color.brandGold)
     }
 
@@ -241,6 +249,16 @@ struct ContentView: View {
     private func ensurePrimaryAdminExists() {
         guard !users.contains(where: { $0.email == AppAccess.primaryAdminEmail }) else { return }
         modelContext.insert(AppUser(email: AppAccess.primaryAdminEmail, role: .admin))
+    }
+
+    private func applyPendingAppRouteIfNeeded() {
+        guard let route = pendingAppRoute else { return }
+        let targetItem = route.sidebarItem
+        if visibleSidebarItems.contains(targetItem) {
+            selectedSidebarItem = targetItem
+        } else {
+            selectedSidebarItem = .timeClock
+        }
     }
 }
 
