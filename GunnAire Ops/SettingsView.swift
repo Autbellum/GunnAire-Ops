@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import AVKit
 
 struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
@@ -21,6 +22,7 @@ struct SettingsView: View {
     @State private var userAdminMessage: String?
     @State private var selectedSettingsPage: SettingsPage = .company
     @State private var showingSplashVideoImporter = false
+    @State private var showingSplashVideoPreview = false
     @State private var splashVideoMessage: String?
     @State private var splashVideoStatus = SplashVideoLocator.currentSourceDescription()
     @State private var splashVideoDetails = SplashVideoLocator.currentStoredVideoDetails()
@@ -132,6 +134,12 @@ struct SettingsView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
+
+                            Button("Preview Splash Video") {
+                                showingSplashVideoPreview = true
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(SplashVideoLocator.resolveURL() == nil)
 
                             Button("Remove Custom Splash Video", role: .destructive) {
                                 removeSplashVideo()
@@ -283,6 +291,9 @@ struct SettingsView: View {
             ) { result in
                 handleSplashVideoImport(result)
             }
+            .sheet(isPresented: $showingSplashVideoPreview) {
+                SplashVideoPreviewSheet()
+            }
         }
     }
 
@@ -427,6 +438,47 @@ struct SettingsView: View {
             let user = users[index]
             if user.email != AppAccess.primaryAdminEmail {
                 modelContext.delete(user)
+            }
+        }
+    }
+}
+
+private struct SplashVideoPreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let url = SplashVideoLocator.resolveURL() {
+                    VideoPlayer(player: player)
+                        .background(Color.black)
+                        .onAppear {
+                            let player = AVPlayer(url: url)
+                            player.isMuted = true
+                            self.player = player
+                            player.play()
+                        }
+                        .onDisappear {
+                            player?.pause()
+                            player = nil
+                        }
+                } else {
+                    ContentUnavailableView(
+                        "No Splash Video",
+                        systemImage: "film",
+                        description: Text("Load a `Loading.mp4` file or bundle one with the app to preview the splash video.")
+                    )
+                }
+            }
+            .navigationTitle("Splash Preview")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
             }
         }
     }
