@@ -1,6 +1,7 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import os
 
 struct AppRootView: View {
     @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
@@ -440,7 +441,15 @@ private struct PlayerLayerView: UIViewRepresentable {
     }
 
     final class PlayerView: UIView {
+        private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "GunnAireOps", category: "SplashVideo")
+
         override static var layerClass: AnyClass { AVPlayerLayer.self }
-        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+        var playerLayer: AVPlayerLayer {
+            if let playerLayer = layer as? AVPlayerLayer {
+                return playerLayer
+            }
+            Self.logger.error("PlayerView.layer was not an AVPlayerLayer as expected.")
+            return AVPlayerLayer()
+        }
     }
 }

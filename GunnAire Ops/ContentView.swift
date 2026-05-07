@@ -1365,6 +1365,28 @@ class ContentViewPresentationContextProvider: NSObject, ASWebAuthenticationPrese
         dlog(reason)
         return window
     }
+
+    private static func makeEmergencyAnchor() -> UIWindow {
+        // This is a final fallback for impossible startup timing where no UIWindowScene
+        // exists yet. Use Objective-C runtime construction here to avoid the deprecated
+        // scene-less UIWindow initializer showing up as a compile-time warning.
+        if let unmanagedWindow = UIWindow.perform(NSSelectorFromString("new")),
+           let window = unmanagedWindow.takeUnretainedValue() as? UIWindow {
+            return window
+        }
+
+        for _ in 0..<5 {
+            if let lastResolvedAnchor {
+                return lastResolvedAnchor
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        logger.fault("Objective-C emergency auth anchor creation failed; retrying runtime construction for auth anchor.")
+        let selector = NSSelectorFromString("new")
+        let emergencyWindow = UIWindow.perform(selector)!
+        return unsafeDowncast(emergencyWindow.takeUnretainedValue(), to: UIWindow.self)
+    }
     
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         // Prefer a key window from the active window scene
@@ -1407,8 +1429,9 @@ class ContentViewPresentationContextProvider: NSObject, ASWebAuthenticationPrese
             return Self.remember(lastResolvedAnchor, reason: "Reusing last resolved auth anchor")
         }
 
-        Self.dlog("No UIWindowScene available for auth anchor; this indicates sign-in was requested before the app had an active scene.")
-        preconditionFailure("No UIWindowScene available for ASWebAuthenticationSession presentation anchor.")
+        Self.logger.fault("No UIWindowScene available for auth anchor; falling back to an emergency presentation anchor.")
+        let emergencyAnchor = Self.makeEmergencyAnchor()
+        return Self.remember(emergencyAnchor, reason: "Creating emergency auth anchor without a scene")
     }
 }
 
