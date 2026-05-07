@@ -34,6 +34,7 @@ struct SettingsView: View {
     @AppStorage("defaultJobDurationMinutes") private var defaultJobDurationMinutes = 90
     @AppStorage("enableSplashVideo") private var enableSplashVideo = true
     @AppStorage("maximumSplashDurationSeconds") private var maximumSplashDurationSeconds = 6.0
+    @AppStorage("allowSplashTapToSkip") private var allowSplashTapToSkip = true
     @AppStorage("requireTechnicianClockIn") private var requireTechnicianClockIn = true
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
     @AppStorage("requireCustomerSignature") private var requireCustomerSignature = true
@@ -129,6 +130,8 @@ struct SettingsView: View {
                                 in: 1.5...8.0,
                                 step: 0.5
                             )
+
+                            Toggle("Allow Tap To Skip", isOn: $allowSplashTapToSkip)
 
                             HStack {
                                 Text("Current Splash")
@@ -493,6 +496,7 @@ struct SettingsView: View {
     private func resetSplashVideoSettings() {
         enableSplashVideo = true
         maximumSplashDurationSeconds = 6.0
+        allowSplashTapToSkip = true
         refreshSplashVideoState()
         splashVideoMessage = "Splash playback settings were reset to defaults."
     }

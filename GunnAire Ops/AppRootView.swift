@@ -45,6 +45,7 @@ private struct VideoSplashView: View {
     @State private var playbackEndObserver: NSObjectProtocol?
     @State private var playbackFailureObserver: NSObjectProtocol?
     @AppStorage("maximumSplashDurationSeconds") private var maximumSplashDurationSeconds = 6.0
+    @AppStorage("allowSplashTapToSkip") private var allowSplashTapToSkip = true
 
     var body: some View {
         ZStack {
@@ -61,6 +62,27 @@ private struct VideoSplashView: View {
                     .opacity(0.9)
                     .accessibilityHidden(true)
             }
+
+            if allowSplashTapToSkip {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Text("Tap to skip")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .padding()
+                    Spacer()
+                }
+                .foregroundStyle(.white)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard allowSplashTapToSkip else { return }
+            finishImmediately()
         }
         .onAppear(perform: start)
         .onDisappear(perform: cleanup)
@@ -135,6 +157,13 @@ private struct VideoSplashView: View {
             NotificationCenter.default.removeObserver(playbackFailureObserver)
             self.playbackFailureObserver = nil
         }
+    }
+
+    private func finishImmediately() {
+        guard !didFinish else { return }
+        didFinish = true
+        cleanup()
+        onFinished()
     }
 }
 
