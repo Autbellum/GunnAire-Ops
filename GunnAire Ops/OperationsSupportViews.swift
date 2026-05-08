@@ -586,6 +586,8 @@ private extension String {
 private struct CustomerEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
+    @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
 
     let customer: Customer
 
@@ -595,6 +597,21 @@ private struct CustomerEditorView: View {
     @State private var phone: String
     @State private var newContractPattern: String = ""
     @State private var newContractDate: Date = Date()
+
+    private var customerServiceCalls: [ServiceCall] {
+        serviceCalls.filter { $0.customer.id == customer.id }
+    }
+
+    private var recentCustomerServiceCalls: [ServiceCall] {
+        Array(customerServiceCalls.prefix(5))
+    }
+
+    private var openCustomerInvoices: [Invoice] {
+        invoices.filter {
+            $0.customer.id == customer.id &&
+            $0.status.caseInsensitiveCompare("paid") != .orderedSame
+        }
+    }
 
     init(customer: Customer) {
         self.customer = customer
@@ -619,6 +636,113 @@ private struct CustomerEditorView: View {
                     Text("QuickBooks ID: \(quickBooksID)")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                }
+
+                Section("Operational Snapshot") {
+                    Text("\(customerServiceCalls.count) jobs on file")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("\(openCustomerInvoices.count) open invoices")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    HStack {
+                        if let nextScheduledCall = customerServiceCalls
+                            .filter({ $0.status != .completed && $0.status != .cancelled })
+                            .sorted(by: { $0.scheduledDate < $1.scheduledDate })
+                            .first {
+                            Button("Open Next Job") {
+                                GunnAireAppIntentRouter.storeDocumentationRoute(nextScheduledCall.id)
+                                dismiss()
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button("Open Schedule") {
+                                GunnAireAppIntentRouter.storeScheduleCallRoute(nextScheduledCall.id)
+                                dismiss()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        if let nextOpenInvoice = openCustomerInvoices.first {
+                            Button("Collect Payment") {
+                                GunnAireAppIntentRouter.storePaymentCollectionRoute(nextOpenInvoice.id)
+                                dismiss()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
+                        }
+                    }
+                }
+
+                if !recentCustomerServiceCalls.isEmpty {
+                    Section("Recent Jobs") {
+                        ForEach(recentCustomerServiceCalls) { call in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(call.type.rawValue.capitalized) • \(call.status.rawValue.capitalized)")
+                                    .font(.headline)
+                                Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                if let notes = call.notes, !notes.isEmpty {
+                                    Text(notes)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(2)
+                                }
+                                HStack {
+                                    Button("Open Job") {
+                                        GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
+                                        dismiss()
+                                    }
+                                    .buttonStyle(.bordered)
+
+                                    Button("Open Schedule") {
+                                        GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
+                                        dismiss()
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
+                if !openCustomerInvoices.isEmpty {
+                    Section("Open Invoices") {
+                        ForEach(openCustomerInvoices.prefix(5)) { invoice in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(invoice.amount.formatted(.currency(code: "USD")))
+                                    .font(.headline)
+                                Text("\(invoice.status.capitalized) • \(invoice.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(invoice.lineItemSummary.isEmpty ? "Invoice \(invoice.id.uuidString.prefix(8))" : invoice.lineItemSummary)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
+                                HStack {
+                                    Button("Collect Payment") {
+                                        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+                                        dismiss()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.green)
+
+                                    if let serviceCallID = invoice.serviceCallID,
+                                       let call = customerServiceCalls.first(where: { $0.id == serviceCallID }) {
+                                        Button("Open Job") {
+                                            GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
+                                            dismiss()
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
                 }
 
                 Section("Service Agreements") {
