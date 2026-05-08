@@ -373,7 +373,24 @@ struct OnsiteDocumentationView: View {
     }
 
     private var jobsNeedingDocumentation: [ServiceCall] {
-        openJobs.filter { $0.linkedInvoiceID == nil && $0.linkedEstimateID == nil }
+        openJobs.filter {
+            $0.documentationCompletedAt == nil ||
+            $0.linkedEstimateID != nil ||
+            $0.linkedInvoiceID != nil
+        }
+        .sorted(by: { $0.scheduledDate < $1.scheduledDate })
+    }
+
+    private var estimateDocumentationCalls: [ServiceCall] {
+        jobsNeedingDocumentation.filter { $0.type == .estimate }
+    }
+
+    private var invoiceDocumentationCalls: [ServiceCall] {
+        jobsNeedingDocumentation.filter { $0.linkedInvoiceID != nil && $0.type != .estimate }
+    }
+
+    private var fieldDocumentationCalls: [ServiceCall] {
+        jobsNeedingDocumentation.filter { $0.type != .estimate && $0.linkedInvoiceID == nil }
     }
 
     private var invoicesAwaitingCloseout: [Invoice] {
@@ -405,38 +422,15 @@ struct OnsiteDocumentationView: View {
                     BillingDocumentsView(initialServiceCall: selectedServiceCall)
                 } else {
                     Form {
-                        Section("Documentation Queue") {
-                            if jobsNeedingDocumentation.isEmpty {
+                        if jobsNeedingDocumentation.isEmpty {
+                            Section("Documentation Queue") {
                                 Text("No active jobs are waiting for documentation.")
                                     .foregroundColor(.secondary)
-                            } else {
-                                ForEach(jobsNeedingDocumentation) { call in
-                                    Button {
-                                        selectedServiceCallID = call.id
-                                    } label: {
-                                        HStack {
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Text(call.customer.name)
-                                                    .font(.headline)
-                                                Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
-                                                    .font(.caption)
-                                                    .foregroundColor(.secondary)
-                                                Text(call.type.rawValue.capitalized)
-                                                    .font(.caption2)
-                                                    .foregroundColor(.secondary)
-                                                Text("Checklist \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
-                                                    .font(.caption2)
-                                                    .foregroundColor(.secondary)
-                                            }
-                                            Spacer()
-                                            Text(documentationQueueLabel(for: call))
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundColor(Color.brandGold)
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                }
                             }
+                        } else {
+                            documentationQueueSection(title: "Estimate Queue", calls: estimateDocumentationCalls)
+                            documentationQueueSection(title: "Invoice Queue", calls: invoiceDocumentationCalls)
+                            documentationQueueSection(title: "Field Documentation Queue", calls: fieldDocumentationCalls)
                         }
 
                         Section("Invoices Awaiting Closeout") {
@@ -484,6 +478,40 @@ struct OnsiteDocumentationView: View {
             .onAppear(perform: applyPendingDocumentationRouteIfNeeded)
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                 applyPendingDocumentationRouteIfNeeded()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func documentationQueueSection(title: String, calls: [ServiceCall]) -> some View {
+        if !calls.isEmpty {
+            Section(title) {
+                ForEach(calls) { call in
+                    Button {
+                        selectedServiceCallID = call.id
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(call.customer.name)
+                                    .font(.headline)
+                                Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(call.type.rawValue.capitalized)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("Checklist \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Text(documentationQueueLabel(for: call))
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(Color.brandGold)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
