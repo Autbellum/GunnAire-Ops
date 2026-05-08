@@ -402,6 +402,11 @@ struct OnsiteDocumentationView: View {
         return serviceCalls.first { $0.id == selectedServiceCallID }
     }
 
+    private func serviceCall(for invoice: Invoice) -> ServiceCall? {
+        guard let serviceCallID = invoice.serviceCallID else { return nil }
+        return serviceCalls.first(where: { $0.id == serviceCallID })
+    }
+
     private func documentationQueueLabel(for call: ServiceCall) -> String {
         let hasDocumentation = call.linkedInvoiceID != nil || call.linkedEstimateID != nil || call.documentationStartedAt != nil
         switch call.type {
@@ -450,7 +455,29 @@ struct OnsiteDocumentationView: View {
                                                 .font(.caption2)
                                                 .foregroundColor(.orange)
                                         }
+                                        HStack {
+                                            if let linkedCall = serviceCall(for: invoice) {
+                                                Button("Open Job") {
+                                                    selectedServiceCallID = linkedCall.id
+                                                }
+                                                .buttonStyle(.bordered)
+
+                                                Button("Open Schedule") {
+                                                    GunnAireAppIntentRouter.storeScheduleCallRoute(linkedCall.id)
+                                                }
+                                                .buttonStyle(.bordered)
+                                            }
+
+                                            if invoice.status != "paid" {
+                                                Button("Collect Payment") {
+                                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+                                                }
+                                                .buttonStyle(.borderedProminent)
+                                                .tint(.green)
+                                            }
+                                        }
                                     }
+                                    .padding(.vertical, 2)
                                 }
                             }
                         }
@@ -487,30 +514,54 @@ struct OnsiteDocumentationView: View {
         if !calls.isEmpty {
             Section(title) {
                 ForEach(calls) { call in
-                    Button {
-                        selectedServiceCallID = call.id
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(call.customer.name)
-                                    .font(.headline)
-                                Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text(call.type.rawValue.capitalized)
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                Text("Checklist \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button {
+                            selectedServiceCallID = call.id
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(call.customer.name)
+                                        .font(.headline)
+                                    Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Text(call.type.rawValue.capitalized)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    Text("Checklist \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Text(documentationQueueLabel(for: call))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundColor(Color.brandGold)
                             }
-                            Spacer()
-                            Text(documentationQueueLabel(for: call))
-                                .font(.caption.weight(.semibold))
-                                .foregroundColor(Color.brandGold)
+                        }
+                        .buttonStyle(.plain)
+
+                        HStack {
+                            Button("Open Job") {
+                                selectedServiceCallID = call.id
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button("Open Schedule") {
+                                GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
+                            }
+                            .buttonStyle(.bordered)
+
+                            if call.linkedInvoiceID != nil {
+                                Button("Collect Payment") {
+                                    if let linkedInvoiceID = call.linkedInvoiceID {
+                                        GunnAireAppIntentRouter.storePaymentCollectionRoute(linkedInvoiceID)
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.green)
+                            }
                         }
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
