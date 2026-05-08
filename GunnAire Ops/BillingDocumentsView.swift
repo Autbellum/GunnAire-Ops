@@ -135,6 +135,17 @@ struct BillingDocumentsView: View {
             .map { $0 }
     }
 
+    private var relatedEquipmentCalls: [ServiceCall] {
+        guard let call = activeServiceCall,
+              let equipmentKey = normalizedEquipmentKey(for: call),
+              !equipmentKey.isEmpty else { return [] }
+        return serviceCalls.filter { candidate in
+            candidate.id != call.id &&
+            candidate.customer.id == call.customer.id &&
+            normalizedEquipmentKey(for: candidate) == equipmentKey
+        }
+    }
+
     private var customerLifetimeInvoiceTotal: Double {
         guard let customer = contextCustomer else { return 0 }
         return invoices
@@ -370,6 +381,8 @@ struct BillingDocumentsView: View {
                             .buttonStyle(.bordered)
                         }
                     }
+
+                    workflowSection(for: call)
                 }
 
                 if currentJobEstimate != nil || currentJobInvoice != nil {
@@ -509,6 +522,27 @@ struct BillingDocumentsView: View {
                                 }
                                 .padding(.vertical, 2)
                             }
+                        }
+                    }
+                }
+
+                if !relatedEquipmentCalls.isEmpty {
+                    Section("Equipment History") {
+                        ForEach(relatedEquipmentCalls.prefix(5)) { historyCall in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(historyCall.type.rawValue.capitalized) • \(historyCall.status.rawValue.capitalized)")
+                                    .font(.caption)
+                                Text(historyCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                if let notes = historyCall.notes, !notes.isEmpty {
+                                    Text(notes)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                            .padding(.vertical, 2)
                         }
                     }
                 }
@@ -1371,6 +1405,110 @@ struct BillingDocumentsView: View {
             call.status = .invoiced
             call.documentationCompletedAt = Date()
         }
+    }
+
+    @ViewBuilder
+    private func workflowSection(for call: ServiceCall) -> some View {
+        Section(jobWorkflowTitle(for: call)) {
+            Text("Workflow progress: \(call.workflowChecklistCompletedCount)/\(call.workflowChecklistTotalCount)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            switch call.type {
+            case .service:
+                Toggle("Diagnostics captured", isOn: Binding(
+                    get: { call.diagnosticsCaptured },
+                    set: { call.diagnosticsCaptured = $0 }
+                ))
+                Toggle("Recommended work reviewed with customer", isOn: Binding(
+                    get: { call.quoteReviewedWithCustomer },
+                    set: { call.quoteReviewedWithCustomer = $0 }
+                ))
+                Toggle("Safety checks completed", isOn: Binding(
+                    get: { call.safetyChecklistComplete },
+                    set: { call.safetyChecklistComplete = $0 }
+                ))
+                Text("Use this for diagnostic and repair calls before building the invoice.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
+            case .estimate:
+                Toggle("Scope reviewed with customer", isOn: Binding(
+                    get: { call.quoteReviewedWithCustomer },
+                    set: { call.quoteReviewedWithCustomer = $0 }
+                ))
+                Toggle("Findings captured for quote", isOn: Binding(
+                    get: { call.diagnosticsCaptured },
+                    set: { call.diagnosticsCaptured = $0 }
+                ))
+                Toggle("Follow-up scheduled", isOn: Binding(
+                    get: { call.followUpRequired },
+                    set: { call.followUpRequired = $0 }
+                ))
+                Text("Estimate jobs should leave with a reviewed scope and a clear next step.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
+            case .install:
+                Toggle("Equipment verified", isOn: Binding(
+                    get: { call.equipmentVerifiedChecklist },
+                    set: { call.equipmentVerifiedChecklist = $0 }
+                ))
+                Toggle("Startup checklist complete", isOn: Binding(
+                    get: { call.startupChecklistComplete },
+                    set: { call.startupChecklistComplete = $0 }
+                ))
+                Toggle("Safety checks completed", isOn: Binding(
+                    get: { call.safetyChecklistComplete },
+                    set: { call.safetyChecklistComplete = $0 }
+                ))
+                Text("Install jobs should verify model/serial, startup, and safety before closeout.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
+            case .maintenance:
+                Toggle("Maintenance checklist complete", isOn: Binding(
+                    get: { call.maintenanceChecklistComplete },
+                    set: { call.maintenanceChecklistComplete = $0 }
+                ))
+                Toggle("Safety checks completed", isOn: Binding(
+                    get: { call.safetyChecklistComplete },
+                    set: { call.safetyChecklistComplete = $0 }
+                ))
+                Toggle("Customer notified of findings", isOn: Binding(
+                    get: { call.customerNotified },
+                    set: { call.customerNotified = $0 }
+                ))
+                Text("Maintenance jobs should leave with service completed, safety checked, and customer informed.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func jobWorkflowTitle(for call: ServiceCall) -> String {
+        switch call.type {
+        case .service:
+            return "Service Workflow"
+        case .estimate:
+            return "Estimate Workflow"
+        case .install:
+            return "Install Workflow"
+        case .maintenance:
+            return "Maintenance Workflow"
+        }
+    }
+
+    private func normalizedEquipmentKey(for call: ServiceCall) -> String? {
+        if let serial = call.equipmentSerialNumber?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !serial.isEmpty {
+            return "serial:\(serial.lowercased())"
+        }
+
+        let equipmentName = call.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let equipmentModel = call.equipmentModel?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let composite = "\(equipmentName)|\(equipmentModel)"
+        return composite == "|" || composite.isEmpty ? nil : composite
     }
 }
 

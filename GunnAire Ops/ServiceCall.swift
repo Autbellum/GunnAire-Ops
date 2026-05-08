@@ -31,6 +31,12 @@ final class ServiceCall {
     var findingsSummary: String?
     var recommendedWorkSummary: String?
     var followUpRequired: Bool
+    var diagnosticsCaptured: Bool
+    var quoteReviewedWithCustomer: Bool
+    var equipmentVerifiedChecklist: Bool
+    var startupChecklistComplete: Bool
+    var maintenanceChecklistComplete: Bool
+    var safetyChecklistComplete: Bool
     var customerNotified: Bool
     var arrivalConfirmed: Bool
     var workCompletedChecklist: Bool
@@ -62,6 +68,12 @@ final class ServiceCall {
         findingsSummary: String? = nil,
         recommendedWorkSummary: String? = nil,
         followUpRequired: Bool = false,
+        diagnosticsCaptured: Bool = false,
+        quoteReviewedWithCustomer: Bool = false,
+        equipmentVerifiedChecklist: Bool = false,
+        startupChecklistComplete: Bool = false,
+        maintenanceChecklistComplete: Bool = false,
+        safetyChecklistComplete: Bool = false,
         customerNotified: Bool = false,
         arrivalConfirmed: Bool = false,
         workCompletedChecklist: Bool = false,
@@ -92,6 +104,12 @@ final class ServiceCall {
         self.findingsSummary = findingsSummary
         self.recommendedWorkSummary = recommendedWorkSummary
         self.followUpRequired = followUpRequired
+        self.diagnosticsCaptured = diagnosticsCaptured
+        self.quoteReviewedWithCustomer = quoteReviewedWithCustomer
+        self.equipmentVerifiedChecklist = equipmentVerifiedChecklist
+        self.startupChecklistComplete = startupChecklistComplete
+        self.maintenanceChecklistComplete = maintenanceChecklistComplete
+        self.safetyChecklistComplete = safetyChecklistComplete
         self.customerNotified = customerNotified
         self.arrivalConfirmed = arrivalConfirmed
         self.workCompletedChecklist = workCompletedChecklist
@@ -139,5 +157,26 @@ final class ServiceCall {
 
         guard !decoratedParts.isEmpty else { return nil }
         return decoratedParts.joined(separator: " • ")
+    }
+
+    var workflowChecklistCompletedCount: Int {
+        workflowChecklistValues.filter { $0 }.count
+    }
+
+    var workflowChecklistTotalCount: Int {
+        workflowChecklistValues.count
+    }
+
+    private var workflowChecklistValues: [Bool] {
+        switch type {
+        case .service:
+            return [diagnosticsCaptured, recommendedWorkSummary != nil, safetyChecklistComplete]
+        case .estimate:
+            return [quoteReviewedWithCustomer, recommendedWorkSummary != nil, followUpRequired]
+        case .install:
+            return [equipmentVerifiedChecklist, startupChecklistComplete, safetyChecklistComplete]
+        case .maintenance:
+            return [maintenanceChecklistComplete, safetyChecklistComplete, customerNotified]
+        }
     }
 }

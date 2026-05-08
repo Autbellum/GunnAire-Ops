@@ -291,6 +291,7 @@ struct ContentView: View {
 
 struct ServiceCallDetailView: View {
     @Environment(\.openURL) private var openURL
+    @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
@@ -391,6 +392,28 @@ GunnAire
         return components.url
     }
 
+    private var jobWorkflowTitle: String {
+        switch call.type {
+        case .service:
+            return "Service Workflow"
+        case .estimate:
+            return "Estimate Workflow"
+        case .install:
+            return "Install Workflow"
+        case .maintenance:
+            return "Maintenance Workflow"
+        }
+    }
+
+    private var relatedEquipmentCalls: [ServiceCall] {
+        guard let equipmentKey = normalizedEquipmentKey(for: call), !equipmentKey.isEmpty else { return [] }
+        return serviceCalls.filter { candidate in
+            candidate.id != call.id &&
+            candidate.customer.id == call.customer.id &&
+            normalizedEquipmentKey(for: candidate) == equipmentKey
+        }
+    }
+
     private var selectedProcessor: OnsitePaymentProcessor {
         OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
     }
@@ -407,6 +430,18 @@ GunnAire
         call.workCompletedChecklist &&
         call.documentationChecklist &&
         call.paymentCollectedChecklist
+    }
+
+    private func normalizedEquipmentKey(for call: ServiceCall) -> String? {
+        if let serial = call.equipmentSerialNumber?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !serial.isEmpty {
+            return "serial:\(serial.lowercased())"
+        }
+
+        let equipmentName = call.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let equipmentModel = call.equipmentModel?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let composite = "\(equipmentName)|\(equipmentModel)"
+        return composite == "|" || composite.isEmpty ? nil : composite
     }
 
     private var activeServiceAgreement: RecurringMaintenanceContract? {
@@ -571,6 +606,91 @@ GunnAire
 
                             if !recentCustomerCalls.isEmpty {
                                 ForEach(recentCustomerCalls) { historyCall in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("\(historyCall.type.rawValue.capitalized) • \(historyCall.status.rawValue.capitalized)")
+                                            .font(.caption)
+                                        Text(historyCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        if let historyNotes = historyCall.notes, !historyNotes.isEmpty {
+                                            Text(historyNotes)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                                .lineLimit(2)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    GroupBox(jobWorkflowTitle) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Workflow progress: \(call.workflowChecklistCompletedCount)/\(call.workflowChecklistTotalCount)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            switch call.type {
+                            case .service:
+                                Toggle("Diagnostics captured", isOn: Binding(
+                                    get: { call.diagnosticsCaptured },
+                                    set: { call.diagnosticsCaptured = $0 }
+                                ))
+                                Toggle("Recommended work reviewed with customer", isOn: Binding(
+                                    get: { call.quoteReviewedWithCustomer },
+                                    set: { call.quoteReviewedWithCustomer = $0 }
+                                ))
+                                Toggle("Safety checks completed", isOn: Binding(
+                                    get: { call.safetyChecklistComplete },
+                                    set: { call.safetyChecklistComplete = $0 }
+                                ))
+                            case .estimate:
+                                Toggle("Scope reviewed with customer", isOn: Binding(
+                                    get: { call.quoteReviewedWithCustomer },
+                                    set: { call.quoteReviewedWithCustomer = $0 }
+                                ))
+                                Toggle("Findings captured for quote", isOn: Binding(
+                                    get: { call.diagnosticsCaptured },
+                                    set: { call.diagnosticsCaptured = $0 }
+                                ))
+                                Toggle("Follow-up scheduled", isOn: Binding(
+                                    get: { call.followUpRequired },
+                                    set: { call.followUpRequired = $0 }
+                                ))
+                            case .install:
+                                Toggle("Equipment verified", isOn: Binding(
+                                    get: { call.equipmentVerifiedChecklist },
+                                    set: { call.equipmentVerifiedChecklist = $0 }
+                                ))
+                                Toggle("Startup checklist complete", isOn: Binding(
+                                    get: { call.startupChecklistComplete },
+                                    set: { call.startupChecklistComplete = $0 }
+                                ))
+                                Toggle("Safety checks completed", isOn: Binding(
+                                    get: { call.safetyChecklistComplete },
+                                    set: { call.safetyChecklistComplete = $0 }
+                                ))
+                            case .maintenance:
+                                Toggle("Maintenance checklist complete", isOn: Binding(
+                                    get: { call.maintenanceChecklistComplete },
+                                    set: { call.maintenanceChecklistComplete = $0 }
+                                ))
+                                Toggle("Safety checks completed", isOn: Binding(
+                                    get: { call.safetyChecklistComplete },
+                                    set: { call.safetyChecklistComplete = $0 }
+                                ))
+                                Toggle("Customer notified of findings", isOn: Binding(
+                                    get: { call.customerNotified },
+                                    set: { call.customerNotified = $0 }
+                                ))
+                            }
+                        }
+                    }
+
+                    if !relatedEquipmentCalls.isEmpty {
+                        GroupBox("Equipment History") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(relatedEquipmentCalls.prefix(5)) { historyCall in
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text("\(historyCall.type.rawValue.capitalized) • \(historyCall.status.rawValue.capitalized)")
                                             .font(.caption)

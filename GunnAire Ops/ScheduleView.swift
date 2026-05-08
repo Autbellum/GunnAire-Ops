@@ -43,6 +43,21 @@ struct ScheduleView: View {
         Array(upcomingJobs.prefix(3))
     }
 
+    private var followUpCalls: [ServiceCall] {
+        callsForSignedInUser
+            .filter { call in
+                call.followUpRequired ||
+                (call.type == .estimate && call.linkedInvoiceID == nil) ||
+                isCollectionOverdue(for: call)
+            }
+            .sorted {
+                if $0.followUpRequired != $1.followUpRequired {
+                    return $0.followUpRequired && !$1.followUpRequired
+                }
+                return $0.scheduledDate > $1.scheduledDate
+            }
+    }
+
     private var callsForSignedInUser: [ServiceCall] {
         guard let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") else {
             return serviceCalls
@@ -282,6 +297,36 @@ struct ScheduleView: View {
                     }
                 }
             }
+
+            if !followUpCalls.isEmpty {
+                Divider()
+                Text("Follow-Up Queue")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.brandGold)
+
+                ForEach(followUpCalls.prefix(3)) { job in
+                    Button {
+                        selectedDate = Calendar.current.startOfDay(for: job.scheduledDate)
+                        navigationPath.append(job)
+                    } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(job.customer.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text(followUpReason(for: job))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -465,6 +510,19 @@ struct ScheduleView: View {
               due > 0,
               let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) else { return false }
         return invoice.createdAt < cutoff
+    }
+
+    private func followUpReason(for call: ServiceCall) -> String {
+        if isCollectionOverdue(for: call) {
+            return "Overdue payment follow-up"
+        }
+        if call.type == .estimate && call.linkedInvoiceID == nil {
+            return "Estimate waiting on approval"
+        }
+        if call.followUpRequired {
+            return "Technician follow-up required"
+        }
+        return "Needs attention"
     }
 
 }
