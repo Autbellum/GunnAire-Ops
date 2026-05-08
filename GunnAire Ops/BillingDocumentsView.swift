@@ -165,6 +165,65 @@ struct BillingDocumentsView: View {
                         }
                     }
 
+                    Section("Documentation Builder") {
+                        Picker("Document", selection: $selectedDocumentKind) {
+                            ForEach(BillingDocumentKind.allCases) { kind in
+                                Text(kind.rawValue).tag(kind)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        HStack {
+                            Text("Customer")
+                            Spacer()
+                            Text(customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Not selected" : customerName)
+                                .foregroundColor(.secondary)
+                        }
+
+                        HStack {
+                            Text("Selected Items")
+                            Spacer()
+                            Text("\(selectedLineItems.count)")
+                                .foregroundColor(.secondary)
+                        }
+
+                        HStack {
+                            Text("Total")
+                            Spacer()
+                            Text(selectedTotal, format: .currency(code: "USD"))
+                                .font(.headline)
+                        }
+
+                        if selectedLineItems.isEmpty {
+                            Text("Select or add at least one item below to enable estimate and invoice creation.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Button(isCreatingDocument && selectedDocumentKind == .estimate ? "Creating Estimate..." : "Create Estimate") {
+                            selectedDocumentKind = .estimate
+                            createDocument()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.brandGold)
+                        .foregroundStyle(Color.primaryBlack)
+                        .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
+
+                        Button(isCreatingDocument && selectedDocumentKind == .invoice ? "Creating Invoice..." : "Create Invoice") {
+                            selectedDocumentKind = .invoice
+                            createDocument()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                        .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
+
+                        if !actionMessage.isEmpty {
+                            Text(actionMessage)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
                     Section("Job Progress") {
                         Toggle("Work Completed", isOn: Binding(
                             get: { call.workCompletedChecklist },
@@ -286,7 +345,7 @@ struct BillingDocumentsView: View {
                     }
                 }
 
-                Section("Create") {
+                Section("Builder Details") {
                     Picker("Document", selection: $selectedDocumentKind) {
                         ForEach(BillingDocumentKind.allCases) { kind in
                             Text(kind.rawValue).tag(kind)
