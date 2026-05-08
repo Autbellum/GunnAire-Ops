@@ -298,6 +298,7 @@ struct ServiceCallDetailView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
     @AppStorage("enablePhotoDocumentation") private var enablePhotoDocumentation = true
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
@@ -373,26 +374,35 @@ struct ServiceCallDetailView: View {
     private var reminderEmailURL: URL? {
         guard let linkedInvoice,
               hasOpenInvoiceBalance,
-              let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !email.isEmpty else { return nil }
+              let draft = reminderEmailDraft(for: linkedInvoice) else { return nil }
         var components = URLComponents()
         components.scheme = "mailto"
-        components.path = email
-        let reference = linkedInvoice.quickBooksID?.isEmpty == false ? linkedInvoice.quickBooksID! : String(linkedInvoice.id.uuidString.prefix(8))
+        components.path = draft.to
         components.queryItems = [
-            URLQueryItem(name: "subject", value: "Invoice Balance Due - \(reference)"),
-            URLQueryItem(name: "body", value: """
+            URLQueryItem(name: "subject", value: draft.subject),
+            URLQueryItem(name: "body", value: draft.body)
+        ]
+        return components.url
+    }
+
+    private func reminderEmailDraft(for invoice: Invoice) -> (to: String, subject: String, body: String)? {
+        guard let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        let reference = invoice.quickBooksID?.isEmpty == false ? invoice.quickBooksID! : String(invoice.id.uuidString.prefix(8))
+        return (
+            to: email,
+            subject: "Invoice Balance Due - \(reference)",
+            body: """
 Hello \(call.customer.name),
 
-This is a reminder that your current invoice balance is \(max(linkedInvoice.amount - totalPaid, 0).formatted(.currency(code: "USD"))).
+This is a reminder that your current invoice balance is \(max(invoice.amount - totalPaid, 0).formatted(.currency(code: "USD"))).
 
 Invoice reference: \(reference)
 
 Thank you,
 GunnAire
-""")
-        ]
-        return components.url
+"""
+        )
     }
 
     private var documentationActionLabel: String {
@@ -410,26 +420,51 @@ GunnAire
 
     private var estimateFollowUpEmailURL: URL? {
         guard let linkedEstimate,
-              let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !email.isEmpty else { return nil }
+              let draft = estimateFollowUpEmailDraft(for: linkedEstimate) else { return nil }
         var components = URLComponents()
         components.scheme = "mailto"
-        components.path = email
-        let reference = linkedEstimate.quickBooksID?.isEmpty == false ? linkedEstimate.quickBooksID! : String(linkedEstimate.id.uuidString.prefix(8))
+        components.path = draft.to
         components.queryItems = [
-            URLQueryItem(name: "subject", value: "Estimate Follow-Up - \(reference)"),
-            URLQueryItem(name: "body", value: """
+            URLQueryItem(name: "subject", value: draft.subject),
+            URLQueryItem(name: "body", value: draft.body)
+        ]
+        return components.url
+    }
+
+    private func estimateFollowUpEmailDraft(for estimate: Estimate) -> (to: String, subject: String, body: String)? {
+        guard let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        let reference = estimate.quickBooksID?.isEmpty == false ? estimate.quickBooksID! : String(estimate.id.uuidString.prefix(8))
+        return (
+            to: email,
+            subject: "Estimate Follow-Up - \(reference)",
+            body: """
 Hello \(call.customer.name),
 
-Following up on your estimate for \(linkedEstimate.amount.formatted(.currency(code: "USD"))).
+Following up on your estimate for \(estimate.amount.formatted(.currency(code: "USD"))).
 
 Please let us know if you would like to move forward or if you have any questions.
 
 Thank you,
 GunnAire
-""")
-        ]
-        return components.url
+"""
+        )
+    }
+
+    private func openReminderEmail(fallbackURL: URL) {
+        if let linkedInvoice, googleAuth.isAuthenticated, let draft = reminderEmailDraft(for: linkedInvoice) {
+            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+        } else {
+            openURL(fallbackURL)
+        }
+    }
+
+    private func openEstimateFollowUpEmail(fallbackURL: URL) {
+        if let linkedEstimate, googleAuth.isAuthenticated, let draft = estimateFollowUpEmailDraft(for: linkedEstimate) {
+            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+        } else {
+            openURL(fallbackURL)
+        }
     }
 
     private var jobWorkflowTitle: String {
@@ -851,7 +886,7 @@ GunnAire
 
                                     if let estimateFollowUpEmailURL {
                                         Button("Follow Up") {
-                                            openURL(estimateFollowUpEmailURL)
+                                            openEstimateFollowUpEmail(fallbackURL: estimateFollowUpEmailURL)
                                             linkedEstimate.status = "follow-up"
                                             call.followUpRequired = true
                                             call.followUpAction = "Follow up on estimate"
@@ -1049,7 +1084,7 @@ GunnAire
 
                             if let reminderEmailURL {
                                 Button {
-                                    openURL(reminderEmailURL)
+                                    openReminderEmail(fallbackURL: reminderEmailURL)
                                 } label: {
                                     Label("Send Payment Reminder", systemImage: "envelope.badge")
                                         .frame(maxWidth: .infinity)

@@ -14,6 +14,7 @@ struct BillingDocumentsView: View {
 
     private let initialServiceCall: ServiceCall?
     private let liveAPI = QuickBooksDataAPI.shared
+    private let googleAuth = GoogleAuthManager.shared
 
     @State private var selectedDocumentKind: BillingDocumentKind
     @State private var selectedCustomerID: UUID?
@@ -259,22 +260,18 @@ struct BillingDocumentsView: View {
     }
 
     private var estimateFollowUpEmailURL: URL? {
-        guard let estimate = currentJobEstimate,
-              let email = contextCustomer?.email?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !email.isEmpty else { return nil }
+        guard let estimate = currentJobEstimate else { return nil }
         return followUpEmailURL(for: estimate)
     }
 
-    private func followUpEmailURL(for estimate: Estimate) -> URL? {
+    private func followUpEmailDraft(for estimate: Estimate) -> (to: String, subject: String, body: String)? {
         guard let email = estimate.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else { return nil }
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = email
         let reference = estimate.quickBooksID?.isEmpty == false ? estimate.quickBooksID! : String(estimate.id.uuidString.prefix(8))
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: "Estimate Follow-Up - \(reference)"),
-            URLQueryItem(name: "body", value: """
+        return (
+            to: email,
+            subject: "Estimate Follow-Up - \(reference)",
+            body: """
 Hello \(estimate.customer.name),
 
 Following up on your estimate for \(estimate.amount.formatted(.currency(code: "USD"))).
@@ -283,20 +280,37 @@ Please let us know if you would like to move forward or if you have any question
 
 Thank you,
 GunnAire
-""")
+"""
+        )
+    }
+
+    private func followUpEmailURL(for estimate: Estimate) -> URL? {
+        guard let draft = followUpEmailDraft(for: estimate) else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = draft.to
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: draft.subject),
+            URLQueryItem(name: "body", value: draft.body)
         ]
         return components.url
     }
 
-    private func paymentReminderEmailURL(for invoice: Invoice) -> URL? {
+    private func openEstimateFollowUpEmail(for estimate: Estimate, fallbackURL: URL) {
+        if googleAuth.isAuthenticated, let draft = followUpEmailDraft(for: estimate) {
+            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+        } else {
+            openURL(fallbackURL)
+        }
+    }
+
+    private func paymentReminderEmailDraft(for invoice: Invoice) -> (to: String, subject: String, body: String)? {
         guard let email = invoice.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else { return nil }
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = email
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: "Payment Reminder From GunnAire"),
-            URLQueryItem(name: "body", value: """
+        return (
+            to: email,
+            subject: "Payment Reminder From GunnAire",
+            body: """
 Hello \(invoice.customer.name),
 
 This is a reminder that \(invoiceBalanceDue(for: invoice).formatted(.currency(code: "USD"))) remains due on your GunnAire invoice.
@@ -305,9 +319,28 @@ Please let us know if you would like us to take payment or if you have any quest
 
 Thank you,
 GunnAire
-""")
+"""
+        )
+    }
+
+    private func paymentReminderEmailURL(for invoice: Invoice) -> URL? {
+        guard let draft = paymentReminderEmailDraft(for: invoice) else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = draft.to
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: draft.subject),
+            URLQueryItem(name: "body", value: draft.body)
         ]
         return components.url
+    }
+
+    private func openPaymentReminderEmail(for invoice: Invoice, fallbackURL: URL) {
+        if googleAuth.isAuthenticated, let draft = paymentReminderEmailDraft(for: invoice) {
+            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+        } else {
+            openURL(fallbackURL)
+        }
     }
 
     private var isJobDocumentationMode: Bool {
@@ -621,7 +654,7 @@ GunnAire
 
                                 if let estimateFollowUpEmailURL {
                                     Button("Send Estimate Follow-Up") {
-                                        openURL(estimateFollowUpEmailURL)
+                                        openEstimateFollowUpEmail(for: estimate, fallbackURL: estimateFollowUpEmailURL)
                                         estimate.status = "follow-up"
                                         activeServiceCall?.followUpRequired = true
                                         activeServiceCall?.followUpAction = "Follow up on estimate"
@@ -790,7 +823,7 @@ GunnAire
 
                                     if let followUpURL = followUpEmailURL(for: estimate) {
                                         Button("Send Follow-Up") {
-                                            openURL(followUpURL)
+                                            openEstimateFollowUpEmail(for: estimate, fallbackURL: followUpURL)
                                             if let linkedCall {
                                                 markEstimateFollowUp(on: linkedCall)
                                             }
@@ -885,7 +918,7 @@ GunnAire
 
                                     if let reminderURL = paymentReminderEmailURL(for: invoice) {
                                         Button("Send Reminder") {
-                                            openURL(reminderURL)
+                                            openPaymentReminderEmail(for: invoice, fallbackURL: reminderURL)
                                             if let linkedCall {
                                                 markPaymentFollowUp(on: linkedCall)
                                             }
@@ -933,7 +966,7 @@ GunnAire
 
                                     if let reminderURL = paymentReminderEmailURL(for: invoice) {
                                         Button("Send Reminder") {
-                                            openURL(reminderURL)
+                                            openPaymentReminderEmail(for: invoice, fallbackURL: reminderURL)
                                             if let linkedCall {
                                                 markPaymentFollowUp(on: linkedCall)
                                             }
