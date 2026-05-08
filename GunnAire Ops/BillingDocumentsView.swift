@@ -24,6 +24,7 @@ struct BillingDocumentsView: View {
     @State private var customerEmail = ""
     @State private var customerAddress = ""
     @State private var itemSearchText = ""
+    @State private var catalogFilter: DocumentationCatalogFilter = .recommended
     @State private var newItemName = ""
     @State private var newItemType: CatalogItemType = .service
     @State private var newItemDescription = ""
@@ -84,10 +85,10 @@ struct BillingDocumentsView: View {
 
     private var filteredItems: [Item] {
         let query = itemSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return items }
         return items.filter { item in
-            item.name.lowercased().contains(query) ||
-            (item.itemDescription?.lowercased().contains(query) ?? false)
+            let matchesQuery = query.isEmpty || item.name.lowercased().contains(query) ||
+                (item.itemDescription?.lowercased().contains(query) ?? false)
+            return matchesQuery && matchesCatalogFilter(item)
         }
     }
 
@@ -762,6 +763,13 @@ GunnAire
                         Text("No items yet. Add one below.")
                             .foregroundColor(.secondary)
                     } else {
+                        Picker("Catalog Filter", selection: $catalogFilter) {
+                            ForEach(DocumentationCatalogFilter.allCases) { filter in
+                                Text(filter.label).tag(filter)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
                         ForEach(filteredItems) { item in
                             Button {
                                 toggleItem(item)
@@ -1208,6 +1216,50 @@ GunnAire
             .lowercased()
     }
 
+    private func matchesCatalogFilter(_ item: Item) -> Bool {
+        switch catalogFilter {
+        case .recommended:
+            return recommendedItemMatch(item)
+        case .service:
+            return item.itemType == .service
+        case .materials:
+            return item.itemType == .nonInventory
+        case .selected:
+            return selectedItems.contains(item.id)
+        case .all:
+            return true
+        }
+    }
+
+    private func recommendedItemMatch(_ item: Item) -> Bool {
+        let haystack = "\(item.name) \(item.itemDescription ?? "")".lowercased()
+        switch activeServiceCall?.type {
+        case .service:
+            return item.itemType == .service ||
+                haystack.contains("repair") ||
+                haystack.contains("diagnostic") ||
+                haystack.contains("labor")
+        case .estimate:
+            return haystack.contains("estimate") ||
+                haystack.contains("proposal") ||
+                haystack.contains("system") ||
+                item.itemType == .service
+        case .install:
+            return item.itemType == .nonInventory ||
+                haystack.contains("install") ||
+                haystack.contains("equipment") ||
+                haystack.contains("system")
+        case .maintenance:
+            return haystack.contains("maintenance") ||
+                haystack.contains("tune") ||
+                haystack.contains("clean") ||
+                haystack.contains("filter") ||
+                item.itemType == .service
+        case nil:
+            return true
+        }
+    }
+
     private func toggleItem(_ item: Item) {
         if selectedItems.contains(item.id) {
             selectedItems.remove(item.id)
@@ -1574,6 +1626,31 @@ GunnAire
         let equipmentModel = call.equipmentModel?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         let composite = "\(equipmentName)|\(equipmentModel)"
         return composite == "|" || composite.isEmpty ? nil : composite
+    }
+}
+
+private enum DocumentationCatalogFilter: String, CaseIterable, Identifiable {
+    case recommended
+    case service
+    case materials
+    case selected
+    case all
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .recommended:
+            return "Recommended"
+        case .service:
+            return "Services"
+        case .materials:
+            return "Materials"
+        case .selected:
+            return "Selected"
+        case .all:
+            return "All"
+        }
     }
 }
 
