@@ -262,6 +262,12 @@ struct BillingDocumentsView: View {
         guard let estimate = currentJobEstimate,
               let email = contextCustomer?.email?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else { return nil }
+        return followUpEmailURL(for: estimate)
+    }
+
+    private func followUpEmailURL(for estimate: Estimate) -> URL? {
+        guard let email = estimate.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
         var components = URLComponents()
         components.scheme = "mailto"
         components.path = email
@@ -274,6 +280,28 @@ Hello \(estimate.customer.name),
 Following up on your estimate for \(estimate.amount.formatted(.currency(code: "USD"))).
 
 Please let us know if you would like to move forward or if you have any questions.
+
+Thank you,
+GunnAire
+""")
+        ]
+        return components.url
+    }
+
+    private func paymentReminderEmailURL(for invoice: Invoice) -> URL? {
+        guard let email = invoice.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = email
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Payment Reminder From GunnAire"),
+            URLQueryItem(name: "body", value: """
+Hello \(invoice.customer.name),
+
+This is a reminder that \(invoiceBalanceDue(for: invoice).formatted(.currency(code: "USD"))) remains due on your GunnAire invoice.
+
+Please let us know if you would like us to take payment or if you have any questions.
 
 Thank you,
 GunnAire
@@ -752,6 +780,13 @@ GunnAire
                                     }
                                     .buttonStyle(.bordered)
 
+                                    if let followUpURL = followUpEmailURL(for: estimate) {
+                                        Button("Send Follow-Up") {
+                                            openURL(followUpURL)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+
                                     Button("Create Invoice") {
                                         prepareInvoiceFromEstimate(estimate)
                                     }
@@ -805,6 +840,13 @@ GunnAire
                                         loadInvoiceIntoBuilder(invoice)
                                     }
                                     .buttonStyle(.bordered)
+
+                                    if let reminderURL = paymentReminderEmailURL(for: invoice) {
+                                        Button("Send Reminder") {
+                                            openURL(reminderURL)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
 
                                     Button("Collect Payment") {
                                         openPaymentsForInvoice(invoice)
