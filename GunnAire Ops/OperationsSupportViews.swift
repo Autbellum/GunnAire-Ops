@@ -14,6 +14,18 @@ struct CustomersView: View {
     @State private var newCustomerAddress = ""
     @State private var selectedCustomer: Customer?
     @State private var didLoadPendingIntentCustomer = false
+    @State private var customerSearchText = ""
+
+    private var filteredCustomers: [Customer] {
+        let search = customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !search.isEmpty else { return customers }
+        return customers.filter { customer in
+            customer.name.localizedCaseInsensitiveContains(search) ||
+            (customer.email?.localizedCaseInsensitiveContains(search) ?? false) ||
+            (customer.phone?.localizedCaseInsensitiveContains(search) ?? false) ||
+            (customer.address?.localizedCaseInsensitiveContains(search) ?? false)
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -47,15 +59,18 @@ struct CustomersView: View {
                 }
 
                 Section("Customer Directory") {
-                    if customers.isEmpty {
+                    TextField("Search customers", text: $customerSearchText)
+                        .textInputAutocapitalization(.never)
+
+                    if filteredCustomers.isEmpty {
                         Text("No customers saved yet.")
                             .foregroundColor(.secondary)
                     } else {
-                        ForEach(customers) { customer in
+                        ForEach(filteredCustomers) { customer in
                             Button {
                                 selectedCustomer = customer
                             } label: {
-                                VStack(alignment: .leading, spacing: 6) {
+                                VStack(alignment: .leading, spacing: 8) {
                                     HStack {
                                         Text(customer.name)
                                             .font(.headline)
@@ -88,6 +103,28 @@ struct CustomersView: View {
                                         Text("Next maintenance: \(nextContract.nextDate.formatted(date: .abbreviated, time: .omitted))")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
+                                    }
+
+                                    HStack {
+                                        Button("Open Record") {
+                                            selectedCustomer = customer
+                                        }
+                                        .buttonStyle(.bordered)
+
+                                        if let nextCall = nextActiveServiceCall(for: customer) {
+                                            Button("Open Job") {
+                                                GunnAireAppIntentRouter.storeDocumentationRoute(nextCall.id)
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+
+                                        if let openInvoice = nextOpenInvoice(for: customer) {
+                                            Button("Collect Payment") {
+                                                GunnAireAppIntentRouter.storePaymentCollectionRoute(openInvoice.id)
+                                            }
+                                            .buttonStyle(.borderedProminent)
+                                            .tint(.green)
+                                        }
                                     }
                                 }
                                 .padding(.vertical, 2)
@@ -133,6 +170,20 @@ struct CustomersView: View {
             .filter { $0.customer.id == customer.id && $0.active }
             .sorted(by: { $0.nextDate < $1.nextDate })
             .first
+    }
+
+    private func nextActiveServiceCall(for customer: Customer) -> ServiceCall? {
+        serviceCalls
+            .filter { $0.customer.id == customer.id && $0.status != .completed && $0.status != .cancelled }
+            .sorted(by: { $0.scheduledDate < $1.scheduledDate })
+            .first
+    }
+
+    private func nextOpenInvoice(for customer: Customer) -> Invoice? {
+        invoices.first {
+            $0.customer.id == customer.id &&
+            $0.status.caseInsensitiveCompare("paid") != .orderedSame
+        }
     }
 }
 
