@@ -86,7 +86,7 @@ final class OnsitePaymentManager: ObservableObject {
             return false
         }
         if processor.requiresQuickBooksSession {
-            return QuickBooksDataAPI.shared.tokens != nil && QuickBooksDataAPI.shared.realmID != nil
+            return QuickBooksDataAPI.shared.isAuthenticated
         }
         return true
     }
@@ -102,7 +102,7 @@ final class OnsitePaymentManager: ObservableObject {
             guard tapToPayAvailableInCurrentBuild else {
                 return "Tap to Pay is hidden in this build until the QuickBooks Tap to Pay support package is installed."
             }
-            if QuickBooksDataAPI.shared.tokens == nil || QuickBooksDataAPI.shared.realmID == nil {
+            if !QuickBooksDataAPI.shared.isAuthenticated {
                 return "Connect QuickBooks first, then mark this device ready for Tap to Pay."
             }
             if !UserDefaults.standard.bool(forKey: "onsitePaymentProcessorReady") {
@@ -126,7 +126,7 @@ final class OnsitePaymentManager: ObservableObject {
         defer { isProcessing = false }
 
         if processor.requiresQuickBooksSession {
-            guard QuickBooksDataAPI.shared.tokens != nil, QuickBooksDataAPI.shared.realmID != nil else {
+            guard QuickBooksDataAPI.shared.isAuthenticated else {
                 throw OnsitePaymentError.quickBooksAuthenticationRequired
             }
             return try await quickBooksBridge.startCharge(

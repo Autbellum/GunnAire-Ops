@@ -413,6 +413,15 @@ struct ScheduleView: View {
                                     if let followUpEmailURL = followUpEmailURL(for: job) {
                                         Button("Email Customer") {
                                             openURL(followUpEmailURL)
+                                            if !job.followUpRequired {
+                                                job.followUpRequired = true
+                                            }
+                                            if job.followUpAction?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                                                job.followUpAction = "Customer follow-up"
+                                            }
+                                            if job.followUpDueDate == nil {
+                                                job.followUpDueDate = Calendar.current.date(byAdding: .day, value: 3, to: Date())
+                                            }
                                         }
                                         .buttonStyle(.bordered)
                                         .tint(Color.brandGold)
@@ -457,6 +466,7 @@ struct ScheduleView: View {
                         if let maintenanceReminderEmailURL = maintenanceReminderEmailURL(for: contract) {
                             Button("Send Reminder") {
                                 openURL(maintenanceReminderEmailURL)
+                                contract.active = true
                             }
                             .buttonStyle(.bordered)
                             .tint(Color.brandGold)

@@ -594,7 +594,7 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private var isQuickBooksConnected: Bool {
-        liveAPI.tokens != nil && liveAPI.realmID != nil
+        liveAPI.isAuthenticated
     }
 
     private func preparePaymentForm() {
