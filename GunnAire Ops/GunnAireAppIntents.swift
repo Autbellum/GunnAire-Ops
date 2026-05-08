@@ -2,10 +2,6 @@ import AppIntents
 import Foundation
 import SwiftData
 
-extension Notification.Name {
-    nonisolated(unsafe) static let gunnAireRouteDidChange = Notification.Name("GunnAireRouteDidChange")
-}
-
 enum GunnAireAppRoute: String, CaseIterable {
     case timeClock = "timeClock"
     case schedule = "scheduleAndJobs"
@@ -97,7 +93,7 @@ enum GunnAireAppRoute: String, CaseIterable {
 enum GunnAireAppIntentRouter {
     nonisolated static func store(_ route: GunnAireAppRoute) {
         UserDefaults.standard.set(route.rawValue, forKey: "GunnAirePendingAppRoute")
-        NotificationCenter.default.post(name: .gunnAireRouteDidChange, object: nil)
+        NotificationCenter.default.post(name: Notification.Name("GunnAireRouteDidChange"), object: nil)
     }
 
     nonisolated static func consumePendingRoute() -> GunnAireAppRoute? {

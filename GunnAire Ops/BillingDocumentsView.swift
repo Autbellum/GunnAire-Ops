@@ -13,8 +13,6 @@ struct BillingDocumentsView: View {
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
 
     private let initialServiceCall: ServiceCall?
-    private let openCloseoutOnAppear: Bool
-    private let openTapToPayOnAppear: Bool
     private let liveAPI = QuickBooksDataAPI.shared
 
     @State private var selectedDocumentKind: BillingDocumentKind
@@ -32,24 +30,19 @@ struct BillingDocumentsView: View {
     @State private var newItemPrice = ""
     @State private var newItemCost = ""
     @State private var newItemTaxable = false
-    @State private var paymentInvoice: Invoice?
     @State private var actionMessage = ""
     @State private var isCreatingDocument = false
     @State private var isImportingQuickBooksItems = false
     @State private var didLoadInitialContext = false
-    @State private var openCloseoutAfterInvoiceCreation = false
     @State private var didAttemptInitialCatalogImport = false
     @State private var openInvoiceAfterEstimateCreation = false
     @State private var didLoadLinkedDocumentContext = false
-    @State private var didTriggerInitialCloseout = false
     @State private var pendingIntentServiceCallID: UUID?
     @State private var showingItemSelector = false
     @State private var showingItemCreator = false
 
     init(initialServiceCall: ServiceCall? = nil, openCloseoutOnAppear: Bool = false, openTapToPayOnAppear: Bool = false) {
         self.initialServiceCall = initialServiceCall
-        self.openCloseoutOnAppear = openCloseoutOnAppear
-        self.openTapToPayOnAppear = openTapToPayOnAppear
         _selectedDocumentKind = State(initialValue: initialServiceCall?.type == .estimate ? .estimate : .invoice)
     }
 
@@ -372,8 +365,8 @@ struct BillingDocumentsView: View {
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
-                                Button(invoice.status == "paid" ? "Invoice Paid" : "Open Closeout") {
-                                    paymentInvoice = invoice
+                                Button(invoice.status == "paid" ? "Invoice Paid" : "Collect Payment") {
+                                    openPaymentsForInvoice(invoice)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(Color.brandGold)
@@ -387,7 +380,7 @@ struct BillingDocumentsView: View {
 
                                 if invoice.status != "paid" {
                                     Button("Record Additional Payment") {
-                                        paymentInvoice = invoice
+                                        openPaymentsForInvoice(invoice)
                                     }
                                     .buttonStyle(.bordered)
                                 }
@@ -441,10 +434,6 @@ struct BillingDocumentsView: View {
 
                     if activeServiceCall != nil && selectedDocumentKind == .estimate {
                         Toggle("Open Invoice Builder After Estimate", isOn: $openInvoiceAfterEstimateCreation)
-                    }
-
-                    if activeServiceCall != nil && selectedDocumentKind == .invoice {
-                        Toggle("Open Closeout After Invoice Creation", isOn: $openCloseoutAfterInvoiceCreation)
                     }
 
                     Button(isCreatingDocument ? "Creating..." : "Create \(selectedDocumentKind.rawValue)") {
@@ -666,8 +655,8 @@ struct BillingDocumentsView: View {
                                         .font(.caption2)
                                         .foregroundColor(.green)
                                 }
-                                Button(invoice.status == "paid" ? "Paid" : "Finalize & Take Payment") {
-                                    paymentInvoice = invoice
+                                Button(invoice.status == "paid" ? "Paid" : "Collect Payment") {
+                                    openPaymentsForInvoice(invoice)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(Color.brandGold)
@@ -705,9 +694,6 @@ struct BillingDocumentsView: View {
                 }
             }
             .navigationTitle(activeServiceCall == nil ? "Invoices & Estimates" : "Job Documentation")
-            .sheet(item: $paymentInvoice) { invoice in
-                RecordInvoicePaymentView(invoice: invoice, autoStartTapToPay: openTapToPayOnAppear)
-            }
             .sheet(isPresented: $showingItemSelector) {
                 DocumentationItemSelectorView(items: items, selectedItems: $selectedItems)
             }
@@ -721,9 +707,6 @@ struct BillingDocumentsView: View {
             .onChange(of: selectedCustomerID) { _, newValue in
                 guard let newValue, let customer = customers.first(where: { $0.id == newValue }) else { return }
                 populateCustomerFields(from: customer)
-            }
-            .onChange(of: currentJobInvoice?.id) { _, _ in
-                triggerInitialCloseoutIfNeeded()
             }
         }
     }
@@ -752,21 +735,12 @@ struct BillingDocumentsView: View {
                 loadLinkedDocumentContextIfNeeded()
             }
             openInvoiceAfterEstimateCreation = true
-            openCloseoutAfterInvoiceCreation = true
         } else if let firstCustomer = customers.first {
             selectedCustomerID = firstCustomer.id
             populateCustomerFields(from: firstCustomer)
         }
 
         importQuickBooksItemsIfNeeded()
-        triggerInitialCloseoutIfNeeded()
-    }
-
-    private func triggerInitialCloseoutIfNeeded() {
-        guard openCloseoutOnAppear, !didTriggerInitialCloseout else { return }
-        guard let invoice = currentJobInvoice, invoice.status != "paid" else { return }
-        didTriggerInitialCloseout = true
-        paymentInvoice = invoice
     }
 
     private func loadLinkedDocumentContextIfNeeded() {
@@ -1063,13 +1037,14 @@ struct BillingDocumentsView: View {
             activeServiceCall?.status = .invoiced
             actionMessage = isQuickBooksConnected ? "Invoice created locally. Syncing to QuickBooks..." : "Invoice created locally."
             syncInvoiceIfNeeded(invoice, customer: customer, items: selectedLineItems)
-            if openCloseoutAfterInvoiceCreation {
-                paymentInvoice = invoice
-            }
             selectedItems.removeAll()
             notes = ""
         }
         isCreatingDocument = false
+    }
+
+    private func openPaymentsForInvoice(_ invoice: Invoice) {
+        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
     }
 
     private func syncEstimateIfNeeded(_ estimate: Estimate, customer: Customer, items: [Item]) {

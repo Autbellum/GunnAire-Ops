@@ -455,6 +455,12 @@ struct PaymentsAndReceiptsView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
+
+                    if !actionMessage.isEmpty {
+                        Text(actionMessage)
+                            .font(.caption)
+                            .foregroundColor(actionMessage.localizedCaseInsensitiveContains("failed") ? .red : .secondary)
+                    }
                 }
             }
             .navigationTitle("Record Payment")
@@ -466,7 +472,7 @@ struct PaymentsAndReceiptsView: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isProcessingQuickBooksPayment ? "Processing..." : "Save") {
+                    Button(paymentConfirmationTitle) {
                         Task {
                             await savePaymentRecord()
                         }
@@ -476,6 +482,19 @@ struct PaymentsAndReceiptsView: View {
             }
         }
         .tint(Color.brandGold)
+    }
+
+    private var paymentConfirmationTitle: String {
+        if isProcessingQuickBooksPayment {
+            return "Processing..."
+        }
+        if selectedMethod == .card, isQuickBooksConnected {
+            return "Process Card Payment"
+        }
+        if selectedMethod == .ach, isQuickBooksConnected {
+            return "Process ACH Payment"
+        }
+        return "Save Payment"
     }
 
     private var refundSheet: some View {
@@ -565,6 +584,7 @@ struct PaymentsAndReceiptsView: View {
         amountText = String(format: "%.2f", outstandingBalance(for: invoice))
         selectedMethod = preferredMethod
         tapToPayMessage = ""
+        actionMessage = ""
         cardLast4 = ""
         authorizationReference = ""
         paymentNotes = ""
@@ -638,6 +658,7 @@ struct PaymentsAndReceiptsView: View {
 
     private func savePaymentRecord() async {
         guard let invoice = selectedInvoice, let amount = Double(amountText), amount > 0 else {
+            actionMessage = "Select an invoice and enter a valid payment amount."
             return
         }
 

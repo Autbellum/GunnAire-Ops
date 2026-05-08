@@ -216,7 +216,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             applyPendingAppRouteIfNeeded()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .gunnAireRouteDidChange)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
             applyPendingAppRouteIfNeeded()
         }
         .tint(Color.brandGold)

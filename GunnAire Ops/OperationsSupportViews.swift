@@ -446,7 +446,7 @@ struct OnsiteDocumentationView: View {
                 }
             }
             .onAppear(perform: applyPendingDocumentationRouteIfNeeded)
-            .onReceive(NotificationCenter.default.publisher(for: .gunnAireRouteDidChange)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                 applyPendingDocumentationRouteIfNeeded()
             }
         }
