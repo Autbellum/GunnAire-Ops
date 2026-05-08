@@ -757,6 +757,7 @@ GunnAire
                 if !isJobDocumentationMode && workspaceMode.showsEstimates && !estimatesNeedingFollowUp.isEmpty {
                     Section("Estimate Follow-Up") {
                         ForEach(estimatesNeedingFollowUp.prefix(6)) { estimate in
+                            let linkedCall = serviceCall(for: estimate)
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 2) {
@@ -780,9 +781,19 @@ GunnAire
                                     }
                                     .buttonStyle(.bordered)
 
+                                    if let linkedCall {
+                                        Button("Open Job") {
+                                            openDocumentation(for: linkedCall)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+
                                     if let followUpURL = followUpEmailURL(for: estimate) {
                                         Button("Send Follow-Up") {
                                             openURL(followUpURL)
+                                            if let linkedCall {
+                                                markEstimateFollowUp(on: linkedCall)
+                                            }
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -803,15 +814,38 @@ GunnAire
                 if !isJobDocumentationMode && workspaceMode.showsEstimates && !acceptedEstimatesReadyToSchedule.isEmpty {
                     Section("Accepted Estimates") {
                         ForEach(acceptedEstimatesReadyToSchedule.prefix(6)) { estimate in
+                            let linkedCall = serviceCall(for: estimate)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(estimate.customer.name)
                                     .font(.headline)
                                 Text("\(estimate.amount, format: .currency(code: "USD")) • Accepted")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                Text("Move this approved work into scheduling from the original job or documentation flow.")
+                                Text(linkedCall == nil
+                                     ? "This accepted estimate is ready to become scheduled work."
+                                     : "This accepted estimate can move straight into scheduled work.")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
+                                HStack {
+                                    if let linkedCall {
+                                        Button("Open Job") {
+                                            openDocumentation(for: linkedCall)
+                                        }
+                                        .buttonStyle(.bordered)
+
+                                        Button("Schedule Work") {
+                                            scheduleApprovedWork(from: linkedCall)
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .tint(Color.brandGold)
+                                        .foregroundStyle(Color.primaryBlack)
+                                    }
+
+                                    Button("Create Invoice") {
+                                        prepareInvoiceFromEstimate(estimate)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
                             }
                             .padding(.vertical, 2)
                         }
@@ -821,6 +855,7 @@ GunnAire
                 if !isJobDocumentationMode && workspaceMode.showsInvoices && !collectibleInvoices.isEmpty {
                     Section("Collections Queue") {
                         ForEach(collectibleInvoices.prefix(8)) { invoice in
+                            let linkedCall = serviceCall(for: invoice)
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 2) {
@@ -841,9 +876,19 @@ GunnAire
                                     }
                                     .buttonStyle(.bordered)
 
+                                    if let linkedCall {
+                                        Button("Open Job") {
+                                            openDocumentation(for: linkedCall)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+
                                     if let reminderURL = paymentReminderEmailURL(for: invoice) {
                                         Button("Send Reminder") {
                                             openURL(reminderURL)
+                                            if let linkedCall {
+                                                markPaymentFollowUp(on: linkedCall)
+                                            }
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -863,6 +908,7 @@ GunnAire
                 if !isJobDocumentationMode && workspaceMode.showsInvoices && !overdueInvoices.isEmpty {
                     Section("Overdue Invoices") {
                         ForEach(overdueInvoices.prefix(6)) { invoice in
+                            let linkedCall = serviceCall(for: invoice)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(invoice.customer.name)
                                     .font(.headline)
@@ -872,6 +918,35 @@ GunnAire
                                 Text(invoice.lineItemSummary)
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
+                                HStack {
+                                    Button("Open Invoice") {
+                                        loadInvoiceIntoBuilder(invoice)
+                                    }
+                                    .buttonStyle(.bordered)
+
+                                    if let linkedCall {
+                                        Button("Open Job") {
+                                            openDocumentation(for: linkedCall)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+
+                                    if let reminderURL = paymentReminderEmailURL(for: invoice) {
+                                        Button("Send Reminder") {
+                                            openURL(reminderURL)
+                                            if let linkedCall {
+                                                markPaymentFollowUp(on: linkedCall)
+                                            }
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+
+                                    Button("Collect Payment") {
+                                        openPaymentsForInvoice(invoice)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.green)
+                                }
                             }
                             .padding(.vertical, 2)
                         }
@@ -1471,6 +1546,32 @@ GunnAire
         if announce {
             actionMessage = "Loaded the saved \(preferredKind.rawValue.lowercased()) back into the builder."
         }
+    }
+
+    private func serviceCall(for estimate: Estimate) -> ServiceCall? {
+        guard let serviceCallID = estimate.serviceCallID else { return nil }
+        return serviceCalls.first(where: { $0.id == serviceCallID })
+    }
+
+    private func serviceCall(for invoice: Invoice) -> ServiceCall? {
+        guard let serviceCallID = invoice.serviceCallID else { return nil }
+        return serviceCalls.first(where: { $0.id == serviceCallID })
+    }
+
+    private func openDocumentation(for serviceCall: ServiceCall) {
+        GunnAireAppIntentRouter.storeDocumentationRoute(serviceCall.id)
+    }
+
+    private func markEstimateFollowUp(on serviceCall: ServiceCall) {
+        serviceCall.followUpRequired = true
+        serviceCall.followUpAction = "Follow up on estimate"
+        serviceCall.followUpDueDate = Calendar.current.date(byAdding: .day, value: 3, to: Date())
+    }
+
+    private func markPaymentFollowUp(on serviceCall: ServiceCall) {
+        serviceCall.followUpRequired = true
+        serviceCall.followUpAction = "Collect payment"
+        serviceCall.followUpDueDate = Calendar.current.date(byAdding: .day, value: 1, to: Date())
     }
 
     private func matchingItemIDs(from lineItemSummary: String) -> Set<UUID> {
