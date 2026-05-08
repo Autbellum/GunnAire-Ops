@@ -409,6 +409,27 @@ GunnAire
         call.paymentCollectedChecklist
     }
 
+    private var activeServiceAgreement: RecurringMaintenanceContract? {
+        call.customer.recurringContracts
+            .filter(\.active)
+            .sorted(by: { $0.nextDate < $1.nextDate })
+            .first
+    }
+
+    private var recentCustomerCalls: [ServiceCall] {
+        serviceCalls
+            .filter { $0.customer.id == call.customer.id }
+            .sorted(by: { $0.scheduledDate > $1.scheduledDate })
+            .prefix(4)
+            .map { $0 }
+    }
+
+    private var customerLifetimeInvoiceTotal: Double {
+        invoices
+            .filter { $0.customer.id == call.customer.id }
+            .reduce(0) { $0 + $1.amount }
+    }
+
     var body: some View {
         ZStack {
             WatermarkBackground()
@@ -485,6 +506,58 @@ GunnAire
                                 }
                             }
                             .tint(Color.brandGold)
+                        }
+                    }
+
+                    GroupBox("Membership & History") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let agreement = activeServiceAgreement {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Active Service Agreement")
+                                        .font(.headline)
+                                    Text(agreement.schedulePattern)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    Text("Next visit: \(agreement.nextDate.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    Text("Reminder: \(agreement.reminderDate.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            } else {
+                                Text("No active service agreement on file.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Text("\(call.customer.serviceCalls.count) jobs • \(call.customer.invoices.count) invoices • \(call.customer.activeContractsCount) active agreements")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            if customerLifetimeInvoiceTotal > 0 {
+                                Text("Lifetime invoiced: \(customerLifetimeInvoiceTotal, format: .currency(code: "USD"))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            if !recentCustomerCalls.isEmpty {
+                                ForEach(recentCustomerCalls) { historyCall in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("\(historyCall.type.rawValue.capitalized) • \(historyCall.status.rawValue.capitalized)")
+                                            .font(.caption)
+                                        Text(historyCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        if let historyNotes = historyCall.notes, !historyNotes.isEmpty {
+                                            Text(historyNotes)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                                .lineLimit(2)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 

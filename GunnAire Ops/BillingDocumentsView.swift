@@ -67,6 +67,21 @@ struct BillingDocumentsView: View {
         items.filter { selectedItems.contains($0.id) }
     }
 
+    private var selectedCostTotal: Double {
+        selectedLineItems.reduce(0) { partial, item in
+            partial + (item.purchaseCost ?? 0)
+        }
+    }
+
+    private var selectedGrossProfit: Double {
+        selectedTotal - selectedCostTotal
+    }
+
+    private var selectedGrossMarginPercent: Double? {
+        guard selectedTotal > 0 else { return nil }
+        return (selectedGrossProfit / selectedTotal) * 100
+    }
+
     private var filteredItems: [Item] {
         let query = itemSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return items }
@@ -95,6 +110,36 @@ struct BillingDocumentsView: View {
         guard let invoice = currentJobInvoice else { return nil }
         let paid = currentJobPayments.reduce(0) { $0 + $1.amount }
         return max(invoice.amount - paid, 0)
+    }
+
+    private var contextCustomer: Customer? {
+        if let selectedCustomer {
+            return selectedCustomer
+        }
+        return activeServiceCall?.customer
+    }
+
+    private var activeServiceAgreement: RecurringMaintenanceContract? {
+        contextCustomer?.recurringContracts
+            .filter(\.active)
+            .sorted(by: { $0.nextDate < $1.nextDate })
+            .first
+    }
+
+    private var recentCustomerCalls: [ServiceCall] {
+        guard let customer = contextCustomer else { return [] }
+        return serviceCalls
+            .filter { $0.customer.id == customer.id }
+            .sorted(by: { $0.scheduledDate > $1.scheduledDate })
+            .prefix(4)
+            .map { $0 }
+    }
+
+    private var customerLifetimeInvoiceTotal: Double {
+        guard let customer = contextCustomer else { return 0 }
+        return invoices
+            .filter { $0.customer.id == customer.id }
+            .reduce(0) { $0 + $1.amount }
     }
 
     private var selectedSummary: String {
@@ -390,6 +435,59 @@ struct BillingDocumentsView: View {
                     }
                 }
 
+                if let customer = contextCustomer {
+                    Section("Customer Context") {
+                        if let agreement = activeServiceAgreement {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Active Service Agreement")
+                                    .font(.headline)
+                                Text(agreement.schedulePattern)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("Next visit: \(agreement.nextDate.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Text("Reminder: \(agreement.reminderDate.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 2)
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Customer History")
+                                .font(.headline)
+                            Text("\(customer.serviceCalls.count) jobs • \(customer.invoices.count) invoices • \(customer.activeContractsCount) active agreements")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            if customerLifetimeInvoiceTotal > 0 {
+                                Text("Lifetime invoiced: \(customerLifetimeInvoiceTotal, format: .currency(code: "USD"))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        if !recentCustomerCalls.isEmpty {
+                            ForEach(recentCustomerCalls) { recentCall in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("\(recentCall.type.rawValue.capitalized) • \(recentCall.status.rawValue.capitalized)")
+                                        .font(.caption)
+                                    Text(recentCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    if let notes = recentCall.notes, !notes.isEmpty {
+                                        Text(notes)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(2)
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                    }
+                }
+
                 Section("Builder Details") {
                     Picker("Document", selection: $selectedDocumentKind) {
                         ForEach(BillingDocumentKind.allCases) { kind in
@@ -431,6 +529,37 @@ struct BillingDocumentsView: View {
 
                     Text("Total: \(selectedTotal, format: .currency(code: "USD"))")
                         .font(.headline)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Job Costing")
+                            .font(.headline)
+                        HStack {
+                            Text("Revenue")
+                            Spacer()
+                            Text(selectedTotal, format: .currency(code: "USD"))
+                                .foregroundColor(.secondary)
+                        }
+                        HStack {
+                            Text("Estimated Cost")
+                            Spacer()
+                            Text(selectedCostTotal, format: .currency(code: "USD"))
+                                .foregroundColor(.secondary)
+                        }
+                        HStack {
+                            Text("Gross Profit")
+                            Spacer()
+                            Text(selectedGrossProfit, format: .currency(code: "USD"))
+                                .foregroundColor(selectedGrossProfit >= 0 ? .secondary : .red)
+                        }
+                        if let selectedGrossMarginPercent {
+                            HStack {
+                                Text("Gross Margin")
+                                Spacer()
+                                Text("\(selectedGrossMarginPercent, format: .number.precision(.fractionLength(1)))%")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
 
                     if activeServiceCall != nil && selectedDocumentKind == .estimate {
                         Toggle("Open Invoice Builder After Estimate", isOn: $openInvoiceAfterEstimateCreation)
