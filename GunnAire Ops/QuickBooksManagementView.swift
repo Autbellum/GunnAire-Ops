@@ -3,6 +3,8 @@ import SwiftData
 
 struct QuickBooksManagementView: View {
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
+    @Query(sort: \Customer.name, order: .forward) private var localCustomers: [Customer]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var localInvoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var localPayments: [Payment]
     private let liveAPI = QuickBooksAPI.shared
@@ -178,6 +180,24 @@ struct QuickBooksManagementView: View {
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
+                                    if let linkedCustomer = localCustomer(for: customer) {
+                                        HStack {
+                                            Button("Open Customer") {
+                                                GunnAireAppIntentRouter.storeCustomerRoute(linkedCustomer.id)
+                                            }
+                                            .buttonStyle(.bordered)
+
+                                            if let nextCall = serviceCalls
+                                                .filter({ $0.customer.id == linkedCustomer.id && $0.status != .completed && $0.status != .cancelled })
+                                                .sorted(by: { $0.scheduledDate < $1.scheduledDate })
+                                                .first {
+                                                Button("Open Job") {
+                                                    GunnAireAppIntentRouter.storeDocumentationRoute(nextCall.id)
+                                                }
+                                                .buttonStyle(.bordered)
+                                            }
+                                        }
+                                    }
                                 }
                                 .padding(.vertical, 2)
                             }
@@ -286,6 +306,13 @@ struct QuickBooksManagementView: View {
                                         if let invoiceURL = liveInvoiceURL(for: invoice) {
                                             Link("Open in QuickBooks", destination: invoiceURL)
                                                 .font(.caption)
+                                        }
+
+                                        if let localInvoice = localInvoice(for: invoice) {
+                                            Button("Open Local Collections") {
+                                                GunnAireAppIntentRouter.storePaymentCollectionRoute(localInvoice.id)
+                                            }
+                                            .buttonStyle(.bordered)
                                         }
                                     }
                                 }
@@ -632,6 +659,24 @@ struct QuickBooksManagementView: View {
                                         Button("Refund This Payment") {
                                             paymentToRefund = payment
                                             showingRefundPaymentSheet = true
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                    HStack {
+                                        Button("Open Customer") {
+                                            GunnAireAppIntentRouter.storeCustomerRoute(payment.invoice.customer.id)
+                                        }
+                                        .buttonStyle(.bordered)
+
+                                        if let linkedCall = localServiceCall(for: payment.invoice) {
+                                            Button("Open Job") {
+                                                GunnAireAppIntentRouter.storeDocumentationRoute(linkedCall.id)
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+
+                                        Button("Open Collections") {
+                                            GunnAireAppIntentRouter.storePaymentCollectionRoute(payment.invoice.id)
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -1495,6 +1540,25 @@ struct QuickBooksManagementView: View {
                 partial + payment.amount
             }
         return max(invoice.amount - netPayments, 0)
+    }
+
+    private func localCustomer(for quickBooksCustomer: QuickBooksCustomer) -> Customer? {
+        localCustomers.first {
+            ($0.quickBooksID == quickBooksCustomer.Id) ||
+            $0.name.caseInsensitiveCompare(quickBooksCustomer.DisplayName) == .orderedSame
+        }
+    }
+
+    private func localInvoice(for quickBooksInvoice: QuickBooksInvoice) -> Invoice? {
+        localInvoices.first {
+            ($0.quickBooksID == quickBooksInvoice.Id) ||
+            (($0.quickBooksID == quickBooksInvoice.DocNumber) && !(quickBooksInvoice.DocNumber ?? "").isEmpty)
+        }
+    }
+
+    private func localServiceCall(for invoice: Invoice) -> ServiceCall? {
+        guard let serviceCallID = invoice.serviceCallID else { return nil }
+        return serviceCalls.first(where: { $0.id == serviceCallID })
     }
 
     private func liveInvoiceURL(for invoice: QuickBooksInvoice) -> URL? {
