@@ -1064,6 +1064,7 @@ struct AddServiceCallView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var customers: [Customer]
     @Query private var technicians: [Technician]
+    @Query private var existingServiceCalls: [ServiceCall]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("defaultJobDurationMinutes") private var defaultJobDurationMinutes = 90
     
@@ -1118,6 +1119,18 @@ struct AddServiceCallView: View {
 
     private var canSaveNewCustomer: Bool {
         !newCustomerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var conflictingCalls: [ServiceCall] {
+        guard let technician else { return [] }
+        let proposedEnd = scheduledTime.addingTimeInterval(duration)
+        return existingServiceCalls.filter { call in
+            guard call.assignedTechnician?.id == technician.id, call.status != .cancelled else { return false }
+            let existingStart = call.scheduledDate
+            let existingEnd = call.scheduledDate.addingTimeInterval(call.duration)
+            return scheduledTime < existingEnd && proposedEnd > existingStart
+        }
+        .sorted { $0.scheduledDate < $1.scheduledDate }
     }
     
     var body: some View {
@@ -1279,6 +1292,21 @@ struct AddServiceCallView: View {
                 Stepper(value: $duration, in: 1800...8*3600, step: 900) {
                     Text("Duration: \(Int(duration/60)) min")
                 }
+                if !conflictingCalls.isEmpty {
+                    Section("Schedule Conflict") {
+                        Text("This technician already has overlapping work scheduled.")
+                            .foregroundColor(.orange)
+                        ForEach(conflictingCalls.prefix(3)) { conflict in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(conflict.customer.name)
+                                    .font(.caption.weight(.semibold))
+                                Text("\(conflict.scheduledDate.formatted(date: .abbreviated, time: .shortened)) • \(Int(conflict.duration / 60)) min")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
                 TextField("Notes", text: $notes, axis: .vertical)
                 Section("Findings & Follow-Up") {
                     TextField("Findings", text: $findingsSummary, axis: .vertical)
@@ -1435,6 +1463,7 @@ struct EditServiceCallView: View {
     @Environment(\.dismiss) private var dismiss
     @Query private var customers: [Customer]
     @Query private var technicians: [Technician]
+    @Query private var existingServiceCalls: [ServiceCall]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     let call: ServiceCall
@@ -1483,6 +1512,20 @@ struct EditServiceCallView: View {
         _selectedCalendarID = State(initialValue: call.googleCalendarID ?? "primary")
     }
 
+    private var conflictingCalls: [ServiceCall] {
+        guard let technician else { return [] }
+        let proposedEnd = scheduledTime.addingTimeInterval(duration)
+        return existingServiceCalls.filter { existingCall in
+            guard existingCall.id != call.id,
+                  existingCall.assignedTechnician?.id == technician.id,
+                  existingCall.status != .cancelled else { return false }
+            let existingStart = existingCall.scheduledDate
+            let existingEnd = existingCall.scheduledDate.addingTimeInterval(existingCall.duration)
+            return scheduledTime < existingEnd && proposedEnd > existingStart
+        }
+        .sorted { $0.scheduledDate < $1.scheduledDate }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -1526,6 +1569,21 @@ struct EditServiceCallView: View {
                 DatePicker("Scheduled Time", selection: $scheduledTime, displayedComponents: [.date, .hourAndMinute])
                 Stepper(value: $duration, in: 1800...8*3600, step: 900) {
                     Text("Duration: \(Int(duration / 60)) min")
+                }
+                if !conflictingCalls.isEmpty {
+                    Section("Schedule Conflict") {
+                        Text("This technician already has overlapping work scheduled.")
+                            .foregroundColor(.orange)
+                        ForEach(conflictingCalls.prefix(3)) { conflict in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(conflict.customer.name)
+                                    .font(.caption.weight(.semibold))
+                                Text("\(conflict.scheduledDate.formatted(date: .abbreviated, time: .shortened)) • \(Int(conflict.duration / 60)) min")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
                 }
                 TextField("Notes", text: $notes, axis: .vertical)
                     .lineLimit(2...4)
