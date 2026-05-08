@@ -51,7 +51,13 @@ struct BillingDocumentsView: View {
     ) {
         self.initialServiceCall = initialServiceCall
         self.workspaceMode = workspaceMode
-        _selectedDocumentKind = State(initialValue: initialServiceCall?.type == .estimate ? .estimate : .invoice)
+        let initialKind: BillingDocumentKind
+        if let initialServiceCall {
+            initialKind = initialServiceCall.type == .estimate ? .estimate : .invoice
+        } else {
+            initialKind = workspaceMode.defaultDocumentKind
+        }
+        _selectedDocumentKind = State(initialValue: initialKind)
     }
 
     private var activeServiceCall: ServiceCall? {
@@ -243,6 +249,10 @@ GunnAire
         return workspaceMode.navigationTitle
     }
 
+    private var allowsDocumentSwitching: Bool {
+        workspaceMode == .all || isJobDocumentationMode
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -312,12 +322,21 @@ GunnAire
                     }
 
                     Section("Documentation Builder") {
-                        Picker("Document", selection: $selectedDocumentKind) {
-                            ForEach(BillingDocumentKind.allCases) { kind in
-                                Text(kind.rawValue).tag(kind)
+                        if allowsDocumentSwitching {
+                            Picker("Document", selection: $selectedDocumentKind) {
+                                ForEach(BillingDocumentKind.allCases) { kind in
+                                    Text(kind.rawValue).tag(kind)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                        } else {
+                            HStack {
+                                Text("Document")
+                                Spacer()
+                                Text(selectedDocumentKind.rawValue)
+                                    .foregroundColor(.secondary)
                             }
                         }
-                        .pickerStyle(.segmented)
 
                         HStack {
                             Text("Customer")
@@ -383,22 +402,26 @@ GunnAire
                                 .foregroundColor(.secondary)
                         }
 
-                        Button(isCreatingDocument && selectedDocumentKind == .estimate ? "Creating Estimate..." : "Create Estimate") {
-                            selectedDocumentKind = .estimate
-                            createDocument()
+                        if workspaceMode.showsEstimateBuilder {
+                            Button(isCreatingDocument && selectedDocumentKind == .estimate ? "Creating Estimate..." : "Create Estimate") {
+                                selectedDocumentKind = .estimate
+                                createDocument()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.brandGold)
-                        .foregroundStyle(Color.primaryBlack)
-                        .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
 
-                        Button(isCreatingDocument && selectedDocumentKind == .invoice ? "Creating Invoice..." : "Create Invoice") {
-                            selectedDocumentKind = .invoice
-                            createDocument()
+                        if workspaceMode.showsInvoiceBuilder {
+                            Button(isCreatingDocument && selectedDocumentKind == .invoice ? "Creating Invoice..." : "Create Invoice") {
+                                selectedDocumentKind = .invoice
+                                createDocument()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
+                            .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.green)
-                        .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
 
                         if !actionMessage.isEmpty {
                             Text(actionMessage)
@@ -2445,6 +2468,15 @@ enum BillingWorkspaceMode {
     case estimates
     case invoices
 
+    var defaultDocumentKind: BillingDocumentKind {
+        switch self {
+        case .all, .invoices:
+            return .invoice
+        case .estimates:
+            return .estimate
+        }
+    }
+
     var navigationTitle: String {
         switch self {
         case .all:
@@ -2475,6 +2507,24 @@ enum BillingWorkspaceMode {
     }
 
     var showsPayments: Bool {
+        switch self {
+        case .all, .invoices:
+            return true
+        case .estimates:
+            return false
+        }
+    }
+
+    var showsEstimateBuilder: Bool {
+        switch self {
+        case .all, .estimates:
+            return true
+        case .invoices:
+            return false
+        }
+    }
+
+    var showsInvoiceBuilder: Bool {
         switch self {
         case .all, .invoices:
             return true
