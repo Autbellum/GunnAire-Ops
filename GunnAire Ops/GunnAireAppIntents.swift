@@ -7,6 +7,8 @@ enum GunnAireAppRoute: String, CaseIterable {
     case schedule = "scheduleAndJobs"
     case customers = "customers"
     case mail = "mail"
+    case estimates = "estimates"
+    case invoices = "invoices"
     case invoicesEstimates = "invoicesEstimates"
     case payments = "payments"
     case receiptsBills = "receiptsBills"
@@ -24,6 +26,10 @@ enum GunnAireAppRoute: String, CaseIterable {
             return .customers
         case .mail:
             return .mail
+        case .estimates:
+            return .estimates
+        case .invoices:
+            return .invoices
         case .invoicesEstimates:
             return .invoices
         case .payments:
@@ -49,6 +55,10 @@ enum GunnAireAppRoute: String, CaseIterable {
             return "Customers"
         case .mail:
             return "Mail"
+        case .estimates:
+            return "Estimates"
+        case .invoices:
+            return "Invoices"
         case .invoicesEstimates:
             return "Invoices"
         case .payments:
@@ -74,6 +84,10 @@ enum GunnAireAppRoute: String, CaseIterable {
             return "person.3"
         case .mail:
             return "envelope"
+        case .estimates:
+            return "doc.text.magnifyingglass"
+        case .invoices:
+            return "doc.text"
         case .invoicesEstimates:
             return "doc.text"
         case .payments:
@@ -549,6 +563,28 @@ struct OpenInvoicesEstimatesIntent: AppIntent {
     }
 }
 
+struct OpenEstimatesIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Estimates"
+    static let description = IntentDescription("Open GunnAire Ops to the estimates workspace.")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        GunnAireAppIntentRouter.store(.estimates)
+        return .result(dialog: "Opening estimates.")
+    }
+}
+
+struct OpenInvoicesIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Invoices"
+    static let description = IntentDescription("Open GunnAire Ops to the invoices workspace.")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        GunnAireAppIntentRouter.store(.invoices)
+        return .result(dialog: "Opening invoices.")
+    }
+}
+
 struct OpenPaymentsIntent: AppIntent {
     static let title: LocalizedStringResource = "Open Payments"
     static let description = IntentDescription("Open GunnAire Ops to the payments workspace.")
@@ -766,14 +802,14 @@ struct GunnAireAppShortcuts: AppShortcutsProvider {
                 systemImageName: "person.crop.circle"
             ),
             AppShortcut(
-                intent: OpenMailIntent(),
-                phrases: ["Open mail in \(.applicationName)"],
-                shortTitle: "Mail",
-                systemImageName: "envelope"
+                intent: OpenEstimatesIntent(),
+                phrases: ["Open estimates in \(.applicationName)"],
+                shortTitle: "Estimates",
+                systemImageName: "doc.text.magnifyingglass"
             ),
             AppShortcut(
-                intent: OpenInvoicesEstimatesIntent(),
-                phrases: ["Open invoices in \(.applicationName)", "Open estimates in \(.applicationName)"],
+                intent: OpenInvoicesIntent(),
+                phrases: ["Open invoices in \(.applicationName)"],
                 shortTitle: "Invoices",
                 systemImageName: "doc.text"
             ),
