@@ -402,6 +402,25 @@ struct ScheduleView: View {
                     }
                 }
             }
+
+            if !activeRecurringContracts.isEmpty {
+                Divider()
+                Text("Upcoming Maintenance")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.brandGold)
+                ForEach(activeRecurringContracts.prefix(3)) { contract in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(contract.customer.name)
+                            .font(.subheadline.weight(.semibold))
+                        Text("\(contract.schedulePattern) • next \(contract.nextDate.formatted(date: .abbreviated, time: .omitted))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
         }
     }
 

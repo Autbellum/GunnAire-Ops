@@ -6,6 +6,7 @@ struct CustomersView: View {
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
+    @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
 
     @State private var newCustomerName = ""
     @State private var newCustomerEmail = ""
@@ -80,9 +81,14 @@ struct CustomersView: View {
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
-                                    Text("\(serviceCallCount(for: customer)) jobs • \(invoiceCount(for: customer)) invoices")
+                                    Text("\(serviceCallCount(for: customer)) jobs • \(invoiceCount(for: customer)) invoices • \(activeContractCount(for: customer)) agreements")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                    if let nextContract = nextActiveContract(for: customer) {
+                                        Text("Next maintenance: \(nextContract.nextDate.formatted(date: .abbreviated, time: .omitted))")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
                                 .padding(.vertical, 2)
                             }
@@ -116,6 +122,17 @@ struct CustomersView: View {
 
     private func invoiceCount(for customer: Customer) -> Int {
         invoices.filter { $0.customer.id == customer.id }.count
+    }
+
+    private func activeContractCount(for customer: Customer) -> Int {
+        recurringContracts.filter { $0.customer.id == customer.id && $0.active }.count
+    }
+
+    private func nextActiveContract(for customer: Customer) -> RecurringMaintenanceContract? {
+        recurringContracts
+            .filter { $0.customer.id == customer.id && $0.active }
+            .sorted(by: { $0.nextDate < $1.nextDate })
+            .first
     }
 }
 
@@ -470,6 +487,7 @@ private extension String {
 
 private struct CustomerEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
     let customer: Customer
 
@@ -477,6 +495,8 @@ private struct CustomerEditorView: View {
     @State private var address: String
     @State private var email: String
     @State private var phone: String
+    @State private var newContractPattern: String = ""
+    @State private var newContractDate: Date = Date()
 
     init(customer: Customer) {
         self.customer = customer
@@ -501,6 +521,52 @@ private struct CustomerEditorView: View {
                     Text("QuickBooks ID: \(quickBooksID)")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                }
+
+                Section("Service Agreements") {
+                    if customer.recurringContracts.isEmpty {
+                        Text("No service agreements on file.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(customer.recurringContracts.sorted(by: { $0.nextDate < $1.nextDate })) { contract in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(contract.schedulePattern)
+                                        .font(.headline)
+                                    Spacer()
+                                    Text(contract.active ? "Active" : "Inactive")
+                                        .font(.caption)
+                                        .foregroundColor(contract.active ? .green : .secondary)
+                                }
+                                Text("Next visit: \(contract.nextDate.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("Reminder: \(contract.reminderDate.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Toggle("Active", isOn: Binding(
+                                    get: { contract.active },
+                                    set: { contract.active = $0 }
+                                ))
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+
+                    TextField("Schedule Pattern", text: $newContractPattern)
+                    DatePicker("Next Visit", selection: $newContractDate, displayedComponents: .date)
+                    Button("Add Service Agreement") {
+                        let contract = RecurringMaintenanceContract(
+                            customer: customer,
+                            schedulePattern: newContractPattern.trimmingCharacters(in: .whitespacesAndNewlines),
+                            nextDate: newContractDate,
+                            active: true
+                        )
+                        modelContext.insert(contract)
+                        newContractPattern = ""
+                        newContractDate = Date()
+                    }
+                    .disabled(newContractPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .navigationTitle("Edit Customer")

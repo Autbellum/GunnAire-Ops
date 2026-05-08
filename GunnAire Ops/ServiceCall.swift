@@ -115,17 +115,20 @@ final class ServiceCall {
     }
 
     var equipmentSummary: String? {
-        let parts = [
+        let rawParts: [String?] = [
             equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines),
             equipmentModel?.trimmingCharacters(in: .whitespacesAndNewlines),
-            equipmentSerialNumber?.trimmingCharacters(in: .whitespacesAndNewlines).map { "S/N \($0)" }
+            equipmentSerialNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
         ]
-        .compactMap { value in
+        let parts = rawParts.compactMap { value -> String? in
             guard let value, !value.isEmpty else { return nil }
             return value
         }
+        let decoratedParts = parts.enumerated().map { index, value in
+            index == 2 ? "S/N \(value)" : value
+        }
 
-        guard !parts.isEmpty else { return nil }
-        return parts.joined(separator: " • ")
+        guard !decoratedParts.isEmpty else { return nil }
+        return decoratedParts.joined(separator: " • ")
     }
 }
