@@ -461,6 +461,13 @@ GunnAire
                                     .buttonStyle(.bordered)
                                 }
 
+                                if estimate.status == "accepted", let call = activeServiceCall {
+                                    Button("Schedule Approved Work") {
+                                        scheduleApprovedWork(from: call)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+
                                 if let estimateFollowUpEmailURL {
                                     Button("Send Estimate Follow-Up") {
                                         openURL(estimateFollowUpEmailURL)
@@ -1252,6 +1259,39 @@ GunnAire
         sourceCall.followUpAction = nil
         sourceCall.followUpDueDate = nil
         actionMessage = "Scheduled follow-up visit for \(followUpCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))."
+    }
+
+    private func scheduleApprovedWork(from sourceCall: ServiceCall) {
+        let scheduledDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        let generatedNotes = [sourceCall.recommendedWorkSummary, sourceCall.notes]
+            .compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: "\n\n")
+
+        let approvedWorkCall = ServiceCall(
+            siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
+            equipmentName: sourceCall.equipmentName,
+            equipmentModel: sourceCall.equipmentModel,
+            equipmentSerialNumber: sourceCall.equipmentSerialNumber,
+            equipmentWarrantyExpiration: sourceCall.equipmentWarrantyExpiration,
+            type: sourceCall.type == .estimate ? .install : sourceCall.type,
+            scheduledDate: scheduledDate,
+            duration: sourceCall.duration,
+            assignedTechnician: sourceCall.assignedTechnician,
+            customer: sourceCall.customer,
+            status: .scheduled,
+            notes: generatedNotes.isEmpty ? "Scheduled from approved estimate" : "Scheduled from approved estimate\n\n\(generatedNotes)",
+            findingsSummary: sourceCall.findingsSummary,
+            recommendedWorkSummary: sourceCall.recommendedWorkSummary,
+            followUpRequired: false
+        )
+        modelContext.insert(approvedWorkCall)
+        sourceCall.followUpRequired = false
+        sourceCall.followUpAction = nil
+        sourceCall.followUpDueDate = nil
+        actionMessage = "Scheduled approved work for \(approvedWorkCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))."
     }
 
     private func matchesCatalogFilter(_ item: Item) -> Bool {

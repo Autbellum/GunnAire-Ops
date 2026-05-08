@@ -522,6 +522,38 @@ GunnAire
         call.followUpDueDate = nil
     }
 
+    private func scheduleApprovedWorkFromEstimate() {
+        let scheduledDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        let generatedNotes = [call.recommendedWorkSummary, call.notes]
+            .compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: "\n\n")
+
+        let approvedWorkCall = ServiceCall(
+            siteAddress: call.siteAddress ?? call.customer.address,
+            equipmentName: call.equipmentName,
+            equipmentModel: call.equipmentModel,
+            equipmentSerialNumber: call.equipmentSerialNumber,
+            equipmentWarrantyExpiration: call.equipmentWarrantyExpiration,
+            type: call.type == .estimate ? .install : call.type,
+            scheduledDate: scheduledDate,
+            duration: call.duration,
+            assignedTechnician: call.assignedTechnician,
+            customer: call.customer,
+            status: .scheduled,
+            notes: generatedNotes.isEmpty ? "Scheduled from approved estimate" : "Scheduled from approved estimate\n\n\(generatedNotes)",
+            findingsSummary: call.findingsSummary,
+            recommendedWorkSummary: call.recommendedWorkSummary,
+            followUpRequired: false
+        )
+        modelContext.insert(approvedWorkCall)
+        call.followUpRequired = false
+        call.followUpAction = nil
+        call.followUpDueDate = nil
+    }
+
     var body: some View {
         ZStack {
             WatermarkBackground()
@@ -808,6 +840,13 @@ GunnAire
                                             call.followUpRequired = true
                                             call.followUpAction = "Follow up on estimate"
                                             call.followUpDueDate = Calendar.current.date(byAdding: .day, value: 3, to: Date())
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+
+                                    if linkedEstimate.status == "accepted" {
+                                        Button("Schedule Approved Work") {
+                                            scheduleApprovedWorkFromEstimate()
                                         }
                                         .buttonStyle(.bordered)
                                     }

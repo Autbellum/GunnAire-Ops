@@ -63,6 +63,15 @@ struct ScheduleView: View {
             }
     }
 
+    private var approvedEstimateCalls: [ServiceCall] {
+        callsForSignedInUser
+            .filter { call in
+                guard let estimate = estimate(for: call) else { return false }
+                return estimate.status == "accepted" && call.linkedInvoiceID == nil
+            }
+            .sorted { $0.scheduledDate > $1.scheduledDate }
+    }
+
     private var callsForSignedInUser: [ServiceCall] {
         guard let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") else {
             return serviceCalls
@@ -380,6 +389,38 @@ struct ScheduleView: View {
                     }
                 }
             }
+
+            if !approvedEstimateCalls.isEmpty {
+                Divider()
+                Text("Approved Work")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.brandGold)
+
+                ForEach(approvedEstimateCalls.prefix(3)) { job in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(job.customer.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text("Estimate approved and ready to schedule")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Button("Schedule Approved Work") {
+                            scheduleApprovedWork(for: job)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(Color.brandGold)
+                    }
+                }
+            }
         }
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -501,25 +542,6 @@ struct ScheduleView: View {
                     } else {
                         syncMessage = "Google Calendar sync failed: \(detail)"
                     }
-                }
-            }
-
-            if !activeRecurringContracts.isEmpty {
-                Divider()
-                Text("Upcoming Maintenance")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.brandGold)
-                ForEach(activeRecurringContracts.prefix(3)) { contract in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(contract.customer.name)
-                            .font(.subheadline.weight(.semibold))
-                        Text("\(contract.schedulePattern) • next \(contract.nextDate.formatted(date: .abbreviated, time: .omitted))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
             }
         }
@@ -650,6 +672,40 @@ struct ScheduleView: View {
         sourceCall.followUpDueDate = nil
         selectedDate = Calendar.current.startOfDay(for: followUpCall.scheduledDate)
         navigationPath.append(followUpCall)
+    }
+
+    private func scheduleApprovedWork(for sourceCall: ServiceCall) {
+        let scheduledDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        let generatedNotes = [sourceCall.recommendedWorkSummary, sourceCall.notes]
+            .compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: "\n\n")
+
+        let approvedWorkCall = ServiceCall(
+            siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
+            equipmentName: sourceCall.equipmentName,
+            equipmentModel: sourceCall.equipmentModel,
+            equipmentSerialNumber: sourceCall.equipmentSerialNumber,
+            equipmentWarrantyExpiration: sourceCall.equipmentWarrantyExpiration,
+            type: sourceCall.type == .estimate ? .install : sourceCall.type,
+            scheduledDate: scheduledDate,
+            duration: sourceCall.duration,
+            assignedTechnician: sourceCall.assignedTechnician,
+            customer: sourceCall.customer,
+            status: .scheduled,
+            notes: generatedNotes.isEmpty ? "Scheduled from approved estimate" : "Scheduled from approved estimate\n\n\(generatedNotes)",
+            findingsSummary: sourceCall.findingsSummary,
+            recommendedWorkSummary: sourceCall.recommendedWorkSummary,
+            followUpRequired: false
+        )
+        modelContext.insert(approvedWorkCall)
+        sourceCall.followUpRequired = false
+        sourceCall.followUpAction = nil
+        sourceCall.followUpDueDate = nil
+        selectedDate = Calendar.current.startOfDay(for: approvedWorkCall.scheduledDate)
+        navigationPath.append(approvedWorkCall)
     }
 
 }
