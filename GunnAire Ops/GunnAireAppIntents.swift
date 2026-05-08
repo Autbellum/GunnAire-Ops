@@ -25,7 +25,7 @@ enum GunnAireAppRoute: String, CaseIterable {
         case .mail:
             return .mail
         case .invoicesEstimates:
-            return .invoicesEstimates
+            return .invoices
         case .payments:
             return .payments
         case .receiptsBills:
