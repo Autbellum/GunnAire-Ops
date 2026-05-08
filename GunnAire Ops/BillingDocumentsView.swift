@@ -26,9 +26,13 @@ struct BillingDocumentsView: View {
     @State private var customerPhone = ""
     @State private var customerEmail = ""
     @State private var customerAddress = ""
+    @State private var itemSearchText = ""
     @State private var newItemName = ""
+    @State private var newItemType: CatalogItemType = .service
     @State private var newItemDescription = ""
     @State private var newItemPrice = ""
+    @State private var newItemCost = ""
+    @State private var newItemTaxable = false
     @State private var paymentInvoice: Invoice?
     @State private var actionMessage = ""
     @State private var isCreatingDocument = false
@@ -71,6 +75,15 @@ struct BillingDocumentsView: View {
 
     private var suggestedLineItems: [Item] {
         items.filter { suggestedItemIDs.contains($0.id) && !selectedItems.contains($0.id) }
+    }
+
+    private var filteredItems: [Item] {
+        let query = itemSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return items }
+        return items.filter { item in
+            item.name.lowercased().contains(query) ||
+            (item.itemDescription?.lowercased().contains(query) ?? false)
+        }
     }
 
     private var currentJobEstimate: Estimate? {
@@ -195,8 +208,15 @@ struct BillingDocumentsView: View {
                         if !selectedLineItems.isEmpty {
                             ForEach(selectedLineItems.prefix(5)) { item in
                                 HStack {
-                                    Text(item.name)
-                                        .font(.caption)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.name)
+                                            .font(.caption)
+                                        if item.isTaxable {
+                                            Text("Taxable")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
                                     Spacer()
                                     Text(item.unitPrice, format: .currency(code: "USD"))
                                         .font(.caption)
@@ -494,36 +514,47 @@ struct BillingDocumentsView: View {
 
                 Section("Items") {
                     if !suggestedLineItems.isEmpty {
-                        ForEach(suggestedLineItems) { item in
-                            Button {
-                                selectedItems.insert(item.id)
-                            } label: {
-                                HStack {
-                                    Image(systemName: "sparkles")
-                                        .foregroundColor(Color.brandGold)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(item.name)
-                                            .font(.headline)
-                                        if let description = item.itemDescription, !description.isEmpty {
-                                            Text(description)
-                                                .font(.caption)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Suggested For This Job")
+                                .font(.subheadline.weight(.semibold))
+                            ForEach(suggestedLineItems) { item in
+                                Button {
+                                    selectedItems.insert(item.id)
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "sparkles")
+                                            .foregroundColor(Color.brandGold)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(item.name)
+                                                .font(.headline)
+                                            if let description = item.itemDescription, !description.isEmpty {
+                                                Text(description)
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                            Text(item.isTaxable ? "Taxable" : "Non-taxable")
+                                                .font(.caption2)
                                                 .foregroundColor(.secondary)
                                         }
+                                        Spacer()
+                                        Text(item.unitPrice, format: .currency(code: "USD"))
+                                            .foregroundColor(.secondary)
                                     }
-                                    Spacer()
-                                    Text(item.unitPrice, format: .currency(code: "USD"))
-                                        .foregroundColor(.secondary)
+                                    .contentShape(Rectangle())
                                 }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
+
+                    TextField("Search items", text: $itemSearchText)
+                        .textInputAutocapitalization(.never)
 
                     if items.isEmpty {
                         Text("No items yet. Add one below.")
                             .foregroundColor(.secondary)
                     } else {
-                        ForEach(items) { item in
+                        ForEach(filteredItems) { item in
                             Button {
                                 toggleItem(item)
                             } label: {
@@ -538,6 +569,19 @@ struct BillingDocumentsView: View {
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
                                         }
+                                        HStack(spacing: 8) {
+                                            Text(item.itemType.rawValue)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                            Text(item.isTaxable ? "Taxable" : "Non-taxable")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                            if let purchaseCost = item.purchaseCost {
+                                                Text("Cost: \(purchaseCost, format: .currency(code: "USD"))")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                        }
                                         if let quickBooksID = item.quickBooksID, !quickBooksID.isEmpty {
                                             Text("QuickBooks linked")
                                                 .font(.caption2)
@@ -547,9 +591,15 @@ struct BillingDocumentsView: View {
                                     Spacer()
                                     Text(item.unitPrice, format: .currency(code: "USD"))
                                 }
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
+                    }
+
+                    if !items.isEmpty && filteredItems.isEmpty {
+                        Text("No items match that search.")
+                            .foregroundColor(.secondary)
                     }
 
                     if isQuickBooksConnected {
@@ -560,10 +610,18 @@ struct BillingDocumentsView: View {
                     }
 
                     TextField("New item", text: $newItemName)
+                    Picker("Item Type", selection: $newItemType) {
+                        ForEach(CatalogItemType.allCases) { type in
+                            Text(type.rawValue).tag(type)
+                        }
+                    }
                     TextField("Description", text: $newItemDescription, axis: .vertical)
                         .lineLimit(2...3)
+                    Toggle("Taxable", isOn: $newItemTaxable)
                     HStack {
                         TextField("Price", text: $newItemPrice)
+                            .keyboardType(.decimalPad)
+                        TextField("Cost", text: $newItemCost)
                             .keyboardType(.decimalPad)
                         Button {
                             addItem()
@@ -786,16 +844,24 @@ struct BillingDocumentsView: View {
 
     private func addItem() {
         guard let price = Double(newItemPrice) else { return }
+        let cost = Double(newItemCost)
         let item = Item(
             name: newItemName.trimmingCharacters(in: .whitespacesAndNewlines),
+            itemType: newItemType,
             unitPrice: price,
+            purchaseCost: cost,
+            isTaxable: newItemTaxable,
             itemDescription: newItemDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : newItemDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         modelContext.insert(item)
         selectedItems.insert(item.id)
+        itemSearchText = ""
         newItemName = ""
+        newItemType = .service
         newItemDescription = ""
         newItemPrice = ""
+        newItemCost = ""
+        newItemTaxable = false
     }
 
     private func importQuickBooksItems() {
@@ -814,7 +880,12 @@ struct BillingDocumentsView: View {
                         let normalizedID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
                         if let existing = items.first(where: { $0.quickBooksID == normalizedID }) {
                             existing.name = quickBooksItem.Name
+                            if let itemType = quickBooksItem.ItemType {
+                                existing.itemTypeRawValue = itemType
+                            }
                             existing.unitPrice = quickBooksItem.UnitPrice ?? existing.unitPrice
+                            existing.purchaseCost = quickBooksItem.PurchaseCost ?? existing.purchaseCost
+                            existing.isTaxable = quickBooksItem.Taxable ?? existing.isTaxable
                             existing.itemDescription = quickBooksItem.Description ?? existing.itemDescription
                             continue
                         }
@@ -822,7 +893,10 @@ struct BillingDocumentsView: View {
                         let localItem = Item(
                             quickBooksID: normalizedID,
                             name: quickBooksItem.Name,
+                            itemType: CatalogItemType(rawValue: quickBooksItem.ItemType ?? "") ?? .service,
                             unitPrice: quickBooksItem.UnitPrice ?? 0,
+                            purchaseCost: quickBooksItem.PurchaseCost,
+                            isTaxable: quickBooksItem.Taxable ?? false,
                             itemDescription: quickBooksItem.Description
                         )
                         modelContext.insert(localItem)
@@ -1199,10 +1273,18 @@ struct BillingDocumentsView: View {
 
         let payload = QuickBooksItemCreate(
             Name: item.name,
-            ItemType: "Service",
+            ItemType: item.itemType.rawValue,
             Description: item.itemDescription,
+            PurchaseDesc: item.itemDescription,
             UnitPrice: item.unitPrice,
-            IncomeAccountRef: nil
+            PurchaseCost: item.purchaseCost,
+            Taxable: item.isTaxable,
+            IncomeAccountRef: Config.QuickBooks.defaultIncomeAccountRef.isEmpty
+                ? nil
+                : QuickBooksReference(value: Config.QuickBooks.defaultIncomeAccountRef, name: nil),
+            ExpenseAccountRef: Config.QuickBooks.defaultExpenseAccountRef.isEmpty
+                ? nil
+                : QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil)
         )
         liveAPI.createItem(payload) { result in
             DispatchQueue.main.async {

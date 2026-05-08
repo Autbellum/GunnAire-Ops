@@ -1003,8 +1003,14 @@ struct QuickBooksManagementView: View {
             Name: name,
             ItemType: "Service",
             Description: description,
+            PurchaseDesc: description,
             UnitPrice: price,
-            IncomeAccountRef: QuickBooksReference(value: Config.QuickBooks.defaultIncomeAccountRef, name: nil)
+            PurchaseCost: nil,
+            Taxable: nil,
+            IncomeAccountRef: QuickBooksReference(value: Config.QuickBooks.defaultIncomeAccountRef, name: nil),
+            ExpenseAccountRef: Config.QuickBooks.defaultExpenseAccountRef.isEmpty
+                ? nil
+                : QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil)
         )
 
         performAction(message: "Creating catalog item in QuickBooks...") {
