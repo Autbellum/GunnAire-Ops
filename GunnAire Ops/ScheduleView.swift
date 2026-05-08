@@ -5,6 +5,7 @@ struct ScheduleView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
     @Query(sort: [SortDescriptor(\ServiceCall.scheduledDate)]) private var serviceCalls: [ServiceCall]
+    @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -70,6 +71,29 @@ struct ScheduleView: View {
                 return estimate.status == "accepted" && call.linkedInvoiceID == nil
             }
             .sorted { $0.scheduledDate > $1.scheduledDate }
+    }
+
+    private var signedInTechnician: Technician? {
+        guard let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") else {
+            return nil
+        }
+        return technicians.first { technician in
+            technician.contactInfo?.localizedCaseInsensitiveContains(email) == true ||
+            email.localizedCaseInsensitiveContains(technician.name)
+        }
+    }
+
+    private var unassignedUpcomingCalls: [ServiceCall] {
+        let now = Date()
+        let sevenDaysAhead = Calendar.current.date(byAdding: .day, value: 7, to: now) ?? now
+        return serviceCalls
+            .filter { call in
+                call.assignedTechnician == nil &&
+                call.status != .cancelled &&
+                call.scheduledDate >= now &&
+                call.scheduledDate <= sevenDaysAhead
+            }
+            .sorted { $0.scheduledDate < $1.scheduledDate }
     }
 
     private var callsForSignedInUser: [ServiceCall] {
@@ -421,6 +445,40 @@ struct ScheduleView: View {
                     }
                 }
             }
+
+            if !unassignedUpcomingCalls.isEmpty {
+                Divider()
+                Text("Unassigned Work")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.brandGold)
+
+                ForEach(unassignedUpcomingCalls.prefix(3)) { job in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(job.customer.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text(job.type.rawValue.capitalized)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if let signedInTechnician {
+                            Button("Assign To Me") {
+                                assign(job, to: signedInTechnician)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(Color.brandGold)
+                        }
+                    }
+                }
+            }
         }
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -706,6 +764,10 @@ struct ScheduleView: View {
         sourceCall.followUpDueDate = nil
         selectedDate = Calendar.current.startOfDay(for: approvedWorkCall.scheduledDate)
         navigationPath.append(approvedWorkCall)
+    }
+
+    private func assign(_ call: ServiceCall, to technician: Technician) {
+        call.assignedTechnician = technician
     }
 
 }
