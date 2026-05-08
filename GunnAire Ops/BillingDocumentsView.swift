@@ -20,7 +20,6 @@ struct BillingDocumentsView: View {
     @State private var selectedDocumentKind: BillingDocumentKind
     @State private var selectedCustomerID: UUID?
     @State private var selectedItems: Set<UUID> = []
-    @State private var suggestedItemIDs: Set<UUID> = []
     @State private var notes = ""
     @State private var customerName = ""
     @State private var customerPhone = ""
@@ -44,6 +43,8 @@ struct BillingDocumentsView: View {
     @State private var didLoadLinkedDocumentContext = false
     @State private var didTriggerInitialCloseout = false
     @State private var pendingIntentServiceCallID: UUID?
+    @State private var showingItemSelector = false
+    @State private var showingItemCreator = false
 
     init(initialServiceCall: ServiceCall? = nil, openCloseoutOnAppear: Bool = false, openTapToPayOnAppear: Bool = false) {
         self.initialServiceCall = initialServiceCall
@@ -71,10 +72,6 @@ struct BillingDocumentsView: View {
 
     private var selectedLineItems: [Item] {
         items.filter { selectedItems.contains($0.id) }
-    }
-
-    private var suggestedLineItems: [Item] {
-        items.filter { suggestedItemIDs.contains($0.id) && !selectedItems.contains($0.id) }
     }
 
     private var filteredItems: [Item] {
@@ -204,6 +201,18 @@ struct BillingDocumentsView: View {
                             Text("\(selectedLineItems.count)")
                                 .foregroundColor(.secondary)
                         }
+
+                        Menu {
+                            Button("Select Existing Items") {
+                                showingItemSelector = true
+                            }
+                            Button("Create New Item") {
+                                showingItemCreator = true
+                            }
+                        } label: {
+                            Label("Items", systemImage: "chevron.down.circle")
+                        }
+                        .foregroundStyle(Color.brandGold)
 
                         if !selectedLineItems.isEmpty {
                             ForEach(selectedLineItems.prefix(5)) { item in
@@ -504,40 +513,6 @@ struct BillingDocumentsView: View {
                 }
 
                 Section("Items") {
-                    if !suggestedLineItems.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Suggested For This Job")
-                                .font(.subheadline.weight(.semibold))
-                            ForEach(suggestedLineItems) { item in
-                                Button {
-                                    selectedItems.insert(item.id)
-                                } label: {
-                                    HStack {
-                                        Image(systemName: "sparkles")
-                                            .foregroundColor(Color.brandGold)
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(item.name)
-                                                .font(.headline)
-                                            if let description = item.itemDescription, !description.isEmpty {
-                                                Text(description)
-                                                    .font(.caption)
-                                                    .foregroundColor(.secondary)
-                                            }
-                                            Text(item.isTaxable ? "Taxable" : "Non-taxable")
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                        }
-                                        Spacer()
-                                        Text(item.unitPrice, format: .currency(code: "USD"))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-
                     TextField("Search items", text: $itemSearchText)
                         .textInputAutocapitalization(.never)
 
@@ -733,6 +708,15 @@ struct BillingDocumentsView: View {
             .sheet(item: $paymentInvoice) { invoice in
                 RecordInvoicePaymentView(invoice: invoice, autoStartTapToPay: openTapToPayOnAppear)
             }
+            .sheet(isPresented: $showingItemSelector) {
+                DocumentationItemSelectorView(items: items, selectedItems: $selectedItems)
+            }
+            .sheet(isPresented: $showingItemCreator) {
+                DocumentationItemCreatorView { createdItemID in
+                    selectedItems.insert(createdItemID)
+                    itemSearchText = ""
+                }
+            }
             .onAppear(perform: loadInitialContextIfNeeded)
             .onChange(of: selectedCustomerID) { _, newValue in
                 guard let newValue, let customer = customers.first(where: { $0.id == newValue }) else { return }
@@ -766,9 +750,6 @@ struct BillingDocumentsView: View {
             }
             if !didLoadLinkedDocumentContext {
                 loadLinkedDocumentContextIfNeeded()
-            }
-            if selectedItems.isEmpty {
-                suggestedItemIDs = recommendedItemIDs(for: call)
             }
             openInvoiceAfterEstimateCreation = true
             openCloseoutAfterInvoiceCreation = true
@@ -896,9 +877,6 @@ struct BillingDocumentsView: View {
                     actionMessage = imported == 0
                         ? "QuickBooks catalog is already up to date."
                         : "Imported \(imported) catalog items from QuickBooks."
-                    if let call = activeServiceCall, selectedItems.isEmpty {
-                        suggestedItemIDs = recommendedItemIDs(for: call)
-                    }
                 }
             }
         }
@@ -909,61 +887,6 @@ struct BillingDocumentsView: View {
         didAttemptInitialCatalogImport = true
         guard isQuickBooksConnected, items.isEmpty else { return }
         importQuickBooksItems()
-    }
-
-    private func recommendedItemIDs(for call: ServiceCall) -> Set<UUID> {
-        let keywords = recommendationKeywords(for: call)
-        guard !keywords.isEmpty else { return [] }
-
-        let rankedItems = items.compactMap { item -> (UUID, Int)? in
-            let haystack = [
-                item.name,
-                item.itemDescription ?? ""
-            ]
-            .joined(separator: " ")
-            .lowercased()
-
-            let score = keywords.reduce(into: 0) { partialResult, keyword in
-                if haystack.contains(keyword) {
-                    partialResult += keyword.count
-                }
-            }
-
-            guard score > 0 else { return nil }
-            return (item.id, score)
-        }
-        .sorted { lhs, rhs in
-            if lhs.1 == rhs.1 {
-                return lhs.0.uuidString < rhs.0.uuidString
-            }
-            return lhs.1 > rhs.1
-        }
-
-        return Set(rankedItems.prefix(3).map(\.0))
-    }
-
-    private func recommendationKeywords(for call: ServiceCall) -> [String] {
-        var keywords = [call.type.rawValue.lowercased()]
-        let noteWords = (call.notes ?? "")
-            .lowercased()
-            .split { !$0.isLetter && !$0.isNumber }
-            .map(String.init)
-            .filter { $0.count >= 4 }
-
-        keywords.append(contentsOf: noteWords)
-
-        switch call.type {
-        case .service:
-            keywords.append(contentsOf: ["service", "diagnostic", "repair"])
-        case .estimate:
-            keywords.append(contentsOf: ["estimate", "inspection", "proposal"])
-        case .install:
-            keywords.append(contentsOf: ["install", "installation", "replacement"])
-        case .maintenance:
-            keywords.append(contentsOf: ["maintenance", "tune", "cleaning"])
-        }
-
-        return Array(Set(keywords))
     }
 
     private func loadEstimateIntoBuilder(_ estimate: Estimate, announce: Bool = true) {
@@ -1013,12 +936,10 @@ struct BillingDocumentsView: View {
         self.notes = notes ?? ""
 
         let restoredItems = matchingItemIDs(from: lineItemSummary)
-        if restoredItems.isEmpty, let call = activeServiceCall {
+        if restoredItems.isEmpty, activeServiceCall != nil {
             selectedItems.removeAll()
-            suggestedItemIDs = recommendedItemIDs(for: call)
         } else {
             selectedItems = restoredItems
-            suggestedItemIDs.removeAll()
         }
 
         if announce {
@@ -1791,6 +1712,144 @@ private struct RecordInvoicePaymentView: View {
             return trimmedExisting
         }
         return "\(trimmedExisting)\n\nCloseout Notes:\n\(completionNotes)"
+    }
+}
+
+private struct DocumentationItemSelectorView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let items: [Item]
+    @Binding var selectedItems: Set<UUID>
+
+    @State private var searchText = ""
+
+    private var filteredItems: [Item] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return items }
+        return items.filter { item in
+            item.name.lowercased().contains(query) ||
+            (item.itemDescription?.lowercased().contains(query) ?? false)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                TextField("Search items", text: $searchText)
+                    .textInputAutocapitalization(.never)
+
+                if filteredItems.isEmpty {
+                    Text("No matching items.")
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(filteredItems) { item in
+                        Button {
+                            if selectedItems.contains(item.id) {
+                                selectedItems.remove(item.id)
+                            } else {
+                                selectedItems.insert(item.id)
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: selectedItems.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundColor(Color.brandGold)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(item.name)
+                                        .font(.headline)
+                                    if let description = item.itemDescription, !description.isEmpty {
+                                        Text(description)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    HStack(spacing: 8) {
+                                        Text(item.itemType.rawValue)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        Text(item.isTaxable ? "Taxable" : "Non-taxable")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Text(item.unitPrice, format: .currency(code: "USD"))
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .navigationTitle("Select Items")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+private struct DocumentationItemCreatorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+
+    let onCreated: (UUID) -> Void
+
+    @State private var name = ""
+    @State private var itemType: CatalogItemType = .service
+    @State private var description = ""
+    @State private var price = ""
+    @State private var cost = ""
+    @State private var isTaxable = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Item name", text: $name)
+                Picker("Item Type", selection: $itemType) {
+                    ForEach(CatalogItemType.allCases) { type in
+                        Text(type.rawValue).tag(type)
+                    }
+                }
+                TextField("Description", text: $description, axis: .vertical)
+                    .lineLimit(2...3)
+                Toggle("Taxable", isOn: $isTaxable)
+                TextField("Sales price", text: $price)
+                    .keyboardType(.decimalPad)
+                TextField("Cost", text: $cost)
+                    .keyboardType(.decimalPad)
+            }
+            .navigationTitle("Create Item")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        saveItem()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Double(price) == nil)
+                }
+            }
+        }
+    }
+
+    private func saveItem() {
+        guard let salesPrice = Double(price) else { return }
+        let item = Item(
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            itemType: itemType,
+            unitPrice: salesPrice,
+            purchaseCost: Double(cost),
+            isTaxable: isTaxable,
+            itemDescription: {
+                let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }()
+        )
+        modelContext.insert(item)
+        onCreated(item.id)
+        dismiss()
     }
 }
 
