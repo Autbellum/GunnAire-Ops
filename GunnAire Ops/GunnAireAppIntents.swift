@@ -177,6 +177,25 @@ enum GunnAireAppIntentRouter {
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingOpenPaymentCollection")
         return id
     }
+
+    nonisolated static func storeMailDraftRoute(to: String, subject: String, body: String) {
+        UserDefaults.standard.set(to, forKey: "GunnAirePendingMailTo")
+        UserDefaults.standard.set(subject, forKey: "GunnAirePendingMailSubject")
+        UserDefaults.standard.set(body, forKey: "GunnAirePendingMailBody")
+        store(.mail)
+    }
+
+    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String)? {
+        guard let to = UserDefaults.standard.string(forKey: "GunnAirePendingMailTo"),
+              let subject = UserDefaults.standard.string(forKey: "GunnAirePendingMailSubject"),
+              let body = UserDefaults.standard.string(forKey: "GunnAirePendingMailBody") else {
+            return nil
+        }
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailTo")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailSubject")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailBody")
+        return (to, subject, body)
+    }
 }
 
 private enum GunnAireIntentStore {

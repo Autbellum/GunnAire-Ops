@@ -412,7 +412,7 @@ struct ScheduleView: View {
 
                                     if let followUpEmailURL = followUpEmailURL(for: job) {
                                         Button("Email Customer") {
-                                            openURL(followUpEmailURL)
+                                            openFollowUpEmail(for: job, fallbackURL: followUpEmailURL)
                                             if !job.followUpRequired {
                                                 job.followUpRequired = true
                                             }
@@ -465,7 +465,7 @@ struct ScheduleView: View {
 
                         if let maintenanceReminderEmailURL = maintenanceReminderEmailURL(for: contract) {
                             Button("Send Reminder") {
-                                openURL(maintenanceReminderEmailURL)
+                                openMaintenanceReminderEmail(for: contract, fallbackURL: maintenanceReminderEmailURL)
                                 contract.active = true
                             }
                             .buttonStyle(.bordered)
@@ -954,6 +954,18 @@ struct ScheduleView: View {
     }
 
     private func followUpEmailURL(for call: ServiceCall) -> URL? {
+        guard let draft = followUpEmailDraft(for: call) else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = draft.to
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: draft.subject),
+            URLQueryItem(name: "body", value: draft.body)
+        ]
+        return components.url
+    }
+
+    private func followUpEmailDraft(for call: ServiceCall) -> (to: String, subject: String, body: String)? {
         guard let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else { return nil }
         let trimmedFollowUpAction = call.followUpAction?
@@ -961,12 +973,10 @@ struct ScheduleView: View {
         let followUpMessage = (trimmedFollowUpAction?.isEmpty == false)
             ? trimmedFollowUpAction!
             : "Please let us know if you would like to move forward or if you have any questions."
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = email
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: "Follow-Up From GunnAire"),
-            URLQueryItem(name: "body", value: """
+        return (
+            to: email,
+            subject: "Follow-Up From GunnAire",
+            body: """
 Hello \(call.customer.name),
 
 Following up on your recent \(call.type.rawValue) appointment with GunnAire.
@@ -975,20 +985,29 @@ Following up on your recent \(call.type.rawValue) appointment with GunnAire.
 
 Thank you,
 GunnAire
-""")
+"""
+        )
+    }
+
+    private func maintenanceReminderEmailURL(for contract: RecurringMaintenanceContract) -> URL? {
+        guard let draft = maintenanceReminderEmailDraft(for: contract) else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = draft.to
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: draft.subject),
+            URLQueryItem(name: "body", value: draft.body)
         ]
         return components.url
     }
 
-    private func maintenanceReminderEmailURL(for contract: RecurringMaintenanceContract) -> URL? {
+    private func maintenanceReminderEmailDraft(for contract: RecurringMaintenanceContract) -> (to: String, subject: String, body: String)? {
         guard let email = contract.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else { return nil }
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = email
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: "Maintenance Reminder From GunnAire"),
-            URLQueryItem(name: "body", value: """
+        return (
+            to: email,
+            subject: "Maintenance Reminder From GunnAire",
+            body: """
 Hello \(contract.customer.name),
 
 This is a reminder that your \(contract.schedulePattern) maintenance visit is due on \(contract.nextDate.formatted(date: .abbreviated, time: .omitted)).
@@ -997,9 +1016,24 @@ Reply to this email if you would like us to schedule your visit.
 
 Thank you,
 GunnAire
-""")
-        ]
-        return components.url
+"""
+        )
+    }
+
+    private func openFollowUpEmail(for call: ServiceCall, fallbackURL: URL) {
+        if googleAuth.isAuthenticated, let draft = followUpEmailDraft(for: call) {
+            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+        } else {
+            openURL(fallbackURL)
+        }
+    }
+
+    private func openMaintenanceReminderEmail(for contract: RecurringMaintenanceContract, fallbackURL: URL) {
+        if googleAuth.isAuthenticated, let draft = maintenanceReminderEmailDraft(for: contract) {
+            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+        } else {
+            openURL(fallbackURL)
+        }
     }
 
     private func scheduleMaintenanceVisit(for contract: RecurringMaintenanceContract) {

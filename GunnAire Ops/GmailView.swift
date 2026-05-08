@@ -10,6 +10,7 @@ struct GmailView: View {
     @State private var selectedMessage: GmailMessageDetail?
     @State private var showingComposeSheet = false
     @State private var composeDraft: GmailDraft?
+    @State private var didConsumePendingDraft = false
 
     var body: some View {
         NavigationStack {
@@ -94,6 +95,7 @@ struct GmailView: View {
                 if googleAuth.isAuthenticated && messages.isEmpty {
                     loadMessages()
                 }
+                applyPendingDraftIfNeeded()
             }
             .onSubmit(of: .search) {
                 loadMessages()
@@ -156,6 +158,18 @@ struct GmailView: View {
                 }
             }
         }
+    }
+
+    private func applyPendingDraftIfNeeded() {
+        guard !didConsumePendingDraft else { return }
+        didConsumePendingDraft = true
+        guard let draft = GunnAireAppIntentRouter.consumePendingMailDraft() else { return }
+        composeDraft = GmailDraft(
+            to: draft.to,
+            subject: draft.subject,
+            body: draft.body,
+            threadID: nil
+        )
     }
 
     private func headerValue(named name: String, in message: GmailMessageDetail) -> String? {

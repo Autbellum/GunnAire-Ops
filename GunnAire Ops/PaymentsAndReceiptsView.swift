@@ -52,6 +52,7 @@ struct PaymentsAndReceiptsView: View {
     @State private var quickBooksPaymentReceipts: [String: QuickBooksPaymentsPaymentReceipt] = [:]
 
     private let liveAPI = QuickBooksDataAPI.shared
+    private let googleAuth = GoogleAuthManager.shared
 
     private var selectedInvoice: Invoice? {
         guard let selectedInvoiceID else { return nil }
@@ -200,7 +201,7 @@ struct PaymentsAndReceiptsView: View {
 
                                         if let reminderURL = reminderEmailURL(for: entry.invoice, balanceDue: entry.balanceDue) {
                                             Button("Email Reminder") {
-                                                openURL(reminderURL)
+                                                openReminderEmail(for: entry.invoice, balanceDue: entry.balanceDue, fallbackURL: reminderURL)
                                                 markCollectionFollowUp(for: entry.invoice)
                                             }
                                             .buttonStyle(.bordered)
@@ -344,7 +345,7 @@ struct PaymentsAndReceiptsView: View {
 
                                         if let receiptURL = receiptEmailURL(for: payment) {
                                             Button("Send Receipt") {
-                                                openURL(receiptURL)
+                                                openReceiptEmail(for: payment, fallbackURL: receiptURL)
                                             }
                                             .buttonStyle(.bordered)
                                         }
@@ -854,14 +855,24 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private func reminderEmailURL(for invoice: Invoice, balanceDue: Double) -> URL? {
-        guard let email = invoice.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !email.isEmpty else { return nil }
+        guard let draft = reminderEmailDraft(for: invoice, balanceDue: balanceDue) else { return nil }
         var components = URLComponents()
         components.scheme = "mailto"
-        components.path = email
+        components.path = draft.to
         components.queryItems = [
-            URLQueryItem(name: "subject", value: "Invoice Balance Due - \(invoiceReference(for: invoice))"),
-            URLQueryItem(name: "body", value: """
+            URLQueryItem(name: "subject", value: draft.subject),
+            URLQueryItem(name: "body", value: draft.body)
+        ]
+        return components.url
+    }
+
+    private func reminderEmailDraft(for invoice: Invoice, balanceDue: Double) -> (to: String, subject: String, body: String)? {
+        guard let email = invoice.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        return (
+            to: email,
+            subject: "Invoice Balance Due - \(invoiceReference(for: invoice))",
+            body: """
 Hello \(invoice.customer.name),
 
 This is a reminder that your current invoice balance is \(balanceDue.formatted(.currency(code: "USD"))).
@@ -870,21 +881,30 @@ Invoice reference: \(invoiceReference(for: invoice))
 
 Thank you,
 GunnAire
-""")
+"""
+        )
+    }
+
+    private func receiptEmailURL(for payment: Payment) -> URL? {
+        guard let draft = receiptEmailDraft(for: payment) else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = draft.to
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: draft.subject),
+            URLQueryItem(name: "body", value: draft.body)
         ]
         return components.url
     }
 
-    private func receiptEmailURL(for payment: Payment) -> URL? {
+    private func receiptEmailDraft(for payment: Payment) -> (to: String, subject: String, body: String)? {
         guard let email = payment.invoice.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else { return nil }
         let remainingBalance = outstandingBalance(for: payment.invoice)
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = email
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: "Payment Receipt - \(invoiceReference(for: payment.invoice))"),
-            URLQueryItem(name: "body", value: """
+        return (
+            to: email,
+            subject: "Payment Receipt - \(invoiceReference(for: payment.invoice))",
+            body: """
 Hello \(payment.invoice.customer.name),
 
 We received your payment of \(payment.amount.formatted(.currency(code: "USD"))) on \(payment.date.formatted(date: .abbreviated, time: .shortened)).
@@ -894,9 +914,24 @@ Remaining balance: \(remainingBalance.formatted(.currency(code: "USD")))
 
 Thank you,
 GunnAire
-""")
-        ]
-        return components.url
+"""
+        )
+    }
+
+    private func openReminderEmail(for invoice: Invoice, balanceDue: Double, fallbackURL: URL) {
+        if googleAuth.isAuthenticated, let draft = reminderEmailDraft(for: invoice, balanceDue: balanceDue) {
+            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+        } else {
+            openURL(fallbackURL)
+        }
+    }
+
+    private func openReceiptEmail(for payment: Payment, fallbackURL: URL) {
+        if googleAuth.isAuthenticated, let draft = receiptEmailDraft(for: payment) {
+            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+        } else {
+            openURL(fallbackURL)
+        }
     }
 
     private func invoiceReference(for invoice: Invoice) -> String {
