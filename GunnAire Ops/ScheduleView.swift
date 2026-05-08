@@ -706,6 +706,45 @@ struct ScheduleView: View {
             }
             .font(.caption2)
             .foregroundColor(.secondary)
+
+            HStack(spacing: 10) {
+                if hasNavigableAddress(for: call) {
+                    Button("Navigate") {
+                        openMaps(for: call)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Docs" : "Start Docs") {
+                    openDocumentationInCloseout = false
+                    openDocumentationInTapToPay = false
+                    documentationCall = call
+                }
+                .buttonStyle(.bordered)
+
+                if call.assignedTechnician == nil, let signedInTechnician {
+                    Button("Assign To Me") {
+                        assign(call, to: signedInTechnician)
+                    }
+                    .buttonStyle(.bordered)
+                } else if call.linkedInvoiceID == nil && (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
+                    Button("Invoice") {
+                        openDocumentationInCloseout = false
+                        openDocumentationInTapToPay = false
+                        documentationCall = call
+                    }
+                    .buttonStyle(.bordered)
+                } else if let invoice = invoice(for: call), invoice.status != "paid" {
+                    Button(tapToPayReady ? "Pay" : "Collect") {
+                        openDocumentationInCloseout = true
+                        openDocumentationInTapToPay = tapToPayReady
+                        documentationCall = call
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .tint(Color.brandGold)
         }
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
