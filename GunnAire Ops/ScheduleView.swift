@@ -83,6 +83,10 @@ struct ScheduleView: View {
         }
     }
 
+    private var assignableTechnicians: [Technician] {
+        technicians.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     private var unassignedUpcomingCalls: [ServiceCall] {
         let now = Date()
         let sevenDaysAhead = Calendar.current.date(byAdding: .day, value: 7, to: now) ?? now
@@ -476,6 +480,26 @@ struct ScheduleView: View {
                             .buttonStyle(.bordered)
                             .tint(Color.brandGold)
                         }
+
+                        if !assignableTechnicians.isEmpty {
+                            Menu {
+                                ForEach(assignableTechnicians) { technician in
+                                    if let nextAvailableStart = nextAvailableStart(for: technician, proposedStart: job.scheduledDate, duration: job.duration),
+                                       nextAvailableStart > job.scheduledDate {
+                                        Button("\(technician.name) • move to \(nextAvailableStart.formatted(date: .omitted, time: .shortened))") {
+                                            assign(job, to: technician, reschedulingTo: nextAvailableStart)
+                                        }
+                                    } else {
+                                        Button(technician.name) {
+                                            assign(job, to: technician)
+                                        }
+                                    }
+                                }
+                            } label: {
+                                Label("Assign Technician", systemImage: "person.crop.circle.badge.plus")
+                            }
+                            .tint(Color.brandGold)
+                        }
                     }
                 }
             }
@@ -512,6 +536,11 @@ struct ScheduleView: View {
                     .lineLimit(2)
             }
             HStack(spacing: 8) {
+                if let technician = call.assignedTechnician {
+                    Label(technician.name, systemImage: "person.fill")
+                } else {
+                    Label("Unassigned", systemImage: "person.slash")
+                }
                 if call.googleEventID != nil {
                     Label("Google", systemImage: "calendar.badge.checkmark")
                 }
@@ -768,6 +797,28 @@ struct ScheduleView: View {
 
     private func assign(_ call: ServiceCall, to technician: Technician) {
         call.assignedTechnician = technician
+    }
+
+    private func assign(_ call: ServiceCall, to technician: Technician, reschedulingTo newStart: Date) {
+        call.assignedTechnician = technician
+        call.scheduledDate = newStart
+    }
+
+    private func nextAvailableStart(for technician: Technician, proposedStart: Date, duration: TimeInterval) -> Date? {
+        let proposedEnd = proposedStart.addingTimeInterval(duration)
+        let conflicts = serviceCalls
+            .filter { call in
+                guard call.assignedTechnician?.id == technician.id, call.status != .cancelled else { return false }
+                let existingStart = call.scheduledDate
+                let existingEnd = call.scheduledDate.addingTimeInterval(call.duration)
+                return proposedStart < existingEnd && proposedEnd > existingStart
+            }
+            .sorted { $0.scheduledDate < $1.scheduledDate }
+
+        guard !conflicts.isEmpty else { return proposedStart }
+        return conflicts
+            .map { $0.scheduledDate.addingTimeInterval($0.duration) }
+            .max()
     }
 
 }
