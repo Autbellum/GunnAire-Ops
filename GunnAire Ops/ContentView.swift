@@ -1132,6 +1132,13 @@ struct AddServiceCallView: View {
         }
         .sorted { $0.scheduledDate < $1.scheduledDate }
     }
+
+    private var nextAvailableStartTime: Date? {
+        guard !conflictingCalls.isEmpty else { return nil }
+        return conflictingCalls
+            .map { $0.scheduledDate.addingTimeInterval($0.duration) }
+            .max()
+    }
     
     var body: some View {
         ZStack {
@@ -1304,6 +1311,15 @@ struct AddServiceCallView: View {
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
                             }
+                        }
+                        if let nextAvailableStartTime {
+                            Button("Use Next Available Slot") {
+                                scheduledTime = nextAvailableStartTime
+                            }
+                            .buttonStyle(.bordered)
+                            Text("Suggested start: \(nextAvailableStartTime.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
                         }
                     }
                 }
@@ -1526,6 +1542,13 @@ struct EditServiceCallView: View {
         .sorted { $0.scheduledDate < $1.scheduledDate }
     }
 
+    private var nextAvailableStartTime: Date? {
+        guard !conflictingCalls.isEmpty else { return nil }
+        return conflictingCalls
+            .map { $0.scheduledDate.addingTimeInterval($0.duration) }
+            .max()
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -1582,6 +1605,15 @@ struct EditServiceCallView: View {
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
                             }
+                        }
+                        if let nextAvailableStartTime {
+                            Button("Use Next Available Slot") {
+                                scheduledTime = nextAvailableStartTime
+                            }
+                            .buttonStyle(.bordered)
+                            Text("Suggested start: \(nextAvailableStartTime.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
                         }
                     }
                 }
