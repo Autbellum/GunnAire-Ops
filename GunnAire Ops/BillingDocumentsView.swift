@@ -41,9 +41,16 @@ struct BillingDocumentsView: View {
     @State private var pendingIntentServiceCallID: UUID?
     @State private var showingItemSelector = false
     @State private var showingItemCreator = false
+    private let workspaceMode: BillingWorkspaceMode
 
-    init(initialServiceCall: ServiceCall? = nil, openCloseoutOnAppear: Bool = false, openTapToPayOnAppear: Bool = false) {
+    init(
+        initialServiceCall: ServiceCall? = nil,
+        workspaceMode: BillingWorkspaceMode = .all,
+        openCloseoutOnAppear: Bool = false,
+        openTapToPayOnAppear: Bool = false
+    ) {
         self.initialServiceCall = initialServiceCall
+        self.workspaceMode = workspaceMode
         _selectedDocumentKind = State(initialValue: initialServiceCall?.type == .estimate ? .estimate : .invoice)
     }
 
@@ -223,6 +230,17 @@ GunnAire
 """)
         ]
         return components.url
+    }
+
+    private var isJobDocumentationMode: Bool {
+        activeServiceCall != nil
+    }
+
+    private var navigationTitle: String {
+        if isJobDocumentationMode {
+            return "Job Documentation"
+        }
+        return workspaceMode.navigationTitle
     }
 
     var body: some View {
@@ -766,206 +784,214 @@ GunnAire
                     }
                 }
 
-                Section("Items") {
-                    TextField("Search items", text: $itemSearchText)
-                        .textInputAutocapitalization(.never)
+                if !isJobDocumentationMode {
+                    Section("Items") {
+                        TextField("Search items", text: $itemSearchText)
+                            .textInputAutocapitalization(.never)
 
-                    if items.isEmpty {
-                        Text("No items yet. Add one below.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        Picker("Catalog Filter", selection: $catalogFilter) {
-                            ForEach(DocumentationCatalogFilter.allCases) { filter in
-                                Text(filter.label).tag(filter)
+                        if items.isEmpty {
+                            Text("No items yet. Add one below.")
+                                .foregroundColor(.secondary)
+                        } else {
+                            Picker("Catalog Filter", selection: $catalogFilter) {
+                                ForEach(DocumentationCatalogFilter.allCases) { filter in
+                                    Text(filter.label).tag(filter)
+                                }
                             }
-                        }
-                        .pickerStyle(.segmented)
+                            .pickerStyle(.segmented)
 
-                        ForEach(filteredItems) { item in
-                            Button {
-                                toggleItem(item)
-                            } label: {
-                                HStack {
-                                    Image(systemName: selectedItems.contains(item.id) ? "checkmark.circle.fill" : "circle")
-                                        .foregroundColor(Color.brandGold)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(item.name)
-                                            .font(.headline)
-                                        if let description = item.itemDescription, !description.isEmpty {
-                                            Text(description)
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-                                        HStack(spacing: 8) {
-                                            Text(item.itemType.rawValue)
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                            Text(item.isTaxable ? "Taxable" : "Non-taxable")
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                            if let purchaseCost = item.purchaseCost {
-                                                Text("Cost: \(purchaseCost, format: .currency(code: "USD"))")
+                            ForEach(filteredItems) { item in
+                                Button {
+                                    toggleItem(item)
+                                } label: {
+                                    HStack {
+                                        Image(systemName: selectedItems.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                            .foregroundColor(Color.brandGold)
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(item.name)
+                                                .font(.headline)
+                                            if let description = item.itemDescription, !description.isEmpty {
+                                                Text(description)
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                            HStack(spacing: 8) {
+                                                Text(item.itemType.rawValue)
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                                Text(item.isTaxable ? "Taxable" : "Non-taxable")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                                if let purchaseCost = item.purchaseCost {
+                                                    Text("Cost: \(purchaseCost, format: .currency(code: "USD"))")
+                                                        .font(.caption2)
+                                                        .foregroundColor(.secondary)
+                                                }
+                                            }
+                                            if let quickBooksID = item.quickBooksID, !quickBooksID.isEmpty {
+                                                Text("QuickBooks linked")
                                                     .font(.caption2)
                                                     .foregroundColor(.secondary)
                                             }
                                         }
-                                        if let quickBooksID = item.quickBooksID, !quickBooksID.isEmpty {
-                                            Text("QuickBooks linked")
+                                        Spacer()
+                                        Text(item.unitPrice, format: .currency(code: "USD"))
+                                    }
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        if !items.isEmpty && filteredItems.isEmpty {
+                            Text("No items match that search.")
+                                .foregroundColor(.secondary)
+                        }
+
+                        if isQuickBooksConnected {
+                            Button(isImportingQuickBooksItems ? "Importing QuickBooks Items..." : "Load QuickBooks Catalog") {
+                                importQuickBooksItems()
+                            }
+                            .disabled(isImportingQuickBooksItems)
+                        }
+
+                        TextField("New item", text: $newItemName)
+                        Picker("Item Type", selection: $newItemType) {
+                            ForEach(CatalogItemType.allCases) { type in
+                                Text(type.rawValue).tag(type)
+                            }
+                        }
+                        TextField("Description", text: $newItemDescription, axis: .vertical)
+                            .lineLimit(2...3)
+                        Toggle("Taxable", isOn: $newItemTaxable)
+                        HStack {
+                            TextField("Price", text: $newItemPrice)
+                                .keyboardType(.decimalPad)
+                            TextField("Cost", text: $newItemCost)
+                                .keyboardType(.decimalPad)
+                            Button {
+                                addItem()
+                            } label: {
+                                Label("Add Item", systemImage: "plus")
+                            }
+                            .disabled(newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Double(newItemPrice) == nil)
+                        }
+                    }
+                }
+
+                if !isJobDocumentationMode && workspaceMode.showsEstimates {
+                    Section("Estimates") {
+                        if estimates.isEmpty {
+                            Text("No estimates yet.")
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(estimates) { estimate in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        VStack(alignment: .leading) {
+                                            Text(estimate.customer.name)
+                                                .font(.headline)
+                                            Text("\(estimate.status.capitalized) - \(estimate.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Spacer()
+                                        Text(estimate.amount, format: .currency(code: "USD"))
+                                    }
+                                    Text(estimate.lineItemSummary)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    if let quickBooksID = estimate.quickBooksID, !quickBooksID.isEmpty {
+                                        Text("QuickBooks ID: \(quickBooksID)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Button("Convert to Invoice") {
+                                        convertEstimate(estimate)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .disabled(estimate.status == "invoiced")
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                    }
+                }
+
+                if !isJobDocumentationMode && workspaceMode.showsInvoices {
+                    Section("Invoices") {
+                        if invoices.isEmpty {
+                            Text("No invoices yet.")
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(invoices) { invoice in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        VStack(alignment: .leading) {
+                                            Text(invoice.customer.name)
+                                                .font(.headline)
+                                            Text("\(invoice.status.capitalized) - \(invoice.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Spacer()
+                                        Text(invoice.amount, format: .currency(code: "USD"))
+                                    }
+                                    Text(invoice.lineItemSummary)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    if let signatureName = invoice.customerSignatureName, !signatureName.isEmpty {
+                                        Text("Signed by \(signatureName)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    if invoice.finalizedAt != nil {
+                                        Text("Finalized")
+                                            .font(.caption2)
+                                            .foregroundColor(.green)
+                                    }
+                                    Button(invoice.status == "paid" ? "Paid" : "Collect Payment") {
+                                        openPaymentsForInvoice(invoice)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(Color.brandGold)
+                                    .foregroundStyle(Color.primaryBlack)
+                                    .disabled(invoice.status == "paid")
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                    }
+                }
+
+                if !isJobDocumentationMode && workspaceMode.showsPayments {
+                    Section("Payments") {
+                        if payments.isEmpty {
+                            Text("No payments recorded yet.")
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(payments.prefix(12)) { payment in
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(payment.invoice.customer.name)
+                                        Text("\(payment.methodSummary) - \(payment.date.formatted(date: .abbreviated, time: .shortened))")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        if let processorDisplayName = payment.processorDisplayName {
+                                            Text("Processor: \(processorDisplayName)")
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
                                         }
                                     }
                                     Spacer()
-                                    Text(item.unitPrice, format: .currency(code: "USD"))
+                                    Text(payment.amount, format: .currency(code: "USD"))
                                 }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-
-                    if !items.isEmpty && filteredItems.isEmpty {
-                        Text("No items match that search.")
-                            .foregroundColor(.secondary)
-                    }
-
-                    if isQuickBooksConnected {
-                        Button(isImportingQuickBooksItems ? "Importing QuickBooks Items..." : "Load QuickBooks Catalog") {
-                            importQuickBooksItems()
-                        }
-                        .disabled(isImportingQuickBooksItems)
-                    }
-
-                    TextField("New item", text: $newItemName)
-                    Picker("Item Type", selection: $newItemType) {
-                        ForEach(CatalogItemType.allCases) { type in
-                            Text(type.rawValue).tag(type)
-                        }
-                    }
-                    TextField("Description", text: $newItemDescription, axis: .vertical)
-                        .lineLimit(2...3)
-                    Toggle("Taxable", isOn: $newItemTaxable)
-                    HStack {
-                        TextField("Price", text: $newItemPrice)
-                            .keyboardType(.decimalPad)
-                        TextField("Cost", text: $newItemCost)
-                            .keyboardType(.decimalPad)
-                        Button {
-                            addItem()
-                        } label: {
-                            Label("Add Item", systemImage: "plus")
-                        }
-                        .disabled(newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Double(newItemPrice) == nil)
-                    }
-                }
-
-                Section("Estimates") {
-                    if estimates.isEmpty {
-                        Text("No estimates yet.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(estimates) { estimate in
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    VStack(alignment: .leading) {
-                                        Text(estimate.customer.name)
-                                            .font(.headline)
-                                        Text("\(estimate.status.capitalized) - \(estimate.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                    Text(estimate.amount, format: .currency(code: "USD"))
-                                }
-                                Text(estimate.lineItemSummary)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                if let quickBooksID = estimate.quickBooksID, !quickBooksID.isEmpty {
-                                    Text("QuickBooks ID: \(quickBooksID)")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                Button("Convert to Invoice") {
-                                    convertEstimate(estimate)
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(estimate.status == "invoiced")
-                            }
-                            .padding(.vertical, 4)
-                        }
-                    }
-                }
-
-                Section("Invoices") {
-                    if invoices.isEmpty {
-                        Text("No invoices yet.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(invoices) { invoice in
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    VStack(alignment: .leading) {
-                                        Text(invoice.customer.name)
-                                            .font(.headline)
-                                        Text("\(invoice.status.capitalized) - \(invoice.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                    Text(invoice.amount, format: .currency(code: "USD"))
-                                }
-                                Text(invoice.lineItemSummary)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                if let signatureName = invoice.customerSignatureName, !signatureName.isEmpty {
-                                    Text("Signed by \(signatureName)")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                if invoice.finalizedAt != nil {
-                                    Text("Finalized")
-                                        .font(.caption2)
-                                        .foregroundColor(.green)
-                                }
-                                Button(invoice.status == "paid" ? "Paid" : "Collect Payment") {
-                                    openPaymentsForInvoice(invoice)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(Color.brandGold)
-                                .foregroundStyle(Color.primaryBlack)
-                                .disabled(invoice.status == "paid")
-                            }
-                            .padding(.vertical, 4)
-                        }
-                    }
-                }
-
-                Section("Payments") {
-                    if payments.isEmpty {
-                        Text("No payments recorded yet.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(payments.prefix(12)) { payment in
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(payment.invoice.customer.name)
-                                    Text("\(payment.methodSummary) - \(payment.date.formatted(date: .abbreviated, time: .shortened))")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    if let processorDisplayName = payment.processorDisplayName {
-                                        Text("Processor: \(processorDisplayName)")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                                Spacer()
-                                Text(payment.amount, format: .currency(code: "USD"))
                             }
                         }
                     }
                 }
             }
-            .navigationTitle(activeServiceCall == nil ? "Invoices & Estimates" : "Job Documentation")
+            .navigationTitle(navigationTitle)
             .sheet(isPresented: $showingItemSelector) {
                 DocumentationItemSelectorView(items: items, selectedItems: $selectedItems)
             }
@@ -1007,9 +1033,6 @@ GunnAire
                 loadLinkedDocumentContextIfNeeded()
             }
             openInvoiceAfterEstimateCreation = true
-        } else if let firstCustomer = customers.first {
-            selectedCustomerID = firstCustomer.id
-            populateCustomerFields(from: firstCustomer)
         }
 
         importQuickBooksItemsIfNeeded()
@@ -2415,6 +2438,50 @@ private enum BillingDocumentKind: String, CaseIterable, Identifiable {
     case invoice = "Invoice"
 
     var id: String { rawValue }
+}
+
+enum BillingWorkspaceMode {
+    case all
+    case estimates
+    case invoices
+
+    var navigationTitle: String {
+        switch self {
+        case .all:
+            return "Invoices & Estimates"
+        case .estimates:
+            return "Estimates"
+        case .invoices:
+            return "Invoices"
+        }
+    }
+
+    var showsEstimates: Bool {
+        switch self {
+        case .all, .estimates:
+            return true
+        case .invoices:
+            return false
+        }
+    }
+
+    var showsInvoices: Bool {
+        switch self {
+        case .all, .invoices:
+            return true
+        case .estimates:
+            return false
+        }
+    }
+
+    var showsPayments: Bool {
+        switch self {
+        case .all, .invoices:
+            return true
+        case .estimates:
+            return false
+        }
+    }
 }
 
 #Preview {
