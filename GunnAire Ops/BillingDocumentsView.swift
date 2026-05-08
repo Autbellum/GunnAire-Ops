@@ -2,6 +2,24 @@ import SwiftUI
 import SwiftData
 import UIKit
 
+enum BillingWorkspaceMode {
+    case all
+    case estimatesOnly
+    case invoicesOnly
+    case jobScoped
+
+    fileprivate var defaultDocumentKind: BillingDocumentKind {
+        switch self {
+        case .estimatesOnly:
+            return .estimate
+        case .invoicesOnly:
+            return .invoice
+        case .all, .jobScoped:
+            return .invoice
+        }
+    }
+}
+
 struct BillingDocumentsView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
@@ -13,6 +31,7 @@ struct BillingDocumentsView: View {
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
 
     private let initialServiceCall: ServiceCall?
+    private let workspaceMode: BillingWorkspaceMode
     private let liveAPI = QuickBooksDataAPI.shared
 
     @State private var selectedDocumentKind: BillingDocumentKind
@@ -41,9 +60,17 @@ struct BillingDocumentsView: View {
     @State private var showingItemSelector = false
     @State private var showingItemCreator = false
 
-    init(initialServiceCall: ServiceCall? = nil, openCloseoutOnAppear: Bool = false, openTapToPayOnAppear: Bool = false) {
+    init(
+        initialServiceCall: ServiceCall? = nil,
+        workspaceMode: BillingWorkspaceMode = .all,
+        openCloseoutOnAppear: Bool = false,
+        openTapToPayOnAppear: Bool = false
+    ) {
         self.initialServiceCall = initialServiceCall
-        _selectedDocumentKind = State(initialValue: initialServiceCall?.type == .estimate ? .estimate : .invoice)
+        self.workspaceMode = initialServiceCall == nil ? workspaceMode : .jobScoped
+        _selectedDocumentKind = State(
+            initialValue: initialServiceCall?.type == .estimate ? .estimate : workspaceMode.defaultDocumentKind
+        )
     }
 
     private var activeServiceCall: ServiceCall? {
@@ -116,6 +143,32 @@ struct BillingDocumentsView: View {
         return address
     }
 
+    private var isJobScoped: Bool {
+        workspaceMode == .jobScoped || activeServiceCall != nil
+    }
+
+    private var showsEstimateWorkspace: Bool {
+        workspaceMode == .all || workspaceMode == .estimatesOnly
+    }
+
+    private var showsInvoiceWorkspace: Bool {
+        workspaceMode == .all || workspaceMode == .invoicesOnly
+    }
+
+    private var allowsEstimateCreation: Bool {
+        if isJobScoped {
+            return selectedDocumentKind == .estimate
+        }
+        return showsEstimateWorkspace
+    }
+
+    private var allowsInvoiceCreation: Bool {
+        if isJobScoped {
+            return selectedDocumentKind == .invoice
+        }
+        return showsInvoiceWorkspace
+    }
+
     private var isQuickBooksConnected: Bool {
         liveAPI.isAuthenticated
     }
@@ -174,12 +227,21 @@ struct BillingDocumentsView: View {
                     }
 
                     Section("Documentation Builder") {
-                        Picker("Document", selection: $selectedDocumentKind) {
-                            ForEach(BillingDocumentKind.allCases) { kind in
-                                Text(kind.rawValue).tag(kind)
+                        if !isJobScoped && workspaceMode == .all {
+                            Picker("Document", selection: $selectedDocumentKind) {
+                                ForEach(BillingDocumentKind.allCases) { kind in
+                                    Text(kind.rawValue).tag(kind)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                        } else {
+                            HStack {
+                                Text("Document")
+                                Spacer()
+                                Text(selectedDocumentKind.rawValue)
+                                    .foregroundColor(.secondary)
                             }
                         }
-                        .pickerStyle(.segmented)
 
                         HStack {
                             Text("Customer")
@@ -245,22 +307,26 @@ struct BillingDocumentsView: View {
                                 .foregroundColor(.secondary)
                         }
 
-                        Button(isCreatingDocument && selectedDocumentKind == .estimate ? "Creating Estimate..." : "Create Estimate") {
-                            selectedDocumentKind = .estimate
-                            createDocument()
+                        if allowsEstimateCreation {
+                            Button(isCreatingDocument && selectedDocumentKind == .estimate ? "Creating Estimate..." : "Create Estimate") {
+                                selectedDocumentKind = .estimate
+                                createDocument()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.brandGold)
-                        .foregroundStyle(Color.primaryBlack)
-                        .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
 
-                        Button(isCreatingDocument && selectedDocumentKind == .invoice ? "Creating Invoice..." : "Create Invoice") {
-                            selectedDocumentKind = .invoice
-                            createDocument()
+                        if allowsInvoiceCreation {
+                            Button(isCreatingDocument && selectedDocumentKind == .invoice ? "Creating Invoice..." : "Create Invoice") {
+                                selectedDocumentKind = .invoice
+                                createDocument()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
+                            .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.green)
-                        .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
 
                         if !actionMessage.isEmpty {
                             Text(actionMessage)
@@ -391,12 +457,14 @@ struct BillingDocumentsView: View {
                 }
 
                 Section("Builder Details") {
-                    Picker("Document", selection: $selectedDocumentKind) {
-                        ForEach(BillingDocumentKind.allCases) { kind in
-                            Text(kind.rawValue).tag(kind)
+                    if !isJobScoped && workspaceMode == .all {
+                        Picker("Document", selection: $selectedDocumentKind) {
+                            ForEach(BillingDocumentKind.allCases) { kind in
+                                Text(kind.rawValue).tag(kind)
+                            }
                         }
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
 
                     Picker("Customer", selection: $selectedCustomerID) {
                         Text("Select Customer").tag(UUID?.none)
@@ -436,13 +504,15 @@ struct BillingDocumentsView: View {
                         Toggle("Open Invoice Builder After Estimate", isOn: $openInvoiceAfterEstimateCreation)
                     }
 
-                    Button(isCreatingDocument ? "Creating..." : "Create \(selectedDocumentKind.rawValue)") {
-                        createDocument()
+                    if !isJobScoped {
+                        Button(isCreatingDocument ? "Creating..." : "Create \(selectedDocumentKind.rawValue)") {
+                            createDocument()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.brandGold)
+                        .foregroundStyle(Color.primaryBlack)
+                        .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.brandGold)
-                    .foregroundStyle(Color.primaryBlack)
-                    .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
 
                     if !actionMessage.isEmpty {
                         Text(actionMessage)
@@ -501,6 +571,7 @@ struct BillingDocumentsView: View {
                     }
                 }
 
+                if !isJobScoped {
                 Section("Items") {
                     TextField("Search items", text: $itemSearchText)
                         .textInputAutocapitalization(.never)
@@ -586,7 +657,9 @@ struct BillingDocumentsView: View {
                         .disabled(newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Double(newItemPrice) == nil)
                     }
                 }
+                }
 
+                if !isJobScoped && showsEstimateWorkspace {
                 Section("Estimates") {
                     if estimates.isEmpty {
                         Text("No estimates yet.")
@@ -623,7 +696,9 @@ struct BillingDocumentsView: View {
                         }
                     }
                 }
+                }
 
+                if !isJobScoped && showsInvoiceWorkspace {
                 Section("Invoices") {
                     if invoices.isEmpty {
                         Text("No invoices yet.")
@@ -667,7 +742,9 @@ struct BillingDocumentsView: View {
                         }
                     }
                 }
+                }
 
+                if !isJobScoped && showsInvoiceWorkspace {
                 Section("Payments") {
                     if payments.isEmpty {
                         Text("No payments recorded yet.")
@@ -692,8 +769,9 @@ struct BillingDocumentsView: View {
                         }
                     }
                 }
+                }
             }
-            .navigationTitle(activeServiceCall == nil ? "Invoices & Estimates" : "Job Documentation")
+            .navigationTitle(navigationTitle)
             .sheet(isPresented: $showingItemSelector) {
                 DocumentationItemSelectorView(items: items, selectedItems: $selectedItems)
             }
@@ -735,12 +813,23 @@ struct BillingDocumentsView: View {
                 loadLinkedDocumentContextIfNeeded()
             }
             openInvoiceAfterEstimateCreation = true
-        } else if let firstCustomer = customers.first {
-            selectedCustomerID = firstCustomer.id
-            populateCustomerFields(from: firstCustomer)
         }
 
         importQuickBooksItemsIfNeeded()
+    }
+
+    private var navigationTitle: String {
+        if isJobScoped {
+            return "Job Documentation"
+        }
+        switch workspaceMode {
+        case .estimatesOnly:
+            return "Estimates"
+        case .invoicesOnly:
+            return "Invoices"
+        case .all, .jobScoped:
+            return "Invoices & Estimates"
+        }
     }
 
     private func loadLinkedDocumentContextIfNeeded() {
