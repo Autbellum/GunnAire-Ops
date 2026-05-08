@@ -100,6 +100,20 @@ struct ScheduleView: View {
             .sorted { $0.scheduledDate < $1.scheduledDate }
     }
 
+    private var readyToInvoiceCalls: [ServiceCall] {
+        callsForSignedInUser
+            .filter { call in
+                call.linkedInvoiceID == nil &&
+                call.status != .cancelled &&
+                (
+                    call.workCompletedChecklist ||
+                    call.documentationChecklist ||
+                    call.status == .completed
+                )
+            }
+            .sorted { $0.scheduledDate > $1.scheduledDate }
+    }
+
     private var callsForSignedInUser: [ServiceCall] {
         guard let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") else {
             return serviceCalls
@@ -503,6 +517,40 @@ struct ScheduleView: View {
                     }
                 }
             }
+
+            if !readyToInvoiceCalls.isEmpty {
+                Divider()
+                Text("Ready To Bill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.brandGold)
+
+                ForEach(readyToInvoiceCalls.prefix(3)) { job in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(job.customer.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text(job.type.rawValue.capitalized)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Button("Open Invoice Builder") {
+                            openDocumentationInCloseout = false
+                            openDocumentationInTapToPay = false
+                            documentationCall = job
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(Color.brandGold)
+                    }
+                }
+            }
         }
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -546,6 +594,9 @@ struct ScheduleView: View {
                 }
                 if call.documentationStartedAt != nil {
                     Label("Started", systemImage: "doc.text")
+                }
+                if call.linkedInvoiceID == nil && (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
+                    Label("Ready to Bill", systemImage: "doc.badge.plus")
                 }
                 if call.followUpRequired {
                     Label("Follow-Up", systemImage: "arrow.uturn.forward.circle.fill")
