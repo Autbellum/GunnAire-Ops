@@ -216,6 +216,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             applyPendingAppRouteIfNeeded()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .gunnAireRouteDidChange)) { _ in
+            applyPendingAppRouteIfNeeded()
+        }
         .tint(Color.brandGold)
     }
 
@@ -298,10 +301,6 @@ struct ServiceCallDetailView: View {
     @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
     let call: ServiceCall
     @State private var showingEditSheet = false
-    @State private var showingDocumentationSheet = false
-    @State private var documentationOpenCloseout = false
-    @State private var documentationOpenTapToPay = false
-
     private var resolvedAddress: String? {
         let address = call.siteAddress ?? call.customer.address
         guard let address, !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -653,9 +652,7 @@ GunnAire
                     }
 
                     Button {
-                        documentationOpenCloseout = false
-                        documentationOpenTapToPay = false
-                        showingDocumentationSheet = true
+                        GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
                     } label: {
                         Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil ? "Continue Documentation" : "Start Documentation", systemImage: "doc.text")
                             .frame(maxWidth: .infinity)
@@ -667,9 +664,11 @@ GunnAire
                     if hasOpenInvoiceBalance {
                         VStack(spacing: 10) {
                             Button {
-                                documentationOpenCloseout = true
-                                documentationOpenTapToPay = tapToPayReady
-                                showingDocumentationSheet = true
+                                if let linkedInvoiceID = call.linkedInvoiceID {
+                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(linkedInvoiceID)
+                                } else {
+                                    GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
+                                }
                             } label: {
                                 Label(tapToPayReady ? "Tap to Pay" : "Take Payment", systemImage: "creditcard")
                                     .frame(maxWidth: .infinity)
@@ -699,19 +698,6 @@ GunnAire
         .foregroundColor(Color.brandGold)
         .sheet(isPresented: $showingEditSheet) {
             EditServiceCallView(call: call)
-        }
-        .sheet(isPresented: $showingDocumentationSheet) {
-            NavigationStack {
-                BillingDocumentsView(
-                    initialServiceCall: call,
-                    openCloseoutOnAppear: documentationOpenCloseout,
-                    openTapToPayOnAppear: documentationOpenTapToPay
-                )
-            }
-            .onDisappear {
-                documentationOpenCloseout = false
-                documentationOpenTapToPay = false
-            }
         }
     }
 }

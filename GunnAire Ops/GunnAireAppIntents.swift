@@ -2,6 +2,10 @@ import AppIntents
 import Foundation
 import SwiftData
 
+extension Notification.Name {
+    nonisolated(unsafe) static let gunnAireRouteDidChange = Notification.Name("GunnAireRouteDidChange")
+}
+
 enum GunnAireAppRoute: String, CaseIterable {
     case timeClock = "timeClock"
     case schedule = "scheduleAndJobs"
@@ -93,6 +97,7 @@ enum GunnAireAppRoute: String, CaseIterable {
 enum GunnAireAppIntentRouter {
     nonisolated static func store(_ route: GunnAireAppRoute) {
         UserDefaults.standard.set(route.rawValue, forKey: "GunnAirePendingAppRoute")
+        NotificationCenter.default.post(name: .gunnAireRouteDidChange, object: nil)
     }
 
     nonisolated static func consumePendingRoute() -> GunnAireAppRoute? {
@@ -105,8 +110,8 @@ enum GunnAireAppIntentRouter {
     }
 
     nonisolated static func storeCustomerRoute(_ id: UUID) {
-        store(.customers)
         UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingCustomerID")
+        store(.customers)
     }
 
     nonisolated static func consumePendingCustomerID() -> UUID? {
@@ -119,8 +124,8 @@ enum GunnAireAppIntentRouter {
     }
 
     nonisolated static func storeDocumentationRoute(_ id: UUID) {
-        store(.documentation)
         UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingServiceCallID")
+        store(.documentation)
     }
 
     nonisolated static func consumePendingServiceCallID() -> UUID? {
@@ -133,8 +138,8 @@ enum GunnAireAppIntentRouter {
     }
 
     nonisolated static func storeScheduleCallRoute(_ id: UUID) {
-        store(.schedule)
         UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingScheduleServiceCallID")
+        store(.schedule)
     }
 
     nonisolated static func consumePendingScheduleCallID() -> UUID? {
@@ -147,9 +152,9 @@ enum GunnAireAppIntentRouter {
     }
 
     nonisolated static func storePaymentCollectionRoute(_ id: UUID) {
-        store(.payments)
         UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingInvoiceID")
         UserDefaults.standard.set(true, forKey: "GunnAirePendingOpenPaymentCollection")
+        store(.payments)
     }
 
     nonisolated static func consumePendingInvoiceCollectionID() -> UUID? {

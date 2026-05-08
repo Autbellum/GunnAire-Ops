@@ -344,6 +344,8 @@ struct SyncIntegrationsView: View {
 struct OnsiteDocumentationView: View {
     @Query(sort: \ServiceCall.scheduledDate, order: .forward) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
+    @State private var selectedServiceCallID: UUID?
+    @State private var didLoadPendingRoute = false
 
     private var quickBooksConnected: Bool {
         QuickBooksDataAPI.shared.isAuthenticated
@@ -361,68 +363,101 @@ struct OnsiteDocumentationView: View {
         invoices.filter { $0.status != "paid" || $0.finalizedAt == nil }
     }
 
+    private var selectedServiceCall: ServiceCall? {
+        guard let selectedServiceCallID else { return nil }
+        return serviceCalls.first { $0.id == selectedServiceCallID }
+    }
+
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Documentation Queue") {
-                    if jobsNeedingDocumentation.isEmpty {
-                        Text("No active jobs are waiting for documentation.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(jobsNeedingDocumentation) { call in
-                            NavigationLink {
-                                BillingDocumentsView(initialServiceCall: call)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(call.customer.name)
-                                        .font(.headline)
-                                    Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    Text(call.type.rawValue.capitalized)
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                    Text("Checklist \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Section("Invoices Awaiting Closeout") {
-                    if invoicesAwaitingCloseout.isEmpty {
-                        Text("All invoices are finalized and paid.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(invoicesAwaitingCloseout) { invoice in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(invoice.customer.name)
-                                    .font(.headline)
-                                Text("\(invoice.amount, format: .currency(code: "USD")) • \(invoice.status.capitalized)")
-                                    .font(.caption)
+            Group {
+                if let selectedServiceCall {
+                    BillingDocumentsView(initialServiceCall: selectedServiceCall)
+                } else {
+                    Form {
+                        Section("Documentation Queue") {
+                            if jobsNeedingDocumentation.isEmpty {
+                                Text("No active jobs are waiting for documentation.")
                                     .foregroundColor(.secondary)
-                                if invoice.finalizedAt == nil {
-                                    Text("Missing final signature or closeout details.")
-                                        .font(.caption2)
-                                        .foregroundColor(.orange)
+                            } else {
+                                ForEach(jobsNeedingDocumentation) { call in
+                                    Button {
+                                        selectedServiceCallID = call.id
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(call.customer.name)
+                                                .font(.headline)
+                                            Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                            Text(call.type.rawValue.capitalized)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                            Text("Checklist \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
                                 }
                             }
                         }
+
+                        Section("Invoices Awaiting Closeout") {
+                            if invoicesAwaitingCloseout.isEmpty {
+                                Text("All invoices are finalized and paid.")
+                                    .foregroundColor(.secondary)
+                            } else {
+                                ForEach(invoicesAwaitingCloseout) { invoice in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(invoice.customer.name)
+                                            .font(.headline)
+                                        Text("\(invoice.amount, format: .currency(code: "USD")) • \(invoice.status.capitalized)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        if invoice.finalizedAt == nil {
+                                            Text("Missing final signature or closeout details.")
+                                                .font(.caption2)
+                                                .foregroundColor(.orange)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Section("Workflow Notes") {
+                            Text("Open a scheduled call from Schedule or this queue to start documentation, build the invoice or estimate, and capture closeout details.")
+                            Text("Use Receipts & Bills to attach PDFs, photos, and vendor documents.")
+                            Text("Use Payments to review or sync recorded payments after invoice closeout.")
+                            Text(quickBooksConnected ? "QuickBooks is connected and ready for live billing document workflows." : "Connect QuickBooks in Settings before expecting live billing document sync.")
+                        }
+                        .foregroundColor(.secondary)
                     }
                 }
-
-                Section("Workflow Notes") {
-                    Text("Open a scheduled call from Schedule or this queue to start documentation, build the invoice or estimate, and capture closeout details.")
-                    Text("Use Receipts & Bills to attach PDFs, photos, and vendor documents.")
-                    Text("Use Payments to review or sync recorded payments after invoice closeout.")
-                    Text(quickBooksConnected ? "QuickBooks is connected and ready for live billing document workflows." : "Connect QuickBooks in Settings before expecting live billing document sync.")
-                }
-                .foregroundColor(.secondary)
             }
             .navigationTitle("Onsite Documentation")
+            .toolbar {
+                if selectedServiceCall != nil {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Documentation Queue") {
+                            selectedServiceCallID = nil
+                        }
+                    }
+                }
+            }
+            .onAppear(perform: applyPendingDocumentationRouteIfNeeded)
+            .onReceive(NotificationCenter.default.publisher(for: .gunnAireRouteDidChange)) { _ in
+                applyPendingDocumentationRouteIfNeeded()
+            }
         }
+    }
+
+    private func applyPendingDocumentationRouteIfNeeded() {
+        if !didLoadPendingRoute {
+            didLoadPendingRoute = true
+        }
+        guard let pendingID = GunnAireAppIntentRouter.consumePendingServiceCallID() else { return }
+        selectedServiceCallID = pendingID
     }
 }
 

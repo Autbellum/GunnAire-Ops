@@ -36,7 +36,6 @@ struct PaymentsAndReceiptsView: View {
     @State private var syncingPaymentID: UUID?
     @State private var isProcessingQuickBooksPayment = false
     @State private var isProcessingQuickBooksRefund = false
-    @State private var processCardWithQuickBooks = false
     @State private var cardholderName = ""
     @State private var cardNumber = ""
     @State private var expirationMonth = ""
@@ -400,31 +399,32 @@ struct PaymentsAndReceiptsView: View {
                             }
                         }
 
-                        TextField("Card last 4", text: $cardLast4)
-                            .keyboardType(.numberPad)
-                        TextField("Authorization ref", text: $authorizationReference)
-
                         if isQuickBooksConnected {
-                            Toggle("Process with QuickBooks Payments", isOn: $processCardWithQuickBooks)
-
-                            if processCardWithQuickBooks {
-                                TextField("Cardholder name", text: $cardholderName)
-                                TextField("Card number", text: $cardNumber)
+                            Text("QuickBooks card processing")
+                                .font(.subheadline.weight(.semibold))
+                            TextField("Cardholder name", text: $cardholderName)
+                            TextField("Card number", text: $cardNumber)
+                                .keyboardType(.numberPad)
+                            HStack {
+                                TextField("Exp MM", text: $expirationMonth)
                                     .keyboardType(.numberPad)
-                                HStack {
-                                    TextField("Exp MM", text: $expirationMonth)
-                                        .keyboardType(.numberPad)
-                                    TextField("Exp YYYY", text: $expirationYear)
-                                        .keyboardType(.numberPad)
-                                    TextField("CVC", text: $cardCVC)
-                                        .keyboardType(.numberPad)
-                                }
-                                TextField("Billing ZIP", text: $billingPostalCode)
-                                    .keyboardType(.numbersAndPunctuation)
-                                Text("Card details are only used to create a QuickBooks Payments token for this transaction and are not saved locally.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                                TextField("Exp YYYY", text: $expirationYear)
+                                    .keyboardType(.numberPad)
+                                TextField("CVC", text: $cardCVC)
+                                    .keyboardType(.numberPad)
                             }
+                            TextField("Billing ZIP", text: $billingPostalCode)
+                                .keyboardType(.numbersAndPunctuation)
+                            Text("Card details are only used to create a QuickBooks Payments token for this transaction and are not saved locally.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            TextField("Card last 4", text: $cardLast4)
+                                .keyboardType(.numberPad)
+                            TextField("Authorization ref", text: $authorizationReference)
+                            Text("QuickBooks Payments is not connected. This card entry will only record a manual payment note.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                     }
                     if selectedMethod == .ach, isQuickBooksConnected {
@@ -523,7 +523,7 @@ struct PaymentsAndReceiptsView: View {
 
     private var paymentFormIsValid: Bool {
         guard Double(amountText) != nil else { return false }
-        if selectedMethod == .card, processCardWithQuickBooks {
+        if selectedMethod == .card, isQuickBooksConnected {
             return !cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                 cardNumber.filter(\.isNumber).count >= 12 &&
                 expirationMonth.filter(\.isNumber).count >= 1 &&
@@ -568,7 +568,6 @@ struct PaymentsAndReceiptsView: View {
         cardLast4 = ""
         authorizationReference = ""
         paymentNotes = ""
-        processCardWithQuickBooks = isQuickBooksConnected && preferredMethod == .card
         cardholderName = invoice.customer.name
         cardNumber = ""
         expirationMonth = ""
@@ -642,7 +641,7 @@ struct PaymentsAndReceiptsView: View {
             return
         }
 
-        if selectedMethod == .card, processCardWithQuickBooks {
+        if selectedMethod == .card, isQuickBooksConnected {
             isProcessingQuickBooksPayment = true
             defer { isProcessingQuickBooksPayment = false }
 
@@ -926,7 +925,6 @@ GunnAire
         authorizationReference = ""
         paymentNotes = ""
         tapToPayMessage = ""
-        processCardWithQuickBooks = false
         cardholderName = ""
         cardNumber = ""
         expirationMonth = ""

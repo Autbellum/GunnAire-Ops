@@ -1317,7 +1317,7 @@ private struct RecordInvoicePaymentView: View {
 
     private var closeoutPaymentFormIsValid: Bool {
         guard shouldRecordPayment else { return true }
-        if method == "card", processCardWithQuickBooks {
+        if method == "card", QuickBooksDataAPI.shared.isAuthenticated {
             return !cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                 cardNumber.filter(\.isNumber).count >= 12 &&
                 expirationMonth.filter(\.isNumber).count >= 1 &&
@@ -1408,31 +1408,32 @@ private struct RecordInvoicePaymentView: View {
                                 }
                             }
 
-                            TextField("Card last 4", text: $cardLast4)
-                                .keyboardType(.numberPad)
-                            TextField("Authorization ref", text: $authorizationCode)
-
                             if QuickBooksDataAPI.shared.isAuthenticated {
-                                Toggle("Process with QuickBooks Payments", isOn: $processCardWithQuickBooks)
-
-                                if processCardWithQuickBooks {
-                                    TextField("Cardholder name", text: $cardholderName)
-                                    TextField("Card number", text: $cardNumber)
+                                Text("QuickBooks card processing")
+                                    .font(.subheadline.weight(.semibold))
+                                TextField("Cardholder name", text: $cardholderName)
+                                TextField("Card number", text: $cardNumber)
+                                    .keyboardType(.numberPad)
+                                HStack {
+                                    TextField("Exp MM", text: $expirationMonth)
                                         .keyboardType(.numberPad)
-                                    HStack {
-                                        TextField("Exp MM", text: $expirationMonth)
-                                            .keyboardType(.numberPad)
-                                        TextField("Exp YYYY", text: $expirationYear)
-                                            .keyboardType(.numberPad)
-                                        TextField("CVC", text: $cardCVC)
-                                            .keyboardType(.numberPad)
-                                    }
-                                    TextField("Billing ZIP", text: $billingPostalCode)
-                                        .keyboardType(.numbersAndPunctuation)
-                                    Text("Card details are only used to create a QuickBooks Payments token for this transaction and are not saved locally.")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
+                                    TextField("Exp YYYY", text: $expirationYear)
+                                        .keyboardType(.numberPad)
+                                    TextField("CVC", text: $cardCVC)
+                                        .keyboardType(.numberPad)
                                 }
+                                TextField("Billing ZIP", text: $billingPostalCode)
+                                    .keyboardType(.numbersAndPunctuation)
+                                Text("Card details are only used to create a QuickBooks Payments token for this transaction and are not saved locally.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else {
+                                TextField("Card last 4", text: $cardLast4)
+                                    .keyboardType(.numberPad)
+                                TextField("Authorization ref", text: $authorizationCode)
+                                Text("QuickBooks Payments is not connected. This card entry will only record a manual payment note.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
                         }
                         if method == "ach", QuickBooksDataAPI.shared.isAuthenticated {
@@ -1552,7 +1553,7 @@ private struct RecordInvoicePaymentView: View {
         invoice.finalizedAt = Date()
 
         if shouldRecordPayment {
-            if method == "card", processCardWithQuickBooks {
+            if method == "card", QuickBooksDataAPI.shared.isAuthenticated {
                 isProcessingQuickBooksPayment = true
                 defer { isProcessingQuickBooksPayment = false }
 
