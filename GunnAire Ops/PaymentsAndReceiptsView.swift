@@ -156,6 +156,23 @@ struct PaymentsAndReceiptsView: View {
                                     }
 
                                     HStack {
+                                        Button("Open Invoice") {
+                                            selectedInvoiceID = entry.invoice.id
+                                        }
+                                        .buttonStyle(.bordered)
+
+                                        if let linkedCall = serviceCall(for: entry.invoice) {
+                                            Button("Open Job") {
+                                                GunnAireAppIntentRouter.storeDocumentationRoute(linkedCall.id)
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+
+                                        Button("Open Customer") {
+                                            GunnAireAppIntentRouter.storeCustomerRoute(entry.invoice.customer.id)
+                                        }
+                                        .buttonStyle(.bordered)
+
                                         Button("Collect") {
                                             preparePaymentForm(for: entry.invoice)
                                             showingRecordPaymentSheet = true
@@ -184,6 +201,7 @@ struct PaymentsAndReceiptsView: View {
                                         if let reminderURL = reminderEmailURL(for: entry.invoice, balanceDue: entry.balanceDue) {
                                             Button("Email Reminder") {
                                                 openURL(reminderURL)
+                                                markCollectionFollowUp(for: entry.invoice)
                                             }
                                             .buttonStyle(.bordered)
                                         }
@@ -307,6 +325,23 @@ struct PaymentsAndReceiptsView: View {
                                     }
 
                                     HStack {
+                                        Button("Open Invoice") {
+                                            selectedInvoiceID = payment.invoice.id
+                                        }
+                                        .buttonStyle(.bordered)
+
+                                        if let linkedCall = serviceCall(for: payment.invoice) {
+                                            Button("Open Job") {
+                                                GunnAireAppIntentRouter.storeDocumentationRoute(linkedCall.id)
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+
+                                        Button("Open Customer") {
+                                            GunnAireAppIntentRouter.storeCustomerRoute(payment.invoice.customer.id)
+                                        }
+                                        .buttonStyle(.bordered)
+
                                         if let receiptURL = receiptEmailURL(for: payment) {
                                             Button("Send Receipt") {
                                                 openURL(receiptURL)
@@ -796,6 +831,18 @@ struct PaymentsAndReceiptsView: View {
             return "Partial"
         }
         return "Open"
+    }
+
+    private func serviceCall(for invoice: Invoice) -> ServiceCall? {
+        guard let serviceCallID = invoice.serviceCallID else { return nil }
+        return invoice.customer.serviceCalls.first(where: { $0.id == serviceCallID })
+    }
+
+    private func markCollectionFollowUp(for invoice: Invoice) {
+        guard let linkedCall = serviceCall(for: invoice) else { return }
+        linkedCall.followUpRequired = true
+        linkedCall.followUpAction = isOverdue(invoice) ? "Urgent payment collection" : "Collect payment"
+        linkedCall.followUpDueDate = Calendar.current.date(byAdding: .day, value: isOverdue(invoice) ? 1 : 3, to: Date())
     }
 
     private func customerPhoneURL(for invoice: Invoice) -> URL? {
