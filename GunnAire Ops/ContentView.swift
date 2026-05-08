@@ -298,6 +298,9 @@ struct ServiceCallDetailView: View {
     @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
     let call: ServiceCall
     @State private var showingEditSheet = false
+    @State private var showingDocumentationSheet = false
+    @State private var documentationOpenCloseout = false
+    @State private var documentationOpenTapToPay = false
 
     private var resolvedAddress: String? {
         let address = call.siteAddress ?? call.customer.address
@@ -649,8 +652,10 @@ GunnAire
                         .foregroundStyle(Color.primaryBlack)
                     }
 
-                    NavigationLink {
-                        BillingDocumentsView(initialServiceCall: call)
+                    Button {
+                        documentationOpenCloseout = false
+                        documentationOpenTapToPay = false
+                        showingDocumentationSheet = true
                     } label: {
                         Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil ? "Continue Documentation" : "Start Documentation", systemImage: "doc.text")
                             .frame(maxWidth: .infinity)
@@ -661,12 +666,10 @@ GunnAire
 
                     if hasOpenInvoiceBalance {
                         VStack(spacing: 10) {
-                            NavigationLink {
-                                BillingDocumentsView(
-                                    initialServiceCall: call,
-                                    openCloseoutOnAppear: true,
-                                    openTapToPayOnAppear: tapToPayReady
-                                )
+                            Button {
+                                documentationOpenCloseout = true
+                                documentationOpenTapToPay = tapToPayReady
+                                showingDocumentationSheet = true
                             } label: {
                                 Label(tapToPayReady ? "Tap to Pay" : "Take Payment", systemImage: "creditcard")
                                     .frame(maxWidth: .infinity)
@@ -696,6 +699,19 @@ GunnAire
         .foregroundColor(Color.brandGold)
         .sheet(isPresented: $showingEditSheet) {
             EditServiceCallView(call: call)
+        }
+        .sheet(isPresented: $showingDocumentationSheet) {
+            NavigationStack {
+                BillingDocumentsView(
+                    initialServiceCall: call,
+                    openCloseoutOnAppear: documentationOpenCloseout,
+                    openTapToPayOnAppear: documentationOpenTapToPay
+                )
+            }
+            .onDisappear {
+                documentationOpenCloseout = false
+                documentationOpenTapToPay = false
+            }
         }
     }
 }
