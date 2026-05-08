@@ -513,6 +513,12 @@ GunnAire
                         if call.followUpRequired {
                             Text("Follow-up required")
                                 .foregroundColor(.orange)
+                            if let followUpAction = call.followUpAction, !followUpAction.isEmpty {
+                                Text("Next action: \(followUpAction)")
+                            }
+                            if let followUpDueDate = call.followUpDueDate {
+                                Text("Due: \(followUpDueDate.formatted(date: .abbreviated, time: .omitted))")
+                            }
                         }
                     }
                     .foregroundColor(.primary)
@@ -954,6 +960,8 @@ struct AddServiceCallView: View {
     @State private var findingsSummary = ""
     @State private var recommendedWorkSummary = ""
     @State private var followUpRequired = false
+    @State private var followUpAction = ""
+    @State private var followUpDueDate = Date()
     @State private var accessibleCalendars: [GoogleCalendar] = []
     @State private var selectedCalendarID: String = "primary"
     @State private var openDocumentationAfterSave = false
@@ -1150,6 +1158,11 @@ struct AddServiceCallView: View {
                     TextField("Recommended Work", text: $recommendedWorkSummary, axis: .vertical)
                         .lineLimit(2...4)
                     Toggle("Follow-Up Required", isOn: $followUpRequired)
+                    if followUpRequired {
+                        TextField("Next Follow-Up Action", text: $followUpAction, axis: .vertical)
+                            .lineLimit(2...3)
+                        DatePicker("Follow-Up Due", selection: $followUpDueDate, displayedComponents: .date)
+                    }
                 }
                 Toggle("Open Documentation After Save", isOn: $openDocumentationAfterSave)
             }
@@ -1202,7 +1215,9 @@ struct AddServiceCallView: View {
             notes: notes.nilIfBlank,
             findingsSummary: findingsSummary.nilIfBlank,
             recommendedWorkSummary: recommendedWorkSummary.nilIfBlank,
-            followUpRequired: followUpRequired
+            followUpRequired: followUpRequired,
+            followUpAction: followUpRequired ? followUpAction.nilIfBlank : nil,
+            followUpDueDate: followUpRequired ? followUpDueDate : nil
         )
         modelContext.insert(call)
         dismiss()
@@ -1312,6 +1327,8 @@ struct EditServiceCallView: View {
     @State private var findingsSummary: String
     @State private var recommendedWorkSummary: String
     @State private var followUpRequired: Bool
+    @State private var followUpAction: String
+    @State private var followUpDueDate: Date
     @State private var accessibleCalendars: [GoogleCalendar] = []
     @State private var selectedCalendarID: String
 
@@ -1333,6 +1350,8 @@ struct EditServiceCallView: View {
         _findingsSummary = State(initialValue: call.findingsSummary ?? "")
         _recommendedWorkSummary = State(initialValue: call.recommendedWorkSummary ?? "")
         _followUpRequired = State(initialValue: call.followUpRequired)
+        _followUpAction = State(initialValue: call.followUpAction ?? "")
+        _followUpDueDate = State(initialValue: call.followUpDueDate ?? Date())
         _selectedCalendarID = State(initialValue: call.googleCalendarID ?? "primary")
     }
 
@@ -1388,6 +1407,11 @@ struct EditServiceCallView: View {
                     TextField("Recommended Work", text: $recommendedWorkSummary, axis: .vertical)
                         .lineLimit(2...4)
                     Toggle("Follow-Up Required", isOn: $followUpRequired)
+                    if followUpRequired {
+                        TextField("Next Follow-Up Action", text: $followUpAction, axis: .vertical)
+                            .lineLimit(2...3)
+                        DatePicker("Follow-Up Due", selection: $followUpDueDate, displayedComponents: .date)
+                    }
                 }
             }
             .navigationTitle("Edit Service Call")
@@ -1428,6 +1452,8 @@ struct EditServiceCallView: View {
         call.findingsSummary = findingsSummary.nilIfBlank
         call.recommendedWorkSummary = recommendedWorkSummary.nilIfBlank
         call.followUpRequired = followUpRequired
+        call.followUpAction = followUpRequired ? followUpAction.nilIfBlank : nil
+        call.followUpDueDate = followUpRequired ? followUpDueDate : nil
 
         if status == .inProgress && call.documentationStartedAt == nil {
             call.documentationStartedAt = Date()

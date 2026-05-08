@@ -241,6 +241,16 @@ struct BillingDocumentsView: View {
                             Text("Follow-up required")
                                 .font(.caption2)
                                 .foregroundColor(.orange)
+                            if let followUpAction = call.followUpAction, !followUpAction.isEmpty {
+                                Text("Next action: \(followUpAction)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            if let followUpDueDate = call.followUpDueDate {
+                                Text("Due: \(followUpDueDate.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                         if let equipmentSummary = call.equipmentSummary {
                             Text(equipmentSummary)

@@ -31,6 +31,8 @@ final class ServiceCall {
     var findingsSummary: String?
     var recommendedWorkSummary: String?
     var followUpRequired: Bool
+    var followUpAction: String?
+    var followUpDueDate: Date?
     var diagnosticsCaptured: Bool
     var quoteReviewedWithCustomer: Bool
     var equipmentVerifiedChecklist: Bool
@@ -68,6 +70,8 @@ final class ServiceCall {
         findingsSummary: String? = nil,
         recommendedWorkSummary: String? = nil,
         followUpRequired: Bool = false,
+        followUpAction: String? = nil,
+        followUpDueDate: Date? = nil,
         diagnosticsCaptured: Bool = false,
         quoteReviewedWithCustomer: Bool = false,
         equipmentVerifiedChecklist: Bool = false,
@@ -104,6 +108,8 @@ final class ServiceCall {
         self.findingsSummary = findingsSummary
         self.recommendedWorkSummary = recommendedWorkSummary
         self.followUpRequired = followUpRequired
+        self.followUpAction = followUpAction
+        self.followUpDueDate = followUpDueDate
         self.diagnosticsCaptured = diagnosticsCaptured
         self.quoteReviewedWithCustomer = quoteReviewedWithCustomer
         self.equipmentVerifiedChecklist = equipmentVerifiedChecklist

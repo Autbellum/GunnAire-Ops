@@ -51,6 +51,11 @@ struct ScheduleView: View {
                 isCollectionOverdue(for: call)
             }
             .sorted {
+                let lhsDueDate = $0.followUpDueDate ?? $0.scheduledDate
+                let rhsDueDate = $1.followUpDueDate ?? $1.scheduledDate
+                if lhsDueDate != rhsDueDate {
+                    return lhsDueDate < rhsDueDate
+                }
                 if $0.followUpRequired != $1.followUpRequired {
                     return $0.followUpRequired && !$1.followUpRequired
                 }
@@ -366,6 +371,9 @@ struct ScheduleView: View {
                 if call.documentationStartedAt != nil {
                     Label("Started", systemImage: "doc.text")
                 }
+                if call.followUpRequired {
+                    Label("Follow-Up", systemImage: "arrow.uturn.forward.circle.fill")
+                }
                 if let estimate = estimate(for: call) {
                     Label(estimate.status.capitalized, systemImage: "list.clipboard.fill")
                 }
@@ -515,6 +523,14 @@ struct ScheduleView: View {
     private func followUpReason(for call: ServiceCall) -> String {
         if isCollectionOverdue(for: call) {
             return "Overdue payment follow-up"
+        }
+        if call.followUpRequired,
+           let followUpAction = call.followUpAction?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !followUpAction.isEmpty {
+            if let dueDate = call.followUpDueDate {
+                return "\(followUpAction) • due \(dueDate.formatted(date: .abbreviated, time: .omitted))"
+            }
+            return followUpAction
         }
         if call.type == .estimate && call.linkedInvoiceID == nil {
             return "Estimate waiting on approval"
