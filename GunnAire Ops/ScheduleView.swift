@@ -114,6 +114,15 @@ struct ScheduleView: View {
             .sorted { $0.scheduledDate > $1.scheduledDate }
     }
 
+    private var needsCloseoutCalls: [ServiceCall] {
+        callsForSignedInUser
+            .filter { call in
+                guard let invoice = invoice(for: call) else { return false }
+                return invoice.finalizedAt == nil || invoice.customerSignedAt == nil
+            }
+            .sorted { $0.scheduledDate > $1.scheduledDate }
+    }
+
     private var callsForSignedInUser: [ServiceCall] {
         guard let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") else {
             return serviceCalls
@@ -551,6 +560,40 @@ struct ScheduleView: View {
                     }
                 }
             }
+
+            if !needsCloseoutCalls.isEmpty {
+                Divider()
+                Text("Needs Closeout")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.brandGold)
+
+                ForEach(needsCloseoutCalls.prefix(3)) { job in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(job.customer.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text(closeoutReason(for: job))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Button("Open Closeout") {
+                            openDocumentationInCloseout = true
+                            openDocumentationInTapToPay = false
+                            documentationCall = job
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(Color.brandGold)
+                    }
+                }
+            }
         }
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -597,6 +640,9 @@ struct ScheduleView: View {
                 }
                 if call.linkedInvoiceID == nil && (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
                     Label("Ready to Bill", systemImage: "doc.badge.plus")
+                }
+                if let invoice = invoice(for: call), invoice.finalizedAt == nil || invoice.customerSignedAt == nil {
+                    Label("Closeout", systemImage: "signature")
                 }
                 if call.followUpRequired {
                     Label("Follow-Up", systemImage: "arrow.uturn.forward.circle.fill")
@@ -747,6 +793,20 @@ struct ScheduleView: View {
             return "Technician follow-up required"
         }
         return "Needs attention"
+    }
+
+    private func closeoutReason(for call: ServiceCall) -> String {
+        guard let invoice = invoice(for: call) else { return "Invoice needs closeout" }
+        if invoice.customerSignedAt == nil && invoice.finalizedAt == nil {
+            return "Signature and finalization missing"
+        }
+        if invoice.customerSignedAt == nil {
+            return "Customer signature missing"
+        }
+        if invoice.finalizedAt == nil {
+            return "Invoice finalization missing"
+        }
+        return "Invoice needs closeout"
     }
 
     private func maintenanceReason(for contract: RecurringMaintenanceContract) -> String {
