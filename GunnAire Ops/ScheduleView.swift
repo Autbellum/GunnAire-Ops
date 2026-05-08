@@ -665,6 +665,11 @@ struct ScheduleView: View {
             .buttonStyle(.plain)
 
             HStack(spacing: 10) {
+                Button("Customer") {
+                    GunnAireAppIntentRouter.storeCustomerRoute(call.customer.id)
+                }
+                .buttonStyle(.bordered)
+
                 if hasNavigableAddress(for: call) {
                     Button("Navigate") {
                         openMaps(for: call)
