@@ -489,6 +489,39 @@ GunnAire
             .reduce(0) { $0 + $1.amount }
     }
 
+    private func scheduleFollowUpVisit() {
+        let scheduledDate = call.followUpDueDate ?? Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        let notesPrefix = call.followUpAction?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let generatedNotes = [notesPrefix, call.notes]
+            .compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: "\n\n")
+
+        let followUpCall = ServiceCall(
+            siteAddress: call.siteAddress ?? call.customer.address,
+            equipmentName: call.equipmentName,
+            equipmentModel: call.equipmentModel,
+            equipmentSerialNumber: call.equipmentSerialNumber,
+            equipmentWarrantyExpiration: call.equipmentWarrantyExpiration,
+            type: call.type,
+            scheduledDate: scheduledDate,
+            duration: call.duration,
+            assignedTechnician: call.assignedTechnician,
+            customer: call.customer,
+            status: .scheduled,
+            notes: generatedNotes.isEmpty ? "Scheduled follow-up visit" : "Scheduled follow-up visit\n\n\(generatedNotes)",
+            findingsSummary: call.findingsSummary,
+            recommendedWorkSummary: call.recommendedWorkSummary,
+            followUpRequired: false
+        )
+        modelContext.insert(followUpCall)
+        call.followUpRequired = false
+        call.followUpAction = nil
+        call.followUpDueDate = nil
+    }
+
     var body: some View {
         ZStack {
             WatermarkBackground()
@@ -543,6 +576,10 @@ GunnAire
                             if let followUpDueDate = call.followUpDueDate {
                                 Text("Due: \(followUpDueDate.formatted(date: .abbreviated, time: .omitted))")
                             }
+                            Button("Schedule Follow-Up Visit") {
+                                scheduleFollowUpVisit()
+                            }
+                            .buttonStyle(.bordered)
                         }
                     }
                     .foregroundColor(.primary)

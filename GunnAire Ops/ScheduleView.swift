@@ -320,19 +320,29 @@ struct ScheduleView: View {
                         selectedDate = Calendar.current.startOfDay(for: job.scheduledDate)
                         navigationPath.append(job)
                     } label: {
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(job.customer.name)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                                Text(followUpReason(for: job))
-                                    .font(.caption)
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(job.customer.name)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                    Text(followUpReason(for: job))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
-                            Spacer()
-                            Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+
+                            if job.followUpRequired || job.type == .estimate {
+                                Button("Schedule Follow-Up Visit") {
+                                    scheduleFollowUpVisit(for: job)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(Color.brandGold)
+                            }
                         }
                     }
                     .buttonStyle(.plain)
@@ -605,6 +615,41 @@ struct ScheduleView: View {
         contract.advanceNextDate()
         selectedDate = Calendar.current.startOfDay(for: call.scheduledDate)
         navigationPath.append(call)
+    }
+
+    private func scheduleFollowUpVisit(for sourceCall: ServiceCall) {
+        let scheduledDate = sourceCall.followUpDueDate ?? Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        let notesPrefix = sourceCall.followUpAction?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let generatedNotes = [notesPrefix, sourceCall.notes]
+            .compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: "\n\n")
+
+        let followUpCall = ServiceCall(
+            siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
+            equipmentName: sourceCall.equipmentName,
+            equipmentModel: sourceCall.equipmentModel,
+            equipmentSerialNumber: sourceCall.equipmentSerialNumber,
+            equipmentWarrantyExpiration: sourceCall.equipmentWarrantyExpiration,
+            type: sourceCall.type,
+            scheduledDate: scheduledDate,
+            duration: sourceCall.duration,
+            assignedTechnician: sourceCall.assignedTechnician,
+            customer: sourceCall.customer,
+            status: .scheduled,
+            notes: generatedNotes.isEmpty ? "Scheduled follow-up visit" : "Scheduled follow-up visit\n\n\(generatedNotes)",
+            findingsSummary: sourceCall.findingsSummary,
+            recommendedWorkSummary: sourceCall.recommendedWorkSummary,
+            followUpRequired: false
+        )
+        modelContext.insert(followUpCall)
+        sourceCall.followUpRequired = false
+        sourceCall.followUpAction = nil
+        sourceCall.followUpDueDate = nil
+        selectedDate = Calendar.current.startOfDay(for: followUpCall.scheduledDate)
+        navigationPath.append(followUpCall)
     }
 
 }

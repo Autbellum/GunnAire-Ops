@@ -276,6 +276,10 @@ GunnAire
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
                             }
+                            Button("Schedule Follow-Up Visit") {
+                                scheduleFollowUpVisit(for: call)
+                            }
+                            .buttonStyle(.bordered)
                         }
                         if let equipmentSummary = call.equipmentSummary {
                             Text(equipmentSummary)
@@ -1214,6 +1218,40 @@ GunnAire
         value
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+    }
+
+    private func scheduleFollowUpVisit(for sourceCall: ServiceCall) {
+        let scheduledDate = sourceCall.followUpDueDate ?? Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+        let notesPrefix = sourceCall.followUpAction?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let generatedNotes = [notesPrefix, sourceCall.notes]
+            .compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: "\n\n")
+
+        let followUpCall = ServiceCall(
+            siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
+            equipmentName: sourceCall.equipmentName,
+            equipmentModel: sourceCall.equipmentModel,
+            equipmentSerialNumber: sourceCall.equipmentSerialNumber,
+            equipmentWarrantyExpiration: sourceCall.equipmentWarrantyExpiration,
+            type: sourceCall.type,
+            scheduledDate: scheduledDate,
+            duration: sourceCall.duration,
+            assignedTechnician: sourceCall.assignedTechnician,
+            customer: sourceCall.customer,
+            status: .scheduled,
+            notes: generatedNotes.isEmpty ? "Scheduled follow-up visit" : "Scheduled follow-up visit\n\n\(generatedNotes)",
+            findingsSummary: sourceCall.findingsSummary,
+            recommendedWorkSummary: sourceCall.recommendedWorkSummary,
+            followUpRequired: false
+        )
+        modelContext.insert(followUpCall)
+        sourceCall.followUpRequired = false
+        sourceCall.followUpAction = nil
+        sourceCall.followUpDueDate = nil
+        actionMessage = "Scheduled follow-up visit for \(followUpCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))."
     }
 
     private func matchesCatalogFilter(_ item: Item) -> Bool {
