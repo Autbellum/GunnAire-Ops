@@ -42,6 +42,31 @@ struct GoogleCalendar: Codable, Identifiable {
             return id == "primary"
         }
     }
+
+    var normalizedSummary: String {
+        summary?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    }
+
+    var displayLabel: String {
+        if id == "primary" {
+            if let summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "\(summary) (Primary)"
+            }
+            return "Primary Calendar"
+        }
+        if let summary,
+           !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           normalizedSummary != normalizedID {
+            return "\(summary) (\(id))"
+        }
+        return id
+    }
+
+    func matchesTechnicianEmail(_ email: String?) -> Bool {
+        let normalizedEmail = AppAccess.normalizedEmail(email)
+        guard !normalizedEmail.isEmpty else { return false }
+        return normalizedID == normalizedEmail || normalizedSummary == normalizedEmail
+    }
 }
 
 struct GoogleCalendarEventsResponse: Codable {

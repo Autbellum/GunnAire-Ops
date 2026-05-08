@@ -37,6 +37,14 @@ enum AppAccess {
         email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
     }
 
+    static func inferredDisplayName(fromEmail email: String) -> String {
+        normalizedEmail(email)
+            .components(separatedBy: "@")
+            .first?
+            .replacingOccurrences(of: ".", with: " ")
+            .capitalized ?? email
+    }
+
     static func isPrimaryAdmin(_ email: String?) -> Bool {
         normalizedEmail(email) == primaryAdminEmail
     }
@@ -55,5 +63,24 @@ enum AppAccess {
             return true
         }
         return users.contains { $0.isActive && $0.email == email }
+    }
+
+    @discardableResult
+    static func ensureTechnicianRecord(
+        for email: String,
+        technicians: [Technician],
+        modelContext: ModelContext
+    ) -> Technician {
+        let normalized = normalizedEmail(email)
+        if let existing = technicians.first(where: { normalizedEmail($0.contactInfo) == normalized }) {
+            return existing
+        }
+
+        let technician = Technician(
+            name: inferredDisplayName(fromEmail: normalized),
+            contactInfo: normalized
+        )
+        modelContext.insert(technician)
+        return technician
     }
 }

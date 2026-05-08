@@ -6,6 +6,7 @@ import AVKit
 struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     @Binding var isQuickBooksAuthenticated: Bool
@@ -469,7 +470,8 @@ struct SettingsView: View {
             return
         }
         modelContext.insert(AppUser(email: email, role: newUserRole))
-        userAdminMessage = "Added \(email) as \(newUserRole.rawValue)."
+        AppAccess.ensureTechnicianRecord(for: email, technicians: technicians, modelContext: modelContext)
+        userAdminMessage = "Added \(email) as \(newUserRole.rawValue) and provisioned the technician calendar record."
         newUserEmail = ""
         newUserRole = .standard
     }

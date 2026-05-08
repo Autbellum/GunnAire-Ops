@@ -20,6 +20,7 @@ struct BillingDocumentsView: View {
     @State private var selectedDocumentKind: BillingDocumentKind
     @State private var selectedCustomerID: UUID?
     @State private var selectedItems: Set<UUID> = []
+    @State private var suggestedItemIDs: Set<UUID> = []
     @State private var notes = ""
     @State private var customerName = ""
     @State private var customerPhone = ""
@@ -66,6 +67,10 @@ struct BillingDocumentsView: View {
 
     private var selectedLineItems: [Item] {
         items.filter { selectedItems.contains($0.id) }
+    }
+
+    private var suggestedLineItems: [Item] {
+        items.filter { suggestedItemIDs.contains($0.id) && !selectedItems.contains($0.id) }
     }
 
     private var currentJobEstimate: Estimate? {
@@ -185,6 +190,33 @@ struct BillingDocumentsView: View {
                             Spacer()
                             Text("\(selectedLineItems.count)")
                                 .foregroundColor(.secondary)
+                        }
+
+                        if !selectedLineItems.isEmpty {
+                            ForEach(selectedLineItems.prefix(5)) { item in
+                                HStack {
+                                    Text(item.name)
+                                        .font(.caption)
+                                    Spacer()
+                                    Text(item.unitPrice, format: .currency(code: "USD"))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+
+                            Button("Clear Selected Items") {
+                                selectedItems.removeAll()
+                            }
+                            .buttonStyle(.bordered)
+                        } else if !suggestedLineItems.isEmpty {
+                            Text("Suggested items are available below, but nothing has been selected yet.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            Button("Apply \(suggestedLineItems.count) Suggested Items") {
+                                selectedItems.formUnion(suggestedItemIDs)
+                            }
+                            .buttonStyle(.bordered)
                         }
 
                         HStack {
@@ -461,6 +493,32 @@ struct BillingDocumentsView: View {
                 }
 
                 Section("Items") {
+                    if !suggestedLineItems.isEmpty {
+                        ForEach(suggestedLineItems) { item in
+                            Button {
+                                selectedItems.insert(item.id)
+                            } label: {
+                                HStack {
+                                    Image(systemName: "sparkles")
+                                        .foregroundColor(Color.brandGold)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(item.name)
+                                            .font(.headline)
+                                        if let description = item.itemDescription, !description.isEmpty {
+                                            Text(description)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                    Spacer()
+                                    Text(item.unitPrice, format: .currency(code: "USD"))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
                     if items.isEmpty {
                         Text("No items yet. Add one below.")
                             .foregroundColor(.secondary)
@@ -661,7 +719,7 @@ struct BillingDocumentsView: View {
                 loadLinkedDocumentContextIfNeeded()
             }
             if selectedItems.isEmpty {
-                selectedItems = recommendedItemIDs(for: call)
+                suggestedItemIDs = recommendedItemIDs(for: call)
             }
             openInvoiceAfterEstimateCreation = true
             openCloseoutAfterInvoiceCreation = true
@@ -774,7 +832,7 @@ struct BillingDocumentsView: View {
                         ? "QuickBooks catalog is already up to date."
                         : "Imported \(imported) catalog items from QuickBooks."
                     if let call = activeServiceCall, selectedItems.isEmpty {
-                        selectedItems = recommendedItemIDs(for: call)
+                        suggestedItemIDs = recommendedItemIDs(for: call)
                     }
                 }
             }
@@ -891,9 +949,11 @@ struct BillingDocumentsView: View {
 
         let restoredItems = matchingItemIDs(from: lineItemSummary)
         if restoredItems.isEmpty, let call = activeServiceCall {
-            selectedItems = recommendedItemIDs(for: call)
+            selectedItems.removeAll()
+            suggestedItemIDs = recommendedItemIDs(for: call)
         } else {
             selectedItems = restoredItems
+            suggestedItemIDs.removeAll()
         }
 
         if announce {

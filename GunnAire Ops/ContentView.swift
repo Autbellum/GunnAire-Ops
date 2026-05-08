@@ -733,7 +733,7 @@ struct AddServiceCallView: View {
     @State private var duration: TimeInterval = 3600
     @State private var siteAddress: String = ""
     @State private var notes: String = ""
-    @State private var accessibleCalendarIDs: Set<String> = ["primary"]
+    @State private var accessibleCalendars: [GoogleCalendar] = []
     @State private var selectedCalendarID: String = "primary"
     @State private var openDocumentationAfterSave = false
 
@@ -859,7 +859,7 @@ struct AddServiceCallView: View {
             DispatchQueue.main.async {
                 switch result {
                 case .success(let calendars):
-                    accessibleCalendarIDs = Set(calendars.map(\.id) + ["primary"])
+                    accessibleCalendars = calendars
                     if !availableCalendars.contains(where: { $0.id == selectedCalendarID }) {
                         selectedCalendarID = preferredCalendarID(for: technician) ?? "primary"
                     }
@@ -871,28 +871,24 @@ struct AddServiceCallView: View {
     }
 
     private func preferredCalendarID(for technician: Technician?) -> String? {
-        guard let technicianEmail = technician?.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !technicianEmail.isEmpty else {
+        guard let technician else {
             return "primary"
         }
-        if accessibleCalendarIDs.contains(technicianEmail) {
-            return technicianEmail
-        }
-        if accessibleCalendarIDs.contains(technicianEmail.lowercased()) {
-            return technicianEmail.lowercased()
+        if let matchedCalendar = accessibleCalendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technician.contactInfo) }) {
+            return matchedCalendar.id
         }
         return "primary"
     }
 
     private var availableCalendars: [(id: String, label: String)] {
-        Array(accessibleCalendarIDs)
-            .sorted()
-            .map { id in
-                if id == "primary" {
-                    return (id: id, label: "Primary Calendar")
-                }
-                return (id: id, label: id)
-            }
+        let calendars = accessibleCalendars.sorted { lhs, rhs in
+            lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
+        }
+        var values = calendars.map { (id: $0.id, label: $0.displayLabel) }
+        if !values.contains(where: { $0.id == "primary" }) {
+            values.insert((id: "primary", label: "Primary Calendar"), at: 0)
+        }
+        return values
     }
 
     private func calendarRoutingMessage(for technician: Technician) -> String {
@@ -901,11 +897,14 @@ struct AddServiceCallView: View {
                 ? "This technician has no calendar email. The event will sync to the connected account's primary calendar."
                 : "This technician has no calendar email. The event will sync to the selected calendar."
         }
-        if selectedCalendarID == technicianEmail || selectedCalendarID == technicianEmail.lowercased() {
-            return "This event will sync to \(selectedCalendarID)'s Google Calendar."
+        if let matchedWritableCalendar = accessibleCalendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technicianEmail) }) {
+            if selectedCalendarID == matchedWritableCalendar.id {
+                return "This event will sync to \(matchedWritableCalendar.displayLabel)."
+            }
+            return "This technician calendar is writable. Current target: \(selectedCalendarID == "primary" ? "Primary Calendar" : selectedCalendarID)."
         }
-        if accessibleCalendarIDs.contains(technicianEmail) || accessibleCalendarIDs.contains(technicianEmail.lowercased()) {
-            return "This technician calendar is accessible. Current target: \(selectedCalendarID == "primary" ? "Primary Calendar" : selectedCalendarID)."
+        if accessibleCalendars.contains(where: { $0.matchesTechnicianEmail(technicianEmail) }) {
+            return "\(technicianEmail) is visible to the connected Google account, but it is read-only. The event will stay on the selected writable calendar."
         }
         return "\(technicianEmail) is not currently shared with the connected Google account. The event will sync to the primary calendar unless access is granted."
     }
@@ -914,10 +913,11 @@ struct AddServiceCallView: View {
         guard let technicianEmail = technician.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines), !technicianEmail.isEmpty else {
             return .orange
         }
-        if selectedCalendarID == technicianEmail || selectedCalendarID == technicianEmail.lowercased() {
+        if let matchedWritableCalendar = accessibleCalendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technicianEmail) }),
+           selectedCalendarID == matchedWritableCalendar.id {
             return .green
         }
-        return accessibleCalendarIDs.contains(technicianEmail) || accessibleCalendarIDs.contains(technicianEmail.lowercased()) ? .yellow : .orange
+        return accessibleCalendars.contains(where: { $0.matchesTechnicianEmail(technicianEmail) }) ? .yellow : .orange
     }
 }
 
@@ -937,7 +937,7 @@ struct EditServiceCallView: View {
     @State private var status: JobStatus
     @State private var siteAddress: String
     @State private var notes: String
-    @State private var accessibleCalendarIDs: Set<String> = ["primary"]
+    @State private var accessibleCalendars: [GoogleCalendar] = []
     @State private var selectedCalendarID: String
 
     init(call: ServiceCall) {
@@ -1007,9 +1007,7 @@ struct EditServiceCallView: View {
         .tint(Color.brandGold)
         .onAppear(perform: loadAccessibleCalendarsIfNeeded)
         .onChange(of: technician) { _, newTechnician in
-            if selectedCalendarID == "primary" || !availableCalendars.contains(where: { $0.id == selectedCalendarID }) {
-                selectedCalendarID = preferredCalendarID(for: newTechnician) ?? "primary"
-            }
+            selectedCalendarID = preferredCalendarID(for: newTechnician) ?? "primary"
         }
     }
 
@@ -1040,7 +1038,7 @@ struct EditServiceCallView: View {
             DispatchQueue.main.async {
                 switch result {
                 case .success(let calendars):
-                    accessibleCalendarIDs = Set(calendars.map(\.id) + ["primary"])
+                    accessibleCalendars = calendars
                     if !availableCalendars.contains(where: { $0.id == selectedCalendarID }) {
                         selectedCalendarID = preferredCalendarID(for: technician) ?? "primary"
                     }
@@ -1052,25 +1050,24 @@ struct EditServiceCallView: View {
     }
 
     private func preferredCalendarID(for technician: Technician?) -> String? {
-        guard let technicianEmail = technician?.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !technicianEmail.isEmpty else {
+        guard let technician else {
             return "primary"
         }
-        if accessibleCalendarIDs.contains(technicianEmail) {
-            return technicianEmail
-        }
-        if accessibleCalendarIDs.contains(technicianEmail.lowercased()) {
-            return technicianEmail.lowercased()
+        if let matchedCalendar = accessibleCalendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technician.contactInfo) }) {
+            return matchedCalendar.id
         }
         return "primary"
     }
 
     private var availableCalendars: [(id: String, label: String)] {
-        Array(accessibleCalendarIDs)
-            .sorted()
-            .map { id in
-                id == "primary" ? (id: id, label: "Primary Calendar") : (id: id, label: id)
-            }
+        let calendars = accessibleCalendars.sorted { lhs, rhs in
+            lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
+        }
+        var values = calendars.map { (id: $0.id, label: $0.displayLabel) }
+        if !values.contains(where: { $0.id == "primary" }) {
+            values.insert((id: "primary", label: "Primary Calendar"), at: 0)
+        }
+        return values
     }
 }
 

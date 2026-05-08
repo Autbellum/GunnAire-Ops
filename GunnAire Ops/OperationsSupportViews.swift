@@ -297,11 +297,10 @@ struct SyncIntegrationsView: View {
         guard let email = technician.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty else {
             return "No email"
         }
-        let normalizedEmail = email.lowercased()
-        if writableCalendarIDs.contains(normalizedEmail) {
+        if availableCalendars.contains(where: { $0.isWritable && $0.matchesTechnicianEmail(email) }) {
             return "Writable"
         }
-        if availableCalendarIDs.contains(email) || availableCalendarIDs.contains(normalizedEmail) {
+        if availableCalendars.contains(where: { $0.matchesTechnicianEmail(email) }) {
             return "Read-only"
         }
         return "Not shared"
@@ -330,8 +329,8 @@ struct SyncIntegrationsView: View {
             technicianMessage = "Enter a technician name first."
             return
         }
-        let email = newTechnicianCalendarEmail.nilIfBlank?.lowercased()
-        if let email, technicians.contains(where: { $0.contactInfo?.lowercased() == email }) {
+        let email = AppAccess.normalizedEmail(newTechnicianCalendarEmail).nilIfBlank
+        if let email, technicians.contains(where: { AppAccess.normalizedEmail($0.contactInfo) == email }) {
             technicianMessage = "A technician with that calendar email already exists."
             return
         }
@@ -520,7 +519,7 @@ private struct TechnicianEditorView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         technician.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                        technician.contactInfo = calendarEmail.nilIfBlank
+                        technician.contactInfo = AppAccess.normalizedEmail(calendarEmail).nilIfBlank
                         dismiss()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
