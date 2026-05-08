@@ -147,6 +147,29 @@ struct BillingDocumentsView: View {
         return (openInvoices.count, overdueInvoices.count, balance)
     }
 
+    private var estimatesNeedingFollowUp: [Estimate] {
+        estimates.filter { estimate in
+            estimate.status == "pending" || estimate.status == "follow-up"
+        }
+    }
+
+    private var acceptedEstimatesReadyToSchedule: [Estimate] {
+        estimates.filter { $0.status == "accepted" }
+    }
+
+    private var collectibleInvoices: [Invoice] {
+        invoices.filter { invoice in
+            invoiceBalanceDue(for: invoice) > 0.009
+        }
+    }
+
+    private var overdueInvoices: [Invoice] {
+        let now = Date()
+        return collectibleInvoices.filter { invoice in
+            Calendar.current.dateComponents([.day], from: invoice.createdAt, to: now).day ?? 0 >= 30
+        }
+    }
+
     private var contextCustomer: Customer? {
         if let selectedCustomer {
             return selectedCustomer
@@ -699,6 +722,116 @@ GunnAire
                                 }
                                 .padding(.vertical, 2)
                             }
+                        }
+                    }
+                }
+
+                if !isJobDocumentationMode && workspaceMode.showsEstimates && !estimatesNeedingFollowUp.isEmpty {
+                    Section("Estimate Follow-Up") {
+                        ForEach(estimatesNeedingFollowUp.prefix(6)) { estimate in
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(estimate.customer.name)
+                                            .font(.headline)
+                                        Text("\(estimate.amount, format: .currency(code: "USD")) • \(estimate.status.capitalized)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(estimate.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Text(estimate.lineItemSummary)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                HStack {
+                                    Button("Load Estimate") {
+                                        loadEstimateIntoBuilder(estimate)
+                                    }
+                                    .buttonStyle(.bordered)
+
+                                    Button("Create Invoice") {
+                                        prepareInvoiceFromEstimate(estimate)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(Color.brandGold)
+                                    .foregroundStyle(Color.primaryBlack)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
+                if !isJobDocumentationMode && workspaceMode.showsEstimates && !acceptedEstimatesReadyToSchedule.isEmpty {
+                    Section("Accepted Estimates") {
+                        ForEach(acceptedEstimatesReadyToSchedule.prefix(6)) { estimate in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(estimate.customer.name)
+                                    .font(.headline)
+                                Text("\(estimate.amount, format: .currency(code: "USD")) • Accepted")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("Move this approved work into scheduling from the original job or documentation flow.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
+                if !isJobDocumentationMode && workspaceMode.showsInvoices && !collectibleInvoices.isEmpty {
+                    Section("Collections Queue") {
+                        ForEach(collectibleInvoices.prefix(8)) { invoice in
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(invoice.customer.name)
+                                            .font(.headline)
+                                        Text("Balance due: \(invoiceBalanceDue(for: invoice), format: .currency(code: "USD"))")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(invoice.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                HStack {
+                                    Button("Open Invoice") {
+                                        loadInvoiceIntoBuilder(invoice)
+                                    }
+                                    .buttonStyle(.bordered)
+
+                                    Button("Collect Payment") {
+                                        openPaymentsForInvoice(invoice)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.green)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
+                if !isJobDocumentationMode && workspaceMode.showsInvoices && !overdueInvoices.isEmpty {
+                    Section("Overdue Invoices") {
+                        ForEach(overdueInvoices.prefix(6)) { invoice in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(invoice.customer.name)
+                                    .font(.headline)
+                                Text("Overdue • \(invoiceBalanceDue(for: invoice), format: .currency(code: "USD")) due")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                Text(invoice.lineItemSummary)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 2)
                         }
                     }
                 }
