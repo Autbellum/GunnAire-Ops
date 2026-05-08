@@ -228,15 +228,6 @@ struct BillingDocumentsView: View {
                                 selectedItems.removeAll()
                             }
                             .buttonStyle(.bordered)
-                        } else if !suggestedLineItems.isEmpty {
-                            Text("Suggested items are available below, but nothing has been selected yet.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-
-                            Button("Apply \(suggestedLineItems.count) Suggested Items") {
-                                selectedItems.formUnion(suggestedItemIDs)
-                            }
-                            .buttonStyle(.bordered)
                         }
 
                         HStack {
