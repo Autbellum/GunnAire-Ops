@@ -123,6 +123,15 @@ struct ScheduleView: View {
             .sorted { $0.scheduledDate > $1.scheduledDate }
     }
 
+    private var quickBooksAttentionPayments: [Payment] {
+        payments
+            .filter { payment in
+                payment.needsQuickBooksAttention &&
+                callsForSignedInUser.contains { $0.linkedInvoiceID == payment.invoice.id }
+            }
+            .sorted { $0.date > $1.date }
+    }
+
     private var callsForSignedInUser: [ServiceCall] {
         guard let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") else {
             return serviceCalls
@@ -588,6 +597,39 @@ struct ScheduleView: View {
                             openDocumentationInCloseout = true
                             openDocumentationInTapToPay = false
                             documentationCall = job
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(Color.brandGold)
+                    }
+                }
+            }
+
+            if !quickBooksAttentionPayments.isEmpty {
+                Divider()
+                Text("QuickBooks Attention")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.brandGold)
+
+                ForEach(quickBooksAttentionPayments.prefix(3)) { payment in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(payment.invoice.customer.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text(payment.quickBooksAccountingSyncDetail ?? "QuickBooks payment sync needs attention")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            Spacer()
+                            Text(payment.amount, format: .currency(code: "USD"))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Button("Open Payments") {
+                            GunnAireAppIntentRouter.storePaymentCollectionRoute(payment.invoice.id)
                         }
                         .buttonStyle(.bordered)
                         .tint(Color.brandGold)
