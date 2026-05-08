@@ -175,7 +175,7 @@ struct ContentView: View {
                 columnVisibility = .doubleColumn
             }
             QuickBooksDataAPI.shared.loadTokens()
-            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.tokens != nil && QuickBooksDataAPI.shared.realmID != nil
+            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
             ensurePrimaryAdminExists()
             refreshGoogleAccountIdentityIfNeeded()
