@@ -7,8 +7,6 @@ enum GunnAireAppRoute: String, CaseIterable {
     case schedule = "scheduleAndJobs"
     case customers = "customers"
     case mail = "mail"
-    case estimates = "estimates"
-    case invoices = "invoices"
     case invoicesEstimates = "invoicesEstimates"
     case payments = "payments"
     case receiptsBills = "receiptsBills"
@@ -26,12 +24,8 @@ enum GunnAireAppRoute: String, CaseIterable {
             return .customers
         case .mail:
             return .mail
-        case .estimates:
-            return .estimates
-        case .invoices:
-            return .invoices
         case .invoicesEstimates:
-            return .invoices
+            return .invoicesEstimates
         case .payments:
             return .payments
         case .receiptsBills:
@@ -55,10 +49,6 @@ enum GunnAireAppRoute: String, CaseIterable {
             return "Customers"
         case .mail:
             return "Mail"
-        case .estimates:
-            return "Estimates"
-        case .invoices:
-            return "Invoices"
         case .invoicesEstimates:
             return "Invoices"
         case .payments:
@@ -84,10 +74,6 @@ enum GunnAireAppRoute: String, CaseIterable {
             return "person.3"
         case .mail:
             return "envelope"
-        case .estimates:
-            return "doc.plaintext"
-        case .invoices:
-            return "doc.text"
         case .invoicesEstimates:
             return "doc.text"
         case .payments:

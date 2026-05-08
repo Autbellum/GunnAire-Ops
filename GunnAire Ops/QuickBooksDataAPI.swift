@@ -40,13 +40,11 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     var realmID: String? {
-        guard let storedRealmID else { return nil }
-        let normalizedRealmID = storedRealmID.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalizedRealmID.isEmpty ? nil : normalizedRealmID
+        storedRealmID
     }
 
     var isAuthenticated: Bool {
-        tokens != nil && realmID != nil
+        tokens != nil && storedRealmID != nil
     }
 
     var canStartOAuthFlow: Bool {
@@ -54,15 +52,10 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     func storeTokens(_ tokens: QuickBooksOAuthTokens, realmID: String) {
-        let normalizedRealmID = realmID.trimmingCharacters(in: .whitespacesAndNewlines)
         self.tokens = tokens
-        self.storedRealmID = normalizedRealmID.isEmpty ? nil : normalizedRealmID
-        guard !normalizedRealmID.isEmpty else {
-            UserDefaults.standard.removeObject(forKey: realmIDKey)
-            return
-        }
-        try? KeychainStore.saveCodable(QuickBooksKeychainPayload(tokens: tokens, realmID: normalizedRealmID), account: keychainAccount)
-        UserDefaults.standard.set(normalizedRealmID, forKey: realmIDKey)
+        self.storedRealmID = realmID
+        try? KeychainStore.saveCodable(QuickBooksKeychainPayload(tokens: tokens, realmID: realmID), account: keychainAccount)
+        UserDefaults.standard.set(realmID, forKey: realmIDKey)
         if let data = try? JSONEncoder().encode(tokens) {
             UserDefaults.standard.set(data, forKey: tokenStorageKey)
         }
@@ -71,12 +64,7 @@ final class QuickBooksDataAPI: ObservableObject {
     func loadTokens() {
         if let payload = try? KeychainStore.loadCodable(QuickBooksKeychainPayload.self, account: keychainAccount) {
             tokens = payload.tokens
-            let keychainRealmID = payload.realmID.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !keychainRealmID.isEmpty {
-                storedRealmID = keychainRealmID
-            } else {
-                storedRealmID = UserDefaults.standard.string(forKey: realmIDKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+            storedRealmID = payload.realmID
             return
         }
 
