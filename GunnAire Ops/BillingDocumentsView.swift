@@ -216,6 +216,21 @@ struct BillingDocumentsView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                        if let findingsSummary = call.findingsSummary, !findingsSummary.isEmpty {
+                            Text("Findings: \(findingsSummary)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        if let recommendedWorkSummary = call.recommendedWorkSummary, !recommendedWorkSummary.isEmpty {
+                            Text("Recommended Work: \(recommendedWorkSummary)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        if call.followUpRequired {
+                            Text("Follow-up required")
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                        }
                         if let equipmentSummary = call.equipmentSummary {
                             Text(equipmentSummary)
                                 .font(.caption)

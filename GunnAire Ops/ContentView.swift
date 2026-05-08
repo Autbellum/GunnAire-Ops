@@ -469,6 +469,16 @@ GunnAire
                         if let notes = call.notes, !notes.isEmpty {
                             Text("Notes: \(notes)")
                         }
+                        if let findingsSummary = call.findingsSummary, !findingsSummary.isEmpty {
+                            Text("Findings: \(findingsSummary)")
+                        }
+                        if let recommendedWorkSummary = call.recommendedWorkSummary, !recommendedWorkSummary.isEmpty {
+                            Text("Recommended Work: \(recommendedWorkSummary)")
+                        }
+                        if call.followUpRequired {
+                            Text("Follow-up required")
+                                .foregroundColor(.orange)
+                        }
                     }
                     .foregroundColor(.primary)
 
@@ -821,6 +831,9 @@ struct AddServiceCallView: View {
     @State private var equipmentWarrantyExpiration: Date = Date()
     @State private var includeWarrantyExpiration = false
     @State private var notes: String = ""
+    @State private var findingsSummary = ""
+    @State private var recommendedWorkSummary = ""
+    @State private var followUpRequired = false
     @State private var accessibleCalendars: [GoogleCalendar] = []
     @State private var selectedCalendarID: String = "primary"
     @State private var openDocumentationAfterSave = false
@@ -1011,6 +1024,13 @@ struct AddServiceCallView: View {
                     Text("Duration: \(Int(duration/60)) min")
                 }
                 TextField("Notes", text: $notes, axis: .vertical)
+                Section("Findings & Follow-Up") {
+                    TextField("Findings", text: $findingsSummary, axis: .vertical)
+                        .lineLimit(2...4)
+                    TextField("Recommended Work", text: $recommendedWorkSummary, axis: .vertical)
+                        .lineLimit(2...4)
+                    Toggle("Follow-Up Required", isOn: $followUpRequired)
+                }
                 Toggle("Open Documentation After Save", isOn: $openDocumentationAfterSave)
             }
             .scrollContentBackground(.hidden)
@@ -1059,7 +1079,10 @@ struct AddServiceCallView: View {
             equipmentModel: equipmentModel.nilIfBlank,
             equipmentSerialNumber: equipmentSerialNumber.nilIfBlank,
             equipmentWarrantyExpiration: includeWarrantyExpiration ? equipmentWarrantyExpiration : nil,
-            notes: notes.isEmpty ? nil : notes
+            notes: notes.nilIfBlank,
+            findingsSummary: findingsSummary.nilIfBlank,
+            recommendedWorkSummary: recommendedWorkSummary.nilIfBlank,
+            followUpRequired: followUpRequired
         )
         modelContext.insert(call)
         dismiss()
@@ -1166,6 +1189,9 @@ struct EditServiceCallView: View {
     @State private var equipmentWarrantyExpiration: Date
     @State private var includeWarrantyExpiration: Bool
     @State private var notes: String
+    @State private var findingsSummary: String
+    @State private var recommendedWorkSummary: String
+    @State private var followUpRequired: Bool
     @State private var accessibleCalendars: [GoogleCalendar] = []
     @State private var selectedCalendarID: String
 
@@ -1184,6 +1210,9 @@ struct EditServiceCallView: View {
         _equipmentWarrantyExpiration = State(initialValue: call.equipmentWarrantyExpiration ?? Date())
         _includeWarrantyExpiration = State(initialValue: call.equipmentWarrantyExpiration != nil)
         _notes = State(initialValue: call.notes ?? "")
+        _findingsSummary = State(initialValue: call.findingsSummary ?? "")
+        _recommendedWorkSummary = State(initialValue: call.recommendedWorkSummary ?? "")
+        _followUpRequired = State(initialValue: call.followUpRequired)
         _selectedCalendarID = State(initialValue: call.googleCalendarID ?? "primary")
     }
 
@@ -1233,6 +1262,13 @@ struct EditServiceCallView: View {
                 }
                 TextField("Notes", text: $notes, axis: .vertical)
                     .lineLimit(2...4)
+                Section("Findings & Follow-Up") {
+                    TextField("Findings", text: $findingsSummary, axis: .vertical)
+                        .lineLimit(2...4)
+                    TextField("Recommended Work", text: $recommendedWorkSummary, axis: .vertical)
+                        .lineLimit(2...4)
+                    Toggle("Follow-Up Required", isOn: $followUpRequired)
+                }
             }
             .navigationTitle("Edit Service Call")
             .toolbar {
@@ -1269,6 +1305,9 @@ struct EditServiceCallView: View {
         call.scheduledDate = scheduledTime
         call.duration = duration
         call.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        call.findingsSummary = findingsSummary.nilIfBlank
+        call.recommendedWorkSummary = recommendedWorkSummary.nilIfBlank
+        call.followUpRequired = followUpRequired
 
         if status == .inProgress && call.documentationStartedAt == nil {
             call.documentationStartedAt = Date()

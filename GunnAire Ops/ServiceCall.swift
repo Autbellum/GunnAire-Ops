@@ -28,6 +28,9 @@ final class ServiceCall {
     var customer: Customer
     var status: JobStatus
     var notes: String?
+    var findingsSummary: String?
+    var recommendedWorkSummary: String?
+    var followUpRequired: Bool
     var customerNotified: Bool
     var arrivalConfirmed: Bool
     var workCompletedChecklist: Bool
@@ -56,6 +59,9 @@ final class ServiceCall {
         customer: Customer,
         status: JobStatus = .scheduled,
         notes: String? = nil,
+        findingsSummary: String? = nil,
+        recommendedWorkSummary: String? = nil,
+        followUpRequired: Bool = false,
         customerNotified: Bool = false,
         arrivalConfirmed: Bool = false,
         workCompletedChecklist: Bool = false,
@@ -83,6 +89,9 @@ final class ServiceCall {
         self.customer = customer
         self.status = status
         self.notes = notes
+        self.findingsSummary = findingsSummary
+        self.recommendedWorkSummary = recommendedWorkSummary
+        self.followUpRequired = followUpRequired
         self.customerNotified = customerNotified
         self.arrivalConfirmed = arrivalConfirmed
         self.workCompletedChecklist = workCompletedChecklist
