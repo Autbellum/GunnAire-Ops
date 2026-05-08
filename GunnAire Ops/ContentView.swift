@@ -472,6 +472,24 @@ GunnAire
                     }
                     .foregroundColor(.primary)
 
+                    GroupBox("Equipment") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let equipmentSummary = call.equipmentSummary {
+                                Text(equipmentSummary)
+                                    .font(.headline)
+                            } else {
+                                Text("No equipment profile recorded yet.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            if let warrantyDate = call.equipmentWarrantyExpiration {
+                                Text("Warranty expires: \(warrantyDate.formatted(date: .abbreviated, time: .omitted))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+
                     if phoneURL != nil || emailURL != nil || mapsURL != nil {
                         GroupBox("Customer Contact") {
                             HStack(spacing: 12) {
@@ -797,6 +815,11 @@ struct AddServiceCallView: View {
     @State private var newCustomerEmail = ""
     @State private var newCustomerAddress = ""
     @State private var siteAddress: String = ""
+    @State private var equipmentName = ""
+    @State private var equipmentModel = ""
+    @State private var equipmentSerialNumber = ""
+    @State private var equipmentWarrantyExpiration: Date = Date()
+    @State private var includeWarrantyExpiration = false
     @State private var notes: String = ""
     @State private var accessibleCalendars: [GoogleCalendar] = []
     @State private var selectedCalendarID: String = "primary"
@@ -958,6 +981,15 @@ struct AddServiceCallView: View {
                 }
                 TextField("Service Address", text: $siteAddress, axis: .vertical)
                     .lineLimit(2...3)
+                Section("Equipment") {
+                    TextField("Equipment", text: $equipmentName)
+                    TextField("Model", text: $equipmentModel)
+                    TextField("Serial Number", text: $equipmentSerialNumber)
+                    Toggle("Track Warranty Expiration", isOn: $includeWarrantyExpiration)
+                    if includeWarrantyExpiration {
+                        DatePicker("Warranty Expiration", selection: $equipmentWarrantyExpiration, displayedComponents: .date)
+                    }
+                }
                 Picker("Technician", selection: $technician) {
                     Text("Unassigned").tag(Technician?.none)
                     ForEach(technicians) { t in
@@ -1023,6 +1055,10 @@ struct AddServiceCallView: View {
             assignedTechnician: technician,
             customer: customer,
             status: .scheduled,
+            equipmentName: equipmentName.nilIfBlank,
+            equipmentModel: equipmentModel.nilIfBlank,
+            equipmentSerialNumber: equipmentSerialNumber.nilIfBlank,
+            equipmentWarrantyExpiration: includeWarrantyExpiration ? equipmentWarrantyExpiration : nil,
             notes: notes.isEmpty ? nil : notes
         )
         modelContext.insert(call)
@@ -1124,6 +1160,11 @@ struct EditServiceCallView: View {
     @State private var duration: TimeInterval
     @State private var status: JobStatus
     @State private var siteAddress: String
+    @State private var equipmentName: String
+    @State private var equipmentModel: String
+    @State private var equipmentSerialNumber: String
+    @State private var equipmentWarrantyExpiration: Date
+    @State private var includeWarrantyExpiration: Bool
     @State private var notes: String
     @State private var accessibleCalendars: [GoogleCalendar] = []
     @State private var selectedCalendarID: String
@@ -1137,6 +1178,11 @@ struct EditServiceCallView: View {
         _duration = State(initialValue: call.duration)
         _status = State(initialValue: call.status)
         _siteAddress = State(initialValue: call.siteAddress ?? call.customer.address ?? "")
+        _equipmentName = State(initialValue: call.equipmentName ?? "")
+        _equipmentModel = State(initialValue: call.equipmentModel ?? "")
+        _equipmentSerialNumber = State(initialValue: call.equipmentSerialNumber ?? "")
+        _equipmentWarrantyExpiration = State(initialValue: call.equipmentWarrantyExpiration ?? Date())
+        _includeWarrantyExpiration = State(initialValue: call.equipmentWarrantyExpiration != nil)
         _notes = State(initialValue: call.notes ?? "")
         _selectedCalendarID = State(initialValue: call.googleCalendarID ?? "primary")
     }
@@ -1172,6 +1218,15 @@ struct EditServiceCallView: View {
                 }
                 TextField("Service Address", text: $siteAddress, axis: .vertical)
                     .lineLimit(2...3)
+                Section("Equipment") {
+                    TextField("Equipment", text: $equipmentName)
+                    TextField("Model", text: $equipmentModel)
+                    TextField("Serial Number", text: $equipmentSerialNumber)
+                    Toggle("Track Warranty Expiration", isOn: $includeWarrantyExpiration)
+                    if includeWarrantyExpiration {
+                        DatePicker("Warranty Expiration", selection: $equipmentWarrantyExpiration, displayedComponents: .date)
+                    }
+                }
                 DatePicker("Scheduled Time", selection: $scheduledTime, displayedComponents: [.date, .hourAndMinute])
                 Stepper(value: $duration, in: 1800...8*3600, step: 900) {
                     Text("Duration: \(Int(duration / 60)) min")
@@ -1207,6 +1262,10 @@ struct EditServiceCallView: View {
         call.status = status
         call.googleCalendarID = selectedCalendarID
         call.siteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? customer.address : siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        call.equipmentName = equipmentName.nilIfBlank
+        call.equipmentModel = equipmentModel.nilIfBlank
+        call.equipmentSerialNumber = equipmentSerialNumber.nilIfBlank
+        call.equipmentWarrantyExpiration = includeWarrantyExpiration ? equipmentWarrantyExpiration : nil
         call.scheduledDate = scheduledTime
         call.duration = duration
         call.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes.trimmingCharacters(in: .whitespacesAndNewlines)

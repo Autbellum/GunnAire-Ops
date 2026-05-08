@@ -216,6 +216,16 @@ struct BillingDocumentsView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                        if let equipmentSummary = call.equipmentSummary {
+                            Text(equipmentSummary)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        if let warrantyDate = call.equipmentWarrantyExpiration {
+                            Text("Warranty expires: \(warrantyDate.formatted(date: .abbreviated, time: .omitted))")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     Section("Documentation Builder") {

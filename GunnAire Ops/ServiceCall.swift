@@ -17,6 +17,10 @@ final class ServiceCall {
     var googleCalendarID: String?
     var googleEventID: String?
     var siteAddress: String?
+    var equipmentName: String?
+    var equipmentModel: String?
+    var equipmentSerialNumber: String?
+    var equipmentWarrantyExpiration: Date?
     var type: ServiceCallType
     var scheduledDate: Date
     var duration: TimeInterval
@@ -41,6 +45,10 @@ final class ServiceCall {
         googleCalendarID: String? = nil,
         googleEventID: String? = nil,
         siteAddress: String? = nil,
+        equipmentName: String? = nil,
+        equipmentModel: String? = nil,
+        equipmentSerialNumber: String? = nil,
+        equipmentWarrantyExpiration: Date? = nil,
         type: ServiceCallType,
         scheduledDate: Date,
         duration: TimeInterval = 3600,
@@ -64,6 +72,10 @@ final class ServiceCall {
         self.googleCalendarID = googleCalendarID
         self.googleEventID = googleEventID
         self.siteAddress = siteAddress
+        self.equipmentName = equipmentName
+        self.equipmentModel = equipmentModel
+        self.equipmentSerialNumber = equipmentSerialNumber
+        self.equipmentWarrantyExpiration = equipmentWarrantyExpiration
         self.type = type
         self.scheduledDate = scheduledDate
         self.duration = duration
@@ -100,5 +112,20 @@ final class ServiceCall {
 
     var isExternallyLinked: Bool {
         googleEventID != nil || googleCalendarID != nil || linkedEstimateID != nil || linkedInvoiceID != nil
+    }
+
+    var equipmentSummary: String? {
+        let parts = [
+            equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines),
+            equipmentModel?.trimmingCharacters(in: .whitespacesAndNewlines),
+            equipmentSerialNumber?.trimmingCharacters(in: .whitespacesAndNewlines).map { "S/N \($0)" }
+        ]
+        .compactMap { value in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }
+
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: " • ")
     }
 }
