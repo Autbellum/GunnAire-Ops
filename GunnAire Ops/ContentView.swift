@@ -1139,6 +1139,7 @@ extension ContentView {
     func fetchAndSyncQuickBooksData() {
         let group = DispatchGroup()
         var failures: [String] = []
+        var optionalWarnings: [String] = []
         var customers: [QuickBooksCustomer] = []
         var items: [QuickBooksItem] = []
         var estimates: [QuickBooksEstimate] = []
@@ -1199,7 +1200,7 @@ extension ContentView {
             case .success(let records):
                 bills = records
             case .failure(let error):
-                failures.append("Bills: \(error.localizedDescription)")
+                optionalWarnings.append("Bills: \(error.localizedDescription)")
             }
             group.leave()
         }
@@ -1232,7 +1233,7 @@ extension ContentView {
             case .success(let records):
                 salesReceipts = records
             case .failure(let error):
-                failures.append("Sales Receipts: \(error.localizedDescription)")
+                optionalWarnings.append("Sales Receipts: \(error.localizedDescription)")
             }
             group.leave()
         }
@@ -1243,7 +1244,7 @@ extension ContentView {
             case .success(let records):
                 deposits = records
             case .failure(let error):
-                failures.append("Deposits: \(error.localizedDescription)")
+                optionalWarnings.append("Deposits: \(error.localizedDescription)")
             }
             group.leave()
         }
@@ -1264,14 +1265,15 @@ extension ContentView {
             }
 
             if failures.isEmpty {
-                presentAuthAlert(
-                    title: "QuickBooks Sync Complete",
-                    message: "Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(vendors.count) vendors, \(payments.count) payments, and \(deposits.count) deposits."
-                )
+                var message = "Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(vendors.count) vendors, \(payments.count) payments, and \(deposits.count) deposits."
+                if !optionalWarnings.isEmpty {
+                    message += "\n\nOptional QuickBooks sections were skipped:\n\(optionalWarnings.joined(separator: "\n"))"
+                }
+                presentAuthAlert(title: "QuickBooks Sync Complete", message: message)
             } else {
                 presentAuthAlert(
                     title: "QuickBooks Sync Partial",
-                    message: failures.joined(separator: "\n")
+                    message: (failures + optionalWarnings).joined(separator: "\n")
                 )
             }
         }

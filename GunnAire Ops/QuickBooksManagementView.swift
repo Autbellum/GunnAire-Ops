@@ -790,6 +790,7 @@ struct QuickBooksManagementView: View {
 
         let group = DispatchGroup()
         var failures: [String] = []
+        var optionalWarnings: [String] = []
 
         group.enter()
         liveAPI.fetchCustomers { result in
@@ -850,7 +851,7 @@ struct QuickBooksManagementView: View {
                 case .success(let records):
                     bills = records
                 case .failure(let error):
-                    failures.append("Bills: \(error.localizedDescription)")
+                    optionalWarnings.append("Bills: \(error.localizedDescription)")
                 }
                 group.leave()
             }
@@ -863,7 +864,7 @@ struct QuickBooksManagementView: View {
                 case .success(let records):
                     purchases = records
                 case .failure(let error):
-                    failures.append("Purchases: \(error.localizedDescription)")
+                    optionalWarnings.append("Purchases: \(error.localizedDescription)")
                 }
                 group.leave()
             }
@@ -902,7 +903,7 @@ struct QuickBooksManagementView: View {
                 case .success(let records):
                     paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
                 case .failure(let error):
-                    failures.append("Payment Methods: \(error.localizedDescription)")
+                    optionalWarnings.append("Payment Methods: \(error.localizedDescription)")
                 }
                 group.leave()
             }
@@ -915,7 +916,7 @@ struct QuickBooksManagementView: View {
                 case .success(let records):
                     storedCards = records
                 case .failure(let error):
-                    failures.append("Stored Cards: \(error.localizedDescription)")
+                    optionalWarnings.append("Stored Cards: \(error.localizedDescription)")
                 }
                 group.leave()
             }
@@ -928,7 +929,7 @@ struct QuickBooksManagementView: View {
                 case .success(let records):
                     salesReceipts = records
                 case .failure(let error):
-                    failures.append("Sales Receipts: \(error.localizedDescription)")
+                    optionalWarnings.append("Sales Receipts: \(error.localizedDescription)")
                 }
                 group.leave()
             }
@@ -941,7 +942,7 @@ struct QuickBooksManagementView: View {
                 case .success(let records):
                     deposits = records
                 case .failure(let error):
-                    failures.append("Deposits: \(error.localizedDescription)")
+                    optionalWarnings.append("Deposits: \(error.localizedDescription)")
                 }
                 group.leave()
             }
@@ -964,8 +965,11 @@ struct QuickBooksManagementView: View {
             }
             if failures.isEmpty {
                 statusMessage = "Sync complete. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, \(storedCards.count) stored cards, and \(deposits.count) deposits."
+                if !optionalWarnings.isEmpty {
+                    statusMessage += "\nOptional sections skipped:\n\(optionalWarnings.joined(separator: "\n"))"
+                }
             } else {
-                statusMessage = failures.joined(separator: "\n")
+                statusMessage = (failures + optionalWarnings).joined(separator: "\n")
             }
         }
     }
