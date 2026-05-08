@@ -75,7 +75,7 @@ struct PaymentsAndReceiptsView: View {
         invoices
             .compactMap { invoice in
                 let balance = outstandingBalance(for: invoice)
-                return balance > 0 ? (invoice, balance) : nil
+                return balance > 0 && invoice.status.caseInsensitiveCompare("paid") != .orderedSame ? (invoice, balance) : nil
             }
             .sorted { lhs, rhs in
                 if lhs.balanceDue == rhs.balanceDue {
@@ -149,7 +149,7 @@ struct PaymentsAndReceiptsView: View {
                                         VStack(alignment: .trailing, spacing: 4) {
                                             Text(entry.balanceDue, format: .currency(code: "USD"))
                                                 .font(.headline)
-                                            Text(entry.invoice.status.capitalized)
+                                            Text(balanceStatusLabel(for: entry.invoice, balanceDue: entry.balanceDue))
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
                                         }
@@ -202,10 +202,10 @@ struct PaymentsAndReceiptsView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(Color.brandGold)
                         .foregroundStyle(Color.primaryBlack)
-                        .disabled(invoices.isEmpty)
+                        .disabled(outstandingInvoices.isEmpty)
 
-                        if invoices.isEmpty {
-                            Text("Create an invoice before recording a payment.")
+                        if outstandingInvoices.isEmpty {
+                            Text("No unpaid or partially paid invoices are available for collection.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -365,9 +365,9 @@ struct PaymentsAndReceiptsView: View {
                 Section("Payment Details") {
                     Picker("Invoice", selection: $selectedInvoiceID) {
                         Text("Select Invoice").tag(UUID?.none)
-                        ForEach(invoices) { invoice in
-                            Text("\(invoice.customer.name) - \(invoice.amount, format: .currency(code: "USD"))")
-                                .tag(UUID?.some(invoice.id))
+                        ForEach(outstandingInvoices, id: \.invoice.id) { entry in
+                            Text("\(entry.invoice.customer.name) - \(entry.balanceDue, format: .currency(code: "USD"))")
+                                .tag(UUID?.some(entry.invoice.id))
                         }
                     }
 
@@ -563,8 +563,8 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private func preparePaymentForm() {
-        if let firstUnpaid = invoices.first(where: { $0.status != "paid" }) ?? invoices.first {
-            preparePaymentForm(for: firstUnpaid)
+        if let firstOutstanding = outstandingInvoices.first?.invoice {
+            preparePaymentForm(for: firstOutstanding)
         }
     }
 
@@ -773,6 +773,9 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private func outstandingBalance(for invoice: Invoice) -> Double {
+        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
+            return 0
+        }
         let paid = payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { $0 + $1.amount }
@@ -783,6 +786,16 @@ struct PaymentsAndReceiptsView: View {
         guard outstandingBalance(for: invoice) > 0 else { return false }
         guard let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) else { return false }
         return invoice.createdAt < cutoff
+    }
+
+    private func balanceStatusLabel(for invoice: Invoice, balanceDue: Double) -> String {
+        if balanceDue <= 0 || invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
+            return "Paid"
+        }
+        if balanceDue < invoice.amount {
+            return "Partial"
+        }
+        return "Open"
     }
 
     private func customerPhoneURL(for invoice: Invoice) -> URL? {

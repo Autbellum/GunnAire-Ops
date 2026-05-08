@@ -44,7 +44,11 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     var isAuthenticated: Bool {
-        Config.QuickBooks.isConfigured && tokens != nil && storedRealmID != nil
+        tokens != nil && storedRealmID != nil
+    }
+
+    var canStartOAuthFlow: Bool {
+        Config.QuickBooks.isConfigured
     }
 
     func storeTokens(_ tokens: QuickBooksOAuthTokens, realmID: String) {

@@ -45,7 +45,7 @@ struct QuickBooksManagementView: View {
     }
 
     private var quickBooksConfigReady: Bool {
-        Config.QuickBooks.isConfigured
+        QuickBooksDataAPI.shared.canStartOAuthFlow
     }
 
     private var salesItemConfigReady: Bool {
@@ -762,10 +762,10 @@ struct QuickBooksManagementView: View {
                 }
                 .onAppear {
                     QuickBooksDataAPI.shared.loadTokens()
-                    if !quickBooksConfigReady {
-                        statusMessage = "QuickBooks client credentials are missing on this Mac. Update Config/Local.xcconfig, then reconnect QuickBooks."
-                    } else if isAuthenticated {
+                    if isAuthenticated {
                         syncAllQuickBooksData()
+                    } else if !quickBooksConfigReady {
+                        statusMessage = "QuickBooks client credentials are missing on this Mac. Add them in Config/Local.xcconfig, then reconnect QuickBooks."
                     } else {
                         statusMessage = "QuickBooks is not connected. Open Settings to authenticate."
                     }
@@ -775,12 +775,10 @@ struct QuickBooksManagementView: View {
     }
 
     private func syncAllQuickBooksData() {
-        guard quickBooksConfigReady else {
-            statusMessage = "QuickBooks client credentials are missing on this Mac. Update Config/Local.xcconfig, then reconnect QuickBooks."
-            return
-        }
         guard isAuthenticated else {
-            statusMessage = "QuickBooks is not connected. Open Settings to authenticate."
+            statusMessage = quickBooksConfigReady
+                ? "QuickBooks is not connected. Open Settings to authenticate."
+                : "QuickBooks client credentials are missing on this Mac. Add them in Config/Local.xcconfig, then reconnect QuickBooks."
             return
         }
 

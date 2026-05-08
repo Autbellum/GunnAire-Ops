@@ -717,6 +717,12 @@ struct AddServiceCallView: View {
     @State private var technician: Technician?
     @State private var scheduledTime: Date
     @State private var duration: TimeInterval = 3600
+    @State private var customerSearchText = ""
+    @State private var creatingNewCustomer = false
+    @State private var newCustomerName = ""
+    @State private var newCustomerPhone = ""
+    @State private var newCustomerEmail = ""
+    @State private var newCustomerAddress = ""
     @State private var siteAddress: String = ""
     @State private var notes: String = ""
     @State private var accessibleCalendars: [GoogleCalendar] = []
@@ -732,6 +738,21 @@ struct AddServiceCallView: View {
         _scheduledTime = State(initialValue: calendar.date(byAdding: components, to: baseDate) ?? Date())
         _duration = State(initialValue: 90 * 60)
         self.onCreated = onCreated
+    }
+
+    private var filteredCustomers: [Customer] {
+        let query = customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return customers }
+        return customers.filter { customer in
+            customer.name.lowercased().contains(query) ||
+            (customer.email?.lowercased().contains(query) ?? false) ||
+            (customer.phone?.lowercased().contains(query) ?? false) ||
+            (customer.address?.lowercased().contains(query) ?? false)
+        }
+    }
+
+    private var canSaveNewCustomer: Bool {
+        !newCustomerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     
     var body: some View {
@@ -755,10 +776,111 @@ struct AddServiceCallView: View {
                         Text(type.rawValue.capitalized).tag(type)
                     }
                 }
-                Picker("Customer", selection: $customer) {
-                    Text("Select").tag(Customer?.none)
-                    ForEach(customers) { c in
-                        Text(c.name).tag(Customer?.some(c))
+
+                Section("Customer") {
+                    TextField("Search customer name", text: $customerSearchText)
+                        .textInputAutocapitalization(.words)
+
+                    if let customer {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(customer.name)
+                                    .font(.headline)
+                                if let email = customer.email, !email.isEmpty {
+                                    Text(email)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                if let phone = customer.phone, !phone.isEmpty {
+                                    Text(phone)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            Spacer()
+                            Button("Clear") {
+                                self.customer = nil
+                                customerSearchText = ""
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+
+                    if customer == nil {
+                        if filteredCustomers.isEmpty {
+                            Text("No matching customers found.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(filteredCustomers.prefix(8)) { matchedCustomer in
+                                Button {
+                                    customer = matchedCustomer
+                                    customerSearchText = matchedCustomer.name
+                                    if siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        siteAddress = matchedCustomer.address ?? ""
+                                    }
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(matchedCustomer.name)
+                                            .foregroundColor(.primary)
+                                        if let address = matchedCustomer.address, !address.isEmpty {
+                                            Text(address)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    Button(creatingNewCustomer ? "Hide New Customer" : "Create New Customer") {
+                        creatingNewCustomer.toggle()
+                        if creatingNewCustomer == false {
+                            resetNewCustomerFields()
+                        } else if let existingCustomer = customer {
+                            newCustomerName = existingCustomer.name
+                            newCustomerPhone = existingCustomer.phone ?? ""
+                            newCustomerEmail = existingCustomer.email ?? ""
+                            newCustomerAddress = existingCustomer.address ?? ""
+                        } else {
+                            newCustomerName = customerSearchText
+                            newCustomerAddress = siteAddress
+                        }
+                    }
+                    .buttonStyle(.bordered)
+
+                    if creatingNewCustomer {
+                        TextField("Customer name", text: $newCustomerName)
+                        TextField("Phone", text: $newCustomerPhone)
+                            .keyboardType(.phonePad)
+                        TextField("Email", text: $newCustomerEmail)
+                            .keyboardType(.emailAddress)
+                            .textInputAutocapitalization(.never)
+                        TextField("Address", text: $newCustomerAddress, axis: .vertical)
+                            .lineLimit(2...3)
+
+                        Button("Save New Customer") {
+                            let createdCustomer = Customer(
+                                name: newCustomerName.trimmingCharacters(in: .whitespacesAndNewlines),
+                                phone: newCustomerPhone.nilIfBlank,
+                                email: newCustomerEmail.nilIfBlank,
+                                address: newCustomerAddress.nilIfBlank
+                            )
+                            modelContext.insert(createdCustomer)
+                            customer = createdCustomer
+                            customerSearchText = createdCustomer.name
+                            if siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                siteAddress = createdCustomer.address ?? ""
+                            }
+                            creatingNewCustomer = false
+                            resetNewCustomerFields()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.brandGold)
+                        .foregroundStyle(Color.primaryBlack)
+                        .disabled(!canSaveNewCustomer)
                     }
                 }
                 TextField("Service Address", text: $siteAddress, axis: .vertical)
@@ -837,6 +959,13 @@ struct AddServiceCallView: View {
                 onCreated?(call)
             }
         }
+    }
+
+    private func resetNewCustomerFields() {
+        newCustomerName = ""
+        newCustomerPhone = ""
+        newCustomerEmail = ""
+        newCustomerAddress = ""
     }
 
     private func loadAccessibleCalendarsIfNeeded() {
