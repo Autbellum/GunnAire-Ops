@@ -626,7 +626,7 @@ private extension ReceiptsAndBillsView {
         isSyncing = true
         syncMessage = nil
 
-        guard QuickBooksDataAPI.shared.tokens != nil, QuickBooksDataAPI.shared.realmID != nil else {
+        guard QuickBooksDataAPI.shared.isAuthenticated else {
             // Keep behavior deterministic in local/demo mode when auth has not been completed.
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(1))
@@ -698,7 +698,7 @@ private extension ReceiptsAndBillsView {
 
     func retryPendingUploads() {
         guard !pendingUploads.isEmpty else { return }
-        guard QuickBooksDataAPI.shared.tokens != nil, QuickBooksDataAPI.shared.realmID != nil else {
+        guard QuickBooksDataAPI.shared.isAuthenticated else {
             syncMessage = "Connect QuickBooks before retrying queued uploads."
             return
         }
@@ -789,7 +789,7 @@ private extension ReceiptsAndBillsView {
 
     func retryPendingUpload(_ pending: PendingUploadRecord, ignoreBackoff: Bool) {
         guard !isSyncing else { return }
-        guard QuickBooksDataAPI.shared.tokens != nil, QuickBooksDataAPI.shared.realmID != nil else {
+        guard QuickBooksDataAPI.shared.isAuthenticated else {
             syncMessage = "Connect QuickBooks before retrying queued uploads."
             return
         }
@@ -981,7 +981,7 @@ private extension ReceiptsAndBillsView {
         attachTargetOptions = []
         selectedAttachTargetID = ""
 
-        guard QuickBooksDataAPI.shared.tokens != nil, QuickBooksDataAPI.shared.realmID != nil else {
+        guard QuickBooksDataAPI.shared.isAuthenticated else {
             isLoadingAttachTargets = false
             attachLookupMessage = "Connect QuickBooks first to load existing IDs."
             return

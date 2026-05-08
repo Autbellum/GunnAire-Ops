@@ -39,7 +39,7 @@ final class QuickBooksAuthAPI: ObservableObject {
             refreshToken = stored.refreshToken
             tokenExpiry = stored.expiration
             realmID = QuickBooksDataAPI.shared.realmID
-            isAuthenticated = (realmID != nil)
+            isAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
         }
     }
     
