@@ -25,7 +25,38 @@ final class RecurringMaintenanceContract {
         return nextDate >= now && nextDate <= thirtyDaysAhead
     }
 
+    var isOverdue: Bool {
+        nextDate < Calendar.current.startOfDay(for: Date())
+    }
+
+    var needsReminder: Bool {
+        reminderDate <= Date() && nextDate >= Calendar.current.startOfDay(for: Date())
+    }
+
     var reminderDate: Date {
         Calendar.current.date(byAdding: .day, value: -7, to: nextDate) ?? nextDate
+    }
+
+    func advanceNextDate() {
+        let calendar = Calendar.current
+        let lowercasedPattern = schedulePattern.lowercased()
+
+        if lowercasedPattern.contains("quarter") || lowercasedPattern.contains("3 month") {
+            nextDate = calendar.date(byAdding: .month, value: 3, to: nextDate) ?? nextDate
+            return
+        }
+        if lowercasedPattern.contains("6 month") || lowercasedPattern.contains("semi") {
+            nextDate = calendar.date(byAdding: .month, value: 6, to: nextDate) ?? nextDate
+            return
+        }
+        if lowercasedPattern.contains("year") || lowercasedPattern.contains("annual") || lowercasedPattern.contains("12 month") {
+            nextDate = calendar.date(byAdding: .year, value: 1, to: nextDate) ?? nextDate
+            return
+        }
+        if lowercasedPattern.contains("month") {
+            nextDate = calendar.date(byAdding: .month, value: 1, to: nextDate) ?? nextDate
+            return
+        }
+        nextDate = calendar.date(byAdding: .month, value: 6, to: nextDate) ?? nextDate
     }
 }

@@ -392,6 +392,30 @@ GunnAire
         return components.url
     }
 
+    private var estimateFollowUpEmailURL: URL? {
+        guard let linkedEstimate,
+              let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = email
+        let reference = linkedEstimate.quickBooksID?.isEmpty == false ? linkedEstimate.quickBooksID! : String(linkedEstimate.id.uuidString.prefix(8))
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Estimate Follow-Up - \(reference)"),
+            URLQueryItem(name: "body", value: """
+Hello \(call.customer.name),
+
+Following up on your estimate for \(linkedEstimate.amount.formatted(.currency(code: "USD"))).
+
+Please let us know if you would like to move forward or if you have any questions.
+
+Thank you,
+GunnAire
+""")
+        ]
+        return components.url
+    }
+
     private var jobWorkflowTitle: String {
         switch call.type {
         case .service:
@@ -723,6 +747,34 @@ GunnAire
                                 Text("Estimate: \(linkedEstimate.amount, format: .currency(code: "USD")) • \(linkedEstimate.status.capitalized)")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                HStack {
+                                    Button("Accepted") {
+                                        linkedEstimate.status = "accepted"
+                                        call.followUpRequired = false
+                                        call.followUpAction = nil
+                                        call.followUpDueDate = nil
+                                    }
+                                    .buttonStyle(.bordered)
+
+                                    Button("Rejected") {
+                                        linkedEstimate.status = "rejected"
+                                        call.followUpRequired = false
+                                        call.followUpAction = nil
+                                        call.followUpDueDate = nil
+                                    }
+                                    .buttonStyle(.bordered)
+
+                                    if let estimateFollowUpEmailURL {
+                                        Button("Follow Up") {
+                                            openURL(estimateFollowUpEmailURL)
+                                            linkedEstimate.status = "follow-up"
+                                            call.followUpRequired = true
+                                            call.followUpAction = "Follow up on estimate"
+                                            call.followUpDueDate = Calendar.current.date(byAdding: .day, value: 3, to: Date())
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                }
                             }
                             if let linkedInvoice {
                                 Text("Invoice: \(linkedInvoice.amount, format: .currency(code: "USD")) • \(linkedInvoice.status.capitalized)")

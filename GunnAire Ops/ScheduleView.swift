@@ -80,6 +80,12 @@ struct ScheduleView: View {
         return recurringContracts.filter { $0.nextDate >= now }
     }
 
+    private var maintenanceAttentionContracts: [RecurringMaintenanceContract] {
+        recurringContracts
+            .filter { $0.active && ($0.isOverdue || $0.isUpcoming || $0.needsReminder) }
+            .sorted { $0.nextDate < $1.nextDate }
+    }
+
     private var selectedProcessor: OnsitePaymentProcessor {
         OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
     }
@@ -332,6 +338,38 @@ struct ScheduleView: View {
                     .buttonStyle(.plain)
                 }
             }
+
+            if !maintenanceAttentionContracts.isEmpty {
+                Divider()
+                Text("Maintenance Attention")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.brandGold)
+
+                ForEach(maintenanceAttentionContracts.prefix(3)) { contract in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(contract.customer.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text(maintenanceReason(for: contract))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(contract.nextDate.formatted(date: .abbreviated, time: .omitted))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Button("Schedule Maintenance Visit") {
+                            scheduleMaintenanceVisit(for: contract)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(Color.brandGold)
+                    }
+                }
+            }
         }
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -539,6 +577,34 @@ struct ScheduleView: View {
             return "Technician follow-up required"
         }
         return "Needs attention"
+    }
+
+    private func maintenanceReason(for contract: RecurringMaintenanceContract) -> String {
+        if contract.isOverdue {
+            return "Maintenance visit overdue"
+        }
+        if contract.needsReminder {
+            return "Reminder window open"
+        }
+        return "\(contract.schedulePattern) maintenance due soon"
+    }
+
+    private func scheduleMaintenanceVisit(for contract: RecurringMaintenanceContract) {
+        let serviceAddress = contract.customer.address?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let call = ServiceCall(
+            siteAddress: serviceAddress?.isEmpty == false ? serviceAddress : nil,
+            type: .maintenance,
+            scheduledDate: contract.nextDate,
+            duration: 90 * 60,
+            customer: contract.customer,
+            status: .scheduled,
+            notes: "Scheduled from maintenance agreement: \(contract.schedulePattern)",
+            followUpRequired: false
+        )
+        modelContext.insert(call)
+        contract.advanceNextDate()
+        selectedDate = Calendar.current.startOfDay(for: call.scheduledDate)
+        navigationPath.append(call)
     }
 
 }

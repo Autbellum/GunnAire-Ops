@@ -200,6 +200,30 @@ struct BillingDocumentsView: View {
         return URL(string: "mailto:\(email)")
     }
 
+    private var estimateFollowUpEmailURL: URL? {
+        guard let estimate = currentJobEstimate,
+              let email = contextCustomer?.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = email
+        let reference = estimate.quickBooksID?.isEmpty == false ? estimate.quickBooksID! : String(estimate.id.uuidString.prefix(8))
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Estimate Follow-Up - \(reference)"),
+            URLQueryItem(name: "body", value: """
+Hello \(estimate.customer.name),
+
+Following up on your estimate for \(estimate.amount.formatted(.currency(code: "USD"))).
+
+Please let us know if you would like to move forward or if you have any questions.
+
+Thank you,
+GunnAire
+""")
+        ]
+        return components.url
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -411,6 +435,37 @@ struct BillingDocumentsView: View {
                                     loadEstimateIntoBuilder(estimate)
                                 }
                                 .buttonStyle(.bordered)
+
+                                HStack {
+                                    Button("Mark Accepted") {
+                                        estimate.status = "accepted"
+                                        activeServiceCall?.followUpRequired = false
+                                        activeServiceCall?.followUpAction = nil
+                                        activeServiceCall?.followUpDueDate = nil
+                                        actionMessage = "Estimate marked accepted."
+                                    }
+                                    .buttonStyle(.bordered)
+
+                                    Button("Mark Rejected") {
+                                        estimate.status = "rejected"
+                                        activeServiceCall?.followUpRequired = false
+                                        activeServiceCall?.followUpAction = nil
+                                        activeServiceCall?.followUpDueDate = nil
+                                        actionMessage = "Estimate marked rejected."
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+
+                                if let estimateFollowUpEmailURL {
+                                    Button("Send Estimate Follow-Up") {
+                                        openURL(estimateFollowUpEmailURL)
+                                        estimate.status = "follow-up"
+                                        activeServiceCall?.followUpRequired = true
+                                        activeServiceCall?.followUpAction = "Follow up on estimate"
+                                        activeServiceCall?.followUpDueDate = Calendar.current.date(byAdding: .day, value: 3, to: Date())
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
 
                                 if currentJobInvoice == nil {
                                     Button("Create Invoice From Estimate") {
