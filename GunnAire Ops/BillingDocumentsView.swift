@@ -126,6 +126,27 @@ struct BillingDocumentsView: View {
         return max(invoice.amount - paid, 0)
     }
 
+    private var estimateMetrics: (pending: Int, accepted: Int, followUp: Int) {
+        let pending = estimates.filter { $0.status == "pending" }.count
+        let accepted = estimates.filter { $0.status == "accepted" }.count
+        let followUp = estimates.filter { $0.status == "follow-up" }.count
+        return (pending, accepted, followUp)
+    }
+
+    private var invoiceMetrics: (open: Int, overdue: Int, outstandingBalance: Double) {
+        let now = Date()
+        let openInvoices = invoices.filter { invoice in
+            invoiceBalanceDue(for: invoice) > 0.009
+        }
+        let overdueInvoices = openInvoices.filter { invoice in
+            Calendar.current.dateComponents([.day], from: invoice.createdAt, to: now).day ?? 0 >= 30
+        }
+        let balance = openInvoices.reduce(0) { partial, invoice in
+            partial + invoiceBalanceDue(for: invoice)
+        }
+        return (openInvoices.count, overdueInvoices.count, balance)
+    }
+
     private var contextCustomer: Customer? {
         if let selectedCustomer {
             return selectedCustomer
@@ -463,6 +484,44 @@ GunnAire
                     }
 
                     workflowSection(for: call)
+                }
+
+                if !isJobDocumentationMode {
+                    Section("Workspace Snapshot") {
+                        switch workspaceMode {
+                        case .all:
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Billing Overview")
+                                    .font(.headline)
+                                HStack {
+                                    workspaceMetricView(title: "Pending Estimates", value: "\(estimateMetrics.pending)")
+                                    Spacer()
+                                    workspaceMetricView(title: "Open Invoices", value: "\(invoiceMetrics.open)")
+                                }
+                                HStack {
+                                    workspaceMetricView(title: "Estimate Follow-Up", value: "\(estimateMetrics.followUp)")
+                                    Spacer()
+                                    workspaceMetricView(title: "Outstanding", value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
+                                }
+                            }
+                        case .estimates:
+                            HStack {
+                                workspaceMetricView(title: "Pending", value: "\(estimateMetrics.pending)")
+                                Spacer()
+                                workspaceMetricView(title: "Accepted", value: "\(estimateMetrics.accepted)")
+                                Spacer()
+                                workspaceMetricView(title: "Follow-Up", value: "\(estimateMetrics.followUp)")
+                            }
+                        case .invoices:
+                            HStack {
+                                workspaceMetricView(title: "Open", value: "\(invoiceMetrics.open)")
+                                Spacer()
+                                workspaceMetricView(title: "Overdue", value: "\(invoiceMetrics.overdue)")
+                                Spacer()
+                                workspaceMetricView(title: "Outstanding", value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
+                            }
+                        }
+                    }
                 }
 
                 if currentJobEstimate != nil || currentJobInvoice != nil {
@@ -1267,6 +1326,13 @@ GunnAire
         return Set(containsMatches.map(\.id))
     }
 
+    private func invoiceBalanceDue(for invoice: Invoice) -> Double {
+        let paid = payments
+            .filter { $0.invoice.id == invoice.id }
+            .reduce(0) { $0 + $1.amount }
+        return max(invoice.amount - paid, 0)
+    }
+
     private func normalizedItemLookupKey(_ value: String) -> String {
         value
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1750,6 +1816,17 @@ GunnAire
         let equipmentModel = call.equipmentModel?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         let composite = "\(equipmentName)|\(equipmentModel)"
         return composite == "|" || composite.isEmpty ? nil : composite
+    }
+}
+
+@ViewBuilder
+private func workspaceMetricView(title: String, value: String) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+        Text(title)
+            .font(.caption)
+            .foregroundColor(.secondary)
+        Text(value)
+            .font(.headline)
     }
 }
 
