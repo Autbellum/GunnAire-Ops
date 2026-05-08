@@ -385,6 +385,19 @@ struct OnsiteDocumentationView: View {
         return serviceCalls.first { $0.id == selectedServiceCallID }
     }
 
+    private func documentationQueueLabel(for call: ServiceCall) -> String {
+        let hasDocumentation = call.linkedInvoiceID != nil || call.linkedEstimateID != nil || call.documentationStartedAt != nil
+        switch call.type {
+        case .estimate:
+            return hasDocumentation ? "Continue Estimate" : "Start Estimate"
+        case .install, .maintenance, .service:
+            if call.linkedInvoiceID != nil {
+                return "Continue Invoice"
+            }
+            return hasDocumentation ? "Continue Documentation" : "Start Documentation"
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -401,18 +414,24 @@ struct OnsiteDocumentationView: View {
                                     Button {
                                         selectedServiceCallID = call.id
                                     } label: {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(call.customer.name)
-                                                .font(.headline)
-                                            Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                            Text(call.type.rawValue.capitalized)
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                            Text("Checklist \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text(call.customer.name)
+                                                    .font(.headline)
+                                                Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                                Text(call.type.rawValue.capitalized)
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                                Text("Checklist \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                            Spacer()
+                                            Text(documentationQueueLabel(for: call))
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundColor(Color.brandGold)
                                         }
                                     }
                                     .buttonStyle(.plain)

@@ -395,6 +395,19 @@ GunnAire
         return components.url
     }
 
+    private var documentationActionLabel: String {
+        let hasDocumentation = call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil
+        switch call.type {
+        case .estimate:
+            return hasDocumentation ? "Continue Estimate" : "Start Estimate"
+        case .install, .maintenance, .service:
+            if call.linkedInvoiceID != nil {
+                return "Continue Invoice"
+            }
+            return hasDocumentation ? "Continue Documentation" : "Start Documentation"
+        }
+    }
+
     private var estimateFollowUpEmailURL: URL? {
         guard let linkedEstimate,
               let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1012,7 +1025,7 @@ GunnAire
                     Button {
                         GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
                     } label: {
-                        Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil ? "Continue Documentation" : "Start Documentation", systemImage: "doc.text")
+                        Label(documentationActionLabel, systemImage: "doc.text")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)

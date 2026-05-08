@@ -2468,7 +2468,7 @@ enum BillingWorkspaceMode {
     case estimates
     case invoices
 
-    var defaultDocumentKind: BillingDocumentKind {
+    fileprivate var defaultDocumentKind: BillingDocumentKind {
         switch self {
         case .all, .invoices:
             return .invoice

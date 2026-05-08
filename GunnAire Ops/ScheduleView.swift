@@ -223,7 +223,7 @@ struct ScheduleView: View {
                                                 openDocumentationInTapToPay = false
                                                 documentationCall = call
                                             } label: {
-                                                Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Continue Docs" : "Start Docs", systemImage: "doc.text")
+                                                Label(documentationActionTitle(for: call, compact: true), systemImage: "doc.text")
                                             }
                                             .tint(Color.brandGold)
                                         }
@@ -672,7 +672,7 @@ struct ScheduleView: View {
                     .buttonStyle(.bordered)
                 }
 
-                Button(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Docs" : "Start Docs") {
+                Button(documentationActionTitle(for: call, compact: true)) {
                     openDocumentationInCloseout = false
                     openDocumentationInTapToPay = false
                     documentationCall = call
@@ -772,6 +772,19 @@ struct ScheduleView: View {
             }
             .font(.caption2)
             .foregroundColor(.secondary)
+        }
+    }
+
+    private func documentationActionTitle(for call: ServiceCall, compact: Bool) -> String {
+        let hasDocumentation = call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil
+        switch call.type {
+        case .estimate:
+            return hasDocumentation ? (compact ? "Estimate" : "Continue Estimate") : "Start Estimate"
+        case .install, .maintenance, .service:
+            if call.linkedInvoiceID != nil {
+                return compact ? "Invoice" : "Continue Invoice"
+            }
+            return hasDocumentation ? (compact ? "Docs" : "Continue Documentation") : "Start Docs"
         }
     }
     
