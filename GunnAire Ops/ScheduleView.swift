@@ -24,28 +24,14 @@ struct ScheduleView: View {
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
     @State private var didApplyPendingScheduleIntent = false
-    
-    enum ViewMode: String, CaseIterable, Identifiable {
-        case day = "Day"
-        case week = "Week"
-        var id: String { rawValue }
+
+    private var selectedDayCalls: [ServiceCall] {
+        callsForSignedInUser
+            .filter { Calendar.current.isDate($0.scheduledDate, inSameDayAs: selectedDate) }
+            .sorted { $0.scheduledDate < $1.scheduledDate }
     }
-    @State private var viewMode: ViewMode = .day
-    
-    var filteredCalls: [ServiceCall] {
-        let calls = callsForSignedInUser
-        switch viewMode {
-        case .day:
-            return calls.filter { Calendar.current.isDate($0.scheduledDate, inSameDayAs: selectedDate) }
-        case .week:
-            let calendar = Calendar.current
-            guard let weekInterval = calendar.dateInterval(of: .weekOfYear, for: selectedDate) else { return [] }
-            return calls.filter { $0.scheduledDate >= weekInterval.start && $0.scheduledDate <= weekInterval.end }
-                .sorted { $0.scheduledDate < $1.scheduledDate }
-        }
-    }
-    
-    var upcomingJobs: [ServiceCall] {
+
+    private var upcomingJobs: [ServiceCall] {
         let now = Date()
         let calendar = Calendar.current
         let sevenDaysAhead = calendar.date(byAdding: .day, value: 7, to: now) ?? now
@@ -53,39 +39,8 @@ struct ScheduleView: View {
             .sorted { $0.scheduledDate < $1.scheduledDate }
     }
 
-    private var jobsNeedingDocumentation: [ServiceCall] {
-        callsForSignedInUser
-            .filter { call in
-                call.status != .cancelled &&
-                (call.documentationStartedAt == nil || (call.linkedEstimateID == nil && call.linkedInvoiceID == nil))
-            }
-            .sorted { $0.scheduledDate < $1.scheduledDate }
-    }
-
-    private var jobsNeedingPayment: [ServiceCall] {
-        callsForSignedInUser
-            .filter { call in
-                guard let invoice = invoice(for: call) else { return false }
-                return invoice.status != "paid"
-            }
-            .sorted { lhs, rhs in
-                let lhsBalance = balanceDue(for: lhs) ?? 0
-                let rhsBalance = balanceDue(for: rhs) ?? 0
-                if lhsBalance == rhsBalance {
-                    return lhs.scheduledDate < rhs.scheduledDate
-                }
-                return lhsBalance > rhsBalance
-            }
-    }
-
-    private var overdueCollectionJobs: [ServiceCall] {
-        jobsNeedingPayment
-            .filter(isCollectionOverdue(for:))
-            .sorted { lhs, rhs in
-                let lhsDate = invoice(for: lhs)?.createdAt ?? lhs.scheduledDate
-                let rhsDate = invoice(for: rhs)?.createdAt ?? rhs.scheduledDate
-                return lhsDate < rhsDate
-            }
+    private var snapshotCalls: [ServiceCall] {
+        Array(upcomingJobs.prefix(3))
     }
 
     private var callsForSignedInUser: [ServiceCall] {
@@ -124,88 +79,95 @@ struct ScheduleView: View {
         ZStack {
             WatermarkBackground()
             NavigationStack(path: $navigationPath) {
-                List {
-                    Section("Dashboard") {
-                        dashboardSection
-                    }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        snapshotSection
 
-                    Section("Calendar") {
-                        DatePicker(
-                            "Select Date",
-                            selection: $selectedDate,
-                            displayedComponents: [.date]
-                        )
-                        .datePickerStyle(.graphical)
-                    }
+                        VStack(alignment: .leading, spacing: 10) {
+                            sectionTitle("Calendar")
+                            DatePicker(
+                                "Select Date",
+                                selection: $selectedDate,
+                                displayedComponents: [.date]
+                            )
+                            .labelsHidden()
+                            .datePickerStyle(.graphical)
+                            .padding(12)
+                            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        }
 
-                    Section {
-                        Picker("View Mode", selection: $viewMode) {
-                            ForEach(ViewMode.allCases) { mode in
-                                Text(mode.rawValue).bold()
-                                    .tag(mode)
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                sectionTitle(selectedDate.formatted(.dateTime.month(.wide).day().year()))
+                                Spacer()
+                                Text("\(selectedDayCalls.count) event\(selectedDayCalls.count == 1 ? "" : "s")")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            if selectedDayCalls.isEmpty {
+                                emptyDayState
+                            } else {
+                                LazyVStack(spacing: 10) {
+                                    ForEach(selectedDayCalls) { call in
+                                        NavigationLink(value: call) {
+                                            serviceCallRow(for: call)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                            if let invoice = invoice(for: call), invoice.status != "paid" {
+                                                Button {
+                                                    openDocumentationInCloseout = true
+                                                    openDocumentationInTapToPay = tapToPayReady
+                                                    documentationCall = call
+                                                } label: {
+                                                    Label(tapToPayReady ? "Tap to Pay" : "Take Payment", systemImage: "creditcard")
+                                                }
+                                                .tint(.green)
+                                            }
+
+                                            Button {
+                                                openDocumentationInCloseout = false
+                                                openDocumentationInTapToPay = false
+                                                documentationCall = call
+                                            } label: {
+                                                Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Continue Docs" : "Start Docs", systemImage: "doc.text")
+                                            }
+                                            .tint(Color.brandGold)
+                                        }
+                                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                            if hasNavigableAddress(for: call) {
+                                                Button {
+                                                    openMaps(for: call)
+                                                } label: {
+                                                    Label("Navigate", systemImage: "map")
+                                                }
+                                                .tint(.blue)
+                                            }
+                                        }
+                                    }
+                                    .onDelete(perform: deleteCalls)
+                                }
                             }
                         }
-                        .pickerStyle(.segmented)
-                    }
 
-                    Section(filteredCalls.isEmpty ? "No Jobs Scheduled" : "Scheduled Jobs") {
-                        ForEach(filteredCalls) { call in
-                            NavigationLink(value: call) {
-                                serviceCallRow(for: call)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if let invoice = invoice(for: call), invoice.status != "paid" {
-                                    Button {
-                                        openDocumentationInCloseout = true
-                                        openDocumentationInTapToPay = tapToPayReady
-                                        documentationCall = call
-                                    } label: {
-                                        Label(tapToPayReady ? "Tap to Pay" : "Take Payment", systemImage: "creditcard")
-                                    }
-                                    .tint(.green)
-                                }
-
-                                Button {
-                                    openDocumentationInCloseout = false
-                                    openDocumentationInTapToPay = false
-                                    documentationCall = call
-                                } label: {
-                                    Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Continue Docs" : "Start Docs", systemImage: "doc.text")
-                                }
-                                .tint(Color.brandGold)
-                            }
-                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                if hasNavigableAddress(for: call) {
-                                    Button {
-                                        openMaps(for: call)
-                                    } label: {
-                                        Label("Navigate", systemImage: "map")
-                                    }
-                                    .tint(.blue)
-                                }
-                            }
-                        }
-                        .onDelete(perform: deleteCalls)
-                    }
-
-                    if let syncMessage {
-                        Section("Sync Status") {
+                        if let syncMessage {
                             Text(syncMessage)
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 2)
                         }
-                    }
 
-                    if googleAuth.isAuthenticated {
-                        Section("Google Calendar") {
-                            Text("If Google Calendar sync was connected before the calendar permission update, disconnect Google in Settings and reconnect it once so Google can issue a new token with calendar access.")
+                        if googleAuth.isAuthenticated {
+                            Text("If Google Calendar sync was connected before the calendar permission update, disconnect Google in Settings and reconnect it once so the app can request fresh calendar permission.")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 2)
                         }
                     }
                 }
-                .listStyle(.insetGrouped)
-                .scrollContentBackground(.hidden)
+                .padding(.horizontal)
+                .padding(.vertical, 10)
                 .background(Color.clear)
                 .navigationTitle("Schedule")
                 .toolbar {
@@ -277,237 +239,80 @@ struct ScheduleView: View {
     }
 
     @ViewBuilder
-    private var dashboardSection: some View {
+    private var snapshotSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Your Upcoming Jobs (Next 7 Days)")
-                    .font(.headline)
-                    .foregroundColor(Color.brandGold)
-                if upcomingJobs.isEmpty {
-                    Text("No upcoming jobs.")
-                        .foregroundColor(.secondary)
-                        .italic()
-                } else {
-                    ForEach(upcomingJobs.prefix(3)) { job in
-                        HStack {
-                            Text(job.customer.name)
-                                .font(.subheadline)
-                                .foregroundColor(.primary)
+            HStack {
+                sectionTitle("Upcoming Snapshot")
+                Spacer()
+                if !upcomingJobs.isEmpty {
+                    Text("\(upcomingJobs.count) this week")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if snapshotCalls.isEmpty {
+                Text("No upcoming jobs scheduled.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(snapshotCalls) { job in
+                    Button {
+                        selectedDate = Calendar.current.startOfDay(for: job.scheduledDate)
+                        navigationPath.append(job)
+                    } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(job.customer.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text(job.type.rawValue.capitalized)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                             Spacer()
                             Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
-                                .foregroundColor(.secondary)
                                 .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    if upcomingJobs.count > 3 {
-                        Text("And \(upcomingJobs.count - 3) more...")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Needs Documentation")
-                    .font(.headline)
-                    .foregroundColor(Color.brandGold)
-                if jobsNeedingDocumentation.isEmpty {
-                    Text("No jobs are waiting on documentation.")
-                        .foregroundColor(.secondary)
-                        .italic()
-                } else {
-                    ForEach(jobsNeedingDocumentation.prefix(3)) { job in
-                        Button {
-                            openDocumentationInCloseout = false
-                            openDocumentationInTapToPay = false
-                            documentationCall = job
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(job.customer.name)
-                                        .font(.subheadline)
-                                        .foregroundColor(.primary)
-                                    Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                Text("Open Docs")
-                                    .font(.caption)
-                                    .foregroundColor(Color.brandGold)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    if jobsNeedingDocumentation.count > 3 {
-                        Text("And \(jobsNeedingDocumentation.count - 3) more...")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Overdue Collections")
-                    .font(.headline)
-                    .foregroundColor(Color.brandGold)
-                if overdueCollectionJobs.isEmpty {
-                    Text("No overdue invoice follow-up is waiting.")
-                        .foregroundColor(.secondary)
-                        .italic()
-                } else {
-                    ForEach(overdueCollectionJobs.prefix(3)) { job in
-                        Button {
-                            openDocumentationInCloseout = true
-                            openDocumentationInTapToPay = tapToPayReady
-                            documentationCall = job
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(job.customer.name)
-                                        .font(.subheadline)
-                                        .foregroundColor(.primary)
-                                    if let invoice = invoice(for: job) {
-                                        Text("Invoice age: \(invoiceAgeDescription(invoice))")
-                                            .font(.caption2)
-                                            .foregroundColor(.red)
-                                    }
-                                }
-                                Spacer()
-                                if let balanceDue = balanceDue(for: job) {
-                                    Text(balanceDue, format: .currency(code: "USD"))
-                                        .font(.caption)
-                                        .foregroundColor(Color.brandGold)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    if overdueCollectionJobs.count > 3 {
-                        Text("And \(overdueCollectionJobs.count - 3) more...")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Needs Payment")
-                    .font(.headline)
-                    .foregroundColor(Color.brandGold)
-                if jobsNeedingPayment.isEmpty {
-                    Text("No jobs currently have an open invoice balance.")
-                        .foregroundColor(.secondary)
-                        .italic()
-                } else {
-                    ForEach(jobsNeedingPayment.prefix(3)) { job in
-                        Button {
-                            openDocumentationInCloseout = true
-                            openDocumentationInTapToPay = tapToPayReady
-                            documentationCall = job
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(job.customer.name)
-                                        .font(.subheadline)
-                                        .foregroundColor(.primary)
-                                    Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                if let balanceDue = balanceDue(for: job) {
-                                    Text(balanceDue, format: .currency(code: "USD"))
-                                        .font(.caption)
-                                        .foregroundColor(Color.brandGold)
-                                }
-                                Text(tapToPayReady ? "Tap to Pay" : "Take Payment")
-                                    .font(.caption2)
-                                    .foregroundColor(.green)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    if jobsNeedingPayment.count > 3 {
-                        Text("And \(jobsNeedingPayment.count - 3) more...")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Active Recurring Contracts")
-                    .font(.headline)
-                    .foregroundColor(Color.brandGold)
-                if activeRecurringContracts.isEmpty {
-                    Text("No active contracts.")
-                        .foregroundColor(.secondary)
-                        .italic()
-                } else {
-                    ForEach(activeRecurringContracts.prefix(3)) { contract in
-                        HStack {
-                            Text(contract.customer.name)
-                                .font(.subheadline)
-                                .foregroundColor(.primary)
-                            Spacer()
-                            Text("Next Due: \(contract.nextDate.formatted(date: .abbreviated, time: .omitted))")
-                                .foregroundColor(.secondary)
-                                .font(.caption)
-                        }
-                    }
-                    if activeRecurringContracts.count > 3 {
-                        Text("And \(activeRecurringContracts.count - 3) more...")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                    .buttonStyle(.plain)
+                    if job.id != snapshotCalls.last?.id {
+                        Divider()
                     }
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     @ViewBuilder
     private func serviceCallRow(for call: ServiceCall) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(call.type.rawValue.capitalized)
-                    .font(.headline)
-                    .foregroundColor(Color.brandGold)
-                Text("- ")
-                    .foregroundColor(.primary)
-                Text(call.customer.name)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(call.customer.name)
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Text(call.type.rawValue.capitalized)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(Color.brandGold)
+                }
+                Spacer()
+                Text(call.scheduledDate.formatted(date: .omitted, time: .shortened))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
-            Text("Time: \(call.scheduledDate.formatted(date: .omitted, time: .shortened)) - \(call.status.rawValue.capitalized)")
+            Text(call.status.rawValue.capitalized)
                 .font(.caption)
                 .foregroundColor(.gray)
             if let address = call.siteAddress ?? call.customer.address,
                !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                HStack(alignment: .top, spacing: 8) {
-                    Text(address)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    Button {
-                        openMaps(for: call)
-                    } label: {
-                        Label("Navigate", systemImage: "map")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundColor(Color.brandGold)
-                }
+                Text(address)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
             }
             HStack(spacing: 8) {
                 if call.googleEventID != nil {
@@ -533,85 +338,37 @@ struct ScheduleView: View {
             }
             .font(.caption2)
             .foregroundColor(.secondary)
-
-            HStack(spacing: 10) {
-                if let phoneURL = phoneURL(for: call) {
-                    Button {
-                        openURL(phoneURL)
-                    } label: {
-                        Label("Call", systemImage: "phone")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundColor(Color.brandGold)
-                }
-
-                if let emailURL = emailURL(for: call) {
-                    Button {
-                        openURL(emailURL)
-                    } label: {
-                        Label("Email", systemImage: "envelope")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundColor(Color.brandGold)
-                }
-
-                if hasNavigableAddress(for: call) {
-                    Button {
-                        openMaps(for: call)
-                    } label: {
-                        Label("Navigate", systemImage: "map")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundColor(Color.brandGold)
-                }
-
-                Button {
-                    openDocumentationInCloseout = false
-                    openDocumentationInTapToPay = false
-                    documentationCall = call
-                } label: {
-                    Label(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Continue Docs" : "Start Docs", systemImage: "doc.text")
-                        .font(.caption2)
-                }
-                .buttonStyle(.borderless)
-                .foregroundColor(Color.brandGold)
-
-                if let invoice = invoice(for: call), invoice.status != "paid" {
-                    Button {
-                        openDocumentationInCloseout = true
-                        openDocumentationInTapToPay = tapToPayReady
-                        documentationCall = call
-                    } label: {
-                        Label(tapToPayReady ? "Tap to Pay" : "Take Payment", systemImage: "creditcard")
-                            .font(.caption2)
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundColor(.green)
-
-                    if let reminderURL = reminderEmailURL(for: call) {
-                        Button {
-                            openURL(reminderURL)
-                        } label: {
-                            Label("Remind", systemImage: "envelope.badge")
-                                .font(.caption2)
-                        }
-                        .buttonStyle(.borderless)
-                        .foregroundColor(.orange)
-                    }
-                }
-            }
         }
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
     
     private func deleteCalls(offsets: IndexSet) {
         withAnimation {
             for index in offsets {
-                modelContext.delete(filteredCalls[index])
+                modelContext.delete(selectedDayCalls[index])
             }
         }
+    }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.headline)
+            .foregroundStyle(Color.brandGold)
+    }
+
+    private var emptyDayState: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("No events for this date.")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+            Text("Choose another date on the calendar or add a new service call.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func syncGoogleCalendar() {
@@ -665,22 +422,6 @@ struct ScheduleView: View {
         return !(address?.isEmpty ?? true)
     }
 
-    private func phoneURL(for call: ServiceCall) -> URL? {
-        guard let phone = call.customer.phone?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !phone.isEmpty else { return nil }
-        let digits = phone.filter(\.isNumber)
-        guard !digits.isEmpty else { return nil }
-        return URL(string: "tel://\(digits)")
-    }
-
-    private func emailURL(for call: ServiceCall) -> URL? {
-        guard let email = call.customer.email?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !email.isEmpty else { return nil }
-        return URL(string: "mailto:\(email)")
-    }
-
     private func invoice(for call: ServiceCall) -> Invoice? {
         guard let invoiceID = call.linkedInvoiceID else { return nil }
         return invoices.first { $0.id == invoiceID }
@@ -701,42 +442,12 @@ struct ScheduleView: View {
 
     private func isCollectionOverdue(for call: ServiceCall) -> Bool {
         guard let invoice = invoice(for: call),
-              let balanceDue = balanceDue(for: call),
-              balanceDue > 0,
+              let due = balanceDue(for: call),
+              due > 0,
               let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) else { return false }
         return invoice.createdAt < cutoff
     }
 
-    private func invoiceAgeDescription(_ invoice: Invoice) -> String {
-        let days = Calendar.current.dateComponents([.day], from: invoice.createdAt, to: Date()).day ?? 0
-        return days <= 0 ? "Due today" : "\(days)d old"
-    }
-
-    private func reminderEmailURL(for call: ServiceCall) -> URL? {
-        guard let invoice = invoice(for: call),
-              let balanceDue = balanceDue(for: call),
-              balanceDue > 0,
-              let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !email.isEmpty else { return nil }
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = email
-        let invoiceReference = invoice.quickBooksID?.isEmpty == false ? invoice.quickBooksID! : String(invoice.id.uuidString.prefix(8))
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: "Invoice Balance Due - \(invoiceReference)"),
-            URLQueryItem(name: "body", value: """
-Hello \(call.customer.name),
-
-This is a reminder that your current invoice balance is \(balanceDue.formatted(.currency(code: "USD"))).
-
-Invoice reference: \(invoiceReference)
-
-Thank you,
-GunnAire
-""")
-        ]
-        return components.url
-    }
 }
 
 #Preview {
