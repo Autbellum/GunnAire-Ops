@@ -205,10 +205,7 @@ struct ScheduleView: View {
                             } else {
                                 LazyVStack(spacing: 10) {
                                     ForEach(selectedDayCalls) { call in
-                                        NavigationLink(value: call) {
-                                            serviceCallRow(for: call)
-                                        }
-                                        .buttonStyle(.plain)
+                                        serviceCallCard(for: call)
                                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                             if let invoice = invoice(for: call), invoice.status != "paid" {
                                                 Button {
@@ -406,11 +403,21 @@ struct ScheduleView: View {
                             }
 
                             if job.followUpRequired || job.type == .estimate {
-                                Button("Schedule Follow-Up Visit") {
-                                    scheduleFollowUpVisit(for: job)
+                                HStack(spacing: 10) {
+                                    Button("Schedule Follow-Up Visit") {
+                                        scheduleFollowUpVisit(for: job)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .tint(Color.brandGold)
+
+                                    if let followUpEmailURL = followUpEmailURL(for: job) {
+                                        Button("Email Customer") {
+                                            openURL(followUpEmailURL)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .tint(Color.brandGold)
+                                    }
                                 }
-                                .buttonStyle(.bordered)
-                                .tint(Color.brandGold)
                             }
                         }
                     }
@@ -446,6 +453,14 @@ struct ScheduleView: View {
                         }
                         .buttonStyle(.bordered)
                         .tint(Color.brandGold)
+
+                        if let maintenanceReminderEmailURL = maintenanceReminderEmailURL(for: contract) {
+                            Button("Send Reminder") {
+                                openURL(maintenanceReminderEmailURL)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(Color.brandGold)
+                        }
                     }
                 }
             }
@@ -642,7 +657,58 @@ struct ScheduleView: View {
     }
 
     @ViewBuilder
-    private func serviceCallRow(for call: ServiceCall) -> some View {
+    private func serviceCallCard(for call: ServiceCall) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            NavigationLink(value: call) {
+                serviceCallSummary(for: call)
+            }
+            .buttonStyle(.plain)
+
+            HStack(spacing: 10) {
+                if hasNavigableAddress(for: call) {
+                    Button("Navigate") {
+                        openMaps(for: call)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Docs" : "Start Docs") {
+                    openDocumentationInCloseout = false
+                    openDocumentationInTapToPay = false
+                    documentationCall = call
+                }
+                .buttonStyle(.bordered)
+
+                if call.assignedTechnician == nil, let signedInTechnician {
+                    Button("Assign To Me") {
+                        assign(call, to: signedInTechnician)
+                    }
+                    .buttonStyle(.bordered)
+                } else if call.linkedInvoiceID == nil && (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
+                    Button("Invoice") {
+                        openDocumentationInCloseout = false
+                        openDocumentationInTapToPay = false
+                        documentationCall = call
+                    }
+                    .buttonStyle(.bordered)
+                } else if let invoice = invoice(for: call), invoice.status != "paid" {
+                    Button(tapToPayReady ? "Pay" : "Collect") {
+                        openDocumentationInCloseout = true
+                        openDocumentationInTapToPay = tapToPayReady
+                        documentationCall = call
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .tint(Color.brandGold)
+        }
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func serviceCallSummary(for call: ServiceCall) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
@@ -706,48 +772,7 @@ struct ScheduleView: View {
             }
             .font(.caption2)
             .foregroundColor(.secondary)
-
-            HStack(spacing: 10) {
-                if hasNavigableAddress(for: call) {
-                    Button("Navigate") {
-                        openMaps(for: call)
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                Button(call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil ? "Docs" : "Start Docs") {
-                    openDocumentationInCloseout = false
-                    openDocumentationInTapToPay = false
-                    documentationCall = call
-                }
-                .buttonStyle(.bordered)
-
-                if call.assignedTechnician == nil, let signedInTechnician {
-                    Button("Assign To Me") {
-                        assign(call, to: signedInTechnician)
-                    }
-                    .buttonStyle(.bordered)
-                } else if call.linkedInvoiceID == nil && (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
-                    Button("Invoice") {
-                        openDocumentationInCloseout = false
-                        openDocumentationInTapToPay = false
-                        documentationCall = call
-                    }
-                    .buttonStyle(.bordered)
-                } else if let invoice = invoice(for: call), invoice.status != "paid" {
-                    Button(tapToPayReady ? "Pay" : "Collect") {
-                        openDocumentationInCloseout = true
-                        openDocumentationInTapToPay = tapToPayReady
-                        documentationCall = call
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-            .font(.caption.weight(.semibold))
-            .tint(Color.brandGold)
         }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
     
     private func deleteCalls(offsets: IndexSet) {
@@ -898,6 +923,55 @@ struct ScheduleView: View {
             return "Reminder window open"
         }
         return "\(contract.schedulePattern) maintenance due soon"
+    }
+
+    private func followUpEmailURL(for call: ServiceCall) -> URL? {
+        guard let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        let trimmedFollowUpAction = call.followUpAction?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let followUpMessage = (trimmedFollowUpAction?.isEmpty == false)
+            ? trimmedFollowUpAction!
+            : "Please let us know if you would like to move forward or if you have any questions."
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = email
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Follow-Up From GunnAire"),
+            URLQueryItem(name: "body", value: """
+Hello \(call.customer.name),
+
+Following up on your recent \(call.type.rawValue) appointment with GunnAire.
+
+\(followUpMessage)
+
+Thank you,
+GunnAire
+""")
+        ]
+        return components.url
+    }
+
+    private func maintenanceReminderEmailURL(for contract: RecurringMaintenanceContract) -> URL? {
+        guard let email = contract.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = email
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Maintenance Reminder From GunnAire"),
+            URLQueryItem(name: "body", value: """
+Hello \(contract.customer.name),
+
+This is a reminder that your \(contract.schedulePattern) maintenance visit is due on \(contract.nextDate.formatted(date: .abbreviated, time: .omitted)).
+
+Reply to this email if you would like us to schedule your visit.
+
+Thank you,
+GunnAire
+""")
+        ]
+        return components.url
     }
 
     private func scheduleMaintenanceVisit(for contract: RecurringMaintenanceContract) {
