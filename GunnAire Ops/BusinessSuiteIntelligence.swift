@@ -169,7 +169,16 @@ enum BusinessSuiteIntelligence {
         }
 
         let paymentSyncAttention = payments.filter(\.needsQuickBooksAttention)
-        let calendarLinkGaps = googleConnected ? dispatchWindowCalls.filter { $0.googleEventID?.isEmpty != false }.count : 0
+        let calendarLinkGaps = googleConnected ? dispatchWindowCalls.filter { call in
+            if call.googleEventID?.isEmpty != false {
+                return true
+            }
+            guard call.assignedTechnician != nil else { return false }
+            return ServiceCalendarRouting.hasStaleAssignedCalendarRoute(
+                calendarID: call.googleCalendarID,
+                technician: call.assignedTechnician
+            )
+        }.count : 0
         let quickBooksDocumentGaps = quickBooksConnected ? quickBooksGapCount(estimates: estimates, invoices: invoices) : 0
         let catalogItems = items.filter {
             !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

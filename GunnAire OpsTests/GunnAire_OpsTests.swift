@@ -383,6 +383,41 @@ struct GunnAire_OpsTests {
         #expect(snapshot.actions.contains { $0.destination == .sync })
     }
 
+    @Test func businessSuiteScoresStaleCalendarRoutesAsIntegrationGaps() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let customer = Customer(name: "Route Customer", address: "510 Integration Ave")
+        let technician = Technician(name: "Route Tech", contactInfo: "route.tech@example.com")
+        let call = ServiceCall(
+            googleCalendarID: "previous.tech@example.com",
+            googleEventID: "event-123",
+            type: .service,
+            scheduledDate: now.addingTimeInterval(2 * 60 * 60),
+            assignedTechnician: technician,
+            customer: customer
+        )
+
+        let snapshot = BusinessSuiteIntelligence.snapshot(
+            customers: [customer],
+            serviceCalls: [call],
+            technicians: [technician],
+            contracts: [],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            timeEntries: [],
+            googleConnected: true,
+            quickBooksConnected: true,
+            onsitePaymentsReady: true,
+            now: now
+        )
+
+        let integrations = try #require(snapshot.workstreams.first { $0.id == .integrations })
+
+        #expect(snapshot.syncAttentionCount == 1)
+        #expect(integrations.detail.contains("1 calendar"))
+        #expect(snapshot.actions.contains { $0.title == "Tighten sync coverage" })
+    }
+
     @Test func businessSuiteFlagsPricebookMarginAndCostGaps() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let unpricedItem = Item(name: "Emergency Diagnostic", unitPrice: 0)
