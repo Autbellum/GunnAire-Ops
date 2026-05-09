@@ -47,11 +47,11 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Capture receipt photos to attach to customer payments and vendor bills.</string>
 	<key>QB_CALLBACK_SCHEME</key>
-	<string>$(QB_CALLBACK_SCHEME)</string>
+	<string>gunnaireops</string>
 	<key>QB_CLIENT_ID</key>
-	<string>$(QB_CLIENT_ID)</string>
+	<string>ABUeWKrqnanv8jakA8Hgui7zF8mMpsHkxdtSlHEtkyclaDFMLH</string>
 	<key>QB_CLIENT_SECRET</key>
-	<string>$(QB_CLIENT_SECRET)</string>
+	<string>garGog2E3NF3fWN6GcFW9eEsoGRfhB2p2yvYrV8p</string>
 	<key>QB_DEFAULT_ITEM_REF</key>
 	<string>$(QB_DEFAULT_ITEM_REF)</string>
 	<key>QB_DEFAULT_INCOME_ACCOUNT_REF</key>
@@ -59,9 +59,9 @@
 	<key>QB_DEFAULT_EXPENSE_ACCOUNT_REF</key>
 	<string>$(QB_DEFAULT_EXPENSE_ACCOUNT_REF)</string>
 	<key>QB_ENVIRONMENT</key>
-	<string>$(QB_ENVIRONMENT)</string>
+	<string>production</string>
 	<key>QB_REDIRECT_URI</key>
-	<string>$(QB_REDIRECT_URI)</string>
+	<string>https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

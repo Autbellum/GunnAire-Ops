@@ -1788,7 +1788,7 @@ struct EditServiceCallView: View {
 extension ContentView {
     // MARK: - QuickBooks OAuth Authentication
     func authenticateQuickBooks() {
-        QuickBooksAPI.shared.startSignIn(presentationContext: authPresentationContextProvider) { result in
+        QuickBooksAuthAPI.shared.startSignIn(presentationContext: authPresentationContextProvider) { result in
             switch result {
             case .success:
                 fetchAndSyncQuickBooksData()
@@ -1872,7 +1872,7 @@ extension ContentView {
         var deposits: [QuickBooksDeposit] = []
 
         group.enter()
-        QuickBooksAPI.shared.fetchCustomers { result in
+        QuickBooksDataAPI.shared.fetchCustomers { result in
             switch result {
             case .success(let records):
                 customers = records
@@ -1883,7 +1883,7 @@ extension ContentView {
         }
 
         group.enter()
-        QuickBooksAPI.shared.fetchItems { result in
+        QuickBooksDataAPI.shared.fetchItems { result in
             switch result {
             case .success(let records):
                 items = records
@@ -1894,7 +1894,7 @@ extension ContentView {
         }
 
         group.enter()
-        QuickBooksAPI.shared.fetchEstimates { result in
+        QuickBooksDataAPI.shared.fetchEstimates { result in
             switch result {
             case .success(let records):
                 estimates = records
@@ -1905,7 +1905,7 @@ extension ContentView {
         }
 
         group.enter()
-        QuickBooksAPI.shared.fetchInvoices { result in
+        QuickBooksDataAPI.shared.fetchInvoices { result in
             switch result {
             case .success(let records):
                 invoices = records
@@ -1916,7 +1916,7 @@ extension ContentView {
         }
 
         group.enter()
-        QuickBooksAPI.shared.fetchBills { result in
+        QuickBooksDataAPI.shared.fetchBills { result in
             switch result {
             case .success(let records):
                 bills = records
@@ -1927,7 +1927,7 @@ extension ContentView {
         }
 
         group.enter()
-        QuickBooksAPI.shared.fetchVendors { result in
+        QuickBooksDataAPI.shared.fetchVendors { result in
             switch result {
             case .success(let records):
                 vendors = records
@@ -1938,7 +1938,7 @@ extension ContentView {
         }
 
         group.enter()
-        QuickBooksAPI.shared.fetchPayments { result in
+        QuickBooksDataAPI.shared.fetchPayments { result in
             switch result {
             case .success(let records):
                 payments = records
@@ -1949,7 +1949,7 @@ extension ContentView {
         }
 
         group.enter()
-        QuickBooksAPI.shared.fetchSalesReceipts { result in
+        QuickBooksDataAPI.shared.fetchSalesReceipts { result in
             switch result {
             case .success(let records):
                 salesReceipts = records
@@ -1960,7 +1960,7 @@ extension ContentView {
         }
 
         group.enter()
-        QuickBooksAPI.shared.fetchDeposits { result in
+        QuickBooksDataAPI.shared.fetchDeposits { result in
             switch result {
             case .success(let records):
                 deposits = records

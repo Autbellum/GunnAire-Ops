@@ -122,4 +122,232 @@ struct GunnAire_OpsTests {
         #expect(SplashVideoLocator.Source.fallback.description == "Logo Fallback")
     }
 
+    @Test func customerIntelligenceBalanceAccountsForRefunds() async throws {
+        let customer = Customer(name: "Balance Customer")
+        let invoice = Invoice(customer: customer, amount: 1_000, status: "unpaid")
+        let payment = Payment(invoice: invoice, amount: 400, method: "card")
+        let refund = Payment(invoice: invoice, amount: 125, method: "card", isRefund: true, refundedPaymentID: payment.id)
+
+        let balance = CustomerIntelligence.outstandingBalance(for: invoice, payments: [payment, refund])
+
+        #expect(balance == 725)
+    }
+
+    @Test func customerIntelligencePrioritizesOverdueCollection() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let customer = Customer(
+            name: "Priority Customer",
+            phone: "555-0100",
+            email: "ops@example.com",
+            address: "100 Field Way"
+        )
+        let invoice = Invoice(
+            customer: customer,
+            amount: 500,
+            status: "unpaid",
+            createdAt: now.addingTimeInterval(-10 * 24 * 60 * 60)
+        )
+
+        let snapshot = CustomerIntelligence.snapshot(
+            for: customer,
+            serviceCalls: [],
+            invoices: [invoice],
+            estimates: [],
+            payments: [],
+            contracts: [],
+            now: now
+        )
+
+        #expect(snapshot.openBalance == 500)
+        #expect(snapshot.overdueInvoiceCount == 1)
+        #expect(snapshot.healthScore < 70)
+        #expect(snapshot.primaryAction == .collectPayment(invoice.id))
+    }
+
+    @Test func customerIntelligenceRanksRiskBeforeHealthyAccounts() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let healthy = Customer(
+            name: "Healthy Account",
+            phone: "555-0101",
+            email: "healthy@example.com",
+            address: "200 Maintenance Dr"
+        )
+        let risky = Customer(
+            name: "Risky Account",
+            phone: "555-0102",
+            email: "risky@example.com",
+            address: "300 Receivable Ave"
+        )
+        let riskyInvoice = Invoice(
+            customer: risky,
+            amount: 1_200,
+            status: "unpaid",
+            createdAt: now.addingTimeInterval(-14 * 24 * 60 * 60)
+        )
+
+        let snapshots = CustomerIntelligence.snapshots(
+            customers: [healthy, risky],
+            serviceCalls: [],
+            invoices: [riskyInvoice],
+            estimates: [],
+            payments: [],
+            contracts: [],
+            now: now
+        )
+
+        #expect(snapshots.first?.customer.id == risky.id)
+    }
+
+    @Test func businessSuitePrioritizesOverdueCollectionsAcrossModules() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let customer = Customer(
+            name: "Suite Customer",
+            phone: "555-0110",
+            email: "suite@example.com",
+            address: "400 Command Center"
+        )
+        let invoice = Invoice(
+            customer: customer,
+            amount: 900,
+            status: "unpaid",
+            createdAt: now.addingTimeInterval(-11 * 24 * 60 * 60)
+        )
+        let readyCall = ServiceCall(
+            type: .service,
+            scheduledDate: now.addingTimeInterval(-2 * 60 * 60),
+            customer: customer,
+            status: .completed,
+            workCompletedChecklist: true
+        )
+
+        let snapshot = BusinessSuiteIntelligence.snapshot(
+            customers: [customer],
+            serviceCalls: [readyCall],
+            technicians: [],
+            contracts: [],
+            estimates: [],
+            invoices: [invoice],
+            payments: [],
+            timeEntries: [],
+            googleConnected: true,
+            quickBooksConnected: true,
+            onsitePaymentsReady: true,
+            now: now
+        )
+
+        #expect(snapshot.openReceivablesTotal == 900)
+        #expect(snapshot.readyToBillCount == 1)
+        #expect(snapshot.actions.first?.destination == .collectPayment(invoice.id))
+    }
+
+    @Test func businessSuiteScoresIntegrationGaps() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let customer = Customer(
+            name: "Sync Customer",
+            phone: "555-0111",
+            email: "sync@example.com",
+            address: "500 Integration Ave"
+        )
+        let call = ServiceCall(
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(24 * 60 * 60),
+            customer: customer
+        )
+        let estimate = Estimate(customer: customer, amount: 1_250, status: "pending")
+        let invoice = Invoice(customer: customer, amount: 300, status: "unpaid")
+
+        let snapshot = BusinessSuiteIntelligence.snapshot(
+            customers: [customer],
+            serviceCalls: [call],
+            technicians: [],
+            contracts: [],
+            estimates: [estimate],
+            invoices: [invoice],
+            payments: [],
+            timeEntries: [],
+            googleConnected: true,
+            quickBooksConnected: true,
+            onsitePaymentsReady: false,
+            now: now
+        )
+
+        let integrations = try #require(snapshot.workstreams.first { $0.id == .integrations })
+
+        #expect(snapshot.syncAttentionCount == 3)
+        #expect(integrations.score < 100)
+        #expect(snapshot.actions.contains { $0.destination == .sync })
+    }
+
+    @Test func businessSuiteFlagsPricebookMarginAndCostGaps() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let unpricedItem = Item(name: "Emergency Diagnostic", unitPrice: 0)
+        let lowMarginItem = Item(name: "Compressor Changeout", unitPrice: 500, purchaseCost: 450)
+        let missingCostItem = Item(name: "Maintenance Tune-Up", unitPrice: 189)
+        let vendor = Vendor(name: "HVAC Supply")
+
+        let snapshot = BusinessSuiteIntelligence.snapshot(
+            customers: [],
+            serviceCalls: [],
+            technicians: [],
+            contracts: [],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            timeEntries: [],
+            items: [unpricedItem, lowMarginItem, missingCostItem],
+            vendors: [vendor],
+            googleConnected: true,
+            quickBooksConnected: true,
+            onsitePaymentsReady: true,
+            now: now
+        )
+
+        let pricebook = try #require(snapshot.workstreams.first { $0.id == .pricebook })
+
+        #expect(snapshot.catalogItemCount == 3)
+        #expect(snapshot.pricebookAttentionCount == 6)
+        #expect(pricebook.score < 70)
+        #expect(snapshot.actions.contains { $0.title == "Set catalog price" && $0.destination == .quickBooks })
+    }
+
+    @Test func businessSuiteKeepsHealthyPricebookStable() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let diagnostic = Item(
+            quickBooksID: "QB-ITEM-1",
+            name: "Diagnostic Visit",
+            unitPrice: 189,
+            purchaseCost: 42
+        )
+        let capacitor = Item(
+            quickBooksID: "QB-ITEM-2",
+            name: "Capacitor Replacement",
+            unitPrice: 329,
+            purchaseCost: 90
+        )
+        let vendor = Vendor(name: "HVAC Supply")
+
+        let snapshot = BusinessSuiteIntelligence.snapshot(
+            customers: [],
+            serviceCalls: [],
+            technicians: [],
+            contracts: [],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            timeEntries: [],
+            items: [diagnostic, capacitor],
+            vendors: [vendor],
+            googleConnected: true,
+            quickBooksConnected: true,
+            onsitePaymentsReady: true,
+            now: now
+        )
+
+        let pricebook = try #require(snapshot.workstreams.first { $0.id == .pricebook })
+
+        #expect(snapshot.pricebookAttentionCount == 0)
+        #expect(snapshot.averageGrossMargin > 0.70)
+        #expect(pricebook.score == 100)
+    }
+
 }

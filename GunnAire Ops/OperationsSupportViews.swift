@@ -6,6 +6,8 @@ struct CustomersView: View {
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
+    @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
+    @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
 
     @State private var newCustomerName = ""
@@ -25,6 +27,20 @@ struct CustomersView: View {
             (customer.phone?.localizedCaseInsensitiveContains(search) ?? false) ||
             (customer.address?.localizedCaseInsensitiveContains(search) ?? false)
         }
+    }
+
+    private var customerSnapshotsByID: [UUID: CustomerIntelligenceSnapshot] {
+        Dictionary(
+            uniqueKeysWithValues: CustomerIntelligence.snapshots(
+                customers: customers,
+                serviceCalls: serviceCalls,
+                invoices: invoices,
+                estimates: estimates,
+                payments: payments,
+                contracts: recurringContracts
+            )
+            .map { ($0.customer.id, $0) }
+        )
     }
 
     var body: some View {
@@ -70,11 +86,17 @@ struct CustomersView: View {
                             Button {
                                 selectedCustomer = customer
                             } label: {
+                                let snapshot = customerSnapshotsByID[customer.id]
                                 VStack(alignment: .leading, spacing: 8) {
                                     HStack {
                                         Text(customer.name)
                                             .font(.headline)
                                         Spacer()
+                                        if let snapshot {
+                                            Label("\(snapshot.healthScore)", systemImage: accountHealthIcon(for: snapshot))
+                                                .font(.caption2.weight(.semibold))
+                                                .foregroundColor(accountHealthTint(for: snapshot))
+                                        }
                                         if let quickBooksID = customer.quickBooksID, !quickBooksID.isEmpty {
                                             Label("QuickBooks", systemImage: "link")
                                                 .font(.caption2)
@@ -99,6 +121,13 @@ struct CustomersView: View {
                                     Text("\(serviceCallCount(for: customer)) jobs • \(invoiceCount(for: customer)) invoices • \(activeContractCount(for: customer)) agreements")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                    if let snapshot {
+                                        Text(accountPulseLine(for: snapshot))
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundColor(accountHealthTint(for: snapshot))
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.78)
+                                    }
                                     if let nextContract = nextActiveContract(for: customer) {
                                         Text("Next maintenance: \(nextContract.nextDate.formatted(date: .abbreviated, time: .omitted))")
                                             .font(.caption2)
@@ -180,17 +209,80 @@ struct CustomersView: View {
     }
 
     private func nextOpenInvoice(for customer: Customer) -> Invoice? {
-        invoices.first {
-            $0.customer.id == customer.id &&
-            $0.status.caseInsensitiveCompare("paid") != .orderedSame
+        invoices
+            .filter {
+                $0.customer.id == customer.id &&
+                $0.status.caseInsensitiveCompare("paid") != .orderedSame
+            }
+            .compactMap { invoice -> (invoice: Invoice, balance: Double)? in
+                let balance = CustomerIntelligence.outstandingBalance(for: invoice, payments: payments)
+                guard balance > 0 else { return nil }
+                return (invoice, balance)
+            }
+            .sorted { $0.balance > $1.balance }
+            .first?
+            .invoice
+    }
+
+    private func accountPulseLine(for snapshot: CustomerIntelligenceSnapshot) -> String {
+        var parts: [String] = ["\(snapshot.healthLabel) account"]
+        if snapshot.openBalance > 0 {
+            parts.append("\(snapshot.openBalance.formatted(.currency(code: "USD"))) open")
         }
+        if snapshot.readyToBillCount > 0 {
+            parts.append("\(snapshot.readyToBillCount) ready to bill")
+        }
+        if snapshot.openEstimateCount > 0 {
+            parts.append("\(snapshot.openEstimateCount) estimates")
+        }
+        if snapshot.syncAttentionCount > 0 {
+            parts.append("\(snapshot.syncAttentionCount) sync")
+        }
+        return parts.joined(separator: " • ")
+    }
+
+    private func accountHealthTint(for snapshot: CustomerIntelligenceSnapshot) -> Color {
+        switch snapshot.healthScore {
+        case 85...100:
+            return .green
+        case 70..<85:
+            return Color.brandGold
+        case 50..<70:
+            return .orange
+        default:
+            return .red
+        }
+    }
+
+    private func accountHealthIcon(for snapshot: CustomerIntelligenceSnapshot) -> String {
+        if snapshot.overdueInvoiceCount > 0 {
+            return "creditcard.trianglebadge.exclamationmark"
+        }
+        if snapshot.syncAttentionCount > 0 {
+            return "arrow.triangle.2.circlepath.circle"
+        }
+        if snapshot.readyToBillCount > 0 {
+            return "doc.badge.plus"
+        }
+        if snapshot.followUpCount > 0 {
+            return "arrow.uturn.forward.circle"
+        }
+        return snapshot.healthScore >= 70 ? "checkmark.seal" : "exclamationmark.triangle"
     }
 }
 
 struct SyncIntegrationsView: View {
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \ServiceCall.scheduledDate, order: .forward) private var serviceCalls: [ServiceCall]
+    @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
+    @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
+    @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
+    @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
+    @Query(sort: \Item.name, order: .forward) private var items: [Item]
+    @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     @State private var availableCalendars: [GoogleCalendar] = []
@@ -201,8 +293,35 @@ struct SyncIntegrationsView: View {
     @State private var selectedTechnician: Technician?
     @State private var technicianMessage: String?
 
+    private let calendar = Calendar.current
+
     private var quickBooksConnected: Bool {
         QuickBooksDataAPI.shared.isAuthenticated
+    }
+
+    private var suiteSnapshot: BusinessSuiteSnapshot {
+        BusinessSuiteIntelligence.snapshot(
+            customers: customers,
+            serviceCalls: serviceCalls,
+            technicians: technicians,
+            contracts: recurringContracts,
+            estimates: estimates,
+            invoices: invoices,
+            payments: payments,
+            timeEntries: timeEntries,
+            items: items,
+            vendors: vendors,
+            googleConnected: googleAuth.isAuthenticated,
+            quickBooksConnected: quickBooksConnected,
+            onsitePaymentsReady: UserDefaults.standard.bool(forKey: "enableOnsitePayments") &&
+                UserDefaults.standard.bool(forKey: "onsitePaymentProcessorReady"),
+            now: Date(),
+            calendar: calendar
+        )
+    }
+
+    private var attentionWorkstreams: [BusinessSuiteWorkstream] {
+        suiteSnapshot.workstreams.filter { $0.severity != .stable }
     }
 
     private var availableCalendarIDs: Set<String> {
@@ -219,6 +338,89 @@ struct SyncIntegrationsView: View {
                 Section("Sync Status") {
                     statusRow("QuickBooks", value: quickBooksConnected ? "Connected" : "Disconnected")
                     statusRow("Google", value: googleAuth.isAuthenticated ? "Connected" : "Disconnected")
+                }
+
+                Section("Suite Readiness") {
+                    HStack(alignment: .center, spacing: 14) {
+                        ZStack {
+                            Circle()
+                                .stroke(suiteTint(for: suiteSnapshot.healthScore).opacity(0.24), lineWidth: 7)
+                            Circle()
+                                .trim(from: 0, to: CGFloat(suiteSnapshot.healthScore) / 100)
+                                .stroke(suiteTint(for: suiteSnapshot.healthScore), style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                            Text("\(suiteSnapshot.healthScore)")
+                                .font(.headline.weight(.bold))
+                        }
+                        .frame(width: 62, height: 62)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(suiteSnapshot.healthLabel)
+                                .font(.headline)
+                                .foregroundColor(suiteTint(for: suiteSnapshot.healthScore))
+                            Text(suiteSnapshot.healthDetail)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                        }
+
+                        Spacer()
+
+                        Button {
+                            GunnAireAppIntentRouter.store(.commandCenter)
+                        } label: {
+                            Label("Command Center", systemImage: "rectangle.3.group")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+
+                    HStack {
+                        suiteMetric("\(suiteSnapshot.openWorkCount)", label: "open work")
+                        suiteMetric(suiteSnapshot.openReceivablesTotal.formatted(.currency(code: "USD")), label: "receivables")
+                        suiteMetric("\(suiteSnapshot.syncAttentionCount)", label: "sync gaps")
+                    }
+
+                    if attentionWorkstreams.isEmpty {
+                        Text("All workstreams are synchronized.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(attentionWorkstreams.prefix(4)) { workstream in
+                            Button {
+                                perform(workstream.destination)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: workstream.systemImage)
+                                        .foregroundColor(suiteSeverityTint(workstream.severity))
+                                        .frame(width: 24)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(workstream.title)
+                                            .font(.subheadline.weight(.semibold))
+                                        Text(workstream.detail)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Text("\(workstream.score)")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundColor(suiteSeverityTint(workstream.severity))
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    if let action = suiteSnapshot.actions.first {
+                        Button {
+                            perform(action.destination)
+                        } label: {
+                            Label(action.title, systemImage: action.systemImage)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(suiteSeverityTint(action.severity))
+                    }
                 }
 
                 Section("Google Calendar Diagnostics") {
@@ -339,6 +541,84 @@ struct SyncIntegrationsView: View {
             Spacer()
             Text(value)
                 .foregroundColor(.secondary)
+        }
+    }
+
+    private func suiteMetric(_ value: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.caption.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func suiteTint(for score: Int) -> Color {
+        switch score {
+        case 85...100:
+            return .green
+        case 70..<85:
+            return Color.brandGold
+        case 50..<70:
+            return .orange
+        default:
+            return .red
+        }
+    }
+
+    private func suiteSeverityTint(_ severity: BusinessSuiteSeverity) -> Color {
+        switch severity {
+        case .stable:
+            return .green
+        case .notice:
+            return Color.brandGold
+        case .warning:
+            return .orange
+        case .critical:
+            return .red
+        }
+    }
+
+    private func perform(_ destination: BusinessSuiteDestination) {
+        switch destination {
+        case .commandCenter:
+            GunnAireAppIntentRouter.store(.commandCenter)
+        case .schedule(let serviceCallID):
+            if let serviceCallID {
+                GunnAireAppIntentRouter.storeScheduleCallRoute(serviceCallID)
+            } else {
+                GunnAireAppIntentRouter.store(.schedule)
+            }
+        case .documentation(let serviceCallID):
+            if let serviceCallID {
+                GunnAireAppIntentRouter.storeDocumentationRoute(serviceCallID)
+            } else {
+                GunnAireAppIntentRouter.store(.documentation)
+            }
+        case .collectPayment(let invoiceID):
+            GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
+        case .customer(let customerID):
+            GunnAireAppIntentRouter.storeCustomerRoute(customerID)
+        case .customers:
+            GunnAireAppIntentRouter.store(.customers)
+        case .payments:
+            GunnAireAppIntentRouter.store(.payments)
+        case .sync:
+            GunnAireAppIntentRouter.store(.sync)
+        case .quickBooks:
+            GunnAireAppIntentRouter.store(.quickBooks)
+        case .estimates:
+            GunnAireAppIntentRouter.store(.estimates)
+        case .invoices:
+            GunnAireAppIntentRouter.store(.invoices)
+        case .timeClock:
+            GunnAireAppIntentRouter.store(.timeClock)
         }
     }
 
@@ -639,6 +919,9 @@ private struct CustomerEditorView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
+    @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
+    @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
 
     let customer: Customer
 
@@ -657,11 +940,26 @@ private struct CustomerEditorView: View {
         Array(customerServiceCalls.prefix(5))
     }
 
-    private var openCustomerInvoices: [Invoice] {
+    private var openCustomerInvoiceBalances: [(invoice: Invoice, balance: Double)] {
         invoices.filter {
-            $0.customer.id == customer.id &&
-            $0.status.caseInsensitiveCompare("paid") != .orderedSame
+            $0.customer.id == customer.id
         }
+        .compactMap { invoice in
+            let balance = CustomerIntelligence.outstandingBalance(for: invoice, payments: payments)
+            guard balance > 0 && invoice.status.caseInsensitiveCompare("paid") != .orderedSame else { return nil }
+            return (invoice, balance)
+        }
+    }
+
+    private var customerSnapshot: CustomerIntelligenceSnapshot {
+        CustomerIntelligence.snapshot(
+            for: customer,
+            serviceCalls: serviceCalls,
+            invoices: invoices,
+            estimates: estimates,
+            payments: payments,
+            contracts: recurringContracts
+        )
     }
 
     init(customer: Customer) {
@@ -670,6 +968,44 @@ private struct CustomerEditorView: View {
         _address = State(initialValue: customer.address ?? "")
         _email = State(initialValue: customer.email ?? "")
         _phone = State(initialValue: customer.phone ?? "")
+    }
+
+    private var customerHealthTint: Color {
+        switch customerSnapshot.healthScore {
+        case 85...100:
+            return .green
+        case 70..<85:
+            return Color.brandGold
+        case 50..<70:
+            return .orange
+        default:
+            return .red
+        }
+    }
+
+    private var customerHealthIcon: String {
+        if customerSnapshot.overdueInvoiceCount > 0 {
+            return "creditcard.trianglebadge.exclamationmark"
+        }
+        if customerSnapshot.syncAttentionCount > 0 {
+            return "arrow.triangle.2.circlepath.circle"
+        }
+        if customerSnapshot.readyToBillCount > 0 {
+            return "doc.badge.plus"
+        }
+        if customerSnapshot.followUpCount > 0 {
+            return "arrow.uturn.forward.circle"
+        }
+        return customerSnapshot.healthScore >= 70 ? "checkmark.seal" : "exclamationmark.triangle"
+    }
+
+    private var shouldShowExternalAccountAction: Bool {
+        switch customerSnapshot.primaryAction {
+        case .completeProfile, .openCustomer:
+            return false
+        default:
+            return true
+        }
     }
 
     var body: some View {
@@ -689,40 +1025,50 @@ private struct CustomerEditorView: View {
                         .foregroundColor(.secondary)
                 }
 
-                Section("Operational Snapshot") {
-                    Text("\(customerServiceCalls.count) jobs on file")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text("\(openCustomerInvoices.count) open invoices")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                Section("Account Intelligence") {
+                    HStack(alignment: .center, spacing: 12) {
+                        Image(systemName: customerHealthIcon)
+                            .font(.title2)
+                            .foregroundColor(customerHealthTint)
+                            .frame(width: 34)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(customerSnapshot.healthScore) • \(customerSnapshot.healthLabel)")
+                                .font(.headline)
+                            Text(customerSnapshot.actionDetail)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Spacer()
+                    }
 
                     HStack {
-                        if let nextScheduledCall = customerServiceCalls
-                            .filter({ $0.status != .completed && $0.status != .cancelled })
-                            .sorted(by: { $0.scheduledDate < $1.scheduledDate })
-                            .first {
-                            Button("Open Next Job") {
-                                GunnAireAppIntentRouter.storeDocumentationRoute(nextScheduledCall.id)
-                                dismiss()
-                            }
-                            .buttonStyle(.bordered)
+                        metricPill("\(customerServiceCalls.count)", label: "jobs")
+                        metricPill(openCustomerInvoiceBalances.reduce(0) { $0 + $1.balance }.formatted(.currency(code: "USD")), label: "balance")
+                        metricPill("\(customerSnapshot.activeContractCount)", label: "agreements")
+                    }
 
-                            Button("Open Schedule") {
-                                GunnAireAppIntentRouter.storeScheduleCallRoute(nextScheduledCall.id)
-                                dismiss()
-                            }
-                            .buttonStyle(.bordered)
-                        }
+                    if customerSnapshot.openEstimateTotal > 0 {
+                        Text("Open estimate pipeline: \(customerSnapshot.openEstimateTotal.formatted(.currency(code: "USD"))) across \(customerSnapshot.openEstimateCount) estimate\(customerSnapshot.openEstimateCount == 1 ? "" : "s").")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
 
-                        if let nextOpenInvoice = openCustomerInvoices.first {
-                            Button("Collect Payment") {
-                                GunnAireAppIntentRouter.storePaymentCollectionRoute(nextOpenInvoice.id)
-                                dismiss()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.green)
+                    if customerSnapshot.syncAttentionCount > 0 {
+                        Text("\(customerSnapshot.syncAttentionCount) payment sync item\(customerSnapshot.syncAttentionCount == 1 ? "" : "s") need review.")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+
+                    if shouldShowExternalAccountAction {
+                        Button {
+                            perform(customerSnapshot.primaryAction)
+                        } label: {
+                            Label(customerSnapshot.primaryAction.title, systemImage: customerSnapshot.primaryAction.systemImage)
                         }
+                        .buttonStyle(.borderedProminent)
+                        .tint(customerHealthTint)
                     }
                 }
 
@@ -760,28 +1106,28 @@ private struct CustomerEditorView: View {
                     }
                 }
 
-                if !openCustomerInvoices.isEmpty {
+                if !openCustomerInvoiceBalances.isEmpty {
                     Section("Open Invoices") {
-                        ForEach(openCustomerInvoices.prefix(5)) { invoice in
+                        ForEach(openCustomerInvoiceBalances.prefix(5), id: \.invoice.id) { entry in
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(invoice.amount.formatted(.currency(code: "USD")))
+                                Text(entry.balance.formatted(.currency(code: "USD")))
                                     .font(.headline)
-                                Text("\(invoice.status.capitalized) • \(invoice.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                Text("\(entry.invoice.status.capitalized) • \(entry.invoice.createdAt.formatted(date: .abbreviated, time: .shortened))")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                Text(invoice.lineItemSummary.isEmpty ? "Invoice \(invoice.id.uuidString.prefix(8))" : invoice.lineItemSummary)
+                                Text(entry.invoice.lineItemSummary.isEmpty ? "Invoice \(entry.invoice.id.uuidString.prefix(8))" : entry.invoice.lineItemSummary)
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
                                     .lineLimit(2)
                                 HStack {
                                     Button("Collect Payment") {
-                                        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+                                        GunnAireAppIntentRouter.storePaymentCollectionRoute(entry.invoice.id)
                                         dismiss()
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .tint(.green)
 
-                                    if let serviceCallID = invoice.serviceCallID,
+                                    if let serviceCallID = entry.invoice.serviceCallID,
                                        let call = customerServiceCalls.first(where: { $0.id == serviceCallID }) {
                                         Button("Open Job") {
                                             GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
@@ -860,6 +1206,40 @@ private struct CustomerEditorView: View {
             }
         }
         .tint(Color.brandGold)
+    }
+
+    private func metricPill(_ value: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.caption.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func perform(_ action: CustomerIntelligenceAction) {
+        switch action {
+        case .collectPayment(let invoiceID):
+            GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
+            dismiss()
+        case .openDocumentation(let serviceCallID):
+            GunnAireAppIntentRouter.storeDocumentationRoute(serviceCallID)
+            dismiss()
+        case .openSchedule(let serviceCallID):
+            GunnAireAppIntentRouter.storeScheduleCallRoute(serviceCallID)
+            dismiss()
+        case .openPayments:
+            GunnAireAppIntentRouter.store(.payments)
+            dismiss()
+        case .completeProfile, .openCustomer:
+            break
+        }
     }
 }
 

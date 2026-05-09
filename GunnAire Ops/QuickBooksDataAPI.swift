@@ -10,6 +10,7 @@ struct QuickBooksOAuthTokens: Codable {
 private struct QuickBooksKeychainPayload: Codable {
     let tokens: QuickBooksOAuthTokens
     let realmID: String
+    let environment: String?
 }
 
 final class QuickBooksDataAPI: ObservableObject {
@@ -17,6 +18,7 @@ final class QuickBooksDataAPI: ObservableObject {
 
     @Published private(set) var tokens: QuickBooksOAuthTokens?
     @Published private(set) var storedRealmID: String?
+    @Published private(set) var storedEnvironment: String?
 
     private let clientId = Config.QuickBooks.clientID
     private let clientSecret = Config.QuickBooks.clientSecret
@@ -26,14 +28,16 @@ final class QuickBooksDataAPI: ObservableObject {
     private let minorVersion = "75"
 
     private var baseURL: String {
-        if Config.QuickBooks.environment.lowercased() == "sandbox" {
+        let env = (storedEnvironment ?? Config.QuickBooks.environment).lowercased()
+        if env == "sandbox" {
             return "https://sandbox-quickbooks.api.intuit.com/v3/company/"
         }
         return "https://quickbooks.api.intuit.com/v3/company/"
     }
 
     private var paymentsBaseURL: String {
-        if Config.QuickBooks.environment.lowercased() == "sandbox" {
+        let env = (storedEnvironment ?? Config.QuickBooks.environment).lowercased()
+        if env == "sandbox" {
             return "https://sandbox.api.intuit.com/quickbooks/v4/payments"
         }
         return "https://api.intuit.com/quickbooks/v4/payments"
@@ -57,11 +61,12 @@ final class QuickBooksDataAPI: ObservableObject {
         let normalizedRealmID = realmID.trimmingCharacters(in: .whitespacesAndNewlines)
         self.tokens = tokens
         self.storedRealmID = normalizedRealmID.isEmpty ? nil : normalizedRealmID
+        self.storedEnvironment = Config.QuickBooks.environment
         guard !normalizedRealmID.isEmpty else {
             UserDefaults.standard.removeObject(forKey: realmIDKey)
             return
         }
-        try? KeychainStore.saveCodable(QuickBooksKeychainPayload(tokens: tokens, realmID: normalizedRealmID), account: keychainAccount)
+        try? KeychainStore.saveCodable(QuickBooksKeychainPayload(tokens: tokens, realmID: normalizedRealmID, environment: self.storedEnvironment), account: keychainAccount)
         UserDefaults.standard.set(normalizedRealmID, forKey: realmIDKey)
         if let data = try? JSONEncoder().encode(tokens) {
             UserDefaults.standard.set(data, forKey: tokenStorageKey)
@@ -71,6 +76,7 @@ final class QuickBooksDataAPI: ObservableObject {
     func loadTokens() {
         if let payload = try? KeychainStore.loadCodable(QuickBooksKeychainPayload.self, account: keychainAccount) {
             tokens = payload.tokens
+            storedEnvironment = payload.environment ?? Config.QuickBooks.environment
             let keychainRealmID = payload.realmID.trimmingCharacters(in: .whitespacesAndNewlines)
             if !keychainRealmID.isEmpty {
                 storedRealmID = keychainRealmID
@@ -84,12 +90,14 @@ final class QuickBooksDataAPI: ObservableObject {
            let tokens = try? JSONDecoder().decode(QuickBooksOAuthTokens.self, from: data),
            let realmID = UserDefaults.standard.string(forKey: realmIDKey) {
             storeTokens(tokens, realmID: realmID)
+            storedEnvironment = Config.QuickBooks.environment
         }
     }
 
     func clearTokens() {
         tokens = nil
         storedRealmID = nil
+        storedEnvironment = nil
         try? KeychainStore.remove(account: keychainAccount)
         UserDefaults.standard.removeObject(forKey: tokenStorageKey)
         UserDefaults.standard.removeObject(forKey: realmIDKey)
@@ -235,7 +243,13 @@ final class QuickBooksDataAPI: ObservableObject {
         if let data,
            let apiError = try? JSONDecoder().decode(QuickBooksFaultEnvelope.self, from: data),
            let firstError = apiError.Fault.Error.first {
-            return .api(statusCode: http.statusCode, detail: "\(firstError.Message): \(firstError.Detail)")
+            var detail = "\(firstError.Message): \(firstError.Detail)"
+            if http.statusCode == 403 {
+                let env = (storedEnvironment ?? Config.QuickBooks.environment)
+                let company = realmID ?? "unknown company"
+                detail += " — Authorization failed. Please reconnect QuickBooks and ensure this app is authorized for \(company) in the \(env) environment."
+            }
+            return .api(statusCode: http.statusCode, detail: detail)
         }
 
         if let data,
@@ -1548,6 +1562,25 @@ struct QuickBooksFault: Codable {
 struct QuickBooksFaultError: Codable {
     let Message: String
     let Detail: String
+
+    private enum CodingKeys: String, CodingKey {
+        case Message, Detail, message, detail
+    }
+
+    init(Message: String, Detail: String) {
+        self.Message = Message
+        self.Detail = Detail
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let upperMessage = try container.decodeIfPresent(String.self, forKey: .Message)
+        let lowerMessage = try container.decodeIfPresent(String.self, forKey: .message)
+        let upperDetail = try container.decodeIfPresent(String.self, forKey: .Detail)
+        let lowerDetail = try container.decodeIfPresent(String.self, forKey: .detail)
+        self.Message = upperMessage ?? lowerMessage ?? "Unknown"
+        self.Detail = upperDetail ?? lowerDetail ?? ""
+    }
 }
 
 struct QuickBooksPaymentsErrorEnvelope: Codable {
