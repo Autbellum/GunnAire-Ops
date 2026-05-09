@@ -995,11 +995,11 @@ struct QuickBooksManagementView: View {
             invoices = records
         }
 
-        run(id: "bills", required: false, fetch: liveAPI.fetchBills) { records in
+        run(id: "bills", required: true, fetch: liveAPI.fetchBills) { records in
             bills = records
         }
 
-        run(id: "purchases", required: false, fetch: liveAPI.fetchPurchases) { records in
+        run(id: "purchases", required: true, fetch: liveAPI.fetchPurchases) { records in
             purchases = records
         }
 
@@ -1011,7 +1011,7 @@ struct QuickBooksManagementView: View {
             payments = records
         }
 
-        run(id: "paymentMethods", required: false, fetch: liveAPI.fetchPaymentMethods) { records in
+        run(id: "paymentMethods", required: true, fetch: liveAPI.fetchPaymentMethods) { records in
             paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
         }
 
@@ -1019,11 +1019,11 @@ struct QuickBooksManagementView: View {
             storedCards = records
         }
 
-        run(id: "salesReceipts", required: false, fetch: liveAPI.fetchSalesReceipts) { records in
+        run(id: "salesReceipts", required: true, fetch: liveAPI.fetchSalesReceipts) { records in
             salesReceipts = records
         }
 
-        run(id: "deposits", required: false, fetch: liveAPI.fetchDeposits) { records in
+        run(id: "deposits", required: true, fetch: liveAPI.fetchDeposits) { records in
             deposits = records
         }
 
@@ -1644,11 +1644,11 @@ struct QuickBooksManagementView: View {
             QuickBooksSyncResourceStatus(id: "invoices", name: "Invoices", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
             QuickBooksSyncResourceStatus(id: "vendors", name: "Vendors", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
             QuickBooksSyncResourceStatus(id: "payments", name: "Payments", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
-            QuickBooksSyncResourceStatus(id: "salesReceipts", name: "Sales Receipts", lane: "Accounting", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
-            QuickBooksSyncResourceStatus(id: "deposits", name: "Deposits", lane: "Accounting", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
-            QuickBooksSyncResourceStatus(id: "bills", name: "Bills", lane: "Accounting", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
-            QuickBooksSyncResourceStatus(id: "purchases", name: "Purchases", lane: "Accounting", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
-            QuickBooksSyncResourceStatus(id: "paymentMethods", name: "Payment Methods", lane: "Payments", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "salesReceipts", name: "Sales Receipts", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "deposits", name: "Deposits", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "bills", name: "Bills", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "purchases", name: "Purchases", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "paymentMethods", name: "Payment Methods", lane: "Payments", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
             QuickBooksSyncResourceStatus(id: "storedCards", name: "Stored Cards", lane: "Payments", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil)
         ]
     }
