@@ -132,6 +132,34 @@ struct GunnAire_OpsTests {
         #expect(assessment.calendarLabel == "Primary Calendar")
     }
 
+    @Test func serviceCalendarRoutingOnlyOffersWritableCalendars() async throws {
+        let calendars = [
+            GoogleCalendar(id: "writer@example.com", summary: "Writer", timeZone: nil, accessRole: "writer"),
+            GoogleCalendar(id: "reader@example.com", summary: "Reader", timeZone: nil, accessRole: "reader")
+        ]
+
+        let options = ServiceCalendarRouting.routeOptions(from: calendars)
+
+        #expect(options.contains(ServiceCalendarRouteOption(id: "primary", label: "Primary Calendar")))
+        #expect(options.contains(where: { $0.id == "writer@example.com" }))
+        #expect(options.contains(where: { $0.id == "reader@example.com" }) == false)
+    }
+
+    @Test func serviceCalendarRoutingSanitizesReadOnlySelection() async throws {
+        let technician = Technician(name: "Tech", contactInfo: "reader@example.com")
+        let calendars = [
+            GoogleCalendar(id: "reader@example.com", summary: "Reader", timeZone: nil, accessRole: "reader")
+        ]
+
+        let selected = ServiceCalendarRouting.validSelection(
+            "reader@example.com",
+            technician: technician,
+            calendars: calendars
+        )
+
+        #expect(selected == "primary")
+    }
+
     @Test func splashVideoLocatorPrefersStoredVideoOverBundledVideo() async throws {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -1112,7 +1112,88 @@ GunnAire
     }
 }
 
-// MARK: - Add Service Call View (unchanged except foregroundColor and changed NavigationView to NavigationStack)
+struct ServiceCalendarRouteOption: Identifiable, Equatable {
+    let id: String
+    let label: String
+}
+
+enum ServiceCalendarRouting {
+    static func routeOptions(from calendars: [GoogleCalendar]) -> [ServiceCalendarRouteOption] {
+        var options = calendars
+            .filter(\.isWritable)
+            .sorted { $0.displayLabel.localizedCaseInsensitiveCompare($1.displayLabel) == .orderedAscending }
+            .map { ServiceCalendarRouteOption(id: $0.id, label: $0.displayLabel) }
+
+        if !options.contains(where: { $0.id == "primary" }) {
+            options.insert(ServiceCalendarRouteOption(id: "primary", label: "Primary Calendar"), at: 0)
+        }
+        return options
+    }
+
+    static func preferredCalendarID(for technician: Technician?, calendars: [GoogleCalendar]) -> String {
+        guard let technician else { return "primary" }
+        if let matchedCalendar = calendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technician.contactInfo) }) {
+            return matchedCalendar.id
+        }
+        return "primary"
+    }
+
+    static func validSelection(_ selectedCalendarID: String, technician: Technician?, calendars: [GoogleCalendar]) -> String {
+        if routeOptions(from: calendars).contains(where: { $0.id == selectedCalendarID }) {
+            return selectedCalendarID
+        }
+        return preferredCalendarID(for: technician, calendars: calendars)
+    }
+
+    static func routingMessage(for technician: Technician?, selectedCalendarID: String, calendars: [GoogleCalendar]) -> String {
+        guard let technician else {
+            return selectedCalendarID == "primary"
+                ? "Unassigned jobs will sync to the connected account's primary calendar."
+                : "Unassigned jobs will sync to the selected writable calendar."
+        }
+
+        let assessment = TechnicianCalendarAccessAssessment.evaluate(
+            calendarID: technician.contactInfo,
+            availableCalendars: calendars
+        )
+
+        switch assessment.state {
+        case .writable:
+            if selectedCalendarID == "primary" {
+                return "\(technician.name) has a writable calendar, but this job is routed to Primary Calendar."
+            }
+            if let matchedCalendar = calendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technician.contactInfo) }),
+               selectedCalendarID == matchedCalendar.id {
+                return "This job will sync to \(matchedCalendar.displayLabel)."
+            }
+            return "This job will sync to the selected writable calendar."
+        case .readOnly:
+            return "\(assessment.calendarLabel) is read-only. This job will stay on the selected writable calendar."
+        case .notShared:
+            return "\(assessment.calendarLabel) is not shared with write access. This job will sync to the selected writable calendar."
+        case .noCalendar:
+            return selectedCalendarID == "primary"
+                ? "No technician calendar is assigned. This job will sync to Primary Calendar."
+                : "No technician calendar is assigned. This job will sync to the selected writable calendar."
+        }
+    }
+
+    static func routingTint(for technician: Technician?, selectedCalendarID: String, calendars: [GoogleCalendar]) -> Color {
+        guard let technician else { return .orange }
+        let assessment = TechnicianCalendarAccessAssessment.evaluate(
+            calendarID: technician.contactInfo,
+            availableCalendars: calendars
+        )
+        if assessment.state == .writable,
+           let matchedCalendar = calendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technician.contactInfo) }),
+           selectedCalendarID == matchedCalendar.id {
+            return .green
+        }
+        return assessment.state.tint
+    }
+}
+
+// MARK: - Add Service Call View
 
 struct AddServiceCallView: View {
     @Environment(\.dismiss) private var dismiss
@@ -1346,11 +1427,9 @@ struct AddServiceCallView: View {
                         Text(calendar.label).tag(calendar.id)
                     }
                 }
-                if let technician {
-                    Text(calendarRoutingMessage(for: technician))
-                        .font(.caption)
-                        .foregroundColor(calendarRoutingColor(for: technician))
-                }
+                Text(ServiceCalendarRouting.routingMessage(for: technician, selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars))
+                    .font(.caption)
+                    .foregroundColor(ServiceCalendarRouting.routingTint(for: technician, selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars))
                 DatePicker("Scheduled Time", selection: $scheduledTime, displayedComponents: [.date, .hourAndMinute])
                 Stepper(value: $duration, in: 1800...8*3600, step: 900) {
                     Text("Duration: \(Int(duration/60)) min")
@@ -1417,7 +1496,7 @@ struct AddServiceCallView: View {
             loadAccessibleCalendarsIfNeeded()
         }
         .onChange(of: technician) { _, newTechnician in
-            selectedCalendarID = preferredCalendarID(for: newTechnician) ?? "primary"
+            selectedCalendarID = ServiceCalendarRouting.preferredCalendarID(for: newTechnician, calendars: accessibleCalendars)
         }
         .onChange(of: customer) { _, newCustomer in
             guard siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -1429,8 +1508,13 @@ struct AddServiceCallView: View {
         guard let customer else { return }
         let trimmedSiteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedSiteAddress = trimmedSiteAddress.isEmpty ? customer.address : trimmedSiteAddress
+        let resolvedCalendarID = ServiceCalendarRouting.validSelection(
+            selectedCalendarID,
+            technician: technician,
+            calendars: accessibleCalendars
+        )
         let call = ServiceCall(
-            googleCalendarID: selectedCalendarID,
+            googleCalendarID: resolvedCalendarID,
             siteAddress: resolvedSiteAddress,
             equipmentName: equipmentName.nilIfBlank,
             equipmentModel: equipmentModel.nilIfBlank,
@@ -1472,9 +1556,11 @@ struct AddServiceCallView: View {
                 switch result {
                 case .success(let calendars):
                     accessibleCalendars = calendars
-                    if !availableCalendars.contains(where: { $0.id == selectedCalendarID }) {
-                        selectedCalendarID = preferredCalendarID(for: technician) ?? "primary"
-                    }
+                    selectedCalendarID = ServiceCalendarRouting.validSelection(
+                        selectedCalendarID,
+                        technician: technician,
+                        calendars: calendars
+                    )
                 case .failure:
                     break
                 }
@@ -1482,54 +1568,9 @@ struct AddServiceCallView: View {
         }
     }
 
-    private func preferredCalendarID(for technician: Technician?) -> String? {
-        guard let technician else {
-            return "primary"
-        }
-        if let matchedCalendar = accessibleCalendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technician.contactInfo) }) {
-            return matchedCalendar.id
-        }
-        return "primary"
-    }
-
     private var availableCalendars: [(id: String, label: String)] {
-        let calendars = accessibleCalendars.sorted { lhs, rhs in
-            lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
-        }
-        var values = calendars.map { (id: $0.id, label: $0.displayLabel) }
-        if !values.contains(where: { $0.id == "primary" }) {
-            values.insert((id: "primary", label: "Primary Calendar"), at: 0)
-        }
-        return values
-    }
-
-    private func calendarRoutingMessage(for technician: Technician) -> String {
-        guard let technicianEmail = technician.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines), !technicianEmail.isEmpty else {
-            return selectedCalendarID == "primary"
-                ? "This technician has no calendar email. The event will sync to the connected account's primary calendar."
-                : "This technician has no calendar email. The event will sync to the selected calendar."
-        }
-        if let matchedWritableCalendar = accessibleCalendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technicianEmail) }) {
-            if selectedCalendarID == matchedWritableCalendar.id {
-                return "This event will sync to \(matchedWritableCalendar.displayLabel)."
-            }
-            return "This technician calendar is writable. Current target: \(selectedCalendarID == "primary" ? "Primary Calendar" : selectedCalendarID)."
-        }
-        if accessibleCalendars.contains(where: { $0.matchesTechnicianEmail(technicianEmail) }) {
-            return "\(technicianEmail) is visible to the connected Google account, but it is read-only. The event will stay on the selected writable calendar."
-        }
-        return "\(technicianEmail) is not currently shared with the connected Google account. The event will sync to the primary calendar unless access is granted."
-    }
-
-    private func calendarRoutingColor(for technician: Technician) -> Color {
-        guard let technicianEmail = technician.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines), !technicianEmail.isEmpty else {
-            return .orange
-        }
-        if let matchedWritableCalendar = accessibleCalendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technicianEmail) }),
-           selectedCalendarID == matchedWritableCalendar.id {
-            return .green
-        }
-        return accessibleCalendars.contains(where: { $0.matchesTechnicianEmail(technicianEmail) }) ? .yellow : .orange
+        ServiceCalendarRouting.routeOptions(from: accessibleCalendars)
+            .map { (id: $0.id, label: $0.label) }
     }
 }
 
@@ -1636,6 +1677,9 @@ struct EditServiceCallView: View {
                         Text(calendar.label).tag(calendar.id)
                     }
                 }
+                Text(ServiceCalendarRouting.routingMessage(for: technician, selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars))
+                    .font(.caption)
+                    .foregroundColor(ServiceCalendarRouting.routingTint(for: technician, selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars))
                 TextField("Service Address", text: $siteAddress, axis: .vertical)
                     .lineLimit(2...3)
                 Section("Equipment") {
@@ -1706,7 +1750,7 @@ struct EditServiceCallView: View {
         .tint(Color.brandGold)
         .onAppear(perform: loadAccessibleCalendarsIfNeeded)
         .onChange(of: technician) { _, newTechnician in
-            selectedCalendarID = preferredCalendarID(for: newTechnician) ?? "primary"
+            selectedCalendarID = ServiceCalendarRouting.preferredCalendarID(for: newTechnician, calendars: accessibleCalendars)
         }
     }
 
@@ -1716,7 +1760,11 @@ struct EditServiceCallView: View {
         call.customer = customer
         call.assignedTechnician = technician
         call.status = status
-        call.googleCalendarID = selectedCalendarID
+        call.googleCalendarID = ServiceCalendarRouting.validSelection(
+            selectedCalendarID,
+            technician: technician,
+            calendars: accessibleCalendars
+        )
         call.siteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? customer.address : siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         call.equipmentName = equipmentName.nilIfBlank
         call.equipmentModel = equipmentModel.nilIfBlank
@@ -1747,9 +1795,11 @@ struct EditServiceCallView: View {
                 switch result {
                 case .success(let calendars):
                     accessibleCalendars = calendars
-                    if !availableCalendars.contains(where: { $0.id == selectedCalendarID }) {
-                        selectedCalendarID = preferredCalendarID(for: technician) ?? "primary"
-                    }
+                    selectedCalendarID = ServiceCalendarRouting.validSelection(
+                        selectedCalendarID,
+                        technician: technician,
+                        calendars: calendars
+                    )
                 case .failure:
                     break
                 }
@@ -1757,25 +1807,9 @@ struct EditServiceCallView: View {
         }
     }
 
-    private func preferredCalendarID(for technician: Technician?) -> String? {
-        guard let technician else {
-            return "primary"
-        }
-        if let matchedCalendar = accessibleCalendars.first(where: { $0.isWritable && $0.matchesTechnicianEmail(technician.contactInfo) }) {
-            return matchedCalendar.id
-        }
-        return "primary"
-    }
-
     private var availableCalendars: [(id: String, label: String)] {
-        let calendars = accessibleCalendars.sorted { lhs, rhs in
-            lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
-        }
-        var values = calendars.map { (id: $0.id, label: $0.displayLabel) }
-        if !values.contains(where: { $0.id == "primary" }) {
-            values.insert((id: "primary", label: "Primary Calendar"), at: 0)
-        }
-        return values
+        ServiceCalendarRouting.routeOptions(from: accessibleCalendars)
+            .map { (id: $0.id, label: $0.label) }
     }
 }
 
