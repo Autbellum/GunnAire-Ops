@@ -73,6 +73,27 @@ struct GunnAire_OpsTests {
         #expect(bodyString.contains("--\(boundary)--"))
     }
 
+    @Test func quickBooksFaultDecoderHandlesLowercaseAuthorizationFaults() async throws {
+        let data = Data(
+            #"{"fault":{"error":[{"message":"message=ApplicationAuthorizationFailed; errorCode=003100; statusCode=403","detail":null,"code":"3100","element":null}],"type":"SERVICE"}}"#.utf8
+        )
+
+        let envelope = try JSONDecoder().decode(QuickBooksFaultEnvelope.self, from: data)
+
+        #expect(envelope.Fault.Error.first?.code == "3100")
+        #expect(envelope.Fault.Error.first?.Message.contains("ApplicationAuthorizationFailed") == true)
+    }
+
+    @Test func quickBooksAuthorizationFailureIsReconnectAction() async throws {
+        let error = QuickBooksDataAPI.QBError.authorizationFailed(
+            statusCode: 403,
+            detail: "QuickBooks rejected this app session."
+        )
+
+        #expect(error.requiresReconnect == true)
+        #expect(error.localizedDescription.contains("Reconnect QuickBooks") == true)
+    }
+
     @Test func splashVideoLocatorPrefersStoredVideoOverBundledVideo() async throws {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

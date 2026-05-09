@@ -1,6 +1,45 @@
 import SwiftUI
 import SwiftData
 
+private enum QuickBooksSyncState: String {
+    case idle = "Idle"
+    case syncing = "Syncing"
+    case success = "Synced"
+    case warning = "Warning"
+    case failed = "Failed"
+
+    var tint: Color {
+        switch self {
+        case .idle: return .secondary
+        case .syncing: return .blue
+        case .success: return .green
+        case .warning: return .orange
+        case .failed: return .red
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .idle: return "circle"
+        case .syncing: return "arrow.triangle.2.circlepath"
+        case .success: return "checkmark.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .failed: return "xmark.octagon.fill"
+        }
+    }
+}
+
+private struct QuickBooksSyncResourceStatus: Identifiable {
+    let id: String
+    let name: String
+    let lane: String
+    let required: Bool
+    var state: QuickBooksSyncState
+    var detail: String
+    var count: Int?
+    var updatedAt: Date?
+}
+
 struct QuickBooksManagementView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
@@ -39,6 +78,9 @@ struct QuickBooksManagementView: View {
     @State private var isLoading = false
     @State private var statusMessage = "Connect QuickBooks in Settings to start live sync."
     @State private var actionMessage: String?
+    @State private var syncResourceStatuses: [QuickBooksSyncResourceStatus] = Self.defaultSyncResourceStatuses
+    @State private var lastSuccessfulSyncAt: Date? = UserDefaults.standard.object(forKey: "QuickBooksLastSuccessfulSyncAt") as? Date
+    @State private var lastSyncStartedAt: Date?
     @State private var activePaymentInvoiceID: String?
     @State private var paymentToRefund: Payment?
 
@@ -107,6 +149,22 @@ struct QuickBooksManagementView: View {
         return URL(string: "https://app.qbo.intuit.com/app/homepage?companyId=\(realmID)")
     }
 
+    private var syncFailureCount: Int {
+        syncResourceStatuses.filter { $0.state == .failed }.count
+    }
+
+    private var syncWarningCount: Int {
+        syncResourceStatuses.filter { $0.state == .warning }.count
+    }
+
+    private var accountingStatuses: [QuickBooksSyncResourceStatus] {
+        syncResourceStatuses.filter { $0.lane == "Accounting" }
+    }
+
+    private var paymentStatuses: [QuickBooksSyncResourceStatus] {
+        syncResourceStatuses.filter { $0.lane == "Payments" }
+    }
+
     var body: some View {
         ZStack {
             WatermarkBackground()
@@ -144,6 +202,33 @@ struct QuickBooksManagementView: View {
                             )
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Section("Sync Health") {
+                        connectionRow(
+                            title: "Last Successful Sync",
+                            value: lastSuccessfulSyncAt?.formatted(date: .abbreviated, time: .shortened) ?? "Not yet"
+                        )
+                        connectionRow(
+                            title: "Token Expires",
+                            value: QuickBooksDataAPI.shared.tokenExpiration?.formatted(date: .abbreviated, time: .shortened) ?? "No active token"
+                        )
+                        connectionRow(
+                            title: "Sync Issues",
+                            value: "\(syncFailureCount) failed • \(syncWarningCount) warnings"
+                        )
+                        Text(QuickBooksDataAPI.shared.connectionDiagnosticSummary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        if syncResourceStatuses.contains(where: { $0.state != .idle }) {
+                            ForEach(accountingStatuses) { status in
+                                syncResourceRow(status)
+                            }
+                            ForEach(paymentStatuses) { status in
+                                syncResourceRow(status)
+                            }
                         }
                     }
 
@@ -829,166 +914,101 @@ struct QuickBooksManagementView: View {
 
         isLoading = true
         actionMessage = nil
+        lastSyncStartedAt = Date()
+        resetSyncStatusesForRun()
         statusMessage = "Syncing customers, catalog, estimates, invoices, sales receipts, bills, purchases, vendors, payments, payment methods, stored cards, and deposits from QuickBooks..."
 
+        QuickBooksDataAPI.shared.refreshTokensIfNeeded { tokenReady in
+            guard tokenReady else {
+                isLoading = false
+                markAllSyncStatusesFailed("Reconnect QuickBooks. The saved token could not be refreshed.")
+                statusMessage = "QuickBooks reconnect required. The saved session could not be refreshed before sync."
+                return
+            }
+
+            runQuickBooksResourceSync()
+        }
+    }
+
+    private func runQuickBooksResourceSync() {
         let group = DispatchGroup()
         var failures: [String] = []
         var optionalWarnings: [String] = []
 
-        group.enter()
-        liveAPI.fetchCustomers { result in
-            DispatchQueue.main.async {
+        func run<T>(
+            id: String,
+            required: Bool,
+            fetch: (@escaping (Result<[T], Error>) -> Void) -> Void,
+            apply: @escaping ([T]) -> Void
+        ) {
+            group.enter()
+            fetch { result in
+                DispatchQueue.main.async {
+                    defer { group.leave() }
                 switch result {
                 case .success(let records):
-                    customers = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
+                        apply(records)
+                        updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
                 case .failure(let error):
-                    failures.append("Customers: \(error.localizedDescription)")
+                        let message = userFacingQuickBooksMessage(for: error)
+                        updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
+                        let prefix = syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
+                        if required {
+                            failures.append("\(prefix): \(message)")
+                        } else {
+                            optionalWarnings.append("\(prefix): \(message)")
+                        }
+                    }
                 }
-                group.leave()
             }
         }
 
-        group.enter()
-        liveAPI.fetchItems { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    items = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
-                case .failure(let error):
-                    failures.append("Catalog: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
+        run(id: "customers", required: true, fetch: liveAPI.fetchCustomers) { records in
+            customers = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
         }
 
-        group.enter()
-        liveAPI.fetchEstimates { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    estimates = records
-                case .failure(let error):
-                    failures.append("Estimates: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
+        run(id: "catalog", required: true, fetch: liveAPI.fetchItems) { records in
+            items = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
         }
 
-        group.enter()
-        liveAPI.fetchInvoices { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    invoices = records
-                case .failure(let error):
-                    failures.append("Invoices: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
+        run(id: "estimates", required: true, fetch: liveAPI.fetchEstimates) { records in
+            estimates = records
         }
 
-        group.enter()
-        liveAPI.fetchBills { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    bills = records
-                case .failure(let error):
-                    optionalWarnings.append("Bills: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
+        run(id: "invoices", required: true, fetch: liveAPI.fetchInvoices) { records in
+            invoices = records
         }
 
-        group.enter()
-        liveAPI.fetchPurchases { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    purchases = records
-                case .failure(let error):
-                    optionalWarnings.append("Purchases: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
+        run(id: "bills", required: false, fetch: liveAPI.fetchBills) { records in
+            bills = records
         }
 
-        group.enter()
-        liveAPI.fetchVendors { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    vendors = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
-                case .failure(let error):
-                    failures.append("Vendors: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
+        run(id: "purchases", required: false, fetch: liveAPI.fetchPurchases) { records in
+            purchases = records
         }
 
-        group.enter()
-        liveAPI.fetchPayments { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    payments = records
-                case .failure(let error):
-                    failures.append("Payments: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
+        run(id: "vendors", required: true, fetch: liveAPI.fetchVendors) { records in
+            vendors = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
         }
 
-        group.enter()
-        liveAPI.fetchPaymentMethods { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
-                case .failure(let error):
-                    optionalWarnings.append("Payment Methods: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
+        run(id: "payments", required: true, fetch: liveAPI.fetchPayments) { records in
+            payments = records
         }
 
-        group.enter()
-        liveAPI.fetchCards { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    storedCards = records
-                case .failure(let error):
-                    optionalWarnings.append("Stored Cards: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
+        run(id: "paymentMethods", required: false, fetch: liveAPI.fetchPaymentMethods) { records in
+            paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
         }
 
-        group.enter()
-        liveAPI.fetchSalesReceipts { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    salesReceipts = records
-                case .failure(let error):
-                    optionalWarnings.append("Sales Receipts: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
+        run(id: "storedCards", required: false, fetch: liveAPI.fetchCards) { records in
+            storedCards = records
         }
 
-        group.enter()
-        liveAPI.fetchDeposits { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    deposits = records
-                case .failure(let error):
-                    optionalWarnings.append("Deposits: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
+        run(id: "salesReceipts", required: false, fetch: liveAPI.fetchSalesReceipts) { records in
+            salesReceipts = records
+        }
+
+        run(id: "deposits", required: false, fetch: liveAPI.fetchDeposits) { records in
+            deposits = records
         }
 
         group.notify(queue: .main) {
@@ -1007,12 +1027,15 @@ struct QuickBooksManagementView: View {
                 failures.append("Local app sync: \(error.localizedDescription)")
             }
             if failures.isEmpty {
+                let now = Date()
+                lastSuccessfulSyncAt = now
+                UserDefaults.standard.set(now, forKey: "QuickBooksLastSuccessfulSyncAt")
                 statusMessage = "Sync complete. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, \(storedCards.count) stored cards, and \(deposits.count) deposits."
                 if !optionalWarnings.isEmpty {
                     statusMessage += "\nOptional sections skipped:\n\(optionalWarnings.joined(separator: "\n"))"
                 }
             } else {
-                statusMessage = (failures + optionalWarnings).joined(separator: "\n")
+                statusMessage = "Sync needs attention.\n" + (failures + optionalWarnings).joined(separator: "\n")
             }
         }
     }
@@ -1592,6 +1615,100 @@ struct QuickBooksManagementView: View {
         Text(text)
             .foregroundColor(.secondary)
             .italic()
+    }
+
+    private static var defaultSyncResourceStatuses: [QuickBooksSyncResourceStatus] {
+        [
+            QuickBooksSyncResourceStatus(id: "customers", name: "Customers", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "catalog", name: "Catalog", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "estimates", name: "Estimates", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "invoices", name: "Invoices", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "vendors", name: "Vendors", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "payments", name: "Payments", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "salesReceipts", name: "Sales Receipts", lane: "Accounting", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "deposits", name: "Deposits", lane: "Accounting", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "bills", name: "Bills", lane: "Accounting", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "purchases", name: "Purchases", lane: "Accounting", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "paymentMethods", name: "Payment Methods", lane: "Payments", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "storedCards", name: "Stored Cards", lane: "Payments", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil)
+        ]
+    }
+
+    private func resetSyncStatusesForRun() {
+        let now = Date()
+        syncResourceStatuses = Self.defaultSyncResourceStatuses.map { status in
+            QuickBooksSyncResourceStatus(
+                id: status.id,
+                name: status.name,
+                lane: status.lane,
+                required: status.required,
+                state: .syncing,
+                detail: "Waiting for QuickBooks...",
+                count: nil,
+                updatedAt: now
+            )
+        }
+    }
+
+    private func markAllSyncStatusesFailed(_ detail: String) {
+        let now = Date()
+        syncResourceStatuses = syncResourceStatuses.map { status in
+            QuickBooksSyncResourceStatus(
+                id: status.id,
+                name: status.name,
+                lane: status.lane,
+                required: status.required,
+                state: status.required ? .failed : .warning,
+                detail: detail,
+                count: nil,
+                updatedAt: now
+            )
+        }
+    }
+
+    private func updateSyncStatus(id: String, state: QuickBooksSyncState, detail: String, count: Int?) {
+        guard let index = syncResourceStatuses.firstIndex(where: { $0.id == id }) else { return }
+        syncResourceStatuses[index].state = state
+        syncResourceStatuses[index].detail = detail
+        syncResourceStatuses[index].count = count
+        syncResourceStatuses[index].updatedAt = Date()
+    }
+
+    private func userFacingQuickBooksMessage(for error: Error) -> String {
+        if let qbError = error as? QuickBooksDataAPI.QBError {
+            return qbError.localizedDescription
+        }
+        return error.localizedDescription
+    }
+
+    @ViewBuilder
+    private func syncResourceRow(_ status: QuickBooksSyncResourceStatus) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: status.state.icon)
+                .foregroundStyle(status.state.tint)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(status.name)
+                        .font(.subheadline)
+                    if !status.required {
+                        Text("Optional")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if let count = status.count {
+                        Text("\(count)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(status.detail)
+                    .font(.caption)
+                    .foregroundStyle(status.state == .failed ? .red : .secondary)
+                    .lineLimit(3)
+            }
+        }
     }
 
     @ViewBuilder
