@@ -150,7 +150,7 @@
          </EnvironmentVariable>
          <EnvironmentVariable
             key = "QB_REDIRECT_URI"
-            value = "https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl"
+            value = "https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback"
             isEnabled = "YES">
          </EnvironmentVariable>
       </EnvironmentVariables>
