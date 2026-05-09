@@ -8,6 +8,7 @@
 import Testing
 @testable import GunnAire_Ops
 import Foundation
+import SwiftData
 
 struct GunnAire_OpsTests {
 
@@ -92,6 +93,24 @@ struct GunnAire_OpsTests {
 
         #expect(error.requiresReconnect == true)
         #expect(error.localizedDescription.contains("Reconnect QuickBooks") == true)
+    }
+
+    @MainActor
+    @Test func appSchemaIncludesVendorForQuickBooksSync() async throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let vendor = Vendor(quickBooksID: "QB-VENDOR-1", name: "HVAC Supply")
+
+        context.insert(vendor)
+        try context.save()
+
+        let vendors = try context.fetch(FetchDescriptor<Vendor>())
+        #expect(vendors.count == 1)
+        #expect(vendors.first?.quickBooksID == "QB-VENDOR-1")
     }
 
     @Test func technicianCalendarAssessmentDetectsWritableCalendar() async throws {

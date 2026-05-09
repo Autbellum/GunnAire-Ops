@@ -37,18 +37,7 @@ struct GunnAire_OpsApp: App {
     }
 
     private static func buildStartupState() -> StartupState {
-        let schema = Schema([
-            Item.self,
-            ServiceCall.self,
-            Customer.self,
-            Technician.self,
-            RecurringMaintenanceContract.self,
-            Invoice.self,
-            Estimate.self,
-            Payment.self,
-            TimeEntry.self,
-            AppUser.self,
-        ])
+        let schema = GunnAireModelSchema.schema
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
         do {

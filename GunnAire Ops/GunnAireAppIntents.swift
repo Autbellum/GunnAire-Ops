@@ -206,18 +206,7 @@ enum GunnAireAppIntentRouter {
 }
 
 private enum GunnAireIntentStore {
-    static let schema = Schema([
-        Item.self,
-        ServiceCall.self,
-        Customer.self,
-        Technician.self,
-        RecurringMaintenanceContract.self,
-        Invoice.self,
-        Estimate.self,
-        Payment.self,
-        TimeEntry.self,
-        AppUser.self,
-    ])
+    static let schema = GunnAireModelSchema.schema
 
     static let container: ModelContainer? = try? ModelContainer(
         for: schema,
