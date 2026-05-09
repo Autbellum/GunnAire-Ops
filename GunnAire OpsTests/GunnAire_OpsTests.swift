@@ -94,6 +94,44 @@ struct GunnAire_OpsTests {
         #expect(error.localizedDescription.contains("Reconnect QuickBooks") == true)
     }
 
+    @Test func technicianCalendarAssessmentDetectsWritableCalendar() async throws {
+        let calendars = [
+            GoogleCalendar(id: "tech@example.com", summary: "Tech Schedule", timeZone: "America/New_York", accessRole: "writer")
+        ]
+
+        let assessment = TechnicianCalendarAccessAssessment.evaluate(
+            calendarID: "TECH@example.com ",
+            availableCalendars: calendars
+        )
+
+        #expect(assessment.state == .writable)
+        #expect(assessment.calendarLabel.contains("Tech Schedule"))
+    }
+
+    @Test func technicianCalendarAssessmentDetectsReadOnlyCalendar() async throws {
+        let calendars = [
+            GoogleCalendar(id: "tech@example.com", summary: "Tech Schedule", timeZone: "America/New_York", accessRole: "reader")
+        ]
+
+        let assessment = TechnicianCalendarAccessAssessment.evaluate(
+            calendarID: "tech@example.com",
+            availableCalendars: calendars
+        )
+
+        #expect(assessment.state == .readOnly)
+        #expect(assessment.detail.contains("cannot write"))
+    }
+
+    @Test func technicianCalendarAssessmentUsesPrimaryAsWritableFallback() async throws {
+        let assessment = TechnicianCalendarAccessAssessment.evaluate(
+            calendarID: "primary",
+            availableCalendars: []
+        )
+
+        #expect(assessment.state == .writable)
+        #expect(assessment.calendarLabel == "Primary Calendar")
+    }
+
     @Test func splashVideoLocatorPrefersStoredVideoOverBundledVideo() async throws {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

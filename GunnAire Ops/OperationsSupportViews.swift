@@ -271,6 +271,91 @@ struct CustomersView: View {
     }
 }
 
+enum TechnicianCalendarAccessState: String {
+    case writable
+    case readOnly
+    case notShared
+    case noCalendar
+
+    var label: String {
+        switch self {
+        case .writable:
+            return "Writable"
+        case .readOnly:
+            return "Read-only"
+        case .notShared:
+            return "Not shared"
+        case .noCalendar:
+            return "No calendar"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .writable:
+            return "checkmark.circle.fill"
+        case .readOnly:
+            return "lock.circle"
+        case .notShared:
+            return "exclamationmark.triangle.fill"
+        case .noCalendar:
+            return "calendar.badge.exclamationmark"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .writable:
+            return .green
+        case .readOnly:
+            return .orange
+        case .notShared:
+            return .red
+        case .noCalendar:
+            return .secondary
+        }
+    }
+}
+
+struct TechnicianCalendarAccessAssessment {
+    let state: TechnicianCalendarAccessState
+    let calendarLabel: String
+    let detail: String
+
+    static func evaluate(calendarID: String?, availableCalendars: [GoogleCalendar]) -> TechnicianCalendarAccessAssessment {
+        let normalizedCalendarID = AppAccess.normalizedEmail(calendarID)
+        guard !normalizedCalendarID.isEmpty else {
+            return TechnicianCalendarAccessAssessment(
+                state: .noCalendar,
+                calendarLabel: "Unassigned",
+                detail: "Assign a writable Google calendar before scheduling."
+            )
+        }
+
+        if normalizedCalendarID == "primary" {
+            return TechnicianCalendarAccessAssessment(
+                state: .writable,
+                calendarLabel: "Primary Calendar",
+                detail: "Jobs can be exported to the signed-in user's primary calendar."
+            )
+        }
+
+        if let calendar = availableCalendars.first(where: { $0.matchesTechnicianEmail(normalizedCalendarID) || $0.normalizedID == normalizedCalendarID }) {
+            return TechnicianCalendarAccessAssessment(
+                state: calendar.isWritable ? .writable : .readOnly,
+                calendarLabel: calendar.displayLabel,
+                detail: calendar.isWritable ? "Jobs can be created and updated on this calendar." : "The connected Google account can view this calendar but cannot write events."
+            )
+        }
+
+        return TechnicianCalendarAccessAssessment(
+            state: .notShared,
+            calendarLabel: normalizedCalendarID,
+            detail: "Share this calendar with write access or assign a writable calendar below."
+        )
+    }
+}
+
 struct SyncIntegrationsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
@@ -330,6 +415,25 @@ struct SyncIntegrationsView: View {
 
     private var writableCalendarIDs: Set<String> {
         Set(availableCalendars.filter(\.isWritable).map(\.normalizedID) + ["primary"])
+    }
+
+    private var writableCalendars: [GoogleCalendar] {
+        availableCalendars
+            .filter(\.isWritable)
+            .sorted { $0.displayLabel.localizedCaseInsensitiveCompare($1.displayLabel) == .orderedAscending }
+    }
+
+    private var readOnlyCalendars: [GoogleCalendar] {
+        availableCalendars
+            .filter { !$0.isWritable }
+            .sorted { $0.displayLabel.localizedCaseInsensitiveCompare($1.displayLabel) == .orderedAscending }
+    }
+
+    private var calendarControlSummary: String {
+        guard googleAuth.isAuthenticated else { return "Google is disconnected." }
+        if loadingCalendars { return "Checking Google Calendar permissions..." }
+        if availableCalendars.isEmpty { return "Refresh to load writable and read-only calendars." }
+        return "\(writableCalendarIDs.count) writable, \(readOnlyCalendars.count) read-only"
     }
 
     var body: some View {
@@ -423,11 +527,23 @@ struct SyncIntegrationsView: View {
                     }
                 }
 
-                Section("Google Calendar Diagnostics") {
-                    Button(loadingCalendars ? "Loading..." : "Refresh Calendar Access") {
-                        refreshCalendarAccess()
+                Section("Google Calendar Control") {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Calendar Access")
+                                .font(.subheadline.weight(.semibold))
+                            Text(calendarControlSummary)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Button(loadingCalendars ? "Loading..." : "Refresh") {
+                            refreshCalendarAccess()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(!googleAuth.isAuthenticated || loadingCalendars)
                     }
-                    .disabled(!googleAuth.isAuthenticated || loadingCalendars)
 
                     if !googleAuth.isAuthenticated {
                         Text("Connect Google in Settings before checking calendar access.")
@@ -439,35 +555,69 @@ struct SyncIntegrationsView: View {
                             .foregroundColor(.secondary)
                     }
 
-                    if !availableCalendars.isEmpty {
+                    if !technicians.isEmpty {
                         ForEach(technicians) { technician in
-                            Button {
-                                selectedTechnician = technician
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(technician.name)
-                                        Text(technician.contactInfo ?? "No calendar email")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                        Text("\(assignedJobCount(for: technician)) assigned jobs")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                    Label {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(technician.name)
+                                                .font(.subheadline.weight(.semibold))
+                                            Text("\(assignedJobCount(for: technician)) assigned jobs")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    } icon: {
+                                        Image(systemName: calendarAccessAssessment(for: technician).state.systemImage)
+                                            .foregroundColor(calendarAccessAssessment(for: technician).state.tint)
                                     }
                                     Spacer()
-                                    Text(calendarAccessLabel(for: technician))
-                                        .foregroundColor(calendarAccessColor(for: technician))
-                                        .font(.caption)
+                                    Button("Edit") {
+                                        selectedTechnician = technician
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+
+                                LabeledContent("Status") {
+                                    Text(calendarAccessAssessment(for: technician).state.label)
+                                        .foregroundColor(calendarAccessAssessment(for: technician).state.tint)
+                                }
+
+                                Text(calendarAccessAssessment(for: technician).detail)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+
+                                Picker("Assigned Calendar", selection: calendarSelectionBinding(for: technician)) {
+                                    Text("Unassigned").tag("")
+                                    Text("Primary Calendar").tag("primary")
+                                    ForEach(writableCalendars) { calendar in
+                                        Text(calendar.displayLabel).tag(calendar.normalizedID)
+                                    }
+                                }
+                                .disabled(!googleAuth.isAuthenticated || loadingCalendars)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+
+                    if !readOnlyCalendars.isEmpty {
+                        DisclosureGroup("Read-only calendars") {
+                            ForEach(readOnlyCalendars) { calendar in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(calendar.displayLabel)
+                                    Text("Ask the calendar owner to grant make changes access before assigning jobs here.")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
                                 }
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
 
                 Section("Technician Directory") {
                     TextField("Technician name", text: $newTechnicianName)
-                    TextField("Calendar email", text: $newTechnicianCalendarEmail)
+                    TextField("Calendar ID or email", text: $newTechnicianCalendarEmail)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.emailAddress)
 
@@ -641,30 +791,24 @@ struct SyncIntegrationsView: View {
         }
     }
 
-    private func calendarAccessLabel(for technician: Technician) -> String {
-        guard let email = technician.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty else {
-            return "No email"
-        }
-        if availableCalendars.contains(where: { $0.isWritable && $0.matchesTechnicianEmail(email) }) {
-            return "Writable"
-        }
-        if availableCalendars.contains(where: { $0.matchesTechnicianEmail(email) }) {
-            return "Read-only"
-        }
-        return "Not shared"
+    private func calendarSelectionBinding(for technician: Technician) -> Binding<String> {
+        Binding(
+            get: {
+                let value = AppAccess.normalizedEmail(technician.contactInfo)
+                return value.isEmpty ? "" : value
+            },
+            set: { newValue in
+                technician.contactInfo = newValue.isEmpty ? nil : newValue
+                technicianMessage = newValue.isEmpty ? "Calendar assignment removed for \(technician.name)." : "Calendar assignment updated for \(technician.name)."
+            }
+        )
     }
 
-    private func calendarAccessColor(for technician: Technician) -> Color {
-        switch calendarAccessLabel(for: technician) {
-        case "Writable":
-            return .green
-        case "Read-only":
-            return .orange
-        case "No email":
-            return .secondary
-        default:
-            return .red
-        }
+    private func calendarAccessAssessment(for technician: Technician) -> TechnicianCalendarAccessAssessment {
+        TechnicianCalendarAccessAssessment.evaluate(
+            calendarID: technician.contactInfo,
+            availableCalendars: availableCalendars
+        )
     }
 
     private func assignedJobCount(for technician: Technician) -> Int {
@@ -1261,7 +1405,7 @@ private struct TechnicianEditorView: View {
         NavigationStack {
             Form {
                 TextField("Technician name", text: $name)
-                TextField("Calendar email", text: $calendarEmail)
+                TextField("Calendar ID or email", text: $calendarEmail)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.emailAddress)
             }
