@@ -271,17 +271,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - QuickBooks stub types moved to QuickBooksStub.swift
-
 // QuickBooksManagementView moved to QuickBooksManagementView.swift
-
-// NewInvoiceView moved to NewInvoiceView.swift
-
-// NewBillView moved to NewBillView.swift
-
-// NewVendorView moved to NewVendorView.swift
-
-// NewPaymentView moved to NewPaymentView.swift
 
 // ScheduleView moved to ScheduleView.swift
 
@@ -289,7 +279,7 @@ struct ContentView: View {
 
 // PaymentsAndReceiptsView moved to PaymentsAndReceiptsView.swift
 
-// MARK: - Remaining Views unchanged except for minor clarifications and comments
+// MARK: - Remaining Views
 
 // ... rest of the file remains unchanged ...
 
@@ -1825,10 +1815,6 @@ struct EditServiceCallView: View {
             .map { (id: $0.id, label: $0.label) }
     }
 }
-
-// MARK: - Placeholder Views for Sidebar Sections with Comments and Example Actions
-
-// ... (GoogleCalendarView, CustomersView, AddCustomerView, InvoicesAndEstimatesView, SyncAndIntegrationsView, OnsiteDocumentationView, SettingsView remain unchanged) ...
 
 // MARK: - OAuth Authentication Extensions for ContentView
 
