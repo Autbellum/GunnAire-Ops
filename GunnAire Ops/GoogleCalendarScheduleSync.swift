@@ -250,13 +250,16 @@ enum GoogleCalendarScheduleSync {
             }
         }
 
+        let currentCalendarID = call.googleCalendarID ?? targetCalendarID
+        let canUpdateExistingEvent = contains(currentCalendarID, in: writableCalendarIDs) &&
+            normalized(currentCalendarID) == normalized(targetCalendarID)
+
         if let eventID = call.googleEventID,
            !eventID.isEmpty,
-           writableCalendarIDs.contains((call.googleCalendarID ?? targetCalendarID).lowercased()) ||
-            writableCalendarIDs.contains(call.googleCalendarID ?? targetCalendarID) {
-            auth.updateCalendarEvent(calendarID: call.googleCalendarID ?? targetCalendarID, eventID: eventID, event: event, completion: finish)
+           canUpdateExistingEvent {
+            auth.updateCalendarEvent(calendarID: currentCalendarID, eventID: eventID, event: event, completion: finish)
         } else {
-            if call.googleCalendarID != nil, call.googleCalendarID != targetCalendarID {
+            if call.googleCalendarID != nil, normalized(call.googleCalendarID ?? "") != normalized(targetCalendarID) {
                 call.googleEventID = nil
             }
             auth.createCalendarEvent(calendarID: targetCalendarID, event: event, completion: finish)
@@ -350,15 +353,11 @@ enum GoogleCalendarScheduleSync {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    private static func preferredCalendarID(
+    static func preferredCalendarID(
         for call: ServiceCall,
         availableCalendarIDs: Set<String>,
         writableCalendarIDs: Set<String>
     ) -> String? {
-        if let existingCalendarID = call.googleCalendarID,
-           contains(existingCalendarID, in: writableCalendarIDs) {
-            return existingCalendarID
-        }
         if let technicianCalendarID = call.assignedTechnician?.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines),
            !technicianCalendarID.isEmpty {
             if contains(technicianCalendarID, in: writableCalendarIDs) {
@@ -367,6 +366,10 @@ enum GoogleCalendarScheduleSync {
             if contains(technicianCalendarID.lowercased(), in: writableCalendarIDs) {
                 return technicianCalendarID.lowercased()
             }
+        }
+        if let existingCalendarID = call.googleCalendarID,
+           contains(existingCalendarID, in: writableCalendarIDs) {
+            return existingCalendarID
         }
         if contains("primary", in: writableCalendarIDs) {
             return "primary"

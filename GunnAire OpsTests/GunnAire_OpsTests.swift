@@ -178,6 +178,28 @@ struct GunnAire_OpsTests {
         #expect(ServiceCalendarRouting.hasStaleAssignedCalendarRoute(calendarID: nil, technician: nil) == false)
     }
 
+    @MainActor
+    @Test func googleCalendarExportPrefersAssignedTechnicianCalendar() async throws {
+        let customer = Customer(name: "Route Customer")
+        let technician = Technician(name: "Route Tech", contactInfo: "route.tech@example.com")
+        let call = ServiceCall(
+            googleCalendarID: "previous.tech@example.com",
+            googleEventID: "event-123",
+            type: .service,
+            scheduledDate: Date(),
+            assignedTechnician: technician,
+            customer: customer
+        )
+
+        let selected = GoogleCalendarScheduleSync.preferredCalendarID(
+            for: call,
+            availableCalendarIDs: ["previous.tech@example.com", "route.tech@example.com", "primary"],
+            writableCalendarIDs: ["previous.tech@example.com", "route.tech@example.com", "primary"]
+        )
+
+        #expect(selected == "route.tech@example.com")
+    }
+
     @Test func splashVideoLocatorPrefersStoredVideoOverBundledVideo() async throws {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
