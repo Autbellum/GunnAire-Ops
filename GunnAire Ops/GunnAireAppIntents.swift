@@ -3,6 +3,7 @@ import Foundation
 import SwiftData
 
 enum GunnAireAppRoute: String, CaseIterable {
+    case commandCenter = "commandCenter"
     case timeClock = "timeClock"
     case schedule = "scheduleAndJobs"
     case customers = "customers"
@@ -18,6 +19,8 @@ enum GunnAireAppRoute: String, CaseIterable {
 
     var sidebarItem: SidebarItem {
         switch self {
+        case .commandCenter:
+            return .commandCenter
         case .timeClock:
             return .timeClock
         case .schedule:
@@ -47,6 +50,8 @@ enum GunnAireAppRoute: String, CaseIterable {
 
     var shortTitle: LocalizedStringResource {
         switch self {
+        case .commandCenter:
+            return "Command Center"
         case .timeClock:
             return "Clock In/Out"
         case .schedule:
@@ -76,6 +81,8 @@ enum GunnAireAppRoute: String, CaseIterable {
 
     var systemImageName: String {
         switch self {
+        case .commandCenter:
+            return "rectangle.3.group"
         case .timeClock:
             return "clock"
         case .schedule:
@@ -535,6 +542,17 @@ struct OpenScheduleIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         GunnAireAppIntentRouter.store(.schedule)
         return .result(dialog: "Opening the schedule dashboard.")
+    }
+}
+
+struct OpenCommandCenterIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Command Center"
+    static let description = IntentDescription("Open GunnAire Ops to the command center.")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        GunnAireAppIntentRouter.store(.commandCenter)
+        return .result(dialog: "Opening the command center.")
     }
 }
 

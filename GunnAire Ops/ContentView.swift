@@ -21,7 +21,7 @@ struct ContentView: View {
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
-    @State private var selectedSidebarItem: SidebarItem? = .timeClock
+    @State private var selectedSidebarItem: SidebarItem? = .commandCenter
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     
     @State private var showingSettings = false
@@ -62,7 +62,7 @@ struct ContentView: View {
     }
 
     private var operationsItems: [SidebarItem] {
-        [.timeClock, .scheduleAndJobs, .customers, .onsiteDocumentation]
+        [.commandCenter, .timeClock, .scheduleAndJobs, .customers, .onsiteDocumentation]
             .filter { visibleSidebarItems.contains($0) }
     }
 
@@ -140,6 +140,8 @@ struct ContentView: View {
                 Group {
                     if let selectedSidebarItem, visibleSidebarItems.contains(selectedSidebarItem) {
                         switch selectedSidebarItem {
+                        case .commandCenter:
+                            OperationsDashboardView()
                         case .timeClock:
                             TimeClockView()
                         case .scheduleAndJobs:
@@ -182,7 +184,7 @@ struct ContentView: View {
             ensurePrimaryAdminExists()
             refreshGoogleAccountIdentityIfNeeded()
             if let selectedSidebarItem, !visibleSidebarItems.contains(selectedSidebarItem) {
-                self.selectedSidebarItem = .timeClock
+                self.selectedSidebarItem = .commandCenter
             }
             applyPendingAppRouteIfNeeded()
         }
@@ -238,6 +240,7 @@ struct ContentView: View {
     
     private func iconName(for item: SidebarItem) -> String {
         switch item {
+        case .commandCenter: return "rectangle.3.group"
         case .timeClock: return "clock"
         case .scheduleAndJobs: return "calendar"
         case .customers: return "person.3"
@@ -263,7 +266,7 @@ struct ContentView: View {
         if visibleSidebarItems.contains(targetItem) {
             selectedSidebarItem = targetItem
         } else {
-            selectedSidebarItem = .timeClock
+            selectedSidebarItem = .commandCenter
         }
     }
 }
@@ -294,6 +297,7 @@ struct ContentView: View {
 
 struct ServiceCallDetailView: View {
     @Environment(\.openURL) private var openURL
+    @Environment(\.modelContext) private var modelContext
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -1298,8 +1302,9 @@ struct AddServiceCallView: View {
                             .lineLimit(2...3)
 
                         Button("Save New Customer") {
+                            let trimmedName = newCustomerName.trimmingCharacters(in: .whitespacesAndNewlines)
                             let createdCustomer = Customer(
-                                name: newCustomerName.trimmingCharacters(in: .whitespacesAndNewlines),
+                                name: trimmedName,
                                 phone: newCustomerPhone.nilIfBlank,
                                 email: newCustomerEmail.nilIfBlank,
                                 address: newCustomerAddress.nilIfBlank
@@ -1422,19 +1427,21 @@ struct AddServiceCallView: View {
     
     private func addCall() {
         guard let customer else { return }
+        let trimmedSiteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedSiteAddress = trimmedSiteAddress.isEmpty ? customer.address : trimmedSiteAddress
         let call = ServiceCall(
             googleCalendarID: selectedCalendarID,
-            siteAddress: siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? customer.address : siteAddress.trimmingCharacters(in: .whitespacesAndNewlines),
+            siteAddress: resolvedSiteAddress,
+            equipmentName: equipmentName.nilIfBlank,
+            equipmentModel: equipmentModel.nilIfBlank,
+            equipmentSerialNumber: equipmentSerialNumber.nilIfBlank,
+            equipmentWarrantyExpiration: includeWarrantyExpiration ? equipmentWarrantyExpiration : nil,
             type: callType,
             scheduledDate: scheduledTime,
             duration: duration,
             assignedTechnician: technician,
             customer: customer,
             status: .scheduled,
-            equipmentName: equipmentName.nilIfBlank,
-            equipmentModel: equipmentModel.nilIfBlank,
-            equipmentSerialNumber: equipmentSerialNumber.nilIfBlank,
-            equipmentWarrantyExpiration: includeWarrantyExpiration ? equipmentWarrantyExpiration : nil,
             notes: notes.nilIfBlank,
             findingsSummary: findingsSummary.nilIfBlank,
             recommendedWorkSummary: recommendedWorkSummary.nilIfBlank,
@@ -2148,6 +2155,13 @@ class ContentViewPresentationContextProvider: NSObject, ASWebAuthenticationPrese
         Self.logger.fault("No UIWindowScene available for auth anchor; falling back to an emergency presentation anchor.")
         let emergencyAnchor = Self.makeEmergencyAnchor()
         return Self.remember(emergencyAnchor, reason: "Creating emergency auth anchor without a scene")
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

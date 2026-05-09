@@ -2,6 +2,7 @@ import Foundation
 
 // Sidebar menu items for the main NavigationSplitView
 enum SidebarItem: String, CaseIterable, Identifiable {
+    case commandCenter = "Command Center"
     case timeClock = "Clock In/Out"
     case scheduleAndJobs = "Schedule & Jobs"
     case customers = "Customers"
