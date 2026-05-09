@@ -626,14 +626,28 @@ private extension ReceiptsAndBillsView {
         isSyncing = true
         syncMessage = nil
 
+        let referenceID = attachEntityID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let entityType = referenceID.isEmpty ? nil : selectedAttachEntityType
+
         guard QuickBooksDataAPI.shared.isAuthenticated else {
-            // Keep behavior deterministic in local/demo mode when auth has not been completed.
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(1))
-                applyDocumentationProgress(forUploadedFileCount: selectedFiles.count)
-                isSyncing = false
-                syncMessage = "QuickBooks is not connected. \(selectedFiles.count) file(s) prepared locally."
+            let queuedRecords = selectedFiles.map { url in
+                PendingUploadRecord(
+                    id: UUID(),
+                    filePath: url.path,
+                    displayName: url.lastPathComponent,
+                    entityTypeRaw: entityType?.rawValue,
+                    entityID: referenceID.isEmpty ? nil : referenceID,
+                    createdAt: Date(),
+                    retryCount: 0,
+                    lastAttemptAt: nil,
+                    nextRetryAt: Date(),
+                    isTerminalFailure: false,
+                    lastError: "QuickBooks was disconnected when this file was selected."
+                )
             }
+            appendPendingUploads(queuedRecords)
+            isSyncing = false
+            syncMessage = "QuickBooks is not connected. Queued \(queuedRecords.count) file(s) for live upload after reconnect."
             return
         }
 
@@ -645,8 +659,6 @@ private extension ReceiptsAndBillsView {
 
         for url in selectedFiles {
             group.enter()
-            let referenceID = attachEntityID.trimmingCharacters(in: .whitespacesAndNewlines)
-            let entityType = referenceID.isEmpty ? nil : selectedAttachEntityType
             QuickBooksDataAPI.shared.uploadDocument(
                 fileURL: url,
                 note: nil,
