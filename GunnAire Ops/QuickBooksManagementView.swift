@@ -83,6 +83,7 @@ struct QuickBooksManagementView: View {
     @State private var lastSyncStartedAt: Date?
     @State private var activePaymentInvoiceID: String?
     @State private var paymentToRefund: Payment?
+    @State private var quickBooksReconnectRequired = false
 
     private var isAuthenticated: Bool {
         QuickBooksDataAPI.shared.isAuthenticated
@@ -221,6 +222,15 @@ struct QuickBooksManagementView: View {
                         Text(QuickBooksDataAPI.shared.connectionDiagnosticSummary)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                        if quickBooksReconnectRequired {
+                            Label(
+                                "Reconnect QuickBooks in Settings with a company admin, then retry sync.",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                        }
 
                         if syncResourceStatuses.contains(where: { $0.state != .idle }) {
                             ForEach(accountingStatuses) { status in
@@ -914,6 +924,7 @@ struct QuickBooksManagementView: View {
 
         isLoading = true
         actionMessage = nil
+        quickBooksReconnectRequired = false
         lastSyncStartedAt = Date()
         resetSyncStatusesForRun()
         statusMessage = "Syncing customers, catalog, estimates, invoices, sales receipts, bills, purchases, vendors, payments, payment methods, stored cards, and deposits from QuickBooks..."
@@ -921,6 +932,7 @@ struct QuickBooksManagementView: View {
         QuickBooksDataAPI.shared.refreshTokensIfNeeded { tokenReady in
             guard tokenReady else {
                 isLoading = false
+                quickBooksReconnectRequired = true
                 markAllSyncStatusesFailed("Reconnect QuickBooks. The saved token could not be refreshed.")
                 statusMessage = "QuickBooks reconnect required. The saved session could not be refreshed before sync."
                 return
@@ -950,6 +962,10 @@ struct QuickBooksManagementView: View {
                         apply(records)
                         updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
                 case .failure(let error):
+                        if let qbError = error as? QuickBooksDataAPI.QBError,
+                           qbError.requiresReconnect {
+                            quickBooksReconnectRequired = true
+                        }
                         let message = userFacingQuickBooksMessage(for: error)
                         updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
                         let prefix = syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
@@ -1034,6 +1050,9 @@ struct QuickBooksManagementView: View {
                 if !optionalWarnings.isEmpty {
                     statusMessage += "\nOptional sections skipped:\n\(optionalWarnings.joined(separator: "\n"))"
                 }
+            } else if quickBooksReconnectRequired {
+                statusMessage = "QuickBooks authorization needs reconnect. Open Settings, disconnect and reconnect QuickBooks with a company admin, confirm this company authorized the app, then retry sync."
+                actionMessage = "Required accounting resources could not sync until QuickBooks authorization is restored."
             } else {
                 statusMessage = "Sync needs attention.\n" + (failures + optionalWarnings).joined(separator: "\n")
             }
