@@ -160,6 +160,15 @@ struct GunnAire_OpsTests {
         #expect(selected == "primary")
     }
 
+    @Test func serviceCalendarRoutingUsesTechnicianAssignmentTarget() async throws {
+        let technician = Technician(name: "Tech", contactInfo: " Tech.Calendar@example.com ")
+
+        let selected = ServiceCalendarRouting.assignedCalendarID(for: technician)
+
+        #expect(selected == "tech.calendar@example.com")
+        #expect(ServiceCalendarRouting.assignedCalendarID(for: nil) == "primary")
+    }
+
     @Test func splashVideoLocatorPrefersStoredVideoOverBundledVideo() async throws {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

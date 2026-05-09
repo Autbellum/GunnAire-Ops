@@ -1125,10 +1125,14 @@ GunnAire
 
     private func assign(_ call: ServiceCall, to technician: Technician) {
         call.assignedTechnician = technician
+        call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
+        call.googleEventID = nil
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician, reschedulingTo newStart: Date) {
         call.assignedTechnician = technician
+        call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
+        call.googleEventID = nil
         call.scheduledDate = newStart
     }
 

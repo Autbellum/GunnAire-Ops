@@ -1367,12 +1367,14 @@ struct OperationsDashboardView: View {
         let originalStart = call.scheduledDate
         let nextStart = nextAvailableStart(for: technician, proposedStart: call.scheduledDate, duration: call.duration)
         call.assignedTechnician = technician
+        call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
+        call.googleEventID = nil
 
         if let nextStart, nextStart > originalStart {
             call.scheduledDate = nextStart
-            dispatchMessage = "\(call.customer.name) assigned to \(technician.name) and moved to \(nextStart.formatted(date: .abbreviated, time: .shortened)). Sync Google Calendar from Schedule to publish the change."
+            dispatchMessage = "\(call.customer.name) assigned to \(technician.name) and moved to \(nextStart.formatted(date: .abbreviated, time: .shortened)). Calendar route reset for the new technician; sync Google Calendar from Schedule to publish the change."
         } else {
-            dispatchMessage = "\(call.customer.name) assigned to \(technician.name). Sync Google Calendar from Schedule to publish the assignment."
+            dispatchMessage = "\(call.customer.name) assigned to \(technician.name). Calendar route reset for the new technician; sync Google Calendar from Schedule to publish the assignment."
         }
     }
 
