@@ -1325,6 +1325,13 @@ struct OperationsDashboardView: View {
         if googleAuth.isAuthenticated && call.googleEventID == nil {
             reasons.append("Calendar not linked")
         }
+        if call.assignedTechnician != nil,
+           ServiceCalendarRouting.hasStaleAssignedCalendarRoute(
+            calendarID: call.googleCalendarID,
+            technician: call.assignedTechnician
+           ) {
+            reasons.append("Calendar route")
+        }
         if call.linkedInvoiceID == nil &&
             (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
             reasons.append("Ready to bill")

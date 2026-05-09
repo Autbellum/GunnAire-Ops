@@ -169,6 +169,15 @@ struct GunnAire_OpsTests {
         #expect(ServiceCalendarRouting.assignedCalendarID(for: nil) == "primary")
     }
 
+    @Test func serviceCalendarRoutingDetectsStaleAssignedRoute() async throws {
+        let technician = Technician(name: "Tech", contactInfo: "tech.calendar@example.com")
+
+        #expect(ServiceCalendarRouting.hasStaleAssignedCalendarRoute(calendarID: nil, technician: technician))
+        #expect(ServiceCalendarRouting.hasStaleAssignedCalendarRoute(calendarID: "old@example.com", technician: technician))
+        #expect(ServiceCalendarRouting.hasStaleAssignedCalendarRoute(calendarID: " TECH.CALENDAR@example.com ", technician: technician) == false)
+        #expect(ServiceCalendarRouting.hasStaleAssignedCalendarRoute(calendarID: nil, technician: nil) == false)
+    }
+
     @Test func splashVideoLocatorPrefersStoredVideoOverBundledVideo() async throws {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

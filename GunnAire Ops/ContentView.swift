@@ -1144,6 +1144,13 @@ enum ServiceCalendarRouting {
         return calendarID.isEmpty ? "primary" : calendarID
     }
 
+    static func hasStaleAssignedCalendarRoute(calendarID: String?, technician: Technician?) -> Bool {
+        let expectedCalendarID = assignedCalendarID(for: technician)
+        let currentCalendarID = AppAccess.normalizedEmail(calendarID)
+        let resolvedCalendarID = currentCalendarID.isEmpty ? "primary" : currentCalendarID
+        return resolvedCalendarID != expectedCalendarID
+    }
+
     static func validSelection(_ selectedCalendarID: String, technician: Technician?, calendars: [GoogleCalendar]) -> String {
         if routeOptions(from: calendars).contains(where: { $0.id == selectedCalendarID }) {
             return selectedCalendarID
