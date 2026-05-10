@@ -311,20 +311,57 @@ final class QuickBooksPaymentsService {
     }
 
     private func createCardToken(_ input: QuickBooksPaymentsCardInput) async throws -> QuickBooksPaymentsTokenResponse {
+
+        let normalizedCardNumber =
+            input.cardNumber.filter(\.isNumber)
+
+        let normalizedMonth =
+            String(format: "%02d", Int(input.expMonth) ?? 0)
+
+        let normalizedYear: String = {
+            let trimmed = input.expYear.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if trimmed.count == 2 {
+                return "20\(trimmed)"
+            }
+
+            return trimmed
+        }()
+
+        let normalizedCVC =
+            input.cvc.filter(\.isNumber)
+
+        let normalizedPostal =
+            input.postalCode?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let normalizedRegion =
+            input.region?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .uppercased()
+
+        let normalizedCountry =
+            input.country?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .uppercased() ?? "US"
+
         let tokenRequest = QuickBooksPaymentsTokenCreateRequest(
             card: QuickBooksPaymentsCard(
-                expYear: input.expYear,
-                expMonth: input.expMonth,
+                expYear: normalizedYear,
+                expMonth: normalizedMonth,
                 address: QuickBooksPaymentsCardAddress(
-                    region: input.region,
-                    postalCode: input.postalCode,
-                    streetAddress: input.addressLine,
-                    country: input.country ?? "US",
-                    city: input.city
+                    region: normalizedRegion,
+                    postalCode: normalizedPostal,
+                    streetAddress: input.addressLine?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                    country: normalizedCountry,
+                    city: input.city?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
                 ),
-                name: input.cardholderName,
-                cvc: input.cvc,
-                number: input.cardNumber
+                name: input.cardholderName
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                cvc: normalizedCVC,
+                number: normalizedCardNumber
             ),
             bankAccount: nil
         )
@@ -364,7 +401,7 @@ final class QuickBooksPaymentsService {
         let charge = QuickBooksPaymentsChargeCreate(
             amount: Self.currencyString(amount),
             currency: "USD",
-            capture: false,
+            capture: true,
             token: token,
             description: note,
             context: QuickBooksPaymentsChargeContext.forClientTransactionID(clientTransactionID),

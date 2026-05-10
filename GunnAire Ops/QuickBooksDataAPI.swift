@@ -1593,14 +1593,64 @@ struct QuickBooksPaymentsTokenResponse: Decodable {
     let value: String
 
     private enum CodingKeys: String, CodingKey {
-        case value, token
+        case value
+        case token
+        case id
+        case card
+        case bankAccount
+    }
+
+    private struct NestedToken: Decodable {
+        let value: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case value
+            case token
+            case id
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            value =
+                QuickBooksFlexibleDecoding.string(container, .value) ??
+                QuickBooksFlexibleDecoding.string(container, .token) ??
+                QuickBooksFlexibleDecoding.string(container, .id)
+        }
     }
 
     init(from decoder: Decoder) throws {
+        if let single = try? decoder.singleValueContainer(),
+           let rawToken = try? single.decode(String.self),
+           !rawToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            value = rawToken
+            return
+        }
+
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        value = QuickBooksFlexibleDecoding.string(container, .value)
-            ?? QuickBooksFlexibleDecoding.string(container, .token)
-            ?? ""
+
+        if let direct =
+            QuickBooksFlexibleDecoding.string(container, .value) ??
+            QuickBooksFlexibleDecoding.string(container, .token) ??
+            QuickBooksFlexibleDecoding.string(container, .id) {
+            value = direct
+            return
+        }
+
+        if let nestedCard = try? container.decodeIfPresent(NestedToken.self, forKey: .card),
+           let nestedValue = nestedCard.value,
+           !nestedValue.isEmpty {
+            value = nestedValue
+            return
+        }
+
+        if let nestedBank = try? container.decodeIfPresent(NestedToken.self, forKey: .bankAccount),
+           let nestedValue = nestedBank.value,
+           !nestedValue.isEmpty {
+            value = nestedValue
+            return
+        }
+
+        value = ""
     }
 }
 
