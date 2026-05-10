@@ -12,7 +12,6 @@ enum QBOResource: String {
     case vendors = "vendor"
     case estimates = "estimate"
 }
-
 final class QuickBooksAuthAPI: ObservableObject {
     // MARK: - OAuth2 Properties
     static let shared = QuickBooksAuthAPI()
@@ -33,6 +32,10 @@ final class QuickBooksAuthAPI: ObservableObject {
     @Published private var tokenExpiry: Date?
 
     private init() {
+        reloadStoredSession()
+    }
+
+    func reloadStoredSession() {
         QuickBooksDataAPI.shared.loadTokens()
         if let stored = QuickBooksDataAPI.shared.tokens {
             accessToken = stored.accessToken
@@ -40,26 +43,32 @@ final class QuickBooksAuthAPI: ObservableObject {
             tokenExpiry = stored.expiration
             realmID = QuickBooksDataAPI.shared.realmID
             isAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+        } else {
+            accessToken = nil
+            refreshToken = nil
+            tokenExpiry = nil
+            realmID = nil
+            isAuthenticated = false
         }
     }
     
     // MARK: - OAuth2 Flow
     func startSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding, completion: @escaping (Result<Void, Error>) -> Void) {
         guard !clientID.hasPrefix("YOUR_"), !clientSecret.hasPrefix("YOUR_"), !redirectURI.hasPrefix("YOUR_") else {
-            completion(.failure(QBOError.missingConfiguration))
+            completion(Result<Void, Error>.failure(QBOError.missingConfiguration))
             return
         }
         guard let authURL = makeAuthURL() else {
-            completion(.failure(QBOError.invalidAuthURL))
+            completion(Result<Void, Error>.failure(QBOError.invalidAuthURL))
             return
         }
         let resolvedCallbackScheme = callbackScheme.isEmpty ? (URL(string: redirectURI)?.scheme ?? "") : callbackScheme
         guard !resolvedCallbackScheme.isEmpty else {
-            completion(.failure(QBOError.invalidRedirectURI(redirectURI)))
+            completion(Result<Void, Error>.failure(QBOError.invalidRedirectURI(redirectURI)))
             return
         }
         guard isCallbackSchemeRegistered(resolvedCallbackScheme) else {
-            completion(.failure(QBOError.callbackSchemeNotRegistered(resolvedCallbackScheme)))
+            completion(Result<Void, Error>.failure(QBOError.callbackSchemeNotRegistered(resolvedCallbackScheme)))
             return
         }
         let session = ASWebAuthenticationSession(
@@ -68,7 +77,7 @@ final class QuickBooksAuthAPI: ObservableObject {
         ) { [weak self] callbackURL, error in
             defer { self?.activeAuthSession = nil }
             guard let self = self, let callbackURL = callbackURL else {
-                completion(.failure(error ?? QBOError.unknown))
+                completion(Result<Void, Error>.failure(error ?? QBOError.unknown))
                 return
             }
             self.handleAuthCallback(url: callbackURL, completion: completion)
@@ -78,7 +87,7 @@ final class QuickBooksAuthAPI: ObservableObject {
         activeAuthSession = session
         if !session.start() {
             activeAuthSession = nil
-            completion(.failure(QBOError.unknown))
+            completion(Result<Void, Error>.failure(QBOError.unknown))
         }
     }
 
@@ -106,22 +115,24 @@ final class QuickBooksAuthAPI: ObservableObject {
     private func makeAuthURL() -> URL? {
         // QBO OAuth endpoint
         var components = URLComponents(string: "https://appcenter.intuit.com/connect/oauth2")
-        let scopes = [
+        var scopes = [
             "com.intuit.quickbooks.accounting",
-            "com.intuit.quickbooks.payment",
             "openid",
             "profile",
             "email",
             "phone",
             "address"
-        ].joined(separator: " ")
+        ]
+        if Config.QuickBooks.enablePaymentsScope {
+            scopes.append("com.intuit.quickbooks.payment")
+        }
         let state = UUID().uuidString
         pendingOAuthState = state
         components?.queryItems = [
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "redirect_uri", value: redirectURI),
             URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "scope", value: scopes),
+            URLQueryItem(name: "scope", value: scopes.joined(separator: " ")),
             URLQueryItem(name: "state", value: state)
         ]
         return components?.url
@@ -130,39 +141,39 @@ final class QuickBooksAuthAPI: ObservableObject {
     private func handleAuthCallback(url: URL, completion: @escaping (Result<Void, Error>) -> Void) {
         // Parse auth code and exchange for access/refresh tokens
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            completion(.failure(QBOError.unknown))
+            completion(Result<Void, Error>.failure(QBOError.unknown))
             return
         }
 
         if let oauthError = components.queryItems?.first(where: { $0.name == "error" })?.value {
             let description = components.queryItems?.first(where: { $0.name == "error_description" })?.value
-            completion(.failure(QBOError.providerError(oauthError, description)))
+            completion(Result<Void, Error>.failure(QBOError.providerError(oauthError, description)))
             return
         }
 
         guard
               let codeItem = components.queryItems?.first(where: { $0.name == "code" }),
               let code = codeItem.value else {
-            completion(.failure(QBOError.missingAuthCode))
+            completion(Result<Void, Error>.failure(QBOError.missingAuthCode))
             return
         }
         guard let state = components.queryItems?.first(where: { $0.name == "state" })?.value,
               state == pendingOAuthState else {
-            completion(.failure(QBOError.invalidState))
+            completion(Result<Void, Error>.failure(QBOError.invalidState))
             return
         }
         let realmID = components.queryItems?.first(where: { $0.name == "realmId" })?.value
             ?? components.queryItems?.first(where: { $0.name == "realmid" })?.value
         guard let realmID,
               !realmID.isEmpty else {
-            completion(.failure(QBOError.missingRealmID))
+            completion(Result<Void, Error>.failure(QBOError.missingRealmID))
             return
         }
         pendingOAuthState = nil
         self.realmID = realmID
 
         exchangeAuthorizationCode(code: code, realmID: realmID) { result in
-            DispatchQueue.main.async {
+            DispatchQueue.main.async(execute: {
                 switch result {
                 case .success(let tokens):
                     self.accessToken = tokens.accessToken
@@ -170,18 +181,18 @@ final class QuickBooksAuthAPI: ObservableObject {
                     self.tokenExpiry = tokens.expiration
                     self.isAuthenticated = true
                     QuickBooksDataAPI.shared.storeTokens(tokens, realmID: realmID)
-                    completion(.success(()))
+                    completion(Result<Void, Error>.success(()))
                 case .failure(let error):
                     self.isAuthenticated = false
-                    completion(.failure(error))
+                    completion(Result<Void, Error>.failure(error))
                 }
-            }
+            })
         }
     }
 
     private func exchangeAuthorizationCode(code: String, realmID: String, completion: @escaping (Result<QuickBooksOAuthTokens, Error>) -> Void) {
         guard let url = URL(string: Config.QuickBooks.tokenEndpoint) else {
-            completion(.failure(QBOError.invalidEndpoint))
+            completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.invalidEndpoint))
             return
         }
 
@@ -191,7 +202,7 @@ final class QuickBooksAuthAPI: ObservableObject {
 
         let credentials = "\(clientID):\(clientSecret)"
         guard let credData = credentials.data(using: .utf8) else {
-            completion(.failure(QBOError.unknown))
+            completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.unknown))
             return
         }
         request.setValue("Basic \(credData.base64EncodedString())", forHTTPHeaderField: "Authorization")
@@ -203,12 +214,12 @@ final class QuickBooksAuthAPI: ObservableObject {
 
         URLSession.shared.dataTask(with: request) { data, response, error in
             if let error {
-                completion(.failure(error))
+                completion(Result<QuickBooksOAuthTokens, Error>.failure(error))
                 return
             }
 
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode), let data else {
-                completion(.failure(QBOError.unknown))
+                completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.unknown))
                 return
             }
 
@@ -218,7 +229,7 @@ final class QuickBooksAuthAPI: ObservableObject {
                 let refresh = json["refresh_token"] as? String,
                 let expiresIn = json["expires_in"] as? Double
             else {
-                completion(.failure(QBOError.unknown))
+                completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.unknown))
                 return
             }
 
@@ -228,19 +239,19 @@ final class QuickBooksAuthAPI: ObservableObject {
                 refreshToken: refresh,
                 expiration: Date().addingTimeInterval(expiresIn)
             )
-            completion(.success(tokens))
+            completion(Result<QuickBooksOAuthTokens, Error>.success(tokens))
         }.resume()
     }
     
     // MARK: - API Requests (scaffold)
     func fetchResource(_ resource: QBOResource, completion: @escaping (Result<Data, Error>) -> Void) {
         guard let accessToken = accessToken, let realmID = realmID else {
-            completion(.failure(QBOError.notAuthenticated))
+            completion(Result<Data, Error>.failure(QBOError.notAuthenticated))
             return
         }
         let base = environment == "sandbox" ? "https://sandbox-quickbooks.api.intuit.com/v3/company/" : "https://quickbooks.api.intuit.com/v3/company/"
         guard let url = URL(string: base + realmID + "/query?query=select * from " + resource.rawValue.capitalized) else {
-            completion(.failure(QBOError.invalidEndpoint))
+            completion(Result<Data, Error>.failure(QBOError.invalidEndpoint))
             return
         }
         var request = URLRequest(url: url)

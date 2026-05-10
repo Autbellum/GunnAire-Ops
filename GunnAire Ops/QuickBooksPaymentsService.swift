@@ -86,6 +86,16 @@ final class QuickBooksPaymentsService {
             clientTransactionID: clientTransactionID
         )
         let charge = try await captureCharge(id: authorized.id, amount: amount)
+
+        guard invoice.quickBooksID.nilIfBlank != nil else {
+            return QuickBooksProcessedPaymentResult(
+                charge: charge,
+                accountingPayment: nil,
+                accountingError: QuickBooksPaymentsServiceError.invoiceNotSyncedToQuickBooks.localizedDescription,
+                clientTransactionID: charge.resolvedClientTransID ?? clientTransactionID
+            )
+        }
+
         let accountingPayment = await syncAccountingPayment(
             invoice: invoice,
             customerQBID: customerQBID,
@@ -127,6 +137,16 @@ final class QuickBooksPaymentsService {
             clientTransactionID: clientTransactionID,
             checkNumber: bankInput.checkNumber
         )
+
+        guard invoice.quickBooksID.nilIfBlank != nil else {
+            return QuickBooksProcessedPaymentResult(
+                charge: charge,
+                accountingPayment: nil,
+                accountingError: QuickBooksPaymentsServiceError.invoiceNotSyncedToQuickBooks.localizedDescription,
+                clientTransactionID: charge.resolvedClientTransID ?? clientTransactionID
+            )
+        }
+
         let accountingPayment = await syncAccountingPayment(
             invoice: invoice,
             customerQBID: customerQBID,
@@ -192,6 +212,9 @@ final class QuickBooksPaymentsService {
         guard let customerQBID = payment.invoice.customer.quickBooksID, !customerQBID.isEmpty else {
             throw QuickBooksPaymentsServiceError.customerNotSynced
         }
+        guard payment.invoice.quickBooksID.nilIfBlank != nil else {
+            throw QuickBooksPaymentsServiceError.invoiceNotSyncedToQuickBooks
+        }
 
         let payload = await quickBooksPaymentPayload(
             invoice: payment.invoice,
@@ -215,6 +238,9 @@ final class QuickBooksPaymentsService {
         }
         guard let customerQBID = payment.invoice.customer.quickBooksID, !customerQBID.isEmpty else {
             throw QuickBooksPaymentsServiceError.customerNotSynced
+        }
+        guard payment.invoice.quickBooksID.nilIfBlank != nil else {
+            throw QuickBooksPaymentsServiceError.invoiceNotSyncedToQuickBooks
         }
 
         let payload = await quickBooksPaymentPayload(
@@ -415,6 +441,10 @@ final class QuickBooksPaymentsService {
         clientTransactionID: String,
         paymentKind: AccountingPaymentKind
     ) async -> (payment: QuickBooksPayment?, error: String?) {
+        guard invoice.quickBooksID.nilIfBlank != nil else {
+            return (nil, QuickBooksPaymentsServiceError.invoiceNotSyncedToQuickBooks.localizedDescription)
+        }
+
         let payload = await quickBooksPaymentPayload(
             invoice: invoice,
             customerQBID: customerQBID,
@@ -510,17 +540,16 @@ final class QuickBooksPaymentsService {
         clientTransactionID: String? = nil,
         paymentKind: AccountingPaymentKind
     ) async -> QuickBooksPaymentCreate {
-        let lines: [QuickBooksPaymentLine]?
-        if let invoiceQBID = invoice.quickBooksID, !invoiceQBID.isEmpty {
-            lines = [
-                QuickBooksPaymentLine(
-                    Amount: amount,
-                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoiceQBID, TxnType: "Invoice")]
-                )
-            ]
-        } else {
-            lines = nil
+        guard let invoiceQBID = invoice.quickBooksID.nilIfBlank else {
+            preconditionFailure("Invoice QuickBooks ID is required before building a QuickBooks Payment payload.")
         }
+
+        let lines: [QuickBooksPaymentLine]? = [
+            QuickBooksPaymentLine(
+                Amount: amount,
+                LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoiceQBID, TxnType: "Invoice")]
+            )
+        ]
 
         let paymentMethodRef = await resolvePaymentMethodReference(for: paymentKind)
         let creditCardPayment: QuickBooksCreditCardPayment?
@@ -599,6 +628,7 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
     case chargeNotSynced
     case missingSalesItemReference
     case invalidRetryTarget
+    case invoiceNotSyncedToQuickBooks
 
     var errorDescription: String? {
         switch self {
@@ -610,6 +640,8 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
             return "Set QB_DEFAULT_ITEM_REF before creating QuickBooks refund receipts."
         case .invalidRetryTarget:
             return "This QuickBooks sync retry target is not valid for the requested recovery action."
+        case .invoiceNotSyncedToQuickBooks:
+            return "Sync this invoice to QuickBooks before syncing or retrying the accounting payment."
         }
     }
 }

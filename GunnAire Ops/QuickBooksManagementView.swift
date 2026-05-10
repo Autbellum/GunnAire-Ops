@@ -390,7 +390,7 @@ struct QuickBooksManagementView: View {
                                         .foregroundColor(.secondary)
 
                                     HStack {
-                                        Button(activePaymentInvoiceID == invoice.Id ? "Processing..." : "Take Payment") {
+                                        Button(activePaymentInvoiceID == invoice.Id ? "Processing..." : "Record QB Payment") {
                                             takeLiveCustomerPayment(for: invoice)
                                         }
                                         .buttonStyle(.borderedProminent)
@@ -456,7 +456,11 @@ struct QuickBooksManagementView: View {
                                 .foregroundColor(.secondary)
                         }
 
-                        Button("Create Sales Receipt") { showingNewSalesReceiptSheet = true }
+                        Text("Use Sales Receipts only for walk-in or no-invoice sales. Invoice collections must use a QuickBooks Payment linked to the invoice.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Button("Create Walk-In / No-Invoice Sale") { showingNewSalesReceiptSheet = true }
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
@@ -839,7 +843,7 @@ struct QuickBooksManagementView: View {
                 }
                 .sheet(isPresented: $showingNewSalesReceiptSheet) {
                     QuickBooksDocumentComposeView(
-                        title: "Create Sales Receipt",
+                        title: "Create Walk-In / No-Invoice Sale",
                         customerRefs: customers.map(\.reference)
                     ) { customerRef, amount, note in
                         createSalesReceipt(customerRef: customerRef, amount: amount, note: note)
@@ -1164,7 +1168,7 @@ struct QuickBooksManagementView: View {
         let payload = QuickBooksSalesReceiptCreate(
             CustomerRef: customerRef,
             Line: [salesLineItem(amount: amount, note: note)],
-            PrivateNote: note,
+            PrivateNote: [note, "GunnAire no-invoice sale. Do not use this path for invoice collections."].compactMap { $0 }.joined(separator: "\n"),
             PaymentMethodRef: nil,
             CreditCardPayment: nil
         )
@@ -1391,6 +1395,8 @@ struct QuickBooksManagementView: View {
                                 quickBooksClientTransID: result.clientTransactionID,
                                 quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                                 quickBooksAccountingSyncDetail: result.accountingError,
+                                processorSyncStatus: "captured",
+                                processorSyncDetail: nil,
                                 amount: amount,
                                 method: "card",
                                 cardLast4: resolvedCardLast4,
@@ -1429,7 +1435,7 @@ struct QuickBooksManagementView: View {
                         }
                     }
                     await MainActor.run {
-                        actionMessage = "Stored QuickBooks card: \(card.number ?? card.id)"
+                        actionMessage = "Stored QuickBooks card: \(card.number ?? card.id). Next step: add a local StoredPaymentMethod model to persist the customer-card mapping before using this card for recurring billing."
                         syncAllQuickBooksData()
                     }
                 } catch {

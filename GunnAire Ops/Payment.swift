@@ -11,8 +11,14 @@ final class Payment {
     var quickBooksChargeID: String?
     var quickBooksClientTransID: String?
     var quickBooksRefundReceiptID: String?
+    var quickBooksDepositID: String?
+    var quickBooksSalesReceiptID: String?
     var quickBooksAccountingSyncStatus: String?
     var quickBooksAccountingSyncDetail: String?
+    var processorSyncStatus: String?
+    var processorSyncDetail: String?
+    var settlementBatchID: String?
+    var storedCardID: String?
     var amount: Double
     var date: Date
     var method: String // cash, check, card
@@ -30,8 +36,14 @@ final class Payment {
         quickBooksChargeID: String? = nil,
         quickBooksClientTransID: String? = nil,
         quickBooksRefundReceiptID: String? = nil,
+        quickBooksDepositID: String? = nil,
+        quickBooksSalesReceiptID: String? = nil,
         quickBooksAccountingSyncStatus: String? = nil,
         quickBooksAccountingSyncDetail: String? = nil,
+        processorSyncStatus: String? = nil,
+        processorSyncDetail: String? = nil,
+        settlementBatchID: String? = nil,
+        storedCardID: String? = nil,
         amount: Double,
         date: Date = Date(),
         method: String = "cash",
@@ -48,8 +60,14 @@ final class Payment {
         self.quickBooksChargeID = quickBooksChargeID
         self.quickBooksClientTransID = quickBooksClientTransID
         self.quickBooksRefundReceiptID = quickBooksRefundReceiptID
+        self.quickBooksDepositID = quickBooksDepositID
+        self.quickBooksSalesReceiptID = quickBooksSalesReceiptID
         self.quickBooksAccountingSyncStatus = quickBooksAccountingSyncStatus
         self.quickBooksAccountingSyncDetail = quickBooksAccountingSyncDetail
+        self.processorSyncStatus = processorSyncStatus
+        self.processorSyncDetail = processorSyncDetail
+        self.settlementBatchID = settlementBatchID
+        self.storedCardID = storedCardID
         self.amount = amount
         self.date = date
         self.method = method
@@ -85,6 +103,14 @@ extension Payment {
     }
 
     var needsQuickBooksAttention: Bool {
-        quickBooksAccountingSyncStatus == "needs_attention"
+        quickBooksAccountingSyncStatus == "needs_attention" || processorSyncStatus == "needs_attention"
+    }
+
+    var hasProcessorCapture: Bool {
+        quickBooksChargeID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    var hasAccountingPayment: Bool {
+        quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 }

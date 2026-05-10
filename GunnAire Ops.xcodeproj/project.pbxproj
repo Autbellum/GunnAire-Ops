@@ -24,6 +24,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		3F4B8A102FAD000100000001 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		3F4B8A112FAD000100000001 /* Local.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.example.xcconfig; sourceTree = "<group>"; };
 		642980E62F4CAB5900A62E15 /* GunnAire Ops.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "GunnAire Ops.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		642980F52F4CAB5A00A62E15 /* GunnAire OpsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "GunnAire OpsTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		642980FF2F4CAB5A00A62E15 /* GunnAire OpsUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "GunnAire OpsUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -73,6 +75,15 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		3F4B8A122FAD000100000001 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				3F4B8A102FAD000100000001 /* Base.xcconfig */,
+				3F4B8A112FAD000100000001 /* Local.example.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 		4226A7412FABAAB90087A3F8 /* Recovered References */ = {
 			isa = PBXGroup;
 			children = (
@@ -87,6 +98,7 @@
 				642980E82F4CAB5900A62E15 /* GunnAire Ops */,
 				642980F82F4CAB5A00A62E15 /* GunnAire OpsTests */,
 				642981022F4CAB5A00A62E15 /* GunnAire OpsUITests */,
+				3F4B8A122FAD000100000001 /* Config */,
 				642980E72F4CAB5900A62E15 /* Products */,
 				4226A7412FABAAB90087A3F8 /* Recovered References */,
 			);
@@ -407,8 +419,7 @@
 		};
 		6429810A2F4CAB5A00A62E15 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReferenceAnchor = 642980DD2F4CAB5900A62E15;
-			baseConfigurationReferenceRelativePath = Config/Base.xcconfig;
+			baseConfigurationReference = 3F4B8A102FAD000100000001 /* Base.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -438,8 +449,7 @@
 		};
 		6429810B2F4CAB5A00A62E15 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReferenceAnchor = 642980DD2F4CAB5900A62E15;
-			baseConfigurationReferenceRelativePath = Config/Base.xcconfig;
+			baseConfigurationReference = 3F4B8A102FAD000100000001 /* Base.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;

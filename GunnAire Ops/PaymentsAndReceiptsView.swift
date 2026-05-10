@@ -652,6 +652,12 @@ struct PaymentsAndReceiptsView: View {
         quickBooksClientTransID: String? = nil,
         quickBooksAccountingSyncStatus: String? = nil,
         quickBooksAccountingSyncDetail: String? = nil,
+        processorSyncStatus: String? = nil,
+        processorSyncDetail: String? = nil,
+        quickBooksDepositID: String? = nil,
+        quickBooksSalesReceiptID: String? = nil,
+        settlementBatchID: String? = nil,
+        storedCardID: String? = nil,
         processorOverride: String? = nil
     ) {
         modelContext.insert(
@@ -660,8 +666,14 @@ struct PaymentsAndReceiptsView: View {
                 quickBooksID: quickBooksPaymentID,
                 quickBooksChargeID: quickBooksChargeID,
                 quickBooksClientTransID: quickBooksClientTransID,
+                quickBooksDepositID: quickBooksDepositID,
+                quickBooksSalesReceiptID: quickBooksSalesReceiptID,
                 quickBooksAccountingSyncStatus: quickBooksAccountingSyncStatus,
                 quickBooksAccountingSyncDetail: quickBooksAccountingSyncDetail,
+                processorSyncStatus: processorSyncStatus,
+                processorSyncDetail: processorSyncDetail,
+                settlementBatchID: settlementBatchID,
+                storedCardID: storedCardID,
                 amount: amount,
                 method: selectedMethod.apiValue,
                 cardLast4: cardLast4.nilIfBlank,
@@ -721,6 +733,8 @@ struct PaymentsAndReceiptsView: View {
                     quickBooksClientTransID: result.clientTransactionID,
                     quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                     quickBooksAccountingSyncDetail: result.accountingError,
+                    processorSyncStatus: "captured",
+                    processorSyncDetail: nil,
                     processorOverride: OnsitePaymentProcessor.quickBooksPayments.rawValue
                 )
                 updateInvoiceStatusAfterPayment(invoice)
@@ -764,6 +778,8 @@ struct PaymentsAndReceiptsView: View {
                     quickBooksClientTransID: result.clientTransactionID,
                     quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                     quickBooksAccountingSyncDetail: result.accountingError,
+                    processorSyncStatus: "submitted",
+                    processorSyncDetail: nil,
                     processorOverride: OnsitePaymentProcessor.quickBooksPayments.rawValue
                 )
                 updateInvoiceStatusAfterPayment(invoice)
@@ -780,7 +796,12 @@ struct PaymentsAndReceiptsView: View {
             return
         }
 
-        saveLocalPayment(invoice: invoice, amount: amount)
+        saveLocalPayment(
+            invoice: invoice,
+            amount: amount,
+            quickBooksAccountingSyncStatus: isQuickBooksConnected ? "pending" : nil,
+            processorSyncStatus: "recorded"
+        )
         updateInvoiceStatusAfterPayment(invoice)
         actionMessage = "Payment recorded for \(invoice.customer.name)."
         resetPaymentForm()
@@ -950,6 +971,10 @@ GunnAire
             actionMessage = "This customer needs a QuickBooks customer ID before the payment can sync."
             return
         }
+        guard payment.invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            actionMessage = "Sync this invoice to QuickBooks before syncing its payment. This prevents unapplied payments and duplicate sales receipts."
+            return
+        }
 
         syncingPaymentID = payment.id
         Task {
@@ -958,11 +983,15 @@ GunnAire
                 await MainActor.run {
                     syncingPaymentID = nil
                     payment.quickBooksID = quickBooksPayment.Id
+                    payment.quickBooksAccountingSyncStatus = "synced"
+                    payment.quickBooksAccountingSyncDetail = nil
                     actionMessage = "Payment synced to QuickBooks: \(quickBooksPayment.Id)."
                 }
             } catch {
                 await MainActor.run {
                     syncingPaymentID = nil
+                    payment.quickBooksAccountingSyncStatus = "needs_attention"
+                    payment.quickBooksAccountingSyncDetail = error.localizedDescription
                     actionMessage = "QuickBooks payment sync failed: \(error.localizedDescription)"
                 }
             }
@@ -1084,7 +1113,9 @@ GunnAire
                     quickBooksRefundReceiptID: result.refundReceipt?.Id,
                     quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                     quickBooksAccountingSyncDetail: result.accountingError,
-                    amount: -refundAmountValue,
+                    processorSyncStatus: "refunded",
+                    processorSyncDetail: nil,
+                    amount: -abs(refundAmountValue),
                     method: payment.method,
                     cardLast4: payment.cardLast4,
                     authorizationReference: result.refund.id,

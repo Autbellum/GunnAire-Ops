@@ -1,8 +1,6 @@
 // Shared defaults for GunnAire Ops.
 // Copy Config/Local.example.xcconfig to Config/Local.xcconfig and fill in real values on each machine.
 
-#include? "Local.xcconfig"
-
 QB_CLIENT_ID =
 QB_CLIENT_SECRET =
 QB_REDIRECT_URI =
@@ -11,9 +9,12 @@ QB_ENVIRONMENT = production
 QB_DEFAULT_ITEM_REF = 1
 QB_DEFAULT_INCOME_ACCOUNT_REF =
 QB_DEFAULT_EXPENSE_ACCOUNT_REF =
+QB_ENABLE_PAYMENTS_SCOPE = false
 
 GOOGLE_CLIENT_ID =
 GOOGLE_REDIRECT_URI =
 GOOGLE_CALLBACK_SCHEME = gunnaireops
 GOOGLE_REVERSED_CLIENT_ID =
 GOOGLE_ALLOWED_HOSTED_DOMAIN = gunnaire.com
+
+#include? "Local.xcconfig"

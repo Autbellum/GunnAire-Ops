@@ -335,6 +335,11 @@ final class QuickBooksDataAPI: ObservableObject {
         "QuickBooks Payments rejected this app session. Reconnect QuickBooks and confirm Payments access is enabled for this company before retrying card, stored-card, or payment-method sync."
     }
 
+    private func clearRejectedSessionIfNeeded(_ error: QBError) {
+        guard error.requiresReconnect else { return }
+        clearTokens()
+    }
+
     private func performAuthorizedDecodingRequest<T: Decodable>(
         _ requestBuilder: @escaping () -> URLRequest?,
         decode type: T.Type,
@@ -353,6 +358,7 @@ final class QuickBooksDataAPI: ObservableObject {
                         return
                     }
                     if let httpError = self.resolveHTTPError(data: data, response: response) {
+                        self.clearRejectedSessionIfNeeded(httpError)
                         completion(.failure(httpError))
                         return
                     }
@@ -388,6 +394,7 @@ final class QuickBooksDataAPI: ObservableObject {
                         return
                     }
                     if let httpError = self.resolvePaymentsHTTPError(data: data, response: response) {
+                        self.clearRejectedSessionIfNeeded(httpError)
                         completion(.failure(httpError))
                         return
                     }
@@ -770,6 +777,7 @@ final class QuickBooksDataAPI: ObservableObject {
                         return
                     }
                     if let httpError = self.resolveHTTPError(data: data, response: response) {
+                        self.clearRejectedSessionIfNeeded(httpError)
                         completion(.failure(httpError))
                         return
                     }
