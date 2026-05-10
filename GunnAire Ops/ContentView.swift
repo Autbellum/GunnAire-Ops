@@ -1891,11 +1891,8 @@ extension ContentView {
     
     // MARK: - Fetch and Sync QuickBooks data
     func fetchAndSyncQuickBooksData() {
-
         let group = DispatchGroup()
-
         var failures: [String] = []
-
         var customers: [QuickBooksCustomer] = []
         var items: [QuickBooksItem] = []
         var estimates: [QuickBooksEstimate] = []
@@ -1909,103 +1906,165 @@ extension ContentView {
         var paymentMethods: [QuickBooksPaymentMethod] = []
         var storedCards: [QuickBooksPaymentsCardRecord] = []
 
-        func validate<T>(
-            _ name: String,
-            _ result: Result<[T], Error>,
-            assign: ([T]) -> Void
-        ) {
-            switch result {
 
-            case .success(let records):
-
-                if records.isEmpty {
-                    failures.append("\(name): returned zero records")
+        group.enter()
+        QuickBooksDataAPI.shared.fetchCustomers { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    customers = records
+                case .failure(let error):
+                    failures.append("Customers: \(error.localizedDescription)")
                 }
-
-                assign(records)
-
-            case .failure(let error):
-
-                failures.append("\(name): \(error.localizedDescription)")
+                group.leave()
             }
         }
 
         group.enter()
-        QuickBooksDataAPI.shared.fetchCustomers { result in
-            validate("Customers", result) { customers = $0 }
-            group.leave()
-        }
-
-        group.enter()
         QuickBooksDataAPI.shared.fetchItems { result in
-            validate("Catalog", result) { items = $0 }
-            group.leave()
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    items = records
+                case .failure(let error):
+                    failures.append("Catalog: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
         }
 
         group.enter()
         QuickBooksDataAPI.shared.fetchEstimates { result in
-            validate("Estimates", result) { estimates = $0 }
-            group.leave()
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    estimates = records
+                case .failure(let error):
+                    failures.append("Estimates: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
         }
 
         group.enter()
         QuickBooksDataAPI.shared.fetchInvoices { result in
-            validate("Invoices", result) { invoices = $0 }
-            group.leave()
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    invoices = records
+                case .failure(let error):
+                    failures.append("Invoices: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
         }
 
         group.enter()
         QuickBooksDataAPI.shared.fetchBills { result in
-            validate("Bills", result) { bills = $0 }
-            group.leave()
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    bills = records
+                case .failure(let error):
+                    failures.append("Bills: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
         }
 
         group.enter()
         QuickBooksDataAPI.shared.fetchPurchases { result in
-            validate("Purchases", result) { purchases = $0 }
-            group.leave()
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    purchases = records
+                case .failure(let error):
+                    failures.append("Purchases: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
         }
 
         group.enter()
         QuickBooksDataAPI.shared.fetchVendors { result in
-            validate("Vendors", result) { vendors = $0 }
-            group.leave()
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    vendors = records
+                case .failure(let error):
+                    failures.append("Vendors: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
         }
 
         group.enter()
         QuickBooksDataAPI.shared.fetchPayments { result in
-            validate("Payments", result) { payments = $0 }
-            group.leave()
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    payments = records
+                case .failure(let error):
+                    failures.append("Payments: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
         }
 
         group.enter()
         QuickBooksDataAPI.shared.fetchSalesReceipts { result in
-            validate("Sales Receipts", result) { salesReceipts = $0 }
-            group.leave()
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    salesReceipts = records
+                case .failure(let error):
+                    failures.append("Sales Receipts: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
         }
 
         group.enter()
         QuickBooksDataAPI.shared.fetchDeposits { result in
-            validate("Deposits", result) { deposits = $0 }
-            group.leave()
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    deposits = records
+                case .failure(let error):
+                    failures.append("Deposits: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
         }
 
         group.enter()
         QuickBooksDataAPI.shared.fetchPaymentMethods { result in
-            validate("Payment Methods", result) { paymentMethods = $0 }
-            group.leave()
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    paymentMethods = records
+                case .failure(let error):
+                    failures.append("Payment Methods: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
         }
 
         group.enter()
         QuickBooksDataAPI.shared.fetchCards { result in
-            validate("Stored Cards", result) { storedCards = $0 }
-            group.leave()
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let records):
+                    storedCards = records
+                case .failure(let error):
+                    failures.append("Stored Cards: \(error.localizedDescription)")
+                }
+                group.leave()
+            }
         }
 
         group.notify(queue: .main) {
-
             do {
-
                 try QuickBooksLocalSync.importSnapshot(
                     customers: customers,
                     items: items,
@@ -2015,47 +2074,21 @@ extension ContentView {
                     vendors: vendors,
                     into: modelContext
                 )
-
             } catch {
-
                 failures.append("Local app sync: \(error.localizedDescription)")
             }
 
             if failures.isEmpty {
-
-                let message =
-                """
-                ALL QuickBooks features synced successfully.
-
-                Customers: \(customers.count)
-                Items: \(items.count)
-                Estimates: \(estimates.count)
-                Invoices: \(invoices.count)
-                Sales Receipts: \(salesReceipts.count)
-                Bills: \(bills.count)
-                Purchases: \(purchases.count)
-                Vendors: \(vendors.count)
-                Payments: \(payments.count)
-                Payment Methods: \(paymentMethods.count)
-                Stored Cards: \(storedCards.count)
-                Deposits: \(deposits.count)
-                """
-
-                presentAuthAlert(
-                    title: "QuickBooks Sync Complete",
-                    message: message
-                )
-
+                let message = "All QuickBooks features checked successfully. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, \(storedCards.count) stored cards, and \(deposits.count) deposits."
+                presentAuthAlert(title: "QuickBooks Sync Complete", message: message)
             } else {
-
                 presentAuthAlert(
-                    title: "QuickBooks Sync FAILED",
+                    title: "QuickBooks Sync Incomplete",
                     message: failures.joined(separator: "\n")
                 )
             }
         }
     }
-    
     // MARK: - Fetch and Sync Google data
     func fetchAndSyncGoogleData() {
         let group = DispatchGroup()
