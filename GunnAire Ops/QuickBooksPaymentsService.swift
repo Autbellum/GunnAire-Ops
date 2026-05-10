@@ -200,6 +200,7 @@ final class QuickBooksPaymentsService {
             amount: payment.amount,
             note: payment.notes,
             paymentRef: payment.quickBooksClientTransID.nilIfBlank ?? payment.quickBooksChargeID.nilIfBlank ?? payment.id.uuidString,
+            clientTransactionID: payment.quickBooksClientTransID.nilIfBlank,
             paymentKind: paymentKind(for: payment)
         )
 
@@ -599,6 +600,20 @@ final class QuickBooksPaymentsService {
         return trimmed
     }
 
+    private static func quickBooksPaymentRefNum(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+
+        let compact = trimmed
+            .replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: "\n", with: "-")
+            .replacingOccurrences(of: "\t", with: "-")
+
+        guard !compact.isEmpty else { return nil }
+        return String(compact.prefix(21))
+    }
+
     private static func chargeClientTransactionID(for invoice: Invoice, amount: Double) -> String {
         let cents = Int((amount * 100).rounded())
         return "ga-charge-\(invoice.id.uuidString.lowercased())-\(cents)-\(UUID().uuidString.lowercased())"
@@ -639,32 +654,20 @@ final class QuickBooksPaymentsService {
 
         let paymentMethodRef = await resolvePaymentMethodReference(for: paymentKind)
 
-        /*
-         Important:
-         The QuickBooks Payments API charge has already been processed before this
-         accounting Payment is created. Do NOT send CreditCardPayment with
-         CreditChargeInfo.ProcessPayment = "true" here.
-
-         That field tells QBO Accounting to process a card itself, which is not
-         supported for this app/session path and causes:
-         "Feature not supported error : true"
-
-         For processed QuickBooks Payments charges, create a normal QBO Payment
-         linked to the invoice and store the charge/client transaction ID in
-         PaymentRefNum + PrivateNote for reconciliation.
-         */
-        let accountingNoteText = clientTransactionID == nil
-            ? note
-            : accountingNote(baseNote: note, clientTransactionID: clientTransactionID!)
+        // Do not send CreditCardPayment/ProcessPayment here. The card/ACH charge
+        // was already handled by QuickBooks Payments. Sending ProcessPayment=true
+        // on the QBO Accounting Payment causes QuickBooks to reject the follow-up
+        // sync with “Feature not supported error : true”.
+        let creditCardPayment: QuickBooksCreditCardPayment? = nil
 
         return QuickBooksPaymentCreate(
             CustomerRef: QuickBooksReference(value: customerQBID, name: invoice.customer.name),
             TotalAmt: amount,
-            PrivateNote: accountingNoteText,
-            PaymentRefNum: paymentRef,
+            PrivateNote: clientTransactionID == nil ? note : accountingNote(baseNote: note, clientTransactionID: clientTransactionID!),
+            PaymentRefNum: Self.quickBooksPaymentRefNum(paymentRef),
             Line: lines,
             PaymentMethodRef: paymentMethodRef,
-            CreditCardPayment: nil
+            CreditCardPayment: creditCardPayment
         )
     }
 
