@@ -1707,11 +1707,6 @@ struct QuickBooksManagementView: View {
                 HStack {
                     Text(status.name)
                         .font(.subheadline)
-                    if !status.required {
-                        Text("Optional")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
                     Spacer()
                     if let count = status.count {
                         Text("\(count)")

@@ -39,10 +39,10 @@ enum GoogleCalendarScheduleSync {
                                 exportCalls(
                                     auth: auth,
                                     modelContext: modelContext,
+                                    calendarEvents: calendarEvents,
                                     signedInEmail: signedInEmail,
                                     isAdminUser: isAdminUser,
-                                    availableCalendarIDs: availableCalendarIDs
-                                    ,
+                                    availableCalendarIDs: availableCalendarIDs,
                                     writableCalendarIDs: writableCalendarIDs
                                 ) { exportResult in
                                     switch exportResult {
@@ -74,6 +74,8 @@ enum GoogleCalendarScheduleSync {
         var callsByGoogleEventID = Dictionary(uniqueKeysWithValues: existingCalls.compactMap { call in
             call.googleEventID.map { ($0, call) }
         })
+        var callsByFingerprint = Dictionary(uniqueKeysWithValues: existingCalls.map { (eventFingerprint(for: $0), $0) })
+        var importedEventFingerprints: Set<String> = []
         var customersByName = Dictionary(uniqueKeysWithValues: existingCustomers.map { (normalized($0.name), $0) })
         var techniciansByEmail = Dictionary(uniqueKeysWithValues: existingTechnicians.compactMap { tech in
             tech.contactInfo.map { ($0.lowercased(), tech) }
@@ -85,6 +87,15 @@ enum GoogleCalendarScheduleSync {
         for calendarEvent in calendarEvents {
             let event = calendarEvent.event
             guard let startDate = parseEventDate(event.start), let endDate = parseEventDate(event.end) else {
+                continue
+            }
+            let fingerprint = eventFingerprint(
+                summary: event.summary,
+                location: event.location,
+                startDate: startDate,
+                endDate: endDate
+            )
+            guard importedEventFingerprints.insert(fingerprint).inserted else {
                 continue
             }
             let duration = max(endDate.timeIntervalSince(startDate), 1800)
@@ -99,7 +110,7 @@ enum GoogleCalendarScheduleSync {
                 customer.address = location
             }
 
-            let call = callsByGoogleEventID[event.id] ?? ServiceCall(
+            let call = callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint] ?? ServiceCall(
                 googleCalendarID: calendarEvent.calendarID,
                 googleEventID: event.id,
                 siteAddress: event.location,
@@ -134,6 +145,7 @@ enum GoogleCalendarScheduleSync {
             call.siteAddress = event.location
             call.notes = event.description
             callsByGoogleEventID[event.id] = call
+            callsByFingerprint[fingerprint] = call
             imported += 1
         }
 
@@ -144,6 +156,7 @@ enum GoogleCalendarScheduleSync {
     private static func exportCalls(
         auth: GoogleAuthManager,
         modelContext: ModelContext,
+        calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)],
         signedInEmail: String?,
         isAdminUser: Bool,
         availableCalendarIDs: Set<String>,
@@ -172,6 +185,7 @@ enum GoogleCalendarScheduleSync {
                 calls: calls,
                 auth: auth,
                 modelContext: modelContext,
+                remoteEventsByFingerprint: remoteEventsByFingerprint(from: calendarEvents),
                 availableCalendarIDs: availableCalendarIDs,
                 writableCalendarIDs: writableCalendarIDs,
                 completion: completion
@@ -188,6 +202,7 @@ enum GoogleCalendarScheduleSync {
         calls: [ServiceCall],
         auth: GoogleAuthManager,
         modelContext: ModelContext,
+        remoteEventsByFingerprint: [String: (calendarID: String, event: GoogleCalendarEvent)],
         availableCalendarIDs: Set<String>,
         writableCalendarIDs: Set<String>,
         completion: @escaping (Result<String, Error>) -> Void
@@ -219,6 +234,7 @@ enum GoogleCalendarScheduleSync {
                 calls: calls,
                 auth: auth,
                 modelContext: modelContext,
+                remoteEventsByFingerprint: remoteEventsByFingerprint,
                 availableCalendarIDs: availableCalendarIDs,
                 writableCalendarIDs: writableCalendarIDs,
                 completion: completion
@@ -227,13 +243,13 @@ enum GoogleCalendarScheduleSync {
         }
 
         let event = makeGoogleEvent(for: call)
-        let finish: (Result<GoogleCalendarEvent, Error>) -> Void = { result in
+        let finish: (String, Result<GoogleCalendarEvent, Error>) -> Void = { savedCalendarID, result in
             Task { @MainActor in
                 switch result {
                 case .failure(let error):
                     completion(.failure(error))
                 case .success(let saved):
-                    call.googleCalendarID = targetCalendarID
+                    call.googleCalendarID = savedCalendarID
                     call.googleEventID = saved.id
                     exportNext(
                         index: index + 1,
@@ -242,6 +258,7 @@ enum GoogleCalendarScheduleSync {
                         calls: calls,
                         auth: auth,
                         modelContext: modelContext,
+                        remoteEventsByFingerprint: remoteEventsByFingerprint,
                         availableCalendarIDs: availableCalendarIDs,
                         writableCalendarIDs: writableCalendarIDs,
                         completion: completion
@@ -257,12 +274,23 @@ enum GoogleCalendarScheduleSync {
         if let eventID = call.googleEventID,
            !eventID.isEmpty,
            canUpdateExistingEvent {
-            auth.updateCalendarEvent(calendarID: currentCalendarID, eventID: eventID, event: event, completion: finish)
+            auth.updateCalendarEvent(calendarID: currentCalendarID, eventID: eventID, event: event) { result in
+                finish(currentCalendarID, result)
+            }
+        } else if let remote = remoteEventsByFingerprint[eventFingerprint(for: call)],
+                  contains(remote.calendarID, in: writableCalendarIDs) {
+            call.googleCalendarID = remote.calendarID
+            call.googleEventID = remote.event.id
+            auth.updateCalendarEvent(calendarID: remote.calendarID, eventID: remote.event.id, event: event) { result in
+                finish(remote.calendarID, result)
+            }
         } else {
             if call.googleCalendarID != nil, normalized(call.googleCalendarID ?? "") != normalized(targetCalendarID) {
                 call.googleEventID = nil
             }
-            auth.createCalendarEvent(calendarID: targetCalendarID, event: event, completion: finish)
+            auth.createCalendarEvent(calendarID: targetCalendarID, event: event) { result in
+                finish(targetCalendarID, result)
+            }
         }
     }
 
@@ -283,6 +311,51 @@ enum GoogleCalendarScheduleSync {
                 timeZone: timeZone
             )
         )
+    }
+
+    private static func remoteEventsByFingerprint(
+        from calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)]
+    ) -> [String: (calendarID: String, event: GoogleCalendarEvent)] {
+        var indexed: [String: (calendarID: String, event: GoogleCalendarEvent)] = [:]
+        for calendarEvent in calendarEvents {
+            guard let startDate = parseEventDate(calendarEvent.event.start),
+                  let endDate = parseEventDate(calendarEvent.event.end) else {
+                continue
+            }
+            let fingerprint = eventFingerprint(
+                summary: calendarEvent.event.summary,
+                location: calendarEvent.event.location,
+                startDate: startDate,
+                endDate: endDate
+            )
+            if indexed[fingerprint] == nil || calendarEvent.calendarID == "primary" {
+                indexed[fingerprint] = calendarEvent
+            }
+        }
+        return indexed
+    }
+
+    private static func eventFingerprint(for call: ServiceCall) -> String {
+        eventFingerprint(
+            summary: "\(call.type.rawValue.capitalized): \(call.customer.name)",
+            location: call.siteAddress ?? call.customer.address,
+            startDate: call.scheduledDate,
+            endDate: call.scheduledDate.addingTimeInterval(call.duration)
+        )
+    }
+
+    private static func eventFingerprint(
+        summary: String?,
+        location: String?,
+        startDate: Date,
+        endDate: Date
+    ) -> String {
+        [
+            normalized(summary ?? ""),
+            normalized(location ?? ""),
+            String(Int(startDate.timeIntervalSince1970 / 60)),
+            String(Int(endDate.timeIntervalSince1970 / 60))
+        ].joined(separator: "|")
     }
 
     private static func parseEventDate(_ value: GoogleCalendarEventDate) -> Date? {
