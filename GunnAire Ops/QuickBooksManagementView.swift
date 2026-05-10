@@ -949,8 +949,6 @@ struct QuickBooksManagementView: View {
     private func runQuickBooksResourceSync() {
         let group = DispatchGroup()
         var failures: [String] = []
-        var optionalWarnings: [String] = []
-
         func run<T>(
             id: String,
             required: Bool,
@@ -973,11 +971,7 @@ struct QuickBooksManagementView: View {
                         let message = userFacingQuickBooksMessage(for: error)
                         updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
                         let prefix = syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
-                        if required {
-                            failures.append("\(prefix): \(message)")
-                        } else {
-                            optionalWarnings.append("\(prefix): \(message)")
-                        }
+                        failures.append("\(prefix): \(message)")
                     }
                 }
             }
@@ -1019,7 +1013,7 @@ struct QuickBooksManagementView: View {
             paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
         }
 
-        run(id: "storedCards", required: false, fetch: liveAPI.fetchCards) { records in
+        run(id: "storedCards", required: true, fetch: liveAPI.fetchCards) { records in
             storedCards = records
         }
 
@@ -1050,15 +1044,12 @@ struct QuickBooksManagementView: View {
                 let now = Date()
                 lastSuccessfulSyncAt = now
                 UserDefaults.standard.set(now, forKey: "QuickBooksLastSuccessfulSyncAt")
-                statusMessage = "Sync complete. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, \(storedCards.count) stored cards, and \(deposits.count) deposits."
-                if !optionalWarnings.isEmpty {
-                    statusMessage += "\nOptional sections skipped:\n\(optionalWarnings.joined(separator: "\n"))"
-                }
+                statusMessage = "All QuickBooks features synced successfully. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, \(storedCards.count) stored cards, and \(deposits.count) deposits."
             } else if quickBooksReconnectRequired {
                 statusMessage = "QuickBooks authorization needs reconnect. Open Settings, disconnect and reconnect QuickBooks with a company admin, confirm this company authorized the app, then retry sync."
-                actionMessage = "Required accounting resources could not sync until QuickBooks authorization is restored."
+                actionMessage = "All QuickBooks features are required. Sync cannot be marked complete until authorization is restored and every resource syncs successfully."
             } else {
-                statusMessage = "Sync needs attention.\n" + (failures + optionalWarnings).joined(separator: "\n")
+                statusMessage = "QuickBooks sync incomplete. All features are required.\n" + failures.joined(separator: "\n")
             }
         }
     }
@@ -1655,7 +1646,7 @@ struct QuickBooksManagementView: View {
             QuickBooksSyncResourceStatus(id: "bills", name: "Bills", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
             QuickBooksSyncResourceStatus(id: "purchases", name: "Purchases", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
             QuickBooksSyncResourceStatus(id: "paymentMethods", name: "Payment Methods", lane: "Payments", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
-            QuickBooksSyncResourceStatus(id: "storedCards", name: "Stored Cards", lane: "Payments", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil)
+            QuickBooksSyncResourceStatus(id: "storedCards", name: "Stored Cards", lane: "Payments", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil)
         ]
     }
 

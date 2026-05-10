@@ -20,6 +20,7 @@ struct BillingDocumentsView: View {
     @State private var selectedCustomerID: UUID?
     @State private var selectedItems: Set<UUID> = []
     @State private var notes = ""
+    @State private var customerSearchText = ""
     @State private var customerName = ""
     @State private var customerPhone = ""
     @State private var customerEmail = ""
@@ -78,6 +79,17 @@ struct BillingDocumentsView: View {
         return customers.first { $0.id == selectedCustomerID }
     }
 
+    private var filteredCustomers: [Customer] {
+        let query = customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return customers }
+        return customers.filter { customer in
+            customer.name.lowercased().contains(query) ||
+            (customer.phone?.lowercased().contains(query) ?? false) ||
+            (customer.email?.lowercased().contains(query) ?? false) ||
+            (customer.address?.lowercased().contains(query) ?? false)
+        }
+    }
+
     private var selectedLineItems: [Item] {
         items.filter { selectedItems.contains($0.id) }
     }
@@ -104,6 +116,10 @@ struct BillingDocumentsView: View {
                 (item.itemDescription?.lowercased().contains(query) ?? false)
             return matchesQuery && matchesCatalogFilter(item)
         }
+    }
+
+    private var builderItemResults: [Item] {
+        Array(filteredItems.prefix(8))
     }
 
     private var currentJobEstimate: Estimate? {
@@ -1015,11 +1031,21 @@ GunnAire
                     }
                     .pickerStyle(.segmented)
 
+                    TextField("Search customers", text: $customerSearchText)
+                        .textInputAutocapitalization(.never)
+
                     Picker("Customer", selection: $selectedCustomerID) {
                         Text("Select Customer").tag(UUID?.none)
-                        ForEach(customers) { customer in
+                        ForEach(filteredCustomers) { customer in
                             Text(customer.name).tag(UUID?.some(customer.id))
                         }
+                    }
+
+                    if !customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       filteredCustomers.isEmpty {
+                        Text("No customers match that search. Fill in the customer fields below to create one.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
 
                     if let call = activeServiceCall {
@@ -1048,6 +1074,116 @@ GunnAire
 
                     Text("Total: \(selectedTotal, format: .currency(code: "USD"))")
                         .font(.headline)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Line Items")
+                                .font(.headline)
+                            Spacer()
+                            if isQuickBooksConnected {
+                                Button(isImportingQuickBooksItems ? "Importing..." : "Sync Catalog") {
+                                    importQuickBooksItems()
+                                }
+                                .font(.caption)
+                                .disabled(isImportingQuickBooksItems)
+                            }
+                        }
+
+                        TextField("Search items to add", text: $itemSearchText)
+                            .textInputAutocapitalization(.never)
+
+                        Picker("Catalog Filter", selection: $catalogFilter) {
+                            ForEach(DocumentationCatalogFilter.allCases) { filter in
+                                Text(filter.label).tag(filter)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        if items.isEmpty {
+                            Text("No catalog items yet. Add one below.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else if builderItemResults.isEmpty {
+                            Text("No items match that search.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(builderItemResults) { item in
+                                Button {
+                                    toggleItem(item)
+                                } label: {
+                                    HStack {
+                                        Image(systemName: selectedItems.contains(item.id) ? "checkmark.circle.fill" : "plus.circle")
+                                            .foregroundColor(Color.brandGold)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(item.name)
+                                                .font(.subheadline.weight(.semibold))
+                                            if let description = item.itemDescription, !description.isEmpty {
+                                                Text(description)
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                                    .lineLimit(1)
+                                            }
+                                        }
+                                        Spacer()
+                                        Text(item.unitPrice, format: .currency(code: "USD"))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        if !selectedLineItems.isEmpty {
+                            Divider()
+                            ForEach(selectedLineItems) { item in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.name)
+                                        if let description = item.itemDescription, !description.isEmpty {
+                                            Text(description)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                    Spacer()
+                                    Text(item.unitPrice, format: .currency(code: "USD"))
+                                        .foregroundColor(.secondary)
+                                    Button {
+                                        selectedItems.remove(item.id)
+                                    } label: {
+                                        Image(systemName: "minus.circle")
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
+                        }
+
+                        DisclosureGroup("Create Item") {
+                            TextField("New item", text: $newItemName)
+                            Picker("Item Type", selection: $newItemType) {
+                                ForEach(CatalogItemType.allCases) { type in
+                                    Text(type.rawValue).tag(type)
+                                }
+                            }
+                            TextField("Description", text: $newItemDescription, axis: .vertical)
+                                .lineLimit(2...3)
+                            Toggle("Taxable", isOn: $newItemTaxable)
+                            HStack {
+                                TextField("Price", text: $newItemPrice)
+                                    .keyboardType(.decimalPad)
+                                TextField("Cost", text: $newItemCost)
+                                    .keyboardType(.decimalPad)
+                                Button {
+                                    addItem()
+                                } label: {
+                                    Label("Add", systemImage: "plus")
+                                }
+                                .disabled(newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Double(newItemPrice) == nil)
+                            }
+                        }
+                    }
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Job Costing")
@@ -1143,104 +1279,9 @@ GunnAire
                     .disabled(customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                     if isQuickBooksConnected {
-                        Text("New customers and items created here will sync to QuickBooks when the document is created.")
+                        Text("New customers saved here create a QuickBooks customer immediately. Items and documents sync when the estimate or invoice is created.")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                    }
-                }
-
-                if !isJobDocumentationMode {
-                    Section("Items") {
-                        TextField("Search items", text: $itemSearchText)
-                            .textInputAutocapitalization(.never)
-
-                        if items.isEmpty {
-                            Text("No items yet. Add one below.")
-                                .foregroundColor(.secondary)
-                        } else {
-                            Picker("Catalog Filter", selection: $catalogFilter) {
-                                ForEach(DocumentationCatalogFilter.allCases) { filter in
-                                    Text(filter.label).tag(filter)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-
-                            ForEach(filteredItems) { item in
-                                Button {
-                                    toggleItem(item)
-                                } label: {
-                                    HStack {
-                                        Image(systemName: selectedItems.contains(item.id) ? "checkmark.circle.fill" : "circle")
-                                            .foregroundColor(Color.brandGold)
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(item.name)
-                                                .font(.headline)
-                                            if let description = item.itemDescription, !description.isEmpty {
-                                                Text(description)
-                                                    .font(.caption)
-                                                    .foregroundColor(.secondary)
-                                            }
-                                            HStack(spacing: 8) {
-                                                Text(item.itemType.rawValue)
-                                                    .font(.caption2)
-                                                    .foregroundColor(.secondary)
-                                                Text(item.isTaxable ? "Taxable" : "Non-taxable")
-                                                    .font(.caption2)
-                                                    .foregroundColor(.secondary)
-                                                if let purchaseCost = item.purchaseCost {
-                                                    Text("Cost: \(purchaseCost, format: .currency(code: "USD"))")
-                                                        .font(.caption2)
-                                                        .foregroundColor(.secondary)
-                                                }
-                                            }
-                                            if let quickBooksID = item.quickBooksID, !quickBooksID.isEmpty {
-                                                Text("QuickBooks linked")
-                                                    .font(.caption2)
-                                                    .foregroundColor(.secondary)
-                                            }
-                                        }
-                                        Spacer()
-                                        Text(item.unitPrice, format: .currency(code: "USD"))
-                                    }
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-
-                        if !items.isEmpty && filteredItems.isEmpty {
-                            Text("No items match that search.")
-                                .foregroundColor(.secondary)
-                        }
-
-                        if isQuickBooksConnected {
-                            Button(isImportingQuickBooksItems ? "Importing QuickBooks Items..." : "Load QuickBooks Catalog") {
-                                importQuickBooksItems()
-                            }
-                            .disabled(isImportingQuickBooksItems)
-                        }
-
-                        TextField("New item", text: $newItemName)
-                        Picker("Item Type", selection: $newItemType) {
-                            ForEach(CatalogItemType.allCases) { type in
-                                Text(type.rawValue).tag(type)
-                            }
-                        }
-                        TextField("Description", text: $newItemDescription, axis: .vertical)
-                            .lineLimit(2...3)
-                        Toggle("Taxable", isOn: $newItemTaxable)
-                        HStack {
-                            TextField("Price", text: $newItemPrice)
-                                .keyboardType(.decimalPad)
-                            TextField("Cost", text: $newItemCost)
-                                .keyboardType(.decimalPad)
-                            Button {
-                                addItem()
-                            } label: {
-                                Label("Add Item", systemImage: "plus")
-                            }
-                            .disabled(newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Double(newItemPrice) == nil)
-                        }
                     }
                 }
 
@@ -1417,6 +1458,7 @@ GunnAire
     }
 
     private func populateCustomerFields(from customer: Customer) {
+        customerSearchText = customer.name
         customerName = customer.name
         customerPhone = customer.phone ?? ""
         customerEmail = customer.email ?? ""
@@ -1431,7 +1473,43 @@ GunnAire
            !trimmedAddress.isEmpty {
             activeServiceCall?.siteAddress = trimmedAddress
         }
-        actionMessage = "\(customer.name) saved locally."
+        if isQuickBooksConnected, customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            syncCustomerToQuickBooks(customer)
+        } else {
+            actionMessage = customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? "\(customer.name) saved and linked to QuickBooks."
+                : "\(customer.name) saved locally."
+        }
+    }
+
+    private func syncCustomerToQuickBooks(_ customer: Customer) {
+        actionMessage = "Creating \(customer.name) in QuickBooks..."
+        let payload = QuickBooksCustomerCreate(
+            DisplayName: customer.name,
+            PrimaryPhone: customer.phone.flatMap { value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : QuickBooksPhoneNumber(FreeFormNumber: trimmed)
+            },
+            PrimaryEmailAddr: customer.email.flatMap { value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
+            },
+            BillAddr: customer.address.flatMap { value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
+            }
+        )
+        liveAPI.createCustomer(payload) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let quickBooksCustomer):
+                    customer.quickBooksID = quickBooksCustomer.Id
+                    actionMessage = "\(customer.name) created in QuickBooks."
+                case .failure(let error):
+                    actionMessage = "\(customer.name) saved locally. QuickBooks customer sync failed: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     private func syncNotesToJob() {
