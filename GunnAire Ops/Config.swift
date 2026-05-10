@@ -33,7 +33,7 @@ struct Config {
         static let defaultIncomeAccountRef = Config.value("QB_DEFAULT_INCOME_ACCOUNT_REF", fallback: "")
         static let defaultExpenseAccountRef = Config.value("QB_DEFAULT_EXPENSE_ACCOUNT_REF", fallback: "")
         static let hasExplicitDefaultSalesItemRef = Config.optionalValue("QB_DEFAULT_ITEM_REF") != nil
-        static let enablePaymentsScope = Config.value("QB_ENABLE_PAYMENTS_SCOPE", fallback: "false").lowercased() == "true"
+        static let enablePaymentsScope = true
         
         // OAuth 2.0 endpoints for QuickBooks Online
         static let authorizationEndpoint = "https://appcenter.intuit.com/connect/oauth2" // Authorization endpoint URL
