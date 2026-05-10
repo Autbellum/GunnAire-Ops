@@ -631,18 +631,16 @@ final class QuickBooksDataAPI: ObservableObject {
 
     func createCardToken(_ tokenRequest: QuickBooksPaymentsTokenCreateRequest, completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void) {
         let body = try? JSONEncoder().encode(tokenRequest)
-        performPaymentsDecodingRequest(
+        performPaymentsTokenRequest(
             { self.authorizedPaymentsRequest(path: "tokens", method: "POST", body: body, contentType: "application/json") },
-            decode: QuickBooksPaymentsTokenResponse.self,
             completion: completion
         )
     }
 
     func createCharge(_ charge: QuickBooksPaymentsChargeCreate, completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void) {
         let body = try? JSONEncoder().encode(charge)
-        performPaymentsDecodingRequest(
+        performPaymentsChargeRequest(
             { self.authorizedPaymentsRequest(path: "charges", method: "POST", body: body, contentType: "application/json") },
-            decode: QuickBooksPaymentsChargeResponse.self,
             completion: completion
         )
     }
@@ -875,6 +873,182 @@ final class QuickBooksDataAPI: ObservableObject {
                 return "QuickBooks authorization needs attention (HTTP \(statusCode)). \(detail) Reconnect QuickBooks, then retry sync."
             }
         }
+    }
+}
+
+private extension QuickBooksDataAPI {
+    func performPaymentsTokenRequest(
+        _ requestBuilder: @escaping () -> URLRequest?,
+        completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void
+    ) {
+        refreshTokensIfNeeded { ok in
+            guard ok, let request = requestBuilder() else {
+                completion(.failure(QBError.unauthorized))
+                return
+            }
+
+            URLSession.shared.dataTask(with: request) { data, response, error in
+                Task { @MainActor in
+                    if let error {
+                        completion(.failure(error))
+                        return
+                    }
+                    if let httpError = self.resolvePaymentsHTTPError(data: data, response: response) {
+                        self.clearRejectedSessionIfNeeded(httpError)
+                        completion(.failure(httpError))
+                        return
+                    }
+                    guard let data, !data.isEmpty else {
+                        completion(.failure(QBError.decodingDetail("QuickBooks Payments returned an empty token response. Headers: \(Self.headerSummary(response))")))
+                        return
+                    }
+                    if let decoded = try? JSONDecoder().decode(QuickBooksPaymentsTokenResponse.self, from: data),
+                       !decoded.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        completion(.success(decoded))
+                        return
+                    }
+                    let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if let token = Self.firstStringValue(in: data, matching: ["value", "token", "id"]), !token.isEmpty {
+                        completion(.success(QuickBooksPaymentsTokenResponse(value: token)))
+                        return
+                    }
+                    completion(.failure(QBError.decodingDetail("Unable to find a token value in QuickBooks Payments response. Raw response: \(raw.prefix(8000))")))
+                }
+            }.resume()
+        }
+    }
+
+    func performPaymentsChargeRequest(
+        _ requestBuilder: @escaping () -> URLRequest?,
+        completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void
+    ) {
+        refreshTokensIfNeeded { ok in
+            guard ok, let request = requestBuilder() else {
+                completion(.failure(QBError.unauthorized))
+                return
+            }
+
+            URLSession.shared.dataTask(with: request) { data, response, error in
+                Task { @MainActor in
+                    if let error {
+                        completion(.failure(error))
+                        return
+                    }
+                    if let httpError = self.resolvePaymentsHTTPError(data: data, response: response) {
+                        self.clearRejectedSessionIfNeeded(httpError)
+                        completion(.failure(httpError))
+                        return
+                    }
+
+                    let headerChargeID = Self.chargeIDFromHeaders(response)
+                    guard let data, !data.isEmpty else {
+                        if let headerChargeID {
+                            completion(.success(QuickBooksPaymentsChargeResponse.placeholder(id: headerChargeID, status: "captured")))
+                        } else {
+                            completion(.failure(QBError.decodingDetail("QuickBooks Payments returned an empty charge response. Headers: \(Self.headerSummary(response))")))
+                        }
+                        return
+                    }
+
+                    if let decoded = try? JSONDecoder().decode(QuickBooksPaymentsChargeResponse.self, from: data) {
+                        completion(.success(decoded))
+                        return
+                    }
+
+                    let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if let charge = Self.chargeResponseFromRawJSON(data: data, fallbackID: headerChargeID) {
+                        completion(.success(charge))
+                        return
+                    }
+
+                    completion(.failure(QBError.decodingDetail("Unable to parse QuickBooks Payments charge response. Raw response: \(raw.prefix(8000)). Headers: \(Self.headerSummary(response))")))
+                }
+            }.resume()
+        }
+    }
+
+    static func headerSummary(_ response: URLResponse?) -> String {
+        guard let http = response as? HTTPURLResponse else { return "No HTTP response" }
+        return http.allHeaderFields.map { "\($0.key): \($0.value)" }.joined(separator: "; ")
+    }
+
+    static func chargeIDFromHeaders(_ response: URLResponse?) -> String? {
+        guard let http = response as? HTTPURLResponse else { return nil }
+        let candidates = ["Location", "location", "Intuit-Tid", "intuit_tid", "intuit_tid"]
+        for key in candidates {
+            if let value = http.allHeaderFields[key] as? String {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.contains("/") {
+                    return trimmed.split(separator: "/").last.map(String.init)
+                }
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        return nil
+    }
+
+    static func firstStringValue(in data: Data, matching keys: Set<String>) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        return firstStringValue(in: json, matching: keys)
+    }
+
+    static func firstStringValue(in value: Any, matching keys: Set<String>) -> String? {
+        if let dict = value as? [String: Any] {
+            for (key, raw) in dict where keys.contains(key) {
+                if let str = raw as? String, !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return str }
+                if let num = raw as? NSNumber { return num.stringValue }
+            }
+            for raw in dict.values {
+                if let found = firstStringValue(in: raw, matching: keys) { return found }
+            }
+        } else if let array = value as? [Any] {
+            for raw in array {
+                if let found = firstStringValue(in: raw, matching: keys) { return found }
+            }
+        }
+        return nil
+    }
+
+    static func firstBoolValue(in value: Any, matching keys: Set<String>) -> Bool? {
+        if let dict = value as? [String: Any] {
+            for (key, raw) in dict where keys.contains(key) {
+                if let bool = raw as? Bool { return bool }
+                if let num = raw as? NSNumber { return num.boolValue }
+                if let str = raw as? String {
+                    let normalized = str.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    if ["true", "1", "yes", "y"].contains(normalized) { return true }
+                    if ["false", "0", "no", "n"].contains(normalized) { return false }
+                }
+            }
+            for raw in dict.values {
+                if let found = firstBoolValue(in: raw, matching: keys) { return found }
+            }
+        } else if let array = value as? [Any] {
+            for raw in array {
+                if let found = firstBoolValue(in: raw, matching: keys) { return found }
+            }
+        }
+        return nil
+    }
+
+    static func chargeResponseFromRawJSON(data: Data, fallbackID: String?) -> QuickBooksPaymentsChargeResponse? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        let id = firstStringValue(in: json, matching: ["id", "chargeId", "chargeID", "paymentId", "paymentID", "txnId", "TxnId"]) ?? fallbackID
+        guard let id, !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return QuickBooksPaymentsChargeResponse(
+            created: firstStringValue(in: json, matching: ["created", "createdAt", "TxnDate", "txnDate"]),
+            status: firstStringValue(in: json, matching: ["status", "Status"]),
+            amount: firstStringValue(in: json, matching: ["amount", "Amount", "TotalAmt", "totalAmt"]),
+            currency: firstStringValue(in: json, matching: ["currency", "Currency", "currencyCode"]),
+            token: firstStringValue(in: json, matching: ["token", "value"]),
+            capture: firstBoolValue(in: json, matching: ["capture", "captured"]),
+            id: id,
+            authCode: firstStringValue(in: json, matching: ["authCode", "authorizationCode", "authorization_code"]),
+            clientTransID: firstStringValue(in: json, matching: ["clientTransID", "clientTransId", "clientTransactionID"]),
+            card: nil,
+            context: nil,
+            captureDetail: nil
+        )
     }
 }
 
@@ -1592,6 +1766,10 @@ struct QuickBooksPaymentsTokenCreateRequest: Codable {
 struct QuickBooksPaymentsTokenResponse: Decodable {
     let value: String
 
+    init(value: String) {
+        self.value = value
+    }
+
     private enum CodingKeys: String, CodingKey {
         case value
         case token
@@ -1864,6 +2042,51 @@ struct QuickBooksPaymentsChargeResponse: Decodable {
     let card: QuickBooksPaymentsMaskedCard?
     let context: QuickBooksPaymentsResponseContext?
     let captureDetail: QuickBooksPaymentsChargeCaptureDetail?
+
+    init(
+        created: String?,
+        status: String?,
+        amount: String?,
+        currency: String?,
+        token: String?,
+        capture: Bool?,
+        id: String,
+        authCode: String?,
+        clientTransID: String?,
+        card: QuickBooksPaymentsMaskedCard?,
+        context: QuickBooksPaymentsResponseContext?,
+        captureDetail: QuickBooksPaymentsChargeCaptureDetail?
+    ) {
+        self.created = created
+        self.status = status
+        self.amount = amount
+        self.currency = currency
+        self.token = token
+        self.capture = capture
+        self.id = id
+        self.authCode = authCode
+        self.clientTransID = clientTransID
+        self.card = card
+        self.context = context
+        self.captureDetail = captureDetail
+    }
+
+    static func placeholder(id: String, status: String?) -> QuickBooksPaymentsChargeResponse {
+        QuickBooksPaymentsChargeResponse(
+            created: nil,
+            status: status,
+            amount: nil,
+            currency: nil,
+            token: nil,
+            capture: true,
+            id: id,
+            authCode: nil,
+            clientTransID: nil,
+            card: nil,
+            context: nil,
+            captureDetail: nil
+        )
+    }
 
     private enum CodingKeys: String, CodingKey {
         case created, status, amount, currency, token, capture, id, authCode, clientTransID, card, context, captureDetail
