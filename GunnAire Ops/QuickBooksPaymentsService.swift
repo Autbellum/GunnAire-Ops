@@ -638,25 +638,33 @@ final class QuickBooksPaymentsService {
         ]
 
         let paymentMethodRef = await resolvePaymentMethodReference(for: paymentKind)
-        let creditCardPayment: QuickBooksCreditCardPayment?
-        switch paymentKind {
-        case .card(let chargeID), .ach(let chargeID):
-            creditCardPayment = QuickBooksCreditCardPayment(
-                CreditChargeInfo: QuickBooksCreditChargeInfo(ProcessPayment: "true"),
-                CreditChargeResponse: QuickBooksCreditChargeResponse(CCTransId: chargeID)
-            )
-        case .manual:
-            creditCardPayment = nil
-        }
+
+        /*
+         Important:
+         The QuickBooks Payments API charge has already been processed before this
+         accounting Payment is created. Do NOT send CreditCardPayment with
+         CreditChargeInfo.ProcessPayment = "true" here.
+
+         That field tells QBO Accounting to process a card itself, which is not
+         supported for this app/session path and causes:
+         "Feature not supported error : true"
+
+         For processed QuickBooks Payments charges, create a normal QBO Payment
+         linked to the invoice and store the charge/client transaction ID in
+         PaymentRefNum + PrivateNote for reconciliation.
+         */
+        let accountingNoteText = clientTransactionID == nil
+            ? note
+            : accountingNote(baseNote: note, clientTransactionID: clientTransactionID!)
 
         return QuickBooksPaymentCreate(
             CustomerRef: QuickBooksReference(value: customerQBID, name: invoice.customer.name),
             TotalAmt: amount,
-            PrivateNote: clientTransactionID == nil ? note : accountingNote(baseNote: note, clientTransactionID: clientTransactionID!),
+            PrivateNote: accountingNoteText,
             PaymentRefNum: paymentRef,
             Line: lines,
             PaymentMethodRef: paymentMethodRef,
-            CreditCardPayment: creditCardPayment
+            CreditCardPayment: nil
         )
     }
 
