@@ -945,11 +945,41 @@ struct QuickBooksBillLine: Codable {
 struct QuickBooksLinkedTxn: Codable {
     let TxnId: String
     let TxnType: String
+
+    private enum CodingKeys: String, CodingKey {
+        case TxnId, TxnType
+    }
+
+    init(TxnId: String, TxnType: String) {
+        self.TxnId = TxnId
+        self.TxnType = TxnType
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        TxnId = try container.decodeIfPresent(String.self, forKey: .TxnId) ?? ""
+        TxnType = try container.decodeIfPresent(String.self, forKey: .TxnType) ?? ""
+    }
 }
 
 struct QuickBooksPaymentLine: Codable {
     let Amount: Double
     let LinkedTxn: [QuickBooksLinkedTxn]
+
+    private enum CodingKeys: String, CodingKey {
+        case Amount, LinkedTxn
+    }
+
+    init(Amount: Double, LinkedTxn: [QuickBooksLinkedTxn]) {
+        self.Amount = Amount
+        self.LinkedTxn = LinkedTxn
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        Amount = try container.decodeIfPresent(Double.self, forKey: .Amount) ?? 0
+        LinkedTxn = try container.decodeIfPresent([QuickBooksLinkedTxn].self, forKey: .LinkedTxn) ?? []
+    }
 }
 
 struct QuickBooksCustomerQueryResponse: Codable {
@@ -1293,6 +1323,22 @@ struct QuickBooksSalesReceipt: Codable, Identifiable {
     let CreditCardPayment: QuickBooksCreditCardPayment?
 
     var id: String { Id }
+
+    private enum CodingKeys: String, CodingKey {
+        case Id, DocNumber, CustomerRef, TotalAmt, TxnDate, PrivateNote, PaymentMethodRef, CreditCardPayment
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
+        DocNumber = try container.decodeIfPresent(String.self, forKey: .DocNumber)
+        CustomerRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .CustomerRef)
+        TotalAmt = try container.decodeIfPresent(Double.self, forKey: .TotalAmt) ?? 0
+        TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
+        PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
+        PaymentMethodRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .PaymentMethodRef)
+        CreditCardPayment = try container.decodeIfPresent(QuickBooksCreditCardPayment.self, forKey: .CreditCardPayment)
+    }
 }
 
 struct QuickBooksSalesReceiptCreate: Codable {
@@ -1356,6 +1402,21 @@ struct QuickBooksDepositList: Codable {
 struct QuickBooksDepositLineDetail: Codable {
     let LinkedTxn: [QuickBooksLinkedTxn]?
     let AccountRef: QuickBooksReference?
+
+    private enum CodingKeys: String, CodingKey {
+        case LinkedTxn, AccountRef
+    }
+
+    init(LinkedTxn: [QuickBooksLinkedTxn]? = nil, AccountRef: QuickBooksReference? = nil) {
+        self.LinkedTxn = LinkedTxn
+        self.AccountRef = AccountRef
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        LinkedTxn = try container.decodeIfPresent([QuickBooksLinkedTxn].self, forKey: .LinkedTxn)
+        AccountRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .AccountRef)
+    }
 }
 
 struct QuickBooksDepositLine: Codable {
@@ -1363,6 +1424,26 @@ struct QuickBooksDepositLine: Codable {
     let DetailType: String
     let Description: String?
     let DepositLineDetail: QuickBooksDepositLineDetail
+
+    private enum CodingKeys: String, CodingKey {
+        case Amount, DetailType, Description, DepositLineDetail
+    }
+
+    init(Amount: Double, DetailType: String, Description: String?, DepositLineDetail: QuickBooksDepositLineDetail) {
+        self.Amount = Amount
+        self.DetailType = DetailType
+        self.Description = Description
+        self.DepositLineDetail = DepositLineDetail
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        Amount = try container.decodeIfPresent(Double.self, forKey: .Amount) ?? 0
+        DetailType = try container.decodeIfPresent(String.self, forKey: .DetailType) ?? "DepositLineDetail"
+        Description = try container.decodeIfPresent(String.self, forKey: .Description)
+        DepositLineDetail = try container.decodeIfPresent(QuickBooksDepositLineDetail.self, forKey: .DepositLineDetail)
+            ?? QuickBooksDepositLineDetail()
+    }
 }
 
 struct QuickBooksDeposit: Codable, Identifiable {
@@ -1374,6 +1455,20 @@ struct QuickBooksDeposit: Codable, Identifiable {
     let Line: [QuickBooksDepositLine]?
 
     var id: String { Id }
+
+    private enum CodingKeys: String, CodingKey {
+        case Id, TxnDate, TotalAmt, PrivateNote, DepositToAccountRef, Line
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
+        TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
+        TotalAmt = try container.decodeIfPresent(Double.self, forKey: .TotalAmt) ?? 0
+        PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
+        DepositToAccountRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .DepositToAccountRef)
+        Line = try container.decodeIfPresent([QuickBooksDepositLine].self, forKey: .Line) ?? []
+    }
 }
 
 struct QuickBooksDepositCreate: Codable {
@@ -1595,16 +1690,29 @@ struct QuickBooksPaymentsLink: Codable, Identifiable {
 }
 
 struct QuickBooksCreditChargeInfo: Codable {
-    let ProcessPayment: String
+    let ProcessPayment: String?
+
+    init(ProcessPayment: String?) {
+        self.ProcessPayment = ProcessPayment
+    }
 }
 
 struct QuickBooksCreditChargeResponse: Codable {
-    let CCTransId: String
+    let CCTransId: String?
+
+    init(CCTransId: String?) {
+        self.CCTransId = CCTransId
+    }
 }
 
 struct QuickBooksCreditCardPayment: Codable {
-    let CreditChargeInfo: QuickBooksCreditChargeInfo
-    let CreditChargeResponse: QuickBooksCreditChargeResponse
+    let CreditChargeInfo: QuickBooksCreditChargeInfo?
+    let CreditChargeResponse: QuickBooksCreditChargeResponse?
+
+    init(CreditChargeInfo: QuickBooksCreditChargeInfo?, CreditChargeResponse: QuickBooksCreditChargeResponse?) {
+        self.CreditChargeInfo = CreditChargeInfo
+        self.CreditChargeResponse = CreditChargeResponse
+    }
 }
 
 struct QuickBooksRefundReceiptCreate: Codable {
