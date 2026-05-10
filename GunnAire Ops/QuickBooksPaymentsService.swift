@@ -85,7 +85,7 @@ final class QuickBooksPaymentsService {
             note: note,
             clientTransactionID: clientTransactionID
         )
-        let charge = try await captureCharge(id: authorized.id, amount: amount)
+        let charge = authorized
 
         guard invoice.quickBooksID.nilIfBlank != nil else {
             return QuickBooksProcessedPaymentResult(
