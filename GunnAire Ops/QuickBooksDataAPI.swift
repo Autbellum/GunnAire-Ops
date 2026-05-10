@@ -372,7 +372,7 @@ final class QuickBooksDataAPI: ObservableObject {
                     } catch {
                         let raw = String(data: data, encoding: .utf8)?
                             .trimmingCharacters(in: .whitespacesAndNewlines)
-                        let sample = raw.map { String($0.prefix(1200)) } ?? "No response body"
+                        let sample = raw.map { String($0.prefix(8000)) } ?? "No response body"
                         completion(.failure(QBError.decodingDetail("\(error.localizedDescription). Raw response: \(sample)")))
                     }
                 }
@@ -412,7 +412,7 @@ final class QuickBooksDataAPI: ObservableObject {
                     } catch {
                         let raw = String(data: data, encoding: .utf8)?
                             .trimmingCharacters(in: .whitespacesAndNewlines)
-                        let sample = raw.map { String($0.prefix(1200)) } ?? "No response body"
+                        let sample = raw.map { String($0.prefix(8000)) } ?? "No response body"
                         completion(.failure(QBError.decodingDetail("\(error.localizedDescription). Raw response: \(sample)")))
                     }
                 }
@@ -1631,8 +1631,8 @@ struct QuickBooksPaymentsCardRecord: Decodable, Identifiable {
         expYear = QuickBooksFlexibleDecoding.string(container, .expYear)
         cardType = QuickBooksFlexibleDecoding.string(container, .cardType)
         number = QuickBooksFlexibleDecoding.string(container, .number)
-        address = try container.decodeIfPresent(QuickBooksPaymentsCardAddress.self, forKey: .address)
-        context = try container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)
+        address = (try? container.decodeIfPresent(QuickBooksPaymentsCardAddress.self, forKey: .address)) ?? nil
+        context = (try? container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)) ?? nil
     }
 }
 
@@ -1735,7 +1735,7 @@ struct QuickBooksPaymentsChargeContext: Codable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        deviceInfo = try container.decodeIfPresent(QuickBooksPaymentsDeviceInfo.self, forKey: .deviceInfo)
+        deviceInfo = (try? container.decodeIfPresent(QuickBooksPaymentsDeviceInfo.self, forKey: .deviceInfo)) ?? nil
         recurring = QuickBooksFlexibleDecoding.bool(container, .recurring)
         tax = QuickBooksFlexibleDecoding.double(container, .tax)
         clientTransID = QuickBooksFlexibleDecoding.string(container, .clientTransID)
@@ -1780,7 +1780,7 @@ struct QuickBooksPaymentsMaskedCard: Decodable {
         name = QuickBooksFlexibleDecoding.string(container, .name)
         expMonth = QuickBooksFlexibleDecoding.string(container, .expMonth)
         expYear = QuickBooksFlexibleDecoding.string(container, .expYear)
-        address = try container.decodeIfPresent(QuickBooksPaymentsCardAddress.self, forKey: .address)
+        address = (try? container.decodeIfPresent(QuickBooksPaymentsCardAddress.self, forKey: .address)) ?? nil
     }
 }
 
@@ -1797,7 +1797,7 @@ struct QuickBooksPaymentsChargeCaptureDetail: Decodable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         created = QuickBooksFlexibleDecoding.string(container, .created)
         amount = QuickBooksFlexibleDecoding.string(container, .amount)
-        context = try container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)
+        context = (try? container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)) ?? nil
     }
 }
 
@@ -1834,9 +1834,9 @@ struct QuickBooksPaymentsChargeResponse: Decodable {
         id = QuickBooksFlexibleDecoding.string(container, .id) ?? UUID().uuidString
         authCode = QuickBooksFlexibleDecoding.string(container, .authCode)
         clientTransID = QuickBooksFlexibleDecoding.string(container, .clientTransID)
-        card = try container.decodeIfPresent(QuickBooksPaymentsMaskedCard.self, forKey: .card)
-        context = try container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)
-        captureDetail = try container.decodeIfPresent(QuickBooksPaymentsChargeCaptureDetail.self, forKey: .captureDetail)
+        card = (try? container.decodeIfPresent(QuickBooksPaymentsMaskedCard.self, forKey: .card)) ?? nil
+        context = (try? container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)) ?? nil
+        captureDetail = (try? container.decodeIfPresent(QuickBooksPaymentsChargeCaptureDetail.self, forKey: .captureDetail)) ?? nil
     }
 }
 
@@ -1874,7 +1874,7 @@ struct QuickBooksPaymentsResponseContext: Codable {
         clientTransID = QuickBooksFlexibleDecoding.string(container, .clientTransID)
         mobile = QuickBooksFlexibleDecoding.bool(container, .mobile)
         isEcommerce = QuickBooksFlexibleDecoding.bool(container, .isEcommerce)
-        deviceInfo = try container.decodeIfPresent(QuickBooksPaymentsDeviceInfo.self, forKey: .deviceInfo)
+        deviceInfo = (try? container.decodeIfPresent(QuickBooksPaymentsDeviceInfo.self, forKey: .deviceInfo)) ?? nil
     }
 }
 
@@ -1914,7 +1914,7 @@ struct QuickBooksPaymentsRefundResponse: Decodable {
         amount = QuickBooksFlexibleDecoding.string(container, .amount)
         description = QuickBooksFlexibleDecoding.string(container, .description)
         id = QuickBooksFlexibleDecoding.string(container, .id) ?? UUID().uuidString
-        context = try container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)
+        context = (try? container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)) ?? nil
         type = QuickBooksFlexibleDecoding.string(container, .type)
     }
 }
@@ -1944,9 +1944,9 @@ struct QuickBooksPaymentsPaymentReceipt: Decodable {
         authCode = QuickBooksFlexibleDecoding.string(container, .authCode)
         amount = QuickBooksFlexibleDecoding.string(container, .amount)
         created = QuickBooksFlexibleDecoding.string(container, .created)
-        card = try container.decodeIfPresent(QuickBooksPaymentsMaskedCard.self, forKey: .card)
-        context = try container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)
-        links = try container.decodeIfPresent([QuickBooksPaymentsLink].self, forKey: .links)
+        card = (try? container.decodeIfPresent(QuickBooksPaymentsMaskedCard.self, forKey: .card)) ?? nil
+        context = (try? container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)) ?? nil
+        links = (try? container.decodeIfPresent([QuickBooksPaymentsLink].self, forKey: .links)) ?? nil
     }
 }
 
