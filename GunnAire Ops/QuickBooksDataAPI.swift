@@ -945,40 +945,38 @@ struct QuickBooksBillLine: Codable {
 struct QuickBooksLinkedTxn: Codable {
     let TxnId: String
     let TxnType: String
-
-    private enum CodingKeys: String, CodingKey {
-        case TxnId, TxnType
-    }
-
-    init(TxnId: String, TxnType: String) {
-        self.TxnId = TxnId
-        self.TxnType = TxnType
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        TxnId = try container.decodeIfPresent(String.self, forKey: .TxnId) ?? ""
-        TxnType = try container.decodeIfPresent(String.self, forKey: .TxnType) ?? ""
-    }
 }
 
 struct QuickBooksPaymentLine: Codable {
     let Amount: Double
-    let LinkedTxn: [QuickBooksLinkedTxn]
+    let LinkedTxn: [QuickBooksLinkedTxn]?
 
     private enum CodingKeys: String, CodingKey {
         case Amount, LinkedTxn
     }
 
-    init(Amount: Double, LinkedTxn: [QuickBooksLinkedTxn]) {
+    init(Amount: Double, LinkedTxn: [QuickBooksLinkedTxn]?) {
         self.Amount = Amount
         self.LinkedTxn = LinkedTxn
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        Amount = try container.decodeIfPresent(Double.self, forKey: .Amount) ?? 0
-        LinkedTxn = try container.decodeIfPresent([QuickBooksLinkedTxn].self, forKey: .LinkedTxn) ?? []
+        Amount = Self.decodeFlexibleDouble(container, key: .Amount) ?? 0
+        LinkedTxn = try container.decodeIfPresent([QuickBooksLinkedTxn].self, forKey: .LinkedTxn)
+    }
+
+    private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
+        if let doubleValue = try? container.decodeIfPresent(Double.self, forKey: key) {
+            return doubleValue
+        }
+        if let intValue = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return Double(intValue)
+        }
+        if let stringValue = try? container.decodeIfPresent(String.self, forKey: key) {
+            return Double(stringValue)
+        }
+        return nil
     }
 }
 
@@ -1257,6 +1255,21 @@ struct QuickBooksPaymentQueryResponse: Codable {
 
 struct QuickBooksPaymentList: Codable {
     let Payment: [QuickBooksPayment]?
+
+    private enum CodingKeys: String, CodingKey {
+        case Payment
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let array = try? container.decodeIfPresent([QuickBooksPayment].self, forKey: .Payment) {
+            Payment = array
+        } else if let single = try? container.decodeIfPresent(QuickBooksPayment.self, forKey: .Payment) {
+            Payment = [single]
+        } else {
+            Payment = nil
+        }
+    }
 }
 
 struct QuickBooksPayment: Codable, Identifiable {
@@ -1280,13 +1293,26 @@ struct QuickBooksPayment: Codable, Identifiable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
         CustomerRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .CustomerRef)
-        TotalAmt = try container.decodeIfPresent(Double.self, forKey: .TotalAmt) ?? 0
+        TotalAmt = Self.decodeFlexibleDouble(container, key: .TotalAmt) ?? 0
         TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
         PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
         PaymentRefNum = try container.decodeIfPresent(String.self, forKey: .PaymentRefNum)
         Line = try container.decodeIfPresent([QuickBooksPaymentLine].self, forKey: .Line)
         PaymentMethodRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .PaymentMethodRef)
         CreditCardPayment = try container.decodeIfPresent(QuickBooksCreditCardPayment.self, forKey: .CreditCardPayment)
+    }
+
+    private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
+        if let doubleValue = try? container.decodeIfPresent(Double.self, forKey: key) {
+            return doubleValue
+        }
+        if let intValue = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return Double(intValue)
+        }
+        if let stringValue = try? container.decodeIfPresent(String.self, forKey: key) {
+            return Double(stringValue)
+        }
+        return nil
     }
 }
 
@@ -1310,6 +1336,21 @@ struct QuickBooksSalesReceiptQueryResponse: Codable {
 
 struct QuickBooksSalesReceiptList: Codable {
     let SalesReceipt: [QuickBooksSalesReceipt]?
+
+    private enum CodingKeys: String, CodingKey {
+        case SalesReceipt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let array = try? container.decodeIfPresent([QuickBooksSalesReceipt].self, forKey: .SalesReceipt) {
+            SalesReceipt = array
+        } else if let single = try? container.decodeIfPresent(QuickBooksSalesReceipt.self, forKey: .SalesReceipt) {
+            SalesReceipt = [single]
+        } else {
+            SalesReceipt = nil
+        }
+    }
 }
 
 struct QuickBooksSalesReceipt: Codable, Identifiable {
@@ -1333,11 +1374,24 @@ struct QuickBooksSalesReceipt: Codable, Identifiable {
         Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
         DocNumber = try container.decodeIfPresent(String.self, forKey: .DocNumber)
         CustomerRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .CustomerRef)
-        TotalAmt = try container.decodeIfPresent(Double.self, forKey: .TotalAmt) ?? 0
+        TotalAmt = Self.decodeFlexibleDouble(container, key: .TotalAmt) ?? 0
         TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
         PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
         PaymentMethodRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .PaymentMethodRef)
         CreditCardPayment = try container.decodeIfPresent(QuickBooksCreditCardPayment.self, forKey: .CreditCardPayment)
+    }
+
+    private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
+        if let doubleValue = try? container.decodeIfPresent(Double.self, forKey: key) {
+            return doubleValue
+        }
+        if let intValue = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return Double(intValue)
+        }
+        if let stringValue = try? container.decodeIfPresent(String.self, forKey: key) {
+            return Double(stringValue)
+        }
+        return nil
     }
 }
 
@@ -1402,21 +1456,6 @@ struct QuickBooksDepositList: Codable {
 struct QuickBooksDepositLineDetail: Codable {
     let LinkedTxn: [QuickBooksLinkedTxn]?
     let AccountRef: QuickBooksReference?
-
-    private enum CodingKeys: String, CodingKey {
-        case LinkedTxn, AccountRef
-    }
-
-    init(LinkedTxn: [QuickBooksLinkedTxn]? = nil, AccountRef: QuickBooksReference? = nil) {
-        self.LinkedTxn = LinkedTxn
-        self.AccountRef = AccountRef
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        LinkedTxn = try container.decodeIfPresent([QuickBooksLinkedTxn].self, forKey: .LinkedTxn)
-        AccountRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .AccountRef)
-    }
 }
 
 struct QuickBooksDepositLine: Codable {
@@ -1424,26 +1463,6 @@ struct QuickBooksDepositLine: Codable {
     let DetailType: String
     let Description: String?
     let DepositLineDetail: QuickBooksDepositLineDetail
-
-    private enum CodingKeys: String, CodingKey {
-        case Amount, DetailType, Description, DepositLineDetail
-    }
-
-    init(Amount: Double, DetailType: String, Description: String?, DepositLineDetail: QuickBooksDepositLineDetail) {
-        self.Amount = Amount
-        self.DetailType = DetailType
-        self.Description = Description
-        self.DepositLineDetail = DepositLineDetail
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        Amount = try container.decodeIfPresent(Double.self, forKey: .Amount) ?? 0
-        DetailType = try container.decodeIfPresent(String.self, forKey: .DetailType) ?? "DepositLineDetail"
-        Description = try container.decodeIfPresent(String.self, forKey: .Description)
-        DepositLineDetail = try container.decodeIfPresent(QuickBooksDepositLineDetail.self, forKey: .DepositLineDetail)
-            ?? QuickBooksDepositLineDetail()
-    }
 }
 
 struct QuickBooksDeposit: Codable, Identifiable {
@@ -1455,20 +1474,6 @@ struct QuickBooksDeposit: Codable, Identifiable {
     let Line: [QuickBooksDepositLine]?
 
     var id: String { Id }
-
-    private enum CodingKeys: String, CodingKey {
-        case Id, TxnDate, TotalAmt, PrivateNote, DepositToAccountRef, Line
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
-        TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
-        TotalAmt = try container.decodeIfPresent(Double.self, forKey: .TotalAmt) ?? 0
-        PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
-        DepositToAccountRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .DepositToAccountRef)
-        Line = try container.decodeIfPresent([QuickBooksDepositLine].self, forKey: .Line) ?? []
-    }
 }
 
 struct QuickBooksDepositCreate: Codable {
