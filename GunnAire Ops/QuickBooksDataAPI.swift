@@ -885,7 +885,8 @@ final class QuickBooksDataAPI: ObservableObject {
         note: String? = nil,
         attachToEntityType: QuickBooksAttachableEntityType? = nil,
         attachToEntityID: String? = nil,
-        completion: @escaping (Result<String, Error>) -> Void
+        completion: @escaping (Result<String, Error>) -> Void,
+        attempt: Int = 0
     ) {
         refreshTokensIfNeeded { ok in
             guard ok else {
@@ -948,7 +949,14 @@ final class QuickBooksDataAPI: ObservableObject {
             URLSession.shared.dataTask(with: request) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                        self.performPaymentsTokenRequest(requestBuilder, completion: completion, attempt: attempt + 1)
+                        self.uploadDocument(
+                            fileURL: fileURL,
+                            note: note,
+                            attachToEntityType: attachToEntityType,
+                            attachToEntityID: attachToEntityID,
+                            completion: completion,
+                            attempt: attempt + 1
+                        )
                     }
                     return
                 }

@@ -965,7 +965,11 @@ struct QuickBooksManagementView: View {
                 required: Bool,
                 fetch: (@escaping (Result<[T], Error>) -> Void) -> Void,
                 apply: @escaping ([T]) -> Void
-            ) async {
+            ) async -> Bool {
+                guard !quickBooksReconnectRequired else {
+                    return false
+                }
+
                 updateSyncStatus(id: id, state: .syncing, detail: "Loading...", count: nil)
                 let result: Result<[T], Error> = await withCheckedContinuation { continuation in
                     fetch { result in
@@ -979,75 +983,56 @@ struct QuickBooksManagementView: View {
                 case .success(let records):
                     apply(records)
                     updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
+                    return true
                 case .failure(let error):
+                    let message = userFacingQuickBooksMessage(for: error)
                     if let qbError = error as? QuickBooksDataAPI.QBError,
                        qbError.requiresReconnect {
                         quickBooksReconnectRequired = true
+                        updateSyncStatus(id: id, state: .failed, detail: message, count: nil)
+                        markPendingSyncStatusesFailed("Reconnect QuickBooks. The saved QuickBooks session was rejected before this resource could sync.")
+                    } else {
+                        updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
                     }
-                    let message = userFacingQuickBooksMessage(for: error)
-                    updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
                     let prefix = syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
                     failures.append("\(prefix): \(message)")
+                    return !quickBooksReconnectRequired
                 }
             }
 
-            await run(id: "customers", required: true, fetch: liveAPI.fetchCustomers) { records in
+            guard await run(id: "customers", required: true, fetch: liveAPI.fetchCustomers, apply: { records in
                 customers = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
-            }
+            }) else { finishQuickBooksResourceSync(with: failures); return }
 
-            await run(id: "catalog", required: true, fetch: liveAPI.fetchItems) { records in
+            guard await run(id: "catalog", required: true, fetch: liveAPI.fetchItems, apply: { records in
                 items = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
-            }
+            }) else { finishQuickBooksResourceSync(with: failures); return }
 
-            await run(id: "estimates", required: true, fetch: liveAPI.fetchEstimates) { records in estimates = records }
-            await run(id: "invoices", required: true, fetch: liveAPI.fetchInvoices) { records in invoices = records }
-            await run(id: "bills", required: true, fetch: liveAPI.fetchBills) { records in bills = records }
-            await run(id: "purchases", required: true, fetch: liveAPI.fetchPurchases) { records in purchases = records }
+            guard await run(id: "estimates", required: true, fetch: liveAPI.fetchEstimates, apply: { records in estimates = records }) else { finishQuickBooksResourceSync(with: failures); return }
+            guard await run(id: "invoices", required: true, fetch: liveAPI.fetchInvoices, apply: { records in invoices = records }) else { finishQuickBooksResourceSync(with: failures); return }
+            guard await run(id: "bills", required: true, fetch: liveAPI.fetchBills, apply: { records in bills = records }) else { finishQuickBooksResourceSync(with: failures); return }
+            guard await run(id: "purchases", required: true, fetch: liveAPI.fetchPurchases, apply: { records in purchases = records }) else { finishQuickBooksResourceSync(with: failures); return }
 
-            await run(id: "vendors", required: true, fetch: liveAPI.fetchVendors) { records in
+            guard await run(id: "vendors", required: true, fetch: liveAPI.fetchVendors, apply: { records in
                 vendors = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
-            }
+            }) else { finishQuickBooksResourceSync(with: failures); return }
 
-            await run(id: "payments", required: true, fetch: liveAPI.fetchPayments) { records in payments = records }
+            guard await run(id: "payments", required: true, fetch: liveAPI.fetchPayments, apply: { records in payments = records }) else { finishQuickBooksResourceSync(with: failures); return }
 
-            await run(id: "paymentMethods", required: true, fetch: liveAPI.fetchPaymentMethods) { records in
+            guard await run(id: "paymentMethods", required: true, fetch: liveAPI.fetchPaymentMethods, apply: { records in
                 paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
-            }
+            }) else { finishQuickBooksResourceSync(with: failures); return }
 
-            await run(id: "storedCards", required: false, fetch: { completion in
+            guard await run(id: "storedCards", required: false, fetch: { completion in
                 liveAPI.fetchCards(forCustomerIDs: customers.map(\.Id), completion: completion)
-            }) { records in
+            }, apply: { records in
                 storedCards = records
-            }
+            }) else { finishQuickBooksResourceSync(with: failures); return }
 
-            await run(id: "salesReceipts", required: true, fetch: liveAPI.fetchSalesReceipts) { records in salesReceipts = records }
-            await run(id: "deposits", required: true, fetch: liveAPI.fetchDeposits) { records in deposits = records }
+            guard await run(id: "salesReceipts", required: true, fetch: liveAPI.fetchSalesReceipts, apply: { records in salesReceipts = records }) else { finishQuickBooksResourceSync(with: failures); return }
+            guard await run(id: "deposits", required: true, fetch: liveAPI.fetchDeposits, apply: { records in deposits = records }) else { finishQuickBooksResourceSync(with: failures); return }
 
-            isLoading = false
-            do {
-                try QuickBooksLocalSync.importSnapshot(
-                    customers: customers,
-                    items: items,
-                    estimates: estimates,
-                    invoices: invoices,
-                    payments: payments,
-                    vendors: vendors,
-                    into: modelContext
-                )
-            } catch {
-                failures.append("Local app sync: \(error.localizedDescription)")
-            }
-            if failures.isEmpty {
-                let now = Date()
-                lastSuccessfulSyncAt = now
-                UserDefaults.standard.set(now, forKey: "QuickBooksLastSuccessfulSyncAt")
-                statusMessage = "All QuickBooks features synced successfully. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, \(storedCards.count) stored cards, and \(deposits.count) deposits."
-            } else if quickBooksReconnectRequired {
-                statusMessage = "QuickBooks authorization needs reconnect. Open Settings, disconnect and reconnect QuickBooks with a company admin, confirm this company authorized the app, then retry sync."
-                actionMessage = "All required QuickBooks features must sync successfully. Stored-card sync is customer-scoped and shown as a warning when unavailable."
-            } else {
-                statusMessage = "QuickBooks sync incomplete. Required features must sync successfully.\n" + failures.joined(separator: "\n")
-            }
+            finishQuickBooksResourceSync(with: failures)
         }
     }
 
@@ -1679,12 +1664,64 @@ struct QuickBooksManagementView: View {
         }
     }
 
+    private func markPendingSyncStatusesFailed(_ detail: String) {
+        let now = Date()
+        syncResourceStatuses = syncResourceStatuses.map { status in
+            guard status.state == .idle || status.state == .syncing else { return status }
+            return QuickBooksSyncResourceStatus(
+                id: status.id,
+                name: status.name,
+                lane: status.lane,
+                required: status.required,
+                state: status.required ? .failed : .warning,
+                detail: detail,
+                count: nil,
+                updatedAt: now
+            )
+        }
+    }
+
     private func updateSyncStatus(id: String, state: QuickBooksSyncState, detail: String, count: Int?) {
         guard let index = syncResourceStatuses.firstIndex(where: { $0.id == id }) else { return }
         syncResourceStatuses[index].state = state
         syncResourceStatuses[index].detail = detail
         syncResourceStatuses[index].count = count
         syncResourceStatuses[index].updatedAt = Date()
+    }
+
+    private func finishQuickBooksResourceSync(with failures: [String]) {
+        isLoading = false
+
+        guard !quickBooksReconnectRequired else {
+            let company = QuickBooksDataAPI.shared.realmID ?? "the selected QuickBooks company"
+            statusMessage = "QuickBooks authorization needs reconnect. Open Settings, disconnect and reconnect QuickBooks with a company admin, confirm company \(company) authorized the production app, then retry sync."
+            actionMessage = failures.first ?? "QuickBooks rejected the saved app session. The app cleared the rejected token so the next sync starts from a fresh reconnect."
+            return
+        }
+
+        var completedFailures = failures
+        do {
+            try QuickBooksLocalSync.importSnapshot(
+                customers: customers,
+                items: items,
+                estimates: estimates,
+                invoices: invoices,
+                payments: payments,
+                vendors: vendors,
+                into: modelContext
+            )
+        } catch {
+            completedFailures.append("Local app sync: \(error.localizedDescription)")
+        }
+
+        if completedFailures.isEmpty {
+            let now = Date()
+            lastSuccessfulSyncAt = now
+            UserDefaults.standard.set(now, forKey: "QuickBooksLastSuccessfulSyncAt")
+            statusMessage = "All QuickBooks features synced successfully. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, \(storedCards.count) stored cards, and \(deposits.count) deposits."
+        } else {
+            statusMessage = "QuickBooks sync incomplete. Required features must sync successfully.\n" + completedFailures.joined(separator: "\n")
+        }
     }
 
     private func userFacingQuickBooksMessage(for error: Error) -> String {
