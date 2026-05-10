@@ -1891,179 +1891,52 @@ extension ContentView {
     
     // MARK: - Fetch and Sync QuickBooks data
     func fetchAndSyncQuickBooksData() {
-        let group = DispatchGroup()
-        var failures: [String] = []
-        var customers: [QuickBooksCustomer] = []
-        var items: [QuickBooksItem] = []
-        var estimates: [QuickBooksEstimate] = []
-        var invoices: [QuickBooksInvoice] = []
-        var bills: [QuickBooksBill] = []
-        var purchases: [QuickBooksPurchase] = []
-        var vendors: [QuickBooksVendor] = []
-        var payments: [QuickBooksPayment] = []
-        var salesReceipts: [QuickBooksSalesReceipt] = []
-        var deposits: [QuickBooksDeposit] = []
-        var paymentMethods: [QuickBooksPaymentMethod] = []
-        var storedCards: [QuickBooksPaymentsCardRecord] = []
+        Task { @MainActor in
+            var failures: [String] = []
+            var customers: [QuickBooksCustomer] = []
+            var items: [QuickBooksItem] = []
+            var estimates: [QuickBooksEstimate] = []
+            var invoices: [QuickBooksInvoice] = []
+            var bills: [QuickBooksBill] = []
+            var purchases: [QuickBooksPurchase] = []
+            var vendors: [QuickBooksVendor] = []
+            var payments: [QuickBooksPayment] = []
+            var salesReceipts: [QuickBooksSalesReceipt] = []
+            var deposits: [QuickBooksDeposit] = []
+            var paymentMethods: [QuickBooksPaymentMethod] = []
+            var storedCards: [QuickBooksPaymentsCardRecord] = []
 
-
-        group.enter()
-        QuickBooksDataAPI.shared.fetchCustomers { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    customers = records
-                case .failure(let error):
-                    failures.append("Customers: \(error.localizedDescription)")
+            func fetch<T>(label: String, _ operation: (@escaping (Result<[T], Error>) -> Void) -> Void) async -> [T] {
+                await withCheckedContinuation { continuation in
+                    operation { result in
+                        DispatchQueue.main.async {
+                            switch result {
+                            case .success(let records):
+                                continuation.resume(returning: records)
+                            case .failure(let error):
+                                failures.append("\(label): \(error.localizedDescription)")
+                                continuation.resume(returning: [])
+                            }
+                        }
+                    }
                 }
-                group.leave()
             }
-        }
 
-        group.enter()
-        QuickBooksDataAPI.shared.fetchItems { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    items = records
-                case .failure(let error):
-                    failures.append("Catalog: \(error.localizedDescription)")
-                }
-                group.leave()
+            customers = await fetch(label: "Customers", QuickBooksDataAPI.shared.fetchCustomers)
+            items = await fetch(label: "Catalog", QuickBooksDataAPI.shared.fetchItems)
+            estimates = await fetch(label: "Estimates", QuickBooksDataAPI.shared.fetchEstimates)
+            invoices = await fetch(label: "Invoices", QuickBooksDataAPI.shared.fetchInvoices)
+            bills = await fetch(label: "Bills", QuickBooksDataAPI.shared.fetchBills)
+            purchases = await fetch(label: "Purchases", QuickBooksDataAPI.shared.fetchPurchases)
+            vendors = await fetch(label: "Vendors", QuickBooksDataAPI.shared.fetchVendors)
+            payments = await fetch(label: "Payments", QuickBooksDataAPI.shared.fetchPayments)
+            salesReceipts = await fetch(label: "Sales Receipts", QuickBooksDataAPI.shared.fetchSalesReceipts)
+            deposits = await fetch(label: "Deposits", QuickBooksDataAPI.shared.fetchDeposits)
+            paymentMethods = await fetch(label: "Payment Methods", QuickBooksDataAPI.shared.fetchPaymentMethods)
+            storedCards = await fetch(label: "Stored Cards") { completion in
+                QuickBooksDataAPI.shared.fetchCards(forCustomerIDs: customers.map(\.Id), completion: completion)
             }
-        }
 
-        group.enter()
-        QuickBooksDataAPI.shared.fetchEstimates { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    estimates = records
-                case .failure(let error):
-                    failures.append("Estimates: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
-        }
-
-        group.enter()
-        QuickBooksDataAPI.shared.fetchInvoices { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    invoices = records
-                case .failure(let error):
-                    failures.append("Invoices: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
-        }
-
-        group.enter()
-        QuickBooksDataAPI.shared.fetchBills { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    bills = records
-                case .failure(let error):
-                    failures.append("Bills: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
-        }
-
-        group.enter()
-        QuickBooksDataAPI.shared.fetchPurchases { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    purchases = records
-                case .failure(let error):
-                    failures.append("Purchases: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
-        }
-
-        group.enter()
-        QuickBooksDataAPI.shared.fetchVendors { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    vendors = records
-                case .failure(let error):
-                    failures.append("Vendors: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
-        }
-
-        group.enter()
-        QuickBooksDataAPI.shared.fetchPayments { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    payments = records
-                case .failure(let error):
-                    failures.append("Payments: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
-        }
-
-        group.enter()
-        QuickBooksDataAPI.shared.fetchSalesReceipts { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    salesReceipts = records
-                case .failure(let error):
-                    failures.append("Sales Receipts: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
-        }
-
-        group.enter()
-        QuickBooksDataAPI.shared.fetchDeposits { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    deposits = records
-                case .failure(let error):
-                    failures.append("Deposits: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
-        }
-
-        group.enter()
-        QuickBooksDataAPI.shared.fetchPaymentMethods { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    paymentMethods = records
-                case .failure(let error):
-                    failures.append("Payment Methods: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
-        }
-
-        group.enter()
-        QuickBooksDataAPI.shared.fetchCards { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let records):
-                    storedCards = records
-                case .failure(let error):
-                    failures.append("Stored Cards: \(error.localizedDescription)")
-                }
-                group.leave()
-            }
-        }
-
-        group.notify(queue: .main) {
             do {
                 try QuickBooksLocalSync.importSnapshot(
                     customers: customers,

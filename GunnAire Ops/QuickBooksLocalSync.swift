@@ -138,8 +138,9 @@ enum QuickBooksLocalSync {
         }
 
         for quickBooksPayment in payments {
-            guard let linkedInvoiceID = quickBooksPayment.Line?
-                .flatMap(\.LinkedTxn!)
+            let linkedTransactions = quickBooksPayment.Line?
+                .flatMap { $0.LinkedTxn ?? [] } ?? []
+            guard let linkedInvoiceID = linkedTransactions
                 .first(where: { $0.TxnType.caseInsensitiveCompare("Invoice") == .orderedSame })?.TxnId,
                   let invoice = invoicesByQBID[linkedInvoiceID] else {
                 continue

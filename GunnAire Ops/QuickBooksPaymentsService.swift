@@ -374,6 +374,13 @@ final class QuickBooksPaymentsService {
         let normalizedCVC =
             input.cvc.filter(\.isNumber)
 
+        guard normalizedCardNumber.count >= 12,
+              (1...12).contains(Int(normalizedMonth) ?? 0),
+              normalizedYear.count == 4,
+              normalizedCVC.count >= 3 else {
+            throw QuickBooksPaymentsServiceError.invalidPaymentInput
+        }
+
         let normalizedPostal =
             input.postalCode?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -727,6 +734,7 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
     case invalidRetryTarget
     case invoiceNotSyncedToQuickBooks
     case quickBooksSessionExpired
+    case invalidPaymentInput
 
     var errorDescription: String? {
         switch self {
@@ -735,13 +743,15 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
         case .chargeNotSynced:
             return "This payment does not have a QuickBooks Payments charge ID to refund."
         case .missingSalesItemReference:
-            return "Set QB_DEFAULT_ITEM_REF before creating QuickBooks refund receipts."
+            return "Set QB_DEFAULT_ITEM_REF to a valid QuickBooks Item.Id before creating QuickBooks invoices, payments, or refund receipts."
         case .invalidRetryTarget:
             return "This QuickBooks sync retry target is not valid for the requested recovery action."
         case .invoiceNotSyncedToQuickBooks:
             return "Sync this invoice to QuickBooks before syncing or retrying the accounting payment."
         case .quickBooksSessionExpired:
             return "Reconnect QuickBooks before processing this payment. The saved QuickBooks session could not be refreshed."
+        case .invalidPaymentInput:
+            return "Enter a valid card number, expiration date, and CVC before sending payment details to QuickBooks Payments."
         }
     }
 }

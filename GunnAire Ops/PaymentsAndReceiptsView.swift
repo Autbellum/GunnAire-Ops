@@ -439,15 +439,17 @@ struct PaymentsAndReceiptsView: View {
                             Text("QuickBooks card processing")
                                 .font(.subheadline.weight(.semibold))
                             TextField("Cardholder name", text: $cardholderName)
-                            TextField("Card number", text: $cardNumber)
+                            SecureField("Card number", text: $cardNumber)
                                 .keyboardType(.numberPad)
+                                .privacySensitive()
                             HStack {
                                 TextField("Exp MM", text: $expirationMonth)
                                     .keyboardType(.numberPad)
                                 TextField("Exp YYYY", text: $expirationYear)
                                     .keyboardType(.numberPad)
-                                TextField("CVC", text: $cardCVC)
+                                SecureField("CVC", text: $cardCVC)
                                     .keyboardType(.numberPad)
+                                    .privacySensitive()
                             }
                             TextField("Billing ZIP", text: $billingPostalCode)
                                 .keyboardType(.numbersAndPunctuation)
@@ -465,8 +467,9 @@ struct PaymentsAndReceiptsView: View {
                     }
                     if selectedMethod == .ach, isQuickBooksConnected {
                         TextField("Account holder name", text: $achAccountHolderName)
-                        TextField("Bank account number", text: $achAccountNumber)
+                        SecureField("Bank account number", text: $achAccountNumber)
                             .keyboardType(.numberPad)
+                            .privacySensitive()
                         TextField("Routing number", text: $achRoutingNumber)
                             .keyboardType(.numberPad)
                         TextField("Phone", text: $achPhone)

@@ -204,6 +204,12 @@ struct QuickBooksManagementView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                         }
+
+                        ForEach(Config.QuickBooks.configurationWarnings, id: \.self) { warning in
+                            Label(warning, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
                     }
 
                     Section("Sync Health") {
@@ -667,7 +673,11 @@ struct QuickBooksManagementView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(Color.brandGold)
                         .foregroundStyle(Color.primaryBlack)
-                        .disabled(!isAuthenticated)
+                        .disabled(!isAuthenticated || customers.isEmpty)
+
+                        Text("Stored cards are fetched and created with the customer-scoped QuickBooks Payments Cards API.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
 
                         if storedCards.isEmpty {
                             Text("No stored QuickBooks payment cards loaded.")
@@ -899,8 +909,8 @@ struct QuickBooksManagementView: View {
                     }
                 }
                 .sheet(isPresented: $showingStoreCardSheet) {
-                    QuickBooksStoreCardComposeView { input in
-                        storeCard(input)
+                    QuickBooksStoreCardComposeView(customers: customers) { customer, input in
+                        storeCard(input, for: customer)
                     }
                     .tint(Color.brandGold)
                 }
@@ -947,85 +957,72 @@ struct QuickBooksManagementView: View {
     }
 
     private func runQuickBooksResourceSync() {
-        let group = DispatchGroup()
-        var failures: [String] = []
-        func run<T>(
-            id: String,
-            required: Bool,
-            fetch: (@escaping (Result<[T], Error>) -> Void) -> Void,
-            apply: @escaping ([T]) -> Void
-        ) {
-            group.enter()
-            fetch { result in
-                DispatchQueue.main.async {
-                    defer { group.leave() }
-                switch result {
-                case .success(let records):
-                        apply(records)
-                        updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
-                case .failure(let error):
-                        if let qbError = error as? QuickBooksDataAPI.QBError,
-                           qbError.requiresReconnect {
-                            quickBooksReconnectRequired = true
+        Task { @MainActor in
+            var failures: [String] = []
+
+            func run<T>(
+                id: String,
+                required: Bool,
+                fetch: (@escaping (Result<[T], Error>) -> Void) -> Void,
+                apply: @escaping ([T]) -> Void
+            ) async {
+                updateSyncStatus(id: id, state: .syncing, detail: "Loading...", count: nil)
+                let result: Result<[T], Error> = await withCheckedContinuation { continuation in
+                    fetch { result in
+                        DispatchQueue.main.async {
+                            continuation.resume(returning: result)
                         }
-                        let message = userFacingQuickBooksMessage(for: error)
-                        updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
-                        let prefix = syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
-                        failures.append("\(prefix): \(message)")
                     }
                 }
+
+                switch result {
+                case .success(let records):
+                    apply(records)
+                    updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
+                case .failure(let error):
+                    if let qbError = error as? QuickBooksDataAPI.QBError,
+                       qbError.requiresReconnect {
+                        quickBooksReconnectRequired = true
+                    }
+                    let message = userFacingQuickBooksMessage(for: error)
+                    updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
+                    let prefix = syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
+                    failures.append("\(prefix): \(message)")
+                }
             }
-        }
 
-        run(id: "customers", required: true, fetch: liveAPI.fetchCustomers) { records in
-            customers = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
-        }
+            await run(id: "customers", required: true, fetch: liveAPI.fetchCustomers) { records in
+                customers = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
+            }
 
-        run(id: "catalog", required: true, fetch: liveAPI.fetchItems) { records in
-            items = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
-        }
+            await run(id: "catalog", required: true, fetch: liveAPI.fetchItems) { records in
+                items = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
+            }
 
-        run(id: "estimates", required: true, fetch: liveAPI.fetchEstimates) { records in
-            estimates = records
-        }
+            await run(id: "estimates", required: true, fetch: liveAPI.fetchEstimates) { records in estimates = records }
+            await run(id: "invoices", required: true, fetch: liveAPI.fetchInvoices) { records in invoices = records }
+            await run(id: "bills", required: true, fetch: liveAPI.fetchBills) { records in bills = records }
+            await run(id: "purchases", required: true, fetch: liveAPI.fetchPurchases) { records in purchases = records }
 
-        run(id: "invoices", required: true, fetch: liveAPI.fetchInvoices) { records in
-            invoices = records
-        }
+            await run(id: "vendors", required: true, fetch: liveAPI.fetchVendors) { records in
+                vendors = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
+            }
 
-        run(id: "bills", required: true, fetch: liveAPI.fetchBills) { records in
-            bills = records
-        }
+            await run(id: "payments", required: true, fetch: liveAPI.fetchPayments) { records in payments = records }
 
-        run(id: "purchases", required: true, fetch: liveAPI.fetchPurchases) { records in
-            purchases = records
-        }
+            await run(id: "paymentMethods", required: true, fetch: liveAPI.fetchPaymentMethods) { records in
+                paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
+            }
 
-        run(id: "vendors", required: true, fetch: liveAPI.fetchVendors) { records in
-            vendors = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
-        }
+            await run(id: "storedCards", required: false, fetch: { completion in
+                liveAPI.fetchCards(forCustomerIDs: customers.map(\.Id), completion: completion)
+            }) { records in
+                storedCards = records
+            }
 
-        run(id: "payments", required: true, fetch: liveAPI.fetchPayments) { records in
-            payments = records
-        }
+            await run(id: "salesReceipts", required: true, fetch: liveAPI.fetchSalesReceipts) { records in salesReceipts = records }
+            await run(id: "deposits", required: true, fetch: liveAPI.fetchDeposits) { records in deposits = records }
 
-        run(id: "paymentMethods", required: true, fetch: liveAPI.fetchPaymentMethods) { records in
-            paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
-        }
-
-        run(id: "storedCards", required: true, fetch: liveAPI.fetchCards) { records in
-            storedCards = records
-        }
-
-        run(id: "salesReceipts", required: true, fetch: liveAPI.fetchSalesReceipts) { records in
-            salesReceipts = records
-        }
-
-        run(id: "deposits", required: true, fetch: liveAPI.fetchDeposits) { records in
-            deposits = records
-        }
-
-        group.notify(queue: .main) {
             isLoading = false
             do {
                 try QuickBooksLocalSync.importSnapshot(
@@ -1047,9 +1044,9 @@ struct QuickBooksManagementView: View {
                 statusMessage = "All QuickBooks features synced successfully. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, \(storedCards.count) stored cards, and \(deposits.count) deposits."
             } else if quickBooksReconnectRequired {
                 statusMessage = "QuickBooks authorization needs reconnect. Open Settings, disconnect and reconnect QuickBooks with a company admin, confirm this company authorized the app, then retry sync."
-                actionMessage = "All QuickBooks features are required. Sync cannot be marked complete until authorization is restored and every resource syncs successfully."
+                actionMessage = "All required QuickBooks features must sync successfully. Stored-card sync is customer-scoped and shown as a warning when unavailable."
             } else {
-                statusMessage = "QuickBooks sync incomplete. All features are required.\n" + failures.joined(separator: "\n")
+                statusMessage = "QuickBooks sync incomplete. Required features must sync successfully.\n" + failures.joined(separator: "\n")
             }
         }
     }
@@ -1415,18 +1412,18 @@ struct QuickBooksManagementView: View {
         }
     }
 
-    private func storeCard(_ input: QuickBooksPaymentsCardInput) {
-        performAction(message: "Storing QuickBooks card...") {
+    private func storeCard(_ input: QuickBooksPaymentsCardInput, for customer: QuickBooksCustomer) {
+        performAction(message: "Storing QuickBooks card for \(customer.DisplayName)...") {
             Task {
                 do {
                     let token = try await QuickBooksPaymentsService.shared.createStandaloneCardToken(input)
                     let card = try await withCheckedThrowingContinuation { continuation in
-                        liveAPI.createStoredCard(QuickBooksPaymentsStoredCardCreateRequest(value: token.value)) { result in
+                        liveAPI.createStoredCard(QuickBooksPaymentsStoredCardCreateRequest(value: token.value), forCustomerID: customer.Id) { result in
                             continuation.resume(with: result)
                         }
                     }
                     await MainActor.run {
-                        actionMessage = "Stored QuickBooks card: \(card.number ?? card.id). Next step: add a local StoredPaymentMethod model to persist the customer-card mapping before using this card for recurring billing."
+                        actionMessage = "Stored QuickBooks card for \(customer.DisplayName): \(card.number ?? card.id). Next step: add a local StoredPaymentMethod model to persist the customer-card mapping before using this card for recurring billing."
                         syncAllQuickBooksData()
                     }
                 } catch {
@@ -1982,8 +1979,10 @@ private struct QuickBooksPaymentComposeView: View {
 private struct QuickBooksStoreCardComposeView: View {
     @Environment(\.dismiss) private var dismiss
 
-    let onStore: (QuickBooksPaymentsCardInput) -> Void
+    let customers: [QuickBooksCustomer]
+    let onStore: (QuickBooksCustomer, QuickBooksPaymentsCardInput) -> Void
 
+    @State private var selectedCustomerIndex = 0
     @State private var cardholderName = ""
     @State private var cardNumber = ""
     @State private var expirationMonth = ""
@@ -1994,24 +1993,47 @@ private struct QuickBooksStoreCardComposeView: View {
     @State private var region = ""
     @State private var postalCode = ""
 
+    private var selectedCustomer: QuickBooksCustomer? {
+        guard customers.indices.contains(selectedCustomerIndex) else { return nil }
+        return customers[selectedCustomerIndex]
+    }
+
     var body: some View {
         NavigationStack {
             Form {
+                Section("Customer") {
+                    if customers.isEmpty {
+                        Text("Sync QuickBooks customers before storing a card.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        Picker("QuickBooks Customer", selection: $selectedCustomerIndex) {
+                            ForEach(customers.indices, id: \.self) { index in
+                                Text(customers[index].DisplayName).tag(index)
+                            }
+                        }
+                    }
+                }
+
                 Section("Store Card") {
                     TextField("Cardholder name", text: $cardholderName)
-                    TextField("Card number", text: $cardNumber)
+                    SecureField("Card number", text: $cardNumber)
                         .keyboardType(.numberPad)
+                        .privacySensitive()
                     TextField("Exp MM", text: $expirationMonth)
                         .keyboardType(.numberPad)
                     TextField("Exp YYYY", text: $expirationYear)
                         .keyboardType(.numberPad)
-                    TextField("CVC", text: $cvc)
+                    SecureField("CVC", text: $cvc)
                         .keyboardType(.numberPad)
+                        .privacySensitive()
                     TextField("Street Address", text: $streetAddress)
                     TextField("City", text: $city)
                     TextField("State", text: $region)
                     TextField("Postal Code", text: $postalCode)
                         .keyboardType(.numbersAndPunctuation)
+                    Text("QuickBooks requires stored cards to be attached to a customer. Card number and CVC are only used to create a Payments token and are not saved locally.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
             }
             .navigationTitle("Store Card")
@@ -2021,13 +2043,15 @@ private struct QuickBooksStoreCardComposeView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Store") {
+                        guard let selectedCustomer else { return }
                         onStore(
+                            selectedCustomer,
                             QuickBooksPaymentsCardInput(
                                 cardholderName: cardholderName,
-                                cardNumber: cardNumber,
-                                expMonth: expirationMonth,
-                                expYear: expirationYear,
-                                cvc: cvc,
+                                cardNumber: cardNumber.filter(\.isNumber),
+                                expMonth: expirationMonth.filter(\.isNumber),
+                                expYear: expirationYear.filter(\.isNumber),
+                                cvc: cvc.filter(\.isNumber),
                                 postalCode: postalCode.nilIfBlank,
                                 addressLine: streetAddress.nilIfBlank,
                                 city: city.nilIfBlank,
@@ -2037,7 +2061,24 @@ private struct QuickBooksStoreCardComposeView: View {
                         )
                         dismiss()
                     }
-                    .disabled(cardholderName.isEmpty || cardNumber.isEmpty || expirationMonth.isEmpty || expirationYear.isEmpty || cvc.isEmpty)
+                    .disabled(
+                        selectedCustomer == nil ||
+                        cardholderName.isEmpty ||
+                        cardNumber.filter(\.isNumber).count < 12 ||
+                        expirationMonth.filter(\.isNumber).isEmpty ||
+                        expirationYear.filter(\.isNumber).count != 4 ||
+                        cvc.filter(\.isNumber).count < 3
+                    )
+                }
+            }
+            .onAppear {
+                if let selectedCustomer, cardholderName.isEmpty {
+                    cardholderName = selectedCustomer.DisplayName
+                }
+            }
+            .onChange(of: selectedCustomerIndex) { _, _ in
+                if let selectedCustomer, cardholderName.isEmpty {
+                    cardholderName = selectedCustomer.DisplayName
                 }
             }
         }
@@ -2082,15 +2123,17 @@ private struct QuickBooksCardChargeComposeView: View {
                         .keyboardType(.decimalPad)
                     TextField("Notes", text: $note)
                     TextField("Cardholder name", text: $cardholderName)
-                    TextField("Card number", text: $cardNumber)
+                    SecureField("Card number", text: $cardNumber)
                         .keyboardType(.numberPad)
+                        .privacySensitive()
                     HStack {
                         TextField("Exp MM", text: $expirationMonth)
                             .keyboardType(.numberPad)
                         TextField("Exp YYYY", text: $expirationYear)
                             .keyboardType(.numberPad)
-                        TextField("CVC", text: $cvc)
+                        SecureField("CVC", text: $cvc)
                             .keyboardType(.numberPad)
+                            .privacySensitive()
                     }
                     TextField("Billing ZIP", text: $postalCode)
                         .keyboardType(.numbersAndPunctuation)

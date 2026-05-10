@@ -54,8 +54,12 @@ final class QuickBooksAuthAPI: ObservableObject {
     
     // MARK: - OAuth2 Flow
     func startSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding, completion: @escaping (Result<Void, Error>) -> Void) {
-        guard !clientID.hasPrefix("YOUR_"), !clientSecret.hasPrefix("YOUR_"), !redirectURI.hasPrefix("YOUR_") else {
+        guard Config.QuickBooks.isConfigured else {
             completion(Result<Void, Error>.failure(QBOError.missingConfiguration))
+            return
+        }
+        if Config.QuickBooks.isProduction && !Config.QuickBooks.redirectURIIsHTTPS {
+            completion(Result<Void, Error>.failure(QBOError.invalidRedirectURI(redirectURI)))
             return
         }
         guard let authURL = makeAuthURL() else {
@@ -113,19 +117,8 @@ final class QuickBooksAuthAPI: ObservableObject {
     }
 
     private func makeAuthURL() -> URL? {
-        // QBO OAuth endpoint
-        var components = URLComponents(string: "https://appcenter.intuit.com/connect/oauth2")
-        var scopes = [
-            "com.intuit.quickbooks.accounting",
-            "openid",
-            "profile",
-            "email",
-            "phone",
-            "address"
-        ]
-        if Config.QuickBooks.enablePaymentsScope {
-            scopes.append("com.intuit.quickbooks.payment")
-        }
+        var components = URLComponents(string: Config.QuickBooks.authorizationEndpoint)
+        let scopes = Config.QuickBooks.oauthScopes
         let state = UUID().uuidString
         pendingOAuthState = state
         components?.queryItems = [
@@ -198,7 +191,9 @@ final class QuickBooksAuthAPI: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = Config.QuickBooks.requestTimeoutSeconds
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         let credentials = "\(clientID):\(clientSecret)"
         guard let credData = credentials.data(using: .utf8) else {
@@ -207,10 +202,13 @@ final class QuickBooksAuthAPI: ObservableObject {
         }
         request.setValue("Basic \(credData.base64EncodedString())", forHTTPHeaderField: "Authorization")
 
-        let escapedCode = code.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? code
-        let escapedRedirect = redirectURI.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? redirectURI
-        let body = "grant_type=authorization_code&code=\(escapedCode)&redirect_uri=\(escapedRedirect)"
-        request.httpBody = body.data(using: .utf8)
+        var bodyComponents = URLComponents()
+        bodyComponents.queryItems = [
+            URLQueryItem(name: "grant_type", value: "authorization_code"),
+            URLQueryItem(name: "code", value: code),
+            URLQueryItem(name: "redirect_uri", value: redirectURI)
+        ]
+        request.httpBody = bodyComponents.percentEncodedQuery?.data(using: .utf8)
 
         URLSession.shared.dataTask(with: request) { data, response, error in
             if let error {
@@ -218,8 +216,14 @@ final class QuickBooksAuthAPI: ObservableObject {
                 return
             }
 
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode), let data else {
+            guard let http = response as? HTTPURLResponse, let data else {
                 completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.unknown))
+                return
+            }
+
+            guard (200...299).contains(http.statusCode) else {
+                let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.tokenExchangeFailed(http.statusCode, raw)))
                 return
             }
 
@@ -229,7 +233,8 @@ final class QuickBooksAuthAPI: ObservableObject {
                 let refresh = json["refresh_token"] as? String,
                 let expiresIn = json["expires_in"] as? Double
             else {
-                completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.unknown))
+                let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.tokenExchangeFailed(http.statusCode, raw)))
                 return
             }
 
@@ -250,11 +255,20 @@ final class QuickBooksAuthAPI: ObservableObject {
             return
         }
         let base = environment == "sandbox" ? "https://sandbox-quickbooks.api.intuit.com/v3/company/" : "https://quickbooks.api.intuit.com/v3/company/"
-        guard let url = URL(string: base + realmID + "/query?query=select * from " + resource.rawValue.capitalized) else {
+        guard var components = URLComponents(string: base + realmID + "/query") else {
+            completion(Result<Data, Error>.failure(QBOError.invalidEndpoint))
+            return
+        }
+        components.queryItems = [
+            URLQueryItem(name: "query", value: "select * from \(resource.rawValue.capitalized)"),
+            URLQueryItem(name: "minorversion", value: "75")
+        ]
+        guard let url = components.url else {
             completion(Result<Data, Error>.failure(QBOError.invalidEndpoint))
             return
         }
         var request = URLRequest(url: url)
+        request.timeoutInterval = Config.QuickBooks.requestTimeoutSeconds
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         // Perform network call (omitted for brevity)
@@ -263,7 +277,7 @@ final class QuickBooksAuthAPI: ObservableObject {
 }
 
 enum QBOError: Error, LocalizedError {
-    case invalidAuthURL, missingAuthCode, missingRealmID, invalidState, notAuthenticated, invalidEndpoint, invalidRedirectURI(String), callbackSchemeNotRegistered(String), missingConfiguration, providerError(String, String?), unknown
+    case invalidAuthURL, missingAuthCode, missingRealmID, invalidState, notAuthenticated, invalidEndpoint, invalidRedirectURI(String), callbackSchemeNotRegistered(String), missingConfiguration, providerError(String, String?), tokenExchangeFailed(Int, String?), unknown
     var errorDescription: String? {
         switch self {
         case .invalidAuthURL: return "Could not build authorization URL."
@@ -276,6 +290,7 @@ enum QBOError: Error, LocalizedError {
         case .callbackSchemeNotRegistered(let scheme): return "QuickBooks callback scheme '\(scheme)' is not registered in app URL Types."
         case .missingConfiguration: return "QuickBooks OAuth credentials are missing in Config/environment variables."
         case .providerError(let code, let description): return "QuickBooks OAuth error: \(code)\(description.map { " - \($0)" } ?? "")"
+        case .tokenExchangeFailed(let statusCode, let detail): return "QuickBooks token exchange failed (HTTP \(statusCode))\(detail.map { ": \($0)" } ?? ""). Confirm the redirect URI exactly matches the Intuit Developer Portal and the client credentials match the selected environment."
         case .unknown: return "An unknown error occurred."
         }
     }

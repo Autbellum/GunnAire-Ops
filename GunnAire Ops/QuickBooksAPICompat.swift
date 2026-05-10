@@ -113,8 +113,20 @@ final class QuickBooksAPI: ObservableObject {
         data.fetchCards(completion: completion)
     }
 
+    func fetchCards(forCustomerID customerID: String, completion: @escaping (Result<[QuickBooksPaymentsCardRecord], Error>) -> Void) {
+        data.fetchCards(forCustomerID: customerID, completion: completion)
+    }
+
+    func fetchCards(forCustomerIDs customerIDs: [String], completion: @escaping (Result<[QuickBooksPaymentsCardRecord], Error>) -> Void) {
+        data.fetchCards(forCustomerIDs: customerIDs, completion: completion)
+    }
+
     func createStoredCard(_ card: QuickBooksPaymentsStoredCardCreateRequest, completion: @escaping (Result<QuickBooksPaymentsCardRecord, Error>) -> Void) {
         data.createStoredCard(card, completion: completion)
+    }
+
+    func createStoredCard(_ card: QuickBooksPaymentsStoredCardCreateRequest, forCustomerID customerID: String, completion: @escaping (Result<QuickBooksPaymentsCardRecord, Error>) -> Void) {
+        data.createStoredCard(card, forCustomerID: customerID, completion: completion)
     }
 
     func fetchPaymentReceipt(id: String, completion: @escaping (Result<QuickBooksPaymentsPaymentReceipt, Error>) -> Void) {

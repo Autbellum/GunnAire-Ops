@@ -44,6 +44,7 @@ enum KeychainStore {
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
             kSecAttrAccount: account,
+            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
             kSecValueData: data
         ]
         let status = SecItemAdd(query as CFDictionary, nil)

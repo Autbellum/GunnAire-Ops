@@ -41,12 +41,16 @@ final class QuickBooksDataAPI: ObservableObject {
         return "https://quickbooks.api.intuit.com/v3/company/"
     }
 
-    private var paymentsBaseURL: String {
+    private var paymentsAPIRootURL: String {
         let env = (storedEnvironment ?? Config.QuickBooks.environment).lowercased()
         if env == "sandbox" {
-            return "https://sandbox.api.intuit.com/quickbooks/v4/payments"
+            return "https://sandbox.api.intuit.com/quickbooks/v4"
         }
-        return "https://api.intuit.com/quickbooks/v4/payments"
+        return "https://api.intuit.com/quickbooks/v4"
+    }
+
+    private var paymentsBaseURL: String {
+        "\(paymentsAPIRootURL)/payments"
     }
 
     var realmID: String? {
@@ -170,8 +174,14 @@ final class QuickBooksDataAPI: ObservableObject {
         }
         request.setValue("Basic \(credData.base64EncodedString())", forHTTPHeaderField: "Authorization")
 
-        let escapedToken = refreshToken.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? refreshToken
-        request.httpBody = "grant_type=refresh_token&refresh_token=\(escapedToken)".data(using: .utf8)
+        request.timeoutInterval = Config.QuickBooks.requestTimeoutSeconds
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        var bodyComponents = URLComponents()
+        bodyComponents.queryItems = [
+            URLQueryItem(name: "grant_type", value: "refresh_token"),
+            URLQueryItem(name: "refresh_token", value: refreshToken)
+        ]
+        request.httpBody = bodyComponents.percentEncodedQuery?.data(using: .utf8)
 
         URLSession.shared.dataTask(with: request) { data, response, error in
             Task { @MainActor in
@@ -235,8 +245,12 @@ final class QuickBooksDataAPI: ObservableObject {
         guard let url = components.url else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = method
+        request.timeoutInterval = Config.QuickBooks.requestTimeoutSeconds
         request.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if method.uppercased() != "GET" {
+            request.setValue(UUID().uuidString, forHTTPHeaderField: "Request-Id")
+        }
         if let contentType {
             request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
@@ -254,25 +268,63 @@ final class QuickBooksDataAPI: ObservableObject {
         body: Data? = nil,
         contentType: String? = nil
     ) -> URLRequest? {
+        makeAuthorizedPaymentsRequest(baseURL: paymentsBaseURL, path: path, method: method, body: body, contentType: contentType)
+    }
+
+    private func authorizedPaymentsCustomerRequest(
+        path: String,
+        method: String = "GET",
+        body: Data? = nil,
+        contentType: String? = nil
+    ) -> URLRequest? {
+        makeAuthorizedPaymentsRequest(baseURL: paymentsAPIRootURL, path: path, method: method, body: body, contentType: contentType)
+    }
+
+    private func makeAuthorizedPaymentsRequest(
+        baseURL: String,
+        path: String,
+        method: String,
+        body: Data?,
+        contentType: String?
+    ) -> URLRequest? {
         guard let tokens else {
             return nil
         }
 
         let trimmedPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
-        guard let url = URL(string: "\(paymentsBaseURL)/\(trimmedPath)") else {
+        guard let url = URL(string: "\(baseURL)/\(trimmedPath)") else {
             return nil
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = method
+        request.timeoutInterval = Config.QuickBooks.requestTimeoutSeconds
         request.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if method.uppercased() != "GET" {
+            request.setValue(UUID().uuidString, forHTTPHeaderField: "Request-Id")
+        }
         if let contentType {
             request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
         request.httpBody = body
         return request
     }
+    private func retryDelayIfRateLimited(response: URLResponse?, attempt: Int) -> TimeInterval? {
+        guard attempt < Config.QuickBooks.maxRetryAttempts,
+              let http = response as? HTTPURLResponse,
+              http.statusCode == 429 else {
+            return nil
+        }
+
+        let retryAfter = (http.allHeaderFields["Retry-After"] as? String)
+            ?? (http.allHeaderFields["retry-after"] as? String)
+        if let retryAfter, let seconds = Double(retryAfter), seconds > 0 {
+            return min(seconds, 30)
+        }
+        return min(pow(2.0, Double(attempt)), 30)
+    }
+
 
     private func resolveHTTPError(data: Data?, response: URLResponse?) -> QBError? {
         guard let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) else {
@@ -303,6 +355,10 @@ final class QuickBooksDataAPI: ObservableObject {
 
         if http.statusCode == 401 || http.statusCode == 403 {
             return .authorizationFailed(statusCode: http.statusCode, detail: authorizationFailureMessage(detail: "QuickBooks rejected this app session."))
+        }
+
+        if http.statusCode == 429 {
+            return .rateLimited(detail: "QuickBooks throttled this request. The app will retry automatically when possible; reduce simultaneous syncs if this persists.")
         }
 
         return .http(statusCode: http.statusCode)
@@ -336,6 +392,10 @@ final class QuickBooksDataAPI: ObservableObject {
             return .authorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: "QuickBooks Payments rejected this app session."))
         }
 
+        if http.statusCode == 429 {
+            return .rateLimited(detail: "QuickBooks Payments throttled this request. The app will retry automatically when possible; reduce simultaneous syncs if this persists.")
+        }
+
         return .http(statusCode: http.statusCode)
     }
 
@@ -365,7 +425,8 @@ final class QuickBooksDataAPI: ObservableObject {
     private func performAuthorizedDecodingRequest<T: Decodable>(
         _ requestBuilder: @escaping () -> URLRequest?,
         decode type: T.Type,
-        completion: @escaping (Result<T, Error>) -> Void
+        completion: @escaping (Result<T, Error>) -> Void,
+        attempt: Int = 0
     ) {
         refreshTokensIfNeeded { ok in
             guard ok, let request = requestBuilder() else {
@@ -374,6 +435,13 @@ final class QuickBooksDataAPI: ObservableObject {
             }
 
             URLSession.shared.dataTask(with: request) { data, response, error in
+                if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                        self.performAuthorizedDecodingRequest(requestBuilder, decode: type, completion: completion, attempt: attempt + 1)
+                    }
+                    return
+                }
+
                 Task { @MainActor in
                     if let error {
                         completion(.failure(error))
@@ -405,7 +473,8 @@ final class QuickBooksDataAPI: ObservableObject {
     private func performPaymentsDecodingRequest<T: Decodable>(
         _ requestBuilder: @escaping () -> URLRequest?,
         decode type: T.Type,
-        completion: @escaping (Result<T, Error>) -> Void
+        completion: @escaping (Result<T, Error>) -> Void,
+        attempt: Int = 0
     ) {
         refreshTokensIfNeeded { ok in
             guard ok, let request = requestBuilder() else {
@@ -414,6 +483,13 @@ final class QuickBooksDataAPI: ObservableObject {
             }
 
             URLSession.shared.dataTask(with: request) { data, response, error in
+                if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                        self.performPaymentsDecodingRequest(requestBuilder, decode: type, completion: completion, attempt: attempt + 1)
+                    }
+                    return
+                }
+
                 Task { @MainActor in
                     if let error {
                         completion(.failure(error))
@@ -670,43 +746,87 @@ final class QuickBooksDataAPI: ObservableObject {
     func fetchCards(
         completion: @escaping (Result<[QuickBooksPaymentsCardRecord], Error>) -> Void
     ) {
+        // QuickBooks Payments cards are customer-scoped. Use fetchCards(forCustomerID:) or
+        // fetchCards(forCustomerIDs:) when a QBO customer ID is available.
+        completion(.success([]))
+    }
+
+    func fetchCards(
+        forCustomerID customerID: String,
+        completion: @escaping (Result<[QuickBooksPaymentsCardRecord], Error>) -> Void
+    ) {
+        let trimmedID = customerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty,
+              let encodedID = trimmedID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            completion(.failure(QBError.missingCustomerIDForStoredCards))
+            return
+        }
 
         performPaymentsDecodingRequest(
-            { self.authorizedPaymentsRequest(path: "cards") },
+            { self.authorizedPaymentsCustomerRequest(path: "customers/\(encodedID)/cards") },
             decode: QuickBooksPaymentsCardsResponse.self
         ) { result in
-
             switch result {
-
             case .success(let response):
-
                 completion(.success(response.items))
-
             case .failure(let error):
-
-                let message =
-                    error.localizedDescription.lowercased()
-
-                // Many QuickBooks merchant accounts
-                // do NOT expose stored cards.
-
-                if message.contains("404") ||
-                   message.contains("not found") ||
-                   message.contains("cards") {
-
+                if Self.isStoredCardsNotAvailable(error) {
                     completion(.success([]))
                     return
                 }
-
                 completion(.failure(error))
             }
         }
     }
 
+    func fetchCards(
+        forCustomerIDs customerIDs: [String],
+        completion: @escaping (Result<[QuickBooksPaymentsCardRecord], Error>) -> Void
+    ) {
+        let uniqueIDs = Array(NSOrderedSet(array: customerIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })) as? [String] ?? []
+        guard !uniqueIDs.isEmpty else {
+            completion(.success([]))
+            return
+        }
+
+        var aggregate: [QuickBooksPaymentsCardRecord] = []
+        func fetchNext(_ index: Int) {
+            guard index < uniqueIDs.count else {
+                completion(.success(aggregate))
+                return
+            }
+            fetchCards(forCustomerID: uniqueIDs[index]) { result in
+                switch result {
+                case .success(let cards):
+                    aggregate.append(contentsOf: cards)
+                    fetchNext(index + 1)
+                case .failure(let error):
+                    completion(.failure(error))
+                }
+            }
+        }
+        fetchNext(0)
+    }
+
     func createStoredCard(_ card: QuickBooksPaymentsStoredCardCreateRequest, completion: @escaping (Result<QuickBooksPaymentsCardRecord, Error>) -> Void) {
+        completion(.failure(QBError.missingCustomerIDForStoredCards))
+    }
+
+    func createStoredCard(
+        _ card: QuickBooksPaymentsStoredCardCreateRequest,
+        forCustomerID customerID: String,
+        completion: @escaping (Result<QuickBooksPaymentsCardRecord, Error>) -> Void
+    ) {
+        let trimmedID = customerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty,
+              let encodedID = trimmedID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            completion(.failure(QBError.missingCustomerIDForStoredCards))
+            return
+        }
+
         let body = try? JSONEncoder().encode(card)
         performPaymentsDecodingRequest(
-            { self.authorizedPaymentsRequest(path: "cards", method: "POST", body: body, contentType: "application/json") },
+            { self.authorizedPaymentsCustomerRequest(path: "customers/\(encodedID)/cards/createFromToken", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksPaymentsCardRecord.self,
             completion: completion
         )
@@ -826,6 +946,12 @@ final class QuickBooksDataAPI: ObservableObject {
             }
 
             URLSession.shared.dataTask(with: request) { data, response, error in
+                if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                        self.performPaymentsTokenRequest(requestBuilder, completion: completion, attempt: attempt + 1)
+                    }
+                    return
+                }
                 Task { @MainActor in
                     if let error {
                         completion(.failure(error))
@@ -890,6 +1016,8 @@ final class QuickBooksDataAPI: ObservableObject {
         case api(statusCode: Int, detail: String)
         case httpDetail(statusCode: Int, detail: String)
         case authorizationFailed(statusCode: Int, detail: String)
+        case rateLimited(detail: String)
+        case missingCustomerIDForStoredCards
 
         var requiresReconnect: Bool {
             switch self {
@@ -920,6 +1048,10 @@ final class QuickBooksDataAPI: ObservableObject {
                 return "QuickBooks request failed (HTTP \(statusCode)): \(detail)"
             case .authorizationFailed(let statusCode, let detail):
                 return "QuickBooks authorization needs attention (HTTP \(statusCode)). \(detail) Reconnect QuickBooks, then retry sync."
+            case .rateLimited(let detail):
+                return detail
+            case .missingCustomerIDForStoredCards:
+                return "QuickBooks stored cards require a QuickBooks Customer.Id. Select or sync a customer before storing or fetching cards."
             }
         }
     }
@@ -928,7 +1060,8 @@ final class QuickBooksDataAPI: ObservableObject {
 private extension QuickBooksDataAPI {
     func performPaymentsTokenRequest(
         _ requestBuilder: @escaping () -> URLRequest?,
-        completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void
+        completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void,
+        attempt: Int = 0
     ) {
         refreshTokensIfNeeded { ok in
             guard ok, let request = requestBuilder() else {
@@ -937,6 +1070,12 @@ private extension QuickBooksDataAPI {
             }
 
             URLSession.shared.dataTask(with: request) { data, response, error in
+                if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                        self.performPaymentsTokenRequest(requestBuilder, completion: completion, attempt: attempt + 1)
+                    }
+                    return
+                }
                 Task { @MainActor in
                     if let error {
                         completion(.failure(error))
@@ -969,7 +1108,8 @@ private extension QuickBooksDataAPI {
 
     func performPaymentsChargeRequest(
         _ requestBuilder: @escaping () -> URLRequest?,
-        completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void
+        completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void,
+        attempt: Int = 0
     ) {
         refreshTokensIfNeeded { ok in
             guard ok, let request = requestBuilder() else {
@@ -978,6 +1118,12 @@ private extension QuickBooksDataAPI {
             }
 
             URLSession.shared.dataTask(with: request) { data, response, error in
+                if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                        self.performPaymentsChargeRequest(requestBuilder, completion: completion, attempt: attempt + 1)
+                    }
+                    return
+                }
                 Task { @MainActor in
                     if let error {
                         completion(.failure(error))
@@ -1013,6 +1159,20 @@ private extension QuickBooksDataAPI {
                     completion(.failure(QBError.decodingDetail("Unable to parse QuickBooks Payments charge response. Raw response: \(raw.prefix(8000)). Headers: \(Self.headerSummary(response))")))
                 }
             }.resume()
+        }
+    }
+
+    static func isStoredCardsNotAvailable(_ error: Error) -> Bool {
+        guard let qbError = error as? QBError else { return false }
+        switch qbError {
+        case .http(let statusCode):
+            return statusCode == 404
+        case .httpDetail(let statusCode, let detail):
+            return statusCode == 404 || detail.lowercased().contains("not found")
+        case .api(let statusCode, let detail):
+            return statusCode == 404 || detail.lowercased().contains("not found")
+        default:
+            return false
         }
     }
 
