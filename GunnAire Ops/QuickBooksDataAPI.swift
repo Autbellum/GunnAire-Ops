@@ -667,12 +667,39 @@ final class QuickBooksDataAPI: ObservableObject {
         )
     }
 
-    func fetchCards(completion: @escaping (Result<[QuickBooksPaymentsCardRecord], Error>) -> Void) {
+    func fetchCards(
+        completion: @escaping (Result<[QuickBooksPaymentsCardRecord], Error>) -> Void
+    ) {
+
         performPaymentsDecodingRequest(
             { self.authorizedPaymentsRequest(path: "cards") },
             decode: QuickBooksPaymentsCardsResponse.self
         ) { result in
-            completion(result.map(\.items))
+
+            switch result {
+
+            case .success(let response):
+
+                completion(.success(response.items))
+
+            case .failure(let error):
+
+                let message =
+                    error.localizedDescription.lowercased()
+
+                // Many QuickBooks merchant accounts
+                // do NOT expose stored cards.
+
+                if message.contains("404") ||
+                   message.contains("not found") ||
+                   message.contains("cards") {
+
+                    completion(.success([]))
+                    return
+                }
+
+                completion(.failure(error))
+            }
         }
     }
 
@@ -1681,6 +1708,41 @@ struct QuickBooksDeposit: Codable, Identifiable {
     let Line: [QuickBooksDepositLine]?
 
     var id: String { Id }
+
+    private enum CodingKeys: String, CodingKey {
+        case Id
+        case TxnDate
+        case TotalAmt
+        case PrivateNote
+        case DepositToAccountRef
+        case Line
+    }
+
+    init(
+        Id: String,
+        TxnDate: String?,
+        TotalAmt: Double,
+        PrivateNote: String?,
+        DepositToAccountRef: QuickBooksReference?,
+        Line: [QuickBooksDepositLine]?
+    ) {
+        self.Id = Id
+        self.TxnDate = TxnDate
+        self.TotalAmt = TotalAmt
+        self.PrivateNote = PrivateNote
+        self.DepositToAccountRef = DepositToAccountRef
+        self.Line = Line
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
+        TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
+        TotalAmt = QuickBooksFlexibleDecoding.double(container, .TotalAmt) ?? 0
+        PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
+        DepositToAccountRef = try? container.decodeIfPresent(QuickBooksReference.self, forKey: .DepositToAccountRef)
+        Line = try? container.decodeIfPresent([QuickBooksDepositLine].self, forKey: .Line)
+    }
 }
 
 struct QuickBooksDepositCreate: Codable {
