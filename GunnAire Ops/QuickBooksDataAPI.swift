@@ -20,12 +20,18 @@ final class QuickBooksDataAPI: ObservableObject {
     @Published private(set) var storedRealmID: String?
     @Published private(set) var storedEnvironment: String?
 
+    private var tokenRefreshTimer: AnyCancellable?
     private let clientId = Config.QuickBooks.clientID
     private let clientSecret = Config.QuickBooks.clientSecret
     private let realmIDKey = "QuickBooksRealmID"
     private let tokenStorageKey = "QuickBooksOAuthTokens"
     private let keychainAccount = "QuickBooksOAuthPayload"
     private let minorVersion = "75"
+
+    private init() {
+        loadTokens()
+        startAutomaticTokenRefresh()
+    }
 
     private var baseURL: String {
         let env = (storedEnvironment ?? Config.QuickBooks.environment).lowercased()
@@ -129,6 +135,22 @@ final class QuickBooksDataAPI: ObservableObject {
         }
 
         refreshAccessToken(refreshToken: tokens.refreshToken, completion: completion)
+    }
+
+    func refreshSessionIfPossible() async -> Bool {
+        await withCheckedContinuation { continuation in
+            refreshTokensIfNeeded { ok in
+                continuation.resume(returning: ok)
+            }
+        }
+    }
+
+    private func startAutomaticTokenRefresh() {
+        tokenRefreshTimer = Timer.publish(every: 15 * 60, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.refreshTokensIfNeeded { _ in }
+            }
     }
 
     private func refreshAccessToken(refreshToken: String, completion: @escaping (Bool) -> Void) {

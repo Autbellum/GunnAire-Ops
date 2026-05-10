@@ -73,9 +73,7 @@ final class QuickBooksPaymentsService {
         cardInput: QuickBooksPaymentsCardInput,
         note: String?
     ) async throws -> QuickBooksProcessedPaymentResult {
-        guard let customerQBID = invoice.customer.quickBooksID, !customerQBID.isEmpty else {
-            throw QuickBooksPaymentsServiceError.customerNotSynced
-        }
+        let customerQBID = try await prepareInvoiceForQuickBooksPayment(invoice)
 
         let clientTransactionID = Self.chargeClientTransactionID(for: invoice, amount: amount)
         let token = try await createCardToken(cardInput)
@@ -86,15 +84,6 @@ final class QuickBooksPaymentsService {
             clientTransactionID: clientTransactionID
         )
         let charge = authorized
-
-        guard invoice.quickBooksID.nilIfBlank != nil else {
-            return QuickBooksProcessedPaymentResult(
-                charge: charge,
-                accountingPayment: nil,
-                accountingError: QuickBooksPaymentsServiceError.invoiceNotSyncedToQuickBooks.localizedDescription,
-                clientTransactionID: charge.resolvedClientTransID ?? clientTransactionID
-            )
-        }
 
         let accountingPayment = await syncAccountingPayment(
             invoice: invoice,
@@ -124,9 +113,7 @@ final class QuickBooksPaymentsService {
         bankInput: QuickBooksPaymentsBankAccountInput,
         note: String?
     ) async throws -> QuickBooksProcessedPaymentResult {
-        guard let customerQBID = invoice.customer.quickBooksID, !customerQBID.isEmpty else {
-            throw QuickBooksPaymentsServiceError.customerNotSynced
-        }
+        let customerQBID = try await prepareInvoiceForQuickBooksPayment(invoice)
 
         let clientTransactionID = Self.chargeClientTransactionID(for: invoice, amount: amount)
         let token = try await createBankAccountToken(bankInput)
@@ -137,15 +124,6 @@ final class QuickBooksPaymentsService {
             clientTransactionID: clientTransactionID,
             checkNumber: bankInput.checkNumber
         )
-
-        guard invoice.quickBooksID.nilIfBlank != nil else {
-            return QuickBooksProcessedPaymentResult(
-                charge: charge,
-                accountingPayment: nil,
-                accountingError: QuickBooksPaymentsServiceError.invoiceNotSyncedToQuickBooks.localizedDescription,
-                clientTransactionID: charge.resolvedClientTransID ?? clientTransactionID
-            )
-        }
 
         let accountingPayment = await syncAccountingPayment(
             invoice: invoice,
@@ -308,6 +286,70 @@ final class QuickBooksPaymentsService {
         guard Config.QuickBooks.hasExplicitDefaultSalesItemRef else { return nil }
         let trimmed = Config.QuickBooks.defaultSalesItemRef.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func prepareInvoiceForQuickBooksPayment(_ invoice: Invoice) async throws -> String {
+        guard await api.refreshSessionIfPossible() else {
+            throw QuickBooksPaymentsServiceError.quickBooksSessionExpired
+        }
+
+        let customerQBID = try await ensureQuickBooksCustomer(for: invoice.customer)
+        try await ensureQuickBooksInvoice(for: invoice, customerQBID: customerQBID)
+        return customerQBID
+    }
+
+    private func ensureQuickBooksCustomer(for customer: Customer) async throws -> String {
+        if let quickBooksID = customer.quickBooksID.nilIfBlank {
+            return quickBooksID
+        }
+
+        let payload = QuickBooksCustomerCreate(
+            DisplayName: customer.name,
+            PrimaryPhone: customer.phone.flatMap { Self.nilIfBlank($0).map { QuickBooksPhoneNumber(FreeFormNumber: $0) } },
+            PrimaryEmailAddr: customer.email.flatMap { Self.nilIfBlank($0).map { QuickBooksEmailAddress(Address: $0) } },
+            BillAddr: customer.address.flatMap { Self.nilIfBlank($0).map { QuickBooksAddress(Line1: $0) } }
+        )
+
+        let created = try await withCheckedThrowingContinuation { continuation in
+            api.createCustomer(payload) { result in
+                continuation.resume(with: result)
+            }
+        }
+        customer.quickBooksID = created.Id
+        return created.Id
+    }
+
+    private func ensureQuickBooksInvoice(for invoice: Invoice, customerQBID: String) async throws {
+        if invoice.quickBooksID.nilIfBlank != nil {
+            return
+        }
+
+        guard let salesItemRef = resolvedSalesItemRef else {
+            throw QuickBooksPaymentsServiceError.missingSalesItemReference
+        }
+
+        let description = Self.nilIfBlank(invoice.lineItemSummary) ?? "GunnAire service invoice"
+        let payload = QuickBooksInvoiceCreate(
+            CustomerRef: QuickBooksReference(value: customerQBID, name: invoice.customer.name),
+            Line: [
+                QuickBooksLineItem(
+                    Amount: invoice.amount,
+                    DetailType: "SalesItemLineDetail",
+                    Description: description,
+                    SalesItemLineDetail: QuickBooksSalesItemLineDetail(
+                        ItemRef: QuickBooksReference(value: salesItemRef, name: nil)
+                    )
+                )
+            ],
+            PrivateNote: invoice.notes
+        )
+
+        let created = try await withCheckedThrowingContinuation { continuation in
+            api.createInvoice(payload) { result in
+                continuation.resume(with: result)
+            }
+        }
+        invoice.quickBooksID = created.Id
     }
 
     private func createCardToken(_ input: QuickBooksPaymentsCardInput) async throws -> QuickBooksPaymentsTokenResponse {
@@ -550,6 +592,13 @@ final class QuickBooksPaymentsService {
         String(format: "%.2f", amount)
     }
 
+    private static func nilIfBlank(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
     private static func chargeClientTransactionID(for invoice: Invoice, amount: Double) -> String {
         let cents = Int((amount * 100).rounded())
         return "ga-charge-\(invoice.id.uuidString.lowercased())-\(cents)-\(UUID().uuidString.lowercased())"
@@ -666,6 +715,7 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
     case missingSalesItemReference
     case invalidRetryTarget
     case invoiceNotSyncedToQuickBooks
+    case quickBooksSessionExpired
 
     var errorDescription: String? {
         switch self {
@@ -679,6 +729,8 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
             return "This QuickBooks sync retry target is not valid for the requested recovery action."
         case .invoiceNotSyncedToQuickBooks:
             return "Sync this invoice to QuickBooks before syncing or retrying the accounting payment."
+        case .quickBooksSessionExpired:
+            return "Reconnect QuickBooks before processing this payment. The saved QuickBooks session could not be refreshed."
         }
     }
 }
