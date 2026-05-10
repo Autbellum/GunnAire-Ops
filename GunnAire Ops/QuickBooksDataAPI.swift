@@ -295,7 +295,7 @@ final class QuickBooksDataAPI: ObservableObject {
            let apiError = try? JSONDecoder().decode(QuickBooksPaymentsErrorEnvelope.self, from: data),
            let description = apiError.firstProblemDescription {
             if http.statusCode == 401 || http.statusCode == 403 {
-                return .authorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: description))
+                return .paymentsAuthorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: description))
             }
             return .httpDetail(statusCode: http.statusCode, detail: description)
         }
@@ -305,13 +305,13 @@ final class QuickBooksDataAPI: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !raw.isEmpty {
             if http.statusCode == 401 || http.statusCode == 403 {
-                return .authorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: raw))
+                return .paymentsAuthorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: raw))
             }
             return .httpDetail(statusCode: http.statusCode, detail: raw)
         }
 
         if http.statusCode == 401 || http.statusCode == 403 {
-            return .authorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: "QuickBooks Payments rejected this app session."))
+            return .paymentsAuthorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: "QuickBooks Payments rejected this app session."))
         }
 
         return .http(statusCode: http.statusCode)
@@ -834,11 +834,14 @@ final class QuickBooksDataAPI: ObservableObject {
         case api(statusCode: Int, detail: String)
         case httpDetail(statusCode: Int, detail: String)
         case authorizationFailed(statusCode: Int, detail: String)
+        case paymentsAuthorizationFailed(statusCode: Int, detail: String)
 
         var requiresReconnect: Bool {
             switch self {
             case .unauthorized, .authorizationFailed:
                 return true
+            case .paymentsAuthorizationFailed:
+                return false
             default:
                 return false
             }
@@ -862,6 +865,8 @@ final class QuickBooksDataAPI: ObservableObject {
                 return "QuickBooks request failed (HTTP \(statusCode)): \(detail)"
             case .authorizationFailed(let statusCode, let detail):
                 return "QuickBooks authorization needs attention (HTTP \(statusCode)). \(detail) Reconnect QuickBooks, then retry sync."
+            case .paymentsAuthorizationFailed(let statusCode, let detail):
+                return "QuickBooks Payments access needs attention (HTTP \(statusCode)). \(detail) Accounting sync can remain connected; this only affects card processing, stored cards, and Payments API features."
             }
         }
     }
@@ -1451,18 +1456,83 @@ struct QuickBooksDepositQueryResponse: Codable {
 
 struct QuickBooksDepositList: Codable {
     let Deposit: [QuickBooksDeposit]?
+
+    private enum CodingKeys: String, CodingKey {
+        case Deposit
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let array = try? container.decodeIfPresent([QuickBooksDeposit].self, forKey: .Deposit) {
+            Deposit = array
+        } else if let single = try? container.decodeIfPresent(QuickBooksDeposit.self, forKey: .Deposit) {
+            Deposit = [single]
+        } else {
+            Deposit = nil
+        }
+    }
 }
 
 struct QuickBooksDepositLineDetail: Codable {
     let LinkedTxn: [QuickBooksLinkedTxn]?
     let AccountRef: QuickBooksReference?
+    let Entity: QuickBooksReference?
+    let PaymentMethodRef: QuickBooksReference?
+    let ClassRef: QuickBooksReference?
+
+    private enum CodingKeys: String, CodingKey {
+        case LinkedTxn, AccountRef, Entity, PaymentMethodRef, ClassRef
+    }
+
+    init(LinkedTxn: [QuickBooksLinkedTxn]? = nil, AccountRef: QuickBooksReference? = nil, Entity: QuickBooksReference? = nil, PaymentMethodRef: QuickBooksReference? = nil, ClassRef: QuickBooksReference? = nil) {
+        self.LinkedTxn = LinkedTxn
+        self.AccountRef = AccountRef
+        self.Entity = Entity
+        self.PaymentMethodRef = PaymentMethodRef
+        self.ClassRef = ClassRef
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        LinkedTxn = try container.decodeIfPresent([QuickBooksLinkedTxn].self, forKey: .LinkedTxn)
+        AccountRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .AccountRef)
+        Entity = try container.decodeIfPresent(QuickBooksReference.self, forKey: .Entity)
+        PaymentMethodRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .PaymentMethodRef)
+        ClassRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .ClassRef)
+    }
 }
 
 struct QuickBooksDepositLine: Codable {
     let Amount: Double
-    let DetailType: String
+    let DetailType: String?
     let Description: String?
-    let DepositLineDetail: QuickBooksDepositLineDetail
+    let DepositLineDetail: QuickBooksDepositLineDetail?
+
+    private enum CodingKeys: String, CodingKey {
+        case Amount, DetailType, Description, DepositLineDetail
+    }
+
+    init(Amount: Double, DetailType: String? = nil, Description: String? = nil, DepositLineDetail: QuickBooksDepositLineDetail? = nil) {
+        self.Amount = Amount
+        self.DetailType = DetailType
+        self.Description = Description
+        self.DepositLineDetail = DepositLineDetail
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        Amount = Self.decodeFlexibleDouble(container, key: .Amount) ?? 0
+        DetailType = try container.decodeIfPresent(String.self, forKey: .DetailType)
+        Description = try container.decodeIfPresent(String.self, forKey: .Description)
+        DepositLineDetail = try container.decodeIfPresent(QuickBooksDepositLineDetail.self, forKey: .DepositLineDetail)
+    }
+
+    private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
+        if let doubleValue = try? container.decodeIfPresent(Double.self, forKey: key) { return doubleValue }
+        if let intValue = try? container.decodeIfPresent(Int.self, forKey: key) { return Double(intValue) }
+        if let stringValue = try? container.decodeIfPresent(String.self, forKey: key) { return Double(stringValue) }
+        return nil
+    }
 }
 
 struct QuickBooksDeposit: Codable, Identifiable {
@@ -1474,6 +1544,27 @@ struct QuickBooksDeposit: Codable, Identifiable {
     let Line: [QuickBooksDepositLine]?
 
     var id: String { Id }
+
+    private enum CodingKeys: String, CodingKey {
+        case Id, TxnDate, TotalAmt, PrivateNote, DepositToAccountRef, Line
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
+        TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
+        TotalAmt = Self.decodeFlexibleDouble(container, key: .TotalAmt) ?? 0
+        PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
+        DepositToAccountRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .DepositToAccountRef)
+        Line = try container.decodeIfPresent([QuickBooksDepositLine].self, forKey: .Line)
+    }
+
+    private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
+        if let doubleValue = try? container.decodeIfPresent(Double.self, forKey: key) { return doubleValue }
+        if let intValue = try? container.decodeIfPresent(Int.self, forKey: key) { return Double(intValue) }
+        if let stringValue = try? container.decodeIfPresent(String.self, forKey: key) { return Double(stringValue) }
+        return nil
+    }
 }
 
 struct QuickBooksDepositCreate: Codable {
@@ -1524,7 +1615,7 @@ struct QuickBooksPaymentsStoredCardCreateRequest: Codable {
     let value: String
 }
 
-struct QuickBooksPaymentsCardRecord: Codable, Identifiable {
+struct QuickBooksPaymentsCardRecord: Decodable, Identifiable {
     let id: String
     let name: String?
     let expMonth: String?
@@ -1536,7 +1627,26 @@ struct QuickBooksPaymentsCardRecord: Codable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, expMonth, expYear, number, address, context
-        case cardType = "cardType"
+        case cardType
+        case card = "card"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        expMonth = Self.decodeFlexibleString(container, key: .expMonth)
+        expYear = Self.decodeFlexibleString(container, key: .expYear)
+        cardType = try container.decodeIfPresent(String.self, forKey: .cardType)
+        number = try container.decodeIfPresent(String.self, forKey: .number)
+        address = try container.decodeIfPresent(QuickBooksPaymentsCardAddress.self, forKey: .address)
+        context = try container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)
+    }
+
+    private static func decodeFlexibleString(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> String? {
+        if let stringValue = try? container.decodeIfPresent(String.self, forKey: key) { return stringValue }
+        if let intValue = try? container.decodeIfPresent(Int.self, forKey: key) { return String(intValue) }
+        return nil
     }
 }
 
