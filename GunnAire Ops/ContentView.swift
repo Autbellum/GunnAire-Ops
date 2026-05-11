@@ -218,7 +218,13 @@ struct ContentView: View {
             Text(authAlertMessage)
         })
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            QuickBooksAuthAPI.shared.reloadStoredSession()
+            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
             applyPendingAppRouteIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .quickBooksAuthenticationDidChange)) { _ in
+            QuickBooksAuthAPI.shared.reloadStoredSession()
+            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
             applyPendingAppRouteIfNeeded()
@@ -1907,7 +1913,11 @@ extension ContentView {
             var storedCards: [QuickBooksPaymentsCardRecord] = []
 
             func fetch<T>(label: String, _ operation: (@escaping (Result<[T], Error>) -> Void) -> Void) async -> [T] {
-                await withCheckedContinuation { continuation in
+                guard await QuickBooksDataAPI.shared.isAuthenticated else {
+                    return []
+                }
+
+                return await withCheckedContinuation { continuation in
                     operation { result in
                         DispatchQueue.main.async {
                             switch result {
@@ -1915,6 +1925,11 @@ extension ContentView {
                                 continuation.resume(returning: records)
                             case .failure(let error):
                                 failures.append("\(label): \(error.localizedDescription)")
+                                if let qbError = error as? QuickBooksDataAPI.QBError,
+                                   qbError.requiresReconnect {
+                                    QuickBooksAuthAPI.shared.reloadStoredSession()
+                                    isQuickBooksAuthenticated = false
+                                }
                                 continuation.resume(returning: [])
                             }
                         }
@@ -1923,8 +1938,29 @@ extension ContentView {
             }
 
             customers = await fetch(label: "Customers", QuickBooksDataAPI.shared.fetchCustomers)
+            guard QuickBooksDataAPI.shared.isAuthenticated else {
+                presentAuthAlert(
+                    title: "QuickBooks Reconnect Required",
+                    message: failures.first ?? "QuickBooks rejected this app session. Reconnect QuickBooks in Settings with a company admin, then retry sync."
+                )
+                return
+            }
             items = await fetch(label: "Catalog", QuickBooksDataAPI.shared.fetchItems)
+            guard QuickBooksDataAPI.shared.isAuthenticated else {
+                presentAuthAlert(
+                    title: "QuickBooks Reconnect Required",
+                    message: failures.first ?? "QuickBooks rejected this app session. Reconnect QuickBooks in Settings with a company admin, then retry sync."
+                )
+                return
+            }
             estimates = await fetch(label: "Estimates", QuickBooksDataAPI.shared.fetchEstimates)
+            guard QuickBooksDataAPI.shared.isAuthenticated else {
+                presentAuthAlert(
+                    title: "QuickBooks Reconnect Required",
+                    message: failures.first ?? "QuickBooks rejected this app session. Reconnect QuickBooks in Settings with a company admin, then retry sync."
+                )
+                return
+            }
             invoices = await fetch(label: "Invoices", QuickBooksDataAPI.shared.fetchInvoices)
             bills = await fetch(label: "Bills", QuickBooksDataAPI.shared.fetchBills)
             purchases = await fetch(label: "Purchases", QuickBooksDataAPI.shared.fetchPurchases)
@@ -1935,6 +1971,14 @@ extension ContentView {
             paymentMethods = await fetch(label: "Payment Methods", QuickBooksDataAPI.shared.fetchPaymentMethods)
             storedCards = await fetch(label: "Stored Cards") { completion in
                 QuickBooksDataAPI.shared.fetchCards(forCustomerIDs: customers.map(\.Id), completion: completion)
+            }
+
+            guard QuickBooksDataAPI.shared.isAuthenticated else {
+                presentAuthAlert(
+                    title: "QuickBooks Reconnect Required",
+                    message: failures.first ?? "QuickBooks rejected this app session. Reconnect QuickBooks in Settings with a company admin, then retry sync."
+                )
+                return
             }
 
             do {

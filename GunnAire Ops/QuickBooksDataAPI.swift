@@ -1,6 +1,10 @@
 import Foundation
 import Combine
 
+extension Notification.Name {
+    static let quickBooksAuthenticationDidChange = Notification.Name("QuickBooksAuthenticationDidChange")
+}
+
 struct QuickBooksOAuthTokens: Codable {
     let accessToken: String
     let refreshToken: String
@@ -11,6 +15,9 @@ private struct QuickBooksKeychainPayload: Codable {
     let tokens: QuickBooksOAuthTokens
     let realmID: String
     let environment: String?
+    let clientIDFingerprint: String?
+    let redirectURI: String?
+    let scopeSignature: String?
 }
 
 final class QuickBooksDataAPI: ObservableObject {
@@ -19,6 +26,9 @@ final class QuickBooksDataAPI: ObservableObject {
     @Published private(set) var tokens: QuickBooksOAuthTokens?
     @Published private(set) var storedRealmID: String?
     @Published private(set) var storedEnvironment: String?
+    @Published private(set) var lastAuthorizationFailureDetail: String?
+    @Published private(set) var lastRejectedRealmID: String?
+    @Published private(set) var lastRejectedEnvironment: String?
 
     private var tokenRefreshTimer: AnyCancellable?
     private let clientId = Config.QuickBooks.clientID
@@ -74,7 +84,17 @@ final class QuickBooksDataAPI: ObservableObject {
     var connectionDiagnosticSummary: String {
         let company = realmID ?? "Not connected"
         let expiration = tokenExpiration?.formatted(date: .abbreviated, time: .shortened) ?? "No token"
-        return "Environment: \(currentEnvironment.capitalized) • Realm: \(company) • Token expires: \(expiration)"
+        return "\(Config.QuickBooks.configurationSummary) • Realm: \(company) • Token expires: \(expiration)"
+    }
+
+    var savedSessionEnvironmentDiffersFromCurrentBuild: Bool {
+        guard let storedEnvironment else { return false }
+        return storedEnvironment.lowercased() != Config.QuickBooks.environment.lowercased()
+    }
+
+    var environmentMismatchDiagnostic: String? {
+        guard savedSessionEnvironmentDiffersFromCurrentBuild else { return nil }
+        return "Saved QuickBooks session was authorized for \(currentEnvironment.capitalized), but this build is configured for \(Config.QuickBooks.environment.capitalized). \(Config.QuickBooks.configurationSummary). Disconnect and reconnect after changing QB_ENVIRONMENT, client keys, or Intuit app credentials."
     }
 
     var canStartOAuthFlow: Bool {
@@ -90,18 +110,37 @@ final class QuickBooksDataAPI: ObservableObject {
             UserDefaults.standard.removeObject(forKey: realmIDKey)
             return
         }
-        try? KeychainStore.saveCodable(QuickBooksKeychainPayload(tokens: tokens, realmID: normalizedRealmID, environment: self.storedEnvironment), account: keychainAccount)
+        try? KeychainStore.saveCodable(
+            QuickBooksKeychainPayload(
+                tokens: tokens,
+                realmID: normalizedRealmID,
+                environment: self.storedEnvironment,
+                clientIDFingerprint: Config.QuickBooks.clientIDFingerprint,
+                redirectURI: Config.QuickBooks.redirectURI,
+                scopeSignature: Config.QuickBooks.oauthScopeSignature
+            ),
+            account: keychainAccount
+        )
         UserDefaults.standard.set(normalizedRealmID, forKey: realmIDKey)
         if let data = try? JSONEncoder().encode(tokens) {
             UserDefaults.standard.set(data, forKey: tokenStorageKey)
         }
+        NotificationCenter.default.post(name: .quickBooksAuthenticationDidChange, object: nil)
     }
 
     func loadTokens() {
         if let payload = try? KeychainStore.loadCodable(QuickBooksKeychainPayload.self, account: keychainAccount) {
+            let keychainRealmID = payload.realmID.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let rejectionReason = savedSessionRejectionReason(for: payload) {
+                lastAuthorizationFailureDetail = rejectionReason
+                lastRejectedRealmID = keychainRealmID.isEmpty ? UserDefaults.standard.string(forKey: realmIDKey) : keychainRealmID
+                lastRejectedEnvironment = payload.environment ?? Config.QuickBooks.environment
+                clearTokens(clearAuthorizationFailure: false)
+                return
+            }
+
             tokens = payload.tokens
             storedEnvironment = payload.environment ?? Config.QuickBooks.environment
-            let keychainRealmID = payload.realmID.trimmingCharacters(in: .whitespacesAndNewlines)
             if !keychainRealmID.isEmpty {
                 storedRealmID = keychainRealmID
             } else {
@@ -111,20 +150,62 @@ final class QuickBooksDataAPI: ObservableObject {
         }
 
         if let data = UserDefaults.standard.data(forKey: tokenStorageKey),
-           let tokens = try? JSONDecoder().decode(QuickBooksOAuthTokens.self, from: data),
+           (try? JSONDecoder().decode(QuickBooksOAuthTokens.self, from: data)) != nil,
            let realmID = UserDefaults.standard.string(forKey: realmIDKey) {
-            storeTokens(tokens, realmID: realmID)
-            storedEnvironment = Config.QuickBooks.environment
+            lastAuthorizationFailureDetail = "Saved QuickBooks session is from the legacy token store and does not record which Intuit app, redirect URI, or OAuth scopes created it. Reconnect once so this build can bind the session to the correct QuickBooks configuration."
+            lastRejectedRealmID = realmID
+            lastRejectedEnvironment = Config.QuickBooks.environment
+            clearTokens(clearAuthorizationFailure: false)
         }
     }
 
-    func clearTokens() {
+    private func savedSessionRejectionReason(for payload: QuickBooksKeychainPayload) -> String? {
+        let savedEnvironment = payload.environment?.lowercased()
+        let currentEnvironment = Config.QuickBooks.environment.lowercased()
+        guard let savedEnvironment, !savedEnvironment.isEmpty else {
+            return "Saved QuickBooks session is missing its sandbox/production binding. Reconnect once so the app can verify the session belongs to this build."
+        }
+        if savedEnvironment != currentEnvironment {
+            return "Saved QuickBooks session was authorized for \(savedEnvironment.capitalized), but this build is configured for \(currentEnvironment.capitalized). Disconnect and reconnect after changing QB_ENVIRONMENT or Intuit app credentials."
+        }
+
+        guard let savedClient = payload.clientIDFingerprint, !savedClient.isEmpty else {
+            return "Saved QuickBooks session is missing the Intuit client binding. Reconnect once so the app can verify the token belongs to this QuickBooks app."
+        }
+        if savedClient != Config.QuickBooks.clientIDFingerprint {
+            return "Saved QuickBooks session was issued for Intuit client \(savedClient), but this build is configured for client \(Config.QuickBooks.clientIDFingerprint). Disconnect and reconnect QuickBooks."
+        }
+
+        guard let savedRedirect = payload.redirectURI, !savedRedirect.isEmpty else {
+            return "Saved QuickBooks session is missing the redirect URI binding. Reconnect once so the app can verify the token belongs to the registered redirect URI."
+        }
+        if savedRedirect != Config.QuickBooks.redirectURI {
+            return "Saved QuickBooks session was created with a different redirect URI. Disconnect and reconnect after confirming QB_REDIRECT_URI exactly matches the Intuit Developer Portal."
+        }
+
+        guard let savedScopes = payload.scopeSignature, !savedScopes.isEmpty else {
+            return "Saved QuickBooks session is missing the OAuth scope binding. Reconnect once so the app can verify Accounting and Payments scope permissions."
+        }
+        if savedScopes != Config.QuickBooks.oauthScopeSignature {
+            return "QuickBooks OAuth scopes changed since this session was authorized. Disconnect and reconnect so Intuit grants the current Accounting/Payments permissions."
+        }
+
+        return nil
+    }
+
+    func clearTokens(clearAuthorizationFailure: Bool = true) {
         tokens = nil
         storedRealmID = nil
         storedEnvironment = nil
+        if clearAuthorizationFailure {
+            lastAuthorizationFailureDetail = nil
+            lastRejectedRealmID = nil
+            lastRejectedEnvironment = nil
+        }
         try? KeychainStore.remove(account: keychainAccount)
         UserDefaults.standard.removeObject(forKey: tokenStorageKey)
         UserDefaults.standard.removeObject(forKey: realmIDKey)
+        NotificationCenter.default.post(name: .quickBooksAuthenticationDidChange, object: nil)
     }
 
     func refreshTokensIfNeeded(completion: @escaping (Bool) -> Void) {
@@ -409,8 +490,15 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     private func authorizationFailureMessage(detail: String) -> String {
-        let company = realmID ?? "the selected QuickBooks company"
-        return "QuickBooks rejected this app session for \(company). Reconnect QuickBooks with a company admin, confirm the app is authorized for \(currentEnvironment), then retry sync."
+        let company = realmID ?? lastRejectedRealmID ?? "the selected QuickBooks company"
+        let environment = currentEnvironment
+        let cleanedDetail = detail
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\n", with: " ")
+        let intuitDetail = cleanedDetail.isEmpty || cleanedDetail == "QuickBooks rejected this app session."
+            ? ""
+            : " Intuit detail: \(String(cleanedDetail.prefix(700)))"
+        return "QuickBooks rejected this app session for \(company). This usually means the saved token was issued for the wrong sandbox/production environment, the app connection was revoked, the app is not authorized for this company, or the user reconnected before the required Accounting scope was granted. Reconnect QuickBooks with a company admin, confirm the app is authorized for \(environment), then retry sync.\(intuitDetail)"
     }
 
     private func paymentsAuthorizationFailureMessage(detail: String) -> String {
@@ -419,7 +507,14 @@ final class QuickBooksDataAPI: ObservableObject {
 
     private func clearRejectedSessionIfNeeded(_ error: QBError) {
         guard error.requiresReconnect else { return }
-        clearTokens()
+        if case .authorizationFailed(_, let detail) = error {
+            lastAuthorizationFailureDetail = detail
+        } else {
+            lastAuthorizationFailureDetail = error.localizedDescription
+        }
+        lastRejectedRealmID = realmID ?? storedRealmID
+        lastRejectedEnvironment = currentEnvironment
+        clearTokens(clearAuthorizationFailure: false)
     }
 
     private func performAuthorizedDecodingRequest<T: Decodable>(

@@ -35,12 +35,22 @@ struct Config {
         static let defaultSalesItemRef = Config.value("QB_DEFAULT_ITEM_REF", fallback: "")
         static let defaultIncomeAccountRef = Config.value("QB_DEFAULT_INCOME_ACCOUNT_REF", fallback: "")
         static let defaultExpenseAccountRef = Config.value("QB_DEFAULT_EXPENSE_ACCOUNT_REF", fallback: "")
-        static let hasExplicitDefaultSalesItemRef = Config.optionalValue("QB_DEFAULT_ITEM_REF") != nil
-        static let hasExplicitDefaultIncomeAccountRef = Config.optionalValue("QB_DEFAULT_INCOME_ACCOUNT_REF") != nil
-        static let hasExplicitDefaultExpenseAccountRef = Config.optionalValue("QB_DEFAULT_EXPENSE_ACCOUNT_REF") != nil
+        private static func looksExplicitQuickBooksValue(_ key: String) -> Bool {
+            guard let value = Config.optionalValue(key) else { return false }
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !normalized.isEmpty else { return false }
+            guard !normalized.contains("$(") else { return false }
+            guard !normalized.hasPrefix("your_") && !normalized.hasPrefix("your-") else { return false }
+            guard !normalized.hasPrefix("placeholder") && !normalized.contains("placeholder") else { return false }
+            return true
+        }
+
+        static let hasExplicitDefaultSalesItemRef = looksExplicitQuickBooksValue("QB_DEFAULT_ITEM_REF")
+        static let hasExplicitDefaultIncomeAccountRef = looksExplicitQuickBooksValue("QB_DEFAULT_INCOME_ACCOUNT_REF")
+        static let hasExplicitDefaultExpenseAccountRef = looksExplicitQuickBooksValue("QB_DEFAULT_EXPENSE_ACCOUNT_REF")
 
         // Enable only when the app is approved for QuickBooks Payments and users reconnect after scope changes.
-        static let enablePaymentsScope = Config.value("QB_ENABLE_PAYMENTS_SCOPE", fallback: "true").lowercased() != "false"
+        static let enablePaymentsScope = Config.value("QB_ENABLE_PAYMENTS_SCOPE", fallback: "false").lowercased() != "false"
         static let maxConcurrentSyncRequests = max(1, Int(Config.value("QB_MAX_CONCURRENT_SYNC_REQUESTS", fallback: "3")) ?? 3)
         static let maxRetryAttempts = max(0, Int(Config.value("QB_MAX_RETRY_ATTEMPTS", fallback: "3")) ?? 3)
         static let requestTimeoutSeconds = max(15, Double(Config.value("QB_REQUEST_TIMEOUT_SECONDS", fallback: "45")) ?? 45)
@@ -51,6 +61,21 @@ struct Config {
             var scopes = [accountingScope, "openid", "profile", "email", "phone", "address"]
             if enablePaymentsScope { scopes.append(paymentsScope) }
             return scopes
+        }
+
+        static var oauthScopeSignature: String {
+            oauthScopes.joined(separator: "|")
+        }
+
+        static var clientIDFingerprint: String {
+            let trimmed = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("YOUR_") else { return "unconfigured" }
+            if trimmed.count <= 12 { return trimmed }
+            return "\(trimmed.prefix(4))…\(trimmed.suffix(6))"
+        }
+
+        static var configurationSummary: String {
+            "Environment: \(environment.capitalized) • Client: \(clientIDFingerprint) • Payments scope: \(enablePaymentsScope ? "On" : "Off")"
         }
 
         // OAuth 2.0 endpoints for QuickBooks Online.
@@ -84,6 +109,9 @@ struct Config {
             }
             if !hasExplicitDefaultExpenseAccountRef {
                 warnings.append("Set QB_DEFAULT_EXPENSE_ACCOUNT_REF before creating bills or expense purchases.")
+            }
+            if enablePaymentsScope {
+                warnings.append("QuickBooks Payments scope is enabled. Confirm the Intuit production app has QuickBooks Payments enabled and reconnect after any scope change.")
             }
             return warnings
         }

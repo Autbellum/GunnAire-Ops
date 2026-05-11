@@ -229,6 +229,12 @@ struct QuickBooksManagementView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
+                        if let environmentMismatch = QuickBooksDataAPI.shared.environmentMismatchDiagnostic {
+                            Label(environmentMismatch, systemImage: "arrow.triangle.2.circlepath.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+
                         if quickBooksReconnectRequired {
                             Label(
                                 "Reconnect QuickBooks in Settings with a company admin, then retry sync.",
@@ -236,6 +242,12 @@ struct QuickBooksManagementView: View {
                             )
                             .font(.caption)
                             .foregroundStyle(.orange)
+
+                            if let authorizationDetail = QuickBooksDataAPI.shared.lastAuthorizationFailureDetail {
+                                Text(authorizationDetail)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
 
                         if syncResourceStatuses.contains(where: { $0.state != .idle }) {
@@ -966,11 +978,11 @@ struct QuickBooksManagementView: View {
                 fetch: (@escaping (Result<[T], Error>) -> Void) -> Void,
                 apply: @escaping ([T]) -> Void
             ) async -> Bool {
-                guard !quickBooksReconnectRequired else {
+                guard await !quickBooksReconnectRequired else {
                     return false
                 }
 
-                updateSyncStatus(id: id, state: .syncing, detail: "Loading...", count: nil)
+                await updateSyncStatus(id: id, state: .syncing, detail: "Loading...", count: nil)
                 let result: Result<[T], Error> = await withCheckedContinuation { continuation in
                     fetch { result in
                         DispatchQueue.main.async {
@@ -982,21 +994,21 @@ struct QuickBooksManagementView: View {
                 switch result {
                 case .success(let records):
                     apply(records)
-                    updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
+                    await updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
                     return true
                 case .failure(let error):
-                    let message = userFacingQuickBooksMessage(for: error)
+                    let message = await userFacingQuickBooksMessage(for: error)
                     if let qbError = error as? QuickBooksDataAPI.QBError,
                        qbError.requiresReconnect {
                         quickBooksReconnectRequired = true
-                        updateSyncStatus(id: id, state: .failed, detail: message, count: nil)
-                        markPendingSyncStatusesFailed("Reconnect QuickBooks. The saved QuickBooks session was rejected before this resource could sync.")
+                        await updateSyncStatus(id: id, state: .failed, detail: message, count: nil)
+                        await markPendingSyncStatusesFailed("Reconnect QuickBooks. The saved QuickBooks session was rejected before this resource could sync.")
                     } else {
-                        updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
+                        await updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
                     }
-                    let prefix = syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
+                    let prefix = await syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
                     failures.append("\(prefix): \(message)")
-                    return !quickBooksReconnectRequired
+                    return await !quickBooksReconnectRequired
                 }
             }
 
@@ -1693,8 +1705,12 @@ struct QuickBooksManagementView: View {
         isLoading = false
 
         guard !quickBooksReconnectRequired else {
-            let company = QuickBooksDataAPI.shared.realmID ?? "the selected QuickBooks company"
-            statusMessage = "QuickBooks authorization needs reconnect. Open Settings, disconnect and reconnect QuickBooks with a company admin, confirm company \(company) authorized the production app, then retry sync."
+            let company = QuickBooksDataAPI.shared.lastRejectedRealmID
+                ?? QuickBooksDataAPI.shared.realmID
+                ?? "the selected QuickBooks company"
+            let environment = QuickBooksDataAPI.shared.lastRejectedEnvironment
+                ?? QuickBooksDataAPI.shared.currentEnvironment
+            statusMessage = "QuickBooks authorization needs reconnect. Open Settings, disconnect and reconnect QuickBooks with a company admin, confirm company \(company) authorized the \(environment) app, then retry sync."
             actionMessage = failures.first ?? "QuickBooks rejected the saved app session. The app cleared the rejected token so the next sync starts from a fresh reconnect."
             return
         }

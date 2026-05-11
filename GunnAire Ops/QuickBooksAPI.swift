@@ -62,6 +62,7 @@ final class QuickBooksAuthAPI: ObservableObject {
             completion(Result<Void, Error>.failure(QBOError.invalidRedirectURI(redirectURI)))
             return
         }
+        signOut()
         guard let authURL = makeAuthURL() else {
             completion(Result<Void, Error>.failure(QBOError.invalidAuthURL))
             return
