@@ -32,9 +32,22 @@
 		6429812A2F4CB15C00A62E15 /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		3F4B8A132FAD000100000001 /* Exceptions for "GunnAire Ops" folder in "GunnAire Ops" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 642980E52F4CAB5900A62E15 /* GunnAire Ops */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		642980E82F4CAB5900A62E15 /* GunnAire Ops */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				3F4B8A132FAD000100000001 /* Exceptions for "GunnAire Ops" folder in "GunnAire Ops" target */,
+			);
 			path = "GunnAire Ops";
 			sourceTree = "<group>";
 		};
@@ -429,7 +442,7 @@
 				DEVELOPMENT_TEAM = 7C4B3RR7RD;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_FILE = "GunnAire Ops/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -459,7 +472,7 @@
 				DEVELOPMENT_TEAM = 7C4B3RR7RD;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_FILE = "GunnAire Ops/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
