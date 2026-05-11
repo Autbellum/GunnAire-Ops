@@ -84,7 +84,32 @@ final class QuickBooksDataAPI: ObservableObject {
     var connectionDiagnosticSummary: String {
         let company = realmID ?? "Not connected"
         let expiration = tokenExpiration?.formatted(date: .abbreviated, time: .shortened) ?? "No token"
-        return "\(Config.QuickBooks.configurationSummary) • Realm: \(company) • Token expires: \(expiration)"
+        return "Environment: \(currentEnvironment.capitalized) • Realm: \(company) • Client: \(Self.currentClientIDFingerprint) • Scopes: \(Self.currentScopeSignature) • Token expires: \(expiration)"
+    }
+
+    private static var currentClientIDFingerprint: String {
+        stableFingerprint(Config.QuickBooks.clientID)
+    }
+
+    private static var currentScopeSignature: String {
+        Config.QuickBooks.oauthScopes.sorted().joined(separator: " ")
+    }
+
+    private static func stableFingerprint(_ value: String) -> String {
+        var hash: UInt64 = 1469598103934665603
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1099511628211
+        }
+        return String(format: "%016llx", hash)
+    }
+
+    private func savedPayloadMatchesCurrentConfiguration(_ payload: QuickBooksKeychainPayload) -> Bool {
+        guard payload.environment?.lowercased() == Config.QuickBooks.environment.lowercased() else { return false }
+        guard payload.clientIDFingerprint == Self.currentClientIDFingerprint else { return false }
+        guard payload.redirectURI == Config.QuickBooks.redirectURI else { return false }
+        guard payload.scopeSignature == Self.currentScopeSignature else { return false }
+        return true
     }
 
     var savedSessionEnvironmentDiffersFromCurrentBuild: Bool {
@@ -94,7 +119,7 @@ final class QuickBooksDataAPI: ObservableObject {
 
     var environmentMismatchDiagnostic: String? {
         guard savedSessionEnvironmentDiffersFromCurrentBuild else { return nil }
-        return "Saved QuickBooks session was authorized for \(currentEnvironment.capitalized), but this build is configured for \(Config.QuickBooks.environment.capitalized). \(Config.QuickBooks.configurationSummary). Disconnect and reconnect after changing QB_ENVIRONMENT, client keys, or Intuit app credentials."
+        return "Saved QuickBooks session was authorized for \(currentEnvironment.capitalized), but this build is configured for \(Config.QuickBooks.environment.capitalized). Disconnect and reconnect after changing QB_ENVIRONMENT, client keys, or Intuit app credentials."
     }
 
     var canStartOAuthFlow: Bool {
@@ -115,9 +140,9 @@ final class QuickBooksDataAPI: ObservableObject {
                 tokens: tokens,
                 realmID: normalizedRealmID,
                 environment: self.storedEnvironment,
-                clientIDFingerprint: Config.QuickBooks.clientIDFingerprint,
+                clientIDFingerprint: Self.currentClientIDFingerprint,
                 redirectURI: Config.QuickBooks.redirectURI,
-                scopeSignature: Config.QuickBooks.oauthScopeSignature
+                scopeSignature: Self.currentScopeSignature
             ),
             account: keychainAccount
         )
@@ -130,17 +155,17 @@ final class QuickBooksDataAPI: ObservableObject {
 
     func loadTokens() {
         if let payload = try? KeychainStore.loadCodable(QuickBooksKeychainPayload.self, account: keychainAccount) {
-            let keychainRealmID = payload.realmID.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let rejectionReason = savedSessionRejectionReason(for: payload) {
-                lastAuthorizationFailureDetail = rejectionReason
-                lastRejectedRealmID = keychainRealmID.isEmpty ? UserDefaults.standard.string(forKey: realmIDKey) : keychainRealmID
-                lastRejectedEnvironment = payload.environment ?? Config.QuickBooks.environment
+            guard savedPayloadMatchesCurrentConfiguration(payload) else {
+                lastAuthorizationFailureDetail = "Saved QuickBooks session was created by a different Intuit client, redirect URI, scope set, or sandbox/production environment. Reconnect once with the current build settings."
+                lastRejectedRealmID = payload.realmID.trimmingCharacters(in: .whitespacesAndNewlines)
+                lastRejectedEnvironment = payload.environment
                 clearTokens(clearAuthorizationFailure: false)
                 return
             }
 
             tokens = payload.tokens
             storedEnvironment = payload.environment ?? Config.QuickBooks.environment
+            let keychainRealmID = payload.realmID.trimmingCharacters(in: .whitespacesAndNewlines)
             if !keychainRealmID.isEmpty {
                 storedRealmID = keychainRealmID
             } else {
@@ -149,48 +174,10 @@ final class QuickBooksDataAPI: ObservableObject {
             return
         }
 
-        if let data = UserDefaults.standard.data(forKey: tokenStorageKey),
-           (try? JSONDecoder().decode(QuickBooksOAuthTokens.self, from: data)) != nil,
-           let realmID = UserDefaults.standard.string(forKey: realmIDKey) {
-            lastAuthorizationFailureDetail = "Saved QuickBooks session is from the legacy token store and does not record which Intuit app, redirect URI, or OAuth scopes created it. Reconnect once so this build can bind the session to the correct QuickBooks configuration."
-            lastRejectedRealmID = realmID
-            lastRejectedEnvironment = Config.QuickBooks.environment
+        if UserDefaults.standard.data(forKey: tokenStorageKey) != nil || UserDefaults.standard.string(forKey: realmIDKey) != nil {
+            lastAuthorizationFailureDetail = "Legacy QuickBooks tokens did not include the Intuit client/redirect/scope binding needed for safe reuse. Reconnect once to create a clean session."
             clearTokens(clearAuthorizationFailure: false)
         }
-    }
-
-    private func savedSessionRejectionReason(for payload: QuickBooksKeychainPayload) -> String? {
-        let savedEnvironment = payload.environment?.lowercased()
-        let currentEnvironment = Config.QuickBooks.environment.lowercased()
-        guard let savedEnvironment, !savedEnvironment.isEmpty else {
-            return "Saved QuickBooks session is missing its sandbox/production binding. Reconnect once so the app can verify the session belongs to this build."
-        }
-        if savedEnvironment != currentEnvironment {
-            return "Saved QuickBooks session was authorized for \(savedEnvironment.capitalized), but this build is configured for \(currentEnvironment.capitalized). Disconnect and reconnect after changing QB_ENVIRONMENT or Intuit app credentials."
-        }
-
-        guard let savedClient = payload.clientIDFingerprint, !savedClient.isEmpty else {
-            return "Saved QuickBooks session is missing the Intuit client binding. Reconnect once so the app can verify the token belongs to this QuickBooks app."
-        }
-        if savedClient != Config.QuickBooks.clientIDFingerprint {
-            return "Saved QuickBooks session was issued for Intuit client \(savedClient), but this build is configured for client \(Config.QuickBooks.clientIDFingerprint). Disconnect and reconnect QuickBooks."
-        }
-
-        guard let savedRedirect = payload.redirectURI, !savedRedirect.isEmpty else {
-            return "Saved QuickBooks session is missing the redirect URI binding. Reconnect once so the app can verify the token belongs to the registered redirect URI."
-        }
-        if savedRedirect != Config.QuickBooks.redirectURI {
-            return "Saved QuickBooks session was created with a different redirect URI. Disconnect and reconnect after confirming QB_REDIRECT_URI exactly matches the Intuit Developer Portal."
-        }
-
-        guard let savedScopes = payload.scopeSignature, !savedScopes.isEmpty else {
-            return "Saved QuickBooks session is missing the OAuth scope binding. Reconnect once so the app can verify Accounting and Payments scope permissions."
-        }
-        if savedScopes != Config.QuickBooks.oauthScopeSignature {
-            return "QuickBooks OAuth scopes changed since this session was authorized. Disconnect and reconnect so Intuit grants the current Accounting/Payments permissions."
-        }
-
-        return nil
     }
 
     func clearTokens(clearAuthorizationFailure: Bool = true) {
@@ -454,7 +441,7 @@ final class QuickBooksDataAPI: ObservableObject {
            let apiError = try? JSONDecoder().decode(QuickBooksPaymentsErrorEnvelope.self, from: data),
            let description = apiError.firstProblemDescription {
             if http.statusCode == 401 || http.statusCode == 403 {
-                return .authorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: description))
+                return .paymentsAuthorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: description))
             }
             return .httpDetail(statusCode: http.statusCode, detail: description)
         }
@@ -464,13 +451,13 @@ final class QuickBooksDataAPI: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !raw.isEmpty {
             if http.statusCode == 401 || http.statusCode == 403 {
-                return .authorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: raw))
+                return .paymentsAuthorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: raw))
             }
             return .httpDetail(statusCode: http.statusCode, detail: raw)
         }
 
         if http.statusCode == 401 || http.statusCode == 403 {
-            return .authorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: "QuickBooks Payments rejected this app session."))
+            return .paymentsAuthorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: "QuickBooks Payments rejected this app session."))
         }
 
         if http.statusCode == 429 {
@@ -1119,6 +1106,7 @@ final class QuickBooksDataAPI: ObservableObject {
         case api(statusCode: Int, detail: String)
         case httpDetail(statusCode: Int, detail: String)
         case authorizationFailed(statusCode: Int, detail: String)
+        case paymentsAuthorizationFailed(statusCode: Int, detail: String)
         case rateLimited(detail: String)
         case missingCustomerIDForStoredCards
 
@@ -1151,6 +1139,8 @@ final class QuickBooksDataAPI: ObservableObject {
                 return "QuickBooks request failed (HTTP \(statusCode)): \(detail)"
             case .authorizationFailed(let statusCode, let detail):
                 return "QuickBooks authorization needs attention (HTTP \(statusCode)). \(detail) Reconnect QuickBooks, then retry sync."
+            case .paymentsAuthorizationFailed(let statusCode, let detail):
+                return "QuickBooks Payments authorization needs attention (HTTP \(statusCode)). \(detail) Accounting sync can remain connected; reconnect only after enabling Payments access in Intuit."
             case .rateLimited(let detail):
                 return detail
             case .missingCustomerIDForStoredCards:
