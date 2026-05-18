@@ -143,10 +143,25 @@ struct Config {
     }
 
     struct QuickBooksTime {
-        static let enabled = value("QB_TIME_ENABLED", fallback: "false").lowercased() == "true"
+        static let enabled = value("QB_TIME_ACTIVITY_SYNC_ENABLED", fallback: "false").lowercased() == "true"
+        static let nameOf = value("QB_TIME_ACTIVITY_NAME_OF", fallback: "Employee")
+        static let entityRef = value("QB_TIME_ACTIVITY_ENTITY_REF", fallback: "")
+        static let itemRef = value("QB_TIME_ACTIVITY_ITEM_REF", fallback: "")
+        static let payrollItemRef = value("QB_TIME_ACTIVITY_PAYROLL_ITEM_REF", fallback: "")
+        static let projectRef = value("QB_TIME_ACTIVITY_PROJECT_REF", fallback: "")
         static let graphqlEndpoint = "https://qb.api.intuit.com/graphql"
-        static let requiredPartnerTier = "Silver or higher"
-        static let requiredScope = "payroll.compensation.read"
-        static let notes = "QuickBooks Payroll and Time is a separate Intuit integration from QuickBooks Online accounting and requires partner onboarding."
+        static let accountingResource = "TimeActivity"
+        static let accountingOperations = "Query, Create, Update, Delete"
+        static let requiredAccountingScope = QuickBooks.accountingScope
+        static let payrollCompensationScope = "payroll.compensation.read"
+        static let notes = "QBO Accounting TimeActivity records completed time only. Live clock-in/out stays local until clock-out creates a duration-based TimeActivity. PayrollItemRef requires QuickBooks Workforce/Payroll compensation access."
+
+        static var normalizedNameOf: String {
+            nameOf.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "vendor" ? "Vendor" : "Employee"
+        }
+
+        static var isConfiguredForSync: Bool {
+            enabled && !entityRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 }

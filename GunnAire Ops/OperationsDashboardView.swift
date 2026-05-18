@@ -12,13 +12,23 @@ struct OperationsDashboardView: View {
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
     @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
     @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
     @State private var dispatchMessage: String?
+    @State private var showingCommandPalette = false
 
     private let calendar = Calendar.current
+
+    private var currentUserEmail: String? {
+        googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+    }
+
+    private var canViewFinancials: Bool {
+        AppAccess.isAdmin(email: currentUserEmail, users: users)
+    }
 
     private var todayCalls: [ServiceCall] {
         serviceCalls
@@ -239,11 +249,15 @@ struct OperationsDashboardView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         headerSection
                         metricsGrid
-                        suiteSynchronizationSection
+                        if canViewFinancials {
+                            suiteSynchronizationSection
+                        }
                         priorityQueueSection
-                        accountIntelligenceSection
+                        if canViewFinancials {
+                            accountIntelligenceSection
+                            workflowSection
+                        }
                         dispatchIntelligenceSection
-                        workflowSection
                         fieldTeamSection
                         systemsSection
                     }
@@ -252,6 +266,27 @@ struct OperationsDashboardView: View {
                 }
             }
             .navigationTitle("Command Center")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showingCommandPalette = true
+                    } label: {
+                        Label("Find", systemImage: "magnifyingglass")
+                    }
+                    .tint(Color.brandGold)
+                }
+            }
+            .sheet(isPresented: $showingCommandPalette) {
+                OperationsCommandPalette(
+                    customers: customers,
+                    serviceCalls: serviceCalls,
+                    invoices: invoices,
+                    estimates: estimates,
+                    payments: payments,
+                    canViewFinancials: canViewFinancials
+                )
+                    .tint(Color.brandGold)
+            }
         }
     }
 
@@ -277,15 +312,23 @@ struct OperationsDashboardView: View {
 
             HStack(spacing: 10) {
                 Button {
+                    showingCommandPalette = true
+                } label: {
+                    Label("Find", systemImage: "magnifyingglass")
+                }
+
+                Button {
                     GunnAireAppIntentRouter.store(.schedule)
                 } label: {
                     Label("Schedule", systemImage: "calendar.badge.clock")
                 }
 
-                Button {
-                    GunnAireAppIntentRouter.store(.payments)
-                } label: {
-                    Label("Collect", systemImage: "creditcard")
+                if canViewFinancials {
+                    Button {
+                        GunnAireAppIntentRouter.store(.payments)
+                    } label: {
+                        Label("Collect", systemImage: "creditcard")
+                    }
                 }
 
                 Button {
@@ -311,20 +354,24 @@ struct OperationsDashboardView: View {
                 systemImage: "calendar",
                 tint: Color.brandGold
             )
-            metricCard(
-                title: "Ready To Bill",
-                value: "\(readyToBillCalls.count)",
-                detail: currency(monthInvoiceTotal) + " this month",
-                systemImage: "doc.badge.plus",
-                tint: .green
-            )
-            metricCard(
-                title: "Receivables",
-                value: currency(openReceivablesTotal),
-                detail: "\(overdueInvoices.count) overdue",
-                systemImage: "dollarsign.circle",
-                tint: overdueInvoices.isEmpty ? Color.brandGold : .red
-            )
+            if canViewFinancials {
+                metricCard(
+                    title: "Ready To Bill",
+                    value: "\(readyToBillCalls.count)",
+                    detail: currency(monthInvoiceTotal) + " this month",
+                    systemImage: "doc.badge.plus",
+                    tint: .green
+                )
+            }
+            if canViewFinancials {
+                metricCard(
+                    title: "Receivables",
+                    value: currency(openReceivablesTotal),
+                    detail: "\(overdueInvoices.count) overdue",
+                    systemImage: "dollarsign.circle",
+                    tint: overdueInvoices.isEmpty ? Color.brandGold : .red
+                )
+            }
             metricCard(
                 title: "Agreements",
                 value: "\(maintenanceAlerts.count)",
@@ -339,13 +386,15 @@ struct OperationsDashboardView: View {
                 systemImage: "person.2.badge.gearshape",
                 tint: unassignedUpcomingCalls.isEmpty ? Color.brandGold : .blue
             )
-            metricCard(
-                title: "Sync Risk",
-                value: "\(quickBooksAttentionPayments.count)",
-                detail: "\(linkedCalendarJobCount) calendar-linked",
-                systemImage: "exclamationmark.arrow.triangle.2.circlepath",
-                tint: quickBooksAttentionPayments.isEmpty ? Color.brandGold : .red
-            )
+            if canViewFinancials {
+                metricCard(
+                    title: "Sync Risk",
+                    value: "\(quickBooksAttentionPayments.count)",
+                    detail: "\(linkedCalendarJobCount) calendar-linked",
+                    systemImage: "exclamationmark.arrow.triangle.2.circlepath",
+                    tint: quickBooksAttentionPayments.isEmpty ? Color.brandGold : .red
+                )
+            }
         }
     }
 
@@ -396,7 +445,7 @@ struct OperationsDashboardView: View {
                     }
                 }
 
-                if let call = readyToBillCalls.first {
+                if canViewFinancials, let call = readyToBillCalls.first {
                     priorityRow(
                         title: "Create invoice",
                         subtitle: "\(call.customer.name) • \(call.type.rawValue.capitalized)",
@@ -409,7 +458,7 @@ struct OperationsDashboardView: View {
                     }
                 }
 
-                if let invoice = overdueInvoices.first {
+                if canViewFinancials, let invoice = overdueInvoices.first {
                     priorityRow(
                         title: "Collect overdue balance",
                         subtitle: "\(invoice.customer.name) • \(invoice.createdAt.formatted(date: .abbreviated, time: .omitted))",
@@ -435,7 +484,7 @@ struct OperationsDashboardView: View {
                     }
                 }
 
-                if let call = acceptedEstimateCalls.first {
+                if canViewFinancials, let call = acceptedEstimateCalls.first {
                     priorityRow(
                         title: "Approved work waiting",
                         subtitle: "\(call.customer.name) • estimate accepted",
@@ -448,7 +497,7 @@ struct OperationsDashboardView: View {
                     }
                 }
 
-                if let payment = quickBooksAttentionPayments.first {
+                if canViewFinancials, let payment = quickBooksAttentionPayments.first {
                     priorityRow(
                         title: "QuickBooks payment sync",
                         subtitle: payment.invoice.customer.name,
@@ -681,26 +730,28 @@ struct OperationsDashboardView: View {
 
             Divider()
 
-            systemRow(
-                title: "QuickBooks",
-                status: QuickBooksDataAPI.shared.isAuthenticated ? "Connected" : "Disconnected",
-                detail: "\(linkedInvoiceCount) linked invoices • \(linkedEstimateCount) linked estimates",
-                systemImage: "banknote",
-                tint: QuickBooksDataAPI.shared.isAuthenticated ? .green : .orange
-            ) {
-                GunnAireAppIntentRouter.store(.quickBooks)
-            }
+            if canViewFinancials {
+                systemRow(
+                    title: "QuickBooks",
+                    status: QuickBooksDataAPI.shared.isAuthenticated ? "Connected" : "Disconnected",
+                    detail: "\(linkedInvoiceCount) linked invoices • \(linkedEstimateCount) linked estimates",
+                    systemImage: "banknote",
+                    tint: QuickBooksDataAPI.shared.isAuthenticated ? .green : .orange
+                ) {
+                    GunnAireAppIntentRouter.store(.quickBooks)
+                }
 
-            Divider()
+                Divider()
 
-            systemRow(
-                title: "On-Site Payments",
-                status: onsitePaymentsStatus,
-                detail: selectedPaymentProcessor.displayName,
-                systemImage: "iphone.gen3.radiowaves.left.and.right",
-                tint: onsitePaymentsTint
-            ) {
-                GunnAireAppIntentRouter.store(.payments)
+                systemRow(
+                    title: "On-Site Payments",
+                    status: onsitePaymentsStatus,
+                    detail: selectedPaymentProcessor.displayName,
+                    systemImage: "iphone.gen3.radiowaves.left.and.right",
+                    tint: onsitePaymentsTint
+                ) {
+                    GunnAireAppIntentRouter.store(.payments)
+                }
             }
         }
     }
@@ -1571,6 +1622,251 @@ private struct TechnicianLoad: Identifiable {
     let weekCount: Int
     let isClockedIn: Bool
     let detail: String
+}
+
+private struct OperationsCommandPalette: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let customers: [Customer]
+    let serviceCalls: [ServiceCall]
+    let invoices: [Invoice]
+    let estimates: [Estimate]
+    let payments: [Payment]
+    let canViewFinancials: Bool
+
+    @State private var searchText = ""
+
+    private var trimmedSearch: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var matchingCustomers: [Customer] {
+        let query = trimmedSearch
+        guard !query.isEmpty else { return Array(customers.prefix(6)) }
+        return customers
+            .filter {
+                $0.name.localizedCaseInsensitiveContains(query) ||
+                ($0.email?.localizedCaseInsensitiveContains(query) ?? false) ||
+                ($0.phone?.localizedCaseInsensitiveContains(query) ?? false) ||
+                ($0.address?.localizedCaseInsensitiveContains(query) ?? false)
+            }
+            .prefix(8)
+            .map { $0 }
+    }
+
+    private var matchingServiceCalls: [ServiceCall] {
+        let query = trimmedSearch
+        let source = serviceCalls
+            .filter { $0.status != .cancelled }
+            .sorted { $0.scheduledDate > $1.scheduledDate }
+        guard !query.isEmpty else { return Array(source.prefix(6)) }
+        return source
+            .filter {
+                $0.customer.name.localizedCaseInsensitiveContains(query) ||
+                $0.type.rawValue.localizedCaseInsensitiveContains(query) ||
+                $0.status.rawValue.localizedCaseInsensitiveContains(query) ||
+                ($0.siteAddress?.localizedCaseInsensitiveContains(query) ?? false) ||
+                ($0.notes?.localizedCaseInsensitiveContains(query) ?? false)
+            }
+            .prefix(8)
+            .map { $0 }
+    }
+
+    private var matchingInvoices: [Invoice] {
+        let query = trimmedSearch
+        let source = invoices.sorted { $0.createdAt > $1.createdAt }
+        guard !query.isEmpty else { return Array(source.prefix(6)) }
+        return source
+            .filter {
+                $0.customer.name.localizedCaseInsensitiveContains(query) ||
+                $0.status.localizedCaseInsensitiveContains(query) ||
+                $0.lineItemSummary.localizedCaseInsensitiveContains(query) ||
+                ($0.quickBooksID?.localizedCaseInsensitiveContains(query) ?? false)
+            }
+            .prefix(8)
+            .map { $0 }
+    }
+
+    private var matchingEstimates: [Estimate] {
+        let query = trimmedSearch
+        let source = estimates.sorted { $0.createdAt > $1.createdAt }
+        guard !query.isEmpty else { return Array(source.prefix(4)) }
+        return source
+            .filter {
+                $0.customer.name.localizedCaseInsensitiveContains(query) ||
+                $0.status.localizedCaseInsensitiveContains(query) ||
+                $0.lineItemSummary.localizedCaseInsensitiveContains(query) ||
+                ($0.quickBooksID?.localizedCaseInsensitiveContains(query) ?? false)
+            }
+            .prefix(6)
+            .map { $0 }
+    }
+
+    private var recentPayments: [Payment] {
+        payments.sorted { $0.date > $1.date }.prefix(6).map { $0 }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                quickActionsSection
+                customersSection
+                jobsSection
+                if canViewFinancials {
+                    invoicesSection
+                    estimatesSection
+                }
+                if canViewFinancials && trimmedSearch.isEmpty {
+                    recentPaymentsSection
+                }
+            }
+            .navigationTitle("Find")
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: canViewFinancials ? "Customer, job, invoice, address" : "Customer, job, address")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var quickActionsSection: some View {
+        Section("Quick Actions") {
+            commandButton("Open Schedule", detail: "Calendar and dispatch board", systemImage: "calendar.badge.clock") {
+                GunnAireAppIntentRouter.store(.schedule)
+            }
+            if canViewFinancials {
+                commandButton("Collect Payment", detail: "Open payment collection", systemImage: "creditcard") {
+                    GunnAireAppIntentRouter.store(.payments)
+                }
+                commandButton("Job Documentation", detail: "Estimate, invoice, and closeout queue", systemImage: "book") {
+                    GunnAireAppIntentRouter.store(.documentation)
+                }
+            }
+            commandButton("Sync Systems", detail: canViewFinancials ? "Google, QuickBooks, and integrations" : "Google Calendar and field sync", systemImage: "arrow.triangle.2.circlepath") {
+                GunnAireAppIntentRouter.store(.sync)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var customersSection: some View {
+        if !matchingCustomers.isEmpty {
+            Section("Customers") {
+                ForEach(matchingCustomers) { customer in
+                    commandButton(
+                        customer.name,
+                        detail: [customer.phone, customer.email, customer.address].compactMap(\.self).filter { !$0.isEmpty }.joined(separator: " • "),
+                        systemImage: "person.crop.circle"
+                    ) {
+                        GunnAireAppIntentRouter.storeCustomerRoute(customer.id)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var jobsSection: some View {
+        if !matchingServiceCalls.isEmpty {
+            Section("Jobs") {
+                ForEach(matchingServiceCalls) { call in
+                    commandButton(
+                        "\(call.customer.name) • \(call.type.rawValue.capitalized)",
+                        detail: "\(call.scheduledDate.formatted(date: .abbreviated, time: .shortened)) • \(call.status.rawValue.capitalized)",
+                        systemImage: "wrench.and.screwdriver"
+                    ) {
+                        GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var invoicesSection: some View {
+        if !matchingInvoices.isEmpty {
+            Section("Invoices") {
+                ForEach(matchingInvoices) { invoice in
+                    commandButton(
+                        "\(invoice.customer.name) • \(invoice.amount.formatted(.currency(code: "USD")))",
+                        detail: "\(invoice.status.capitalized) • \(invoice.createdAt.formatted(date: .abbreviated, time: .omitted))",
+                        systemImage: "doc.text"
+                    ) {
+                        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var estimatesSection: some View {
+        if !matchingEstimates.isEmpty {
+            Section("Estimates") {
+                ForEach(matchingEstimates) { estimate in
+                    commandButton(
+                        "\(estimate.customer.name) • \(estimate.amount.formatted(.currency(code: "USD")))",
+                        detail: "\(estimate.status.capitalized) • \(estimate.createdAt.formatted(date: .abbreviated, time: .omitted))",
+                        systemImage: "doc.text.magnifyingglass"
+                    ) {
+                        if let serviceCallID = estimate.serviceCallID {
+                            GunnAireAppIntentRouter.storeDocumentationRoute(serviceCallID)
+                        } else {
+                            GunnAireAppIntentRouter.store(.estimates)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var recentPaymentsSection: some View {
+        if !recentPayments.isEmpty {
+            Section("Recent Payments") {
+                ForEach(recentPayments) { payment in
+                    commandButton(
+                        "\(payment.invoice.customer.name) • \(payment.amount.formatted(.currency(code: "USD")))",
+                        detail: "\(payment.method.capitalized) • \(payment.date.formatted(date: .abbreviated, time: .omitted))",
+                        systemImage: payment.needsQuickBooksAttention ? "exclamationmark.arrow.triangle.2.circlepath" : "checkmark.circle"
+                    ) {
+                        GunnAireAppIntentRouter.store(.payments)
+                    }
+                }
+            }
+        }
+    }
+
+    private func commandButton(_ title: String, detail: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button {
+            dismiss()
+            action()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .frame(width: 24)
+                    .foregroundStyle(Color.brandGold)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if !detail.isEmpty {
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 #Preview {

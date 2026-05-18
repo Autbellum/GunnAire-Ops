@@ -3,16 +3,22 @@
 
 QB_CLIENT_ID = your_quickbooks_client_id
 QB_CLIENT_SECRET = your_quickbooks_client_secret
-QB_REDIRECT_URI = https:/$()/gunnaire.com/wp-json/ga/v1/qbo/oauth/callback
+QB_REDIRECT_URI = https:/$()/example.com/qbo/oauth/callback
 QB_CALLBACK_SCHEME = gunnaireops
-QB_ENVIRONMENT = production
-QB_DEFAULT_ITEM_REF = 1
+QB_ENVIRONMENT = sandbox
+QB_DEFAULT_ITEM_REF = your_default_item_ref
 QB_DEFAULT_INCOME_ACCOUNT_REF = your_income_account_ref
 QB_DEFAULT_EXPENSE_ACCOUNT_REF = your_expense_account_ref
 QB_ENABLE_PAYMENTS_SCOPE = false
+QB_TIME_ACTIVITY_SYNC_ENABLED = false
+QB_TIME_ACTIVITY_NAME_OF = Employee
+QB_TIME_ACTIVITY_ENTITY_REF =
+QB_TIME_ACTIVITY_ITEM_REF =
+QB_TIME_ACTIVITY_PAYROLL_ITEM_REF =
+QB_TIME_ACTIVITY_PROJECT_REF =
 
 GOOGLE_CLIENT_ID = your_google_client_id.apps.googleusercontent.com
 GOOGLE_REDIRECT_URI = com.googleusercontent.apps.your_google_client_id:/oauth2redirect
 GOOGLE_CALLBACK_SCHEME = com.googleusercontent.apps.your_google_client_id
 GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.your_google_client_id
-GOOGLE_ALLOWED_HOSTED_DOMAIN = gunnaire.com
+GOOGLE_ALLOWED_HOSTED_DOMAIN = example.com

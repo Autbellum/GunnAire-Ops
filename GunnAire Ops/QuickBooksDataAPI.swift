@@ -504,12 +504,17 @@ final class QuickBooksDataAPI: ObservableObject {
         clearTokens(clearAuthorizationFailure: false)
     }
 
+    private struct DecodableTypeBox<T: Decodable>: @unchecked Sendable {
+        let type: T.Type
+    }
+
     private func performAuthorizedDecodingRequest<T: Decodable>(
         _ requestBuilder: @escaping () -> URLRequest?,
         decode type: T.Type,
         completion: @escaping (Result<T, Error>) -> Void,
         attempt: Int = 0
     ) {
+        let typeBox = DecodableTypeBox(type: type)
         refreshTokensIfNeeded { ok in
             guard ok, let request = requestBuilder() else {
                 completion(.failure(QBError.unauthorized))
@@ -519,7 +524,7 @@ final class QuickBooksDataAPI: ObservableObject {
             URLSession.shared.dataTask(with: request) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                        self.performAuthorizedDecodingRequest(requestBuilder, decode: type, completion: completion, attempt: attempt + 1)
+                        self.performAuthorizedDecodingRequest(requestBuilder, decode: typeBox.type, completion: completion, attempt: attempt + 1)
                     }
                     return
                 }
@@ -558,6 +563,7 @@ final class QuickBooksDataAPI: ObservableObject {
         completion: @escaping (Result<T, Error>) -> Void,
         attempt: Int = 0
     ) {
+        let typeBox = DecodableTypeBox(type: type)
         refreshTokensIfNeeded { ok in
             guard ok, let request = requestBuilder() else {
                 completion(.failure(QBError.unauthorized))
@@ -567,7 +573,7 @@ final class QuickBooksDataAPI: ObservableObject {
             URLSession.shared.dataTask(with: request) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                        self.performPaymentsDecodingRequest(requestBuilder, decode: type, completion: completion, attempt: attempt + 1)
+                        self.performPaymentsDecodingRequest(requestBuilder, decode: typeBox.type, completion: completion, attempt: attempt + 1)
                     }
                     return
                 }
@@ -730,6 +736,25 @@ final class QuickBooksDataAPI: ObservableObject {
             decode: QuickBooksVendorResponse.self
         ) { result in
             completion(result.map(\.Vendor))
+        }
+    }
+
+    func fetchTimeActivities(completion: @escaping (Result<[QuickBooksTimeActivity], Error>) -> Void) {
+        performAuthorizedDecodingRequest(
+            { self.makeQueryRequest("SELECT * FROM TimeActivity") },
+            decode: QuickBooksTimeActivityQueryResponse.self
+        ) { result in
+            completion(result.map { $0.QueryResponse.TimeActivity ?? [] })
+        }
+    }
+
+    func createTimeActivity(_ activity: QuickBooksTimeActivityCreate, completion: @escaping (Result<QuickBooksTimeActivity, Error>) -> Void) {
+        let body = try? JSONEncoder().encode(activity)
+        performAuthorizedDecodingRequest(
+            { self.authorizedRequest(path: "timeactivity", method: "POST", body: body, contentType: "application/json") },
+            decode: QuickBooksTimeActivityResponse.self
+        ) { result in
+            completion(result.map(\.TimeActivity))
         }
     }
 
@@ -1734,6 +1759,50 @@ struct QuickBooksVendorCreate: Codable {
 
 struct QuickBooksVendorResponse: Codable {
     let Vendor: QuickBooksVendor
+}
+
+struct QuickBooksTimeActivityQueryResponse: Codable {
+    let QueryResponse: QuickBooksTimeActivityList
+}
+
+struct QuickBooksTimeActivityList: Codable {
+    let TimeActivity: [QuickBooksTimeActivity]?
+}
+
+struct QuickBooksTimeActivity: Codable, Identifiable {
+    let Id: String
+    let SyncToken: String?
+    let TxnDate: String?
+    let NameOf: String?
+    let EmployeeRef: QuickBooksReference?
+    let VendorRef: QuickBooksReference?
+    let CustomerRef: QuickBooksReference?
+    let ProjectRef: QuickBooksReference?
+    let ItemRef: QuickBooksReference?
+    let PayrollItemRef: QuickBooksReference?
+    let Hours: Int?
+    let Minutes: Int?
+    let Description: String?
+
+    var id: String { Id }
+}
+
+struct QuickBooksTimeActivityCreate: Codable {
+    let TxnDate: String
+    let NameOf: String
+    let EmployeeRef: QuickBooksReference?
+    let VendorRef: QuickBooksReference?
+    let CustomerRef: QuickBooksReference?
+    let ProjectRef: QuickBooksReference?
+    let ItemRef: QuickBooksReference?
+    let PayrollItemRef: QuickBooksReference?
+    let Hours: Int
+    let Minutes: Int
+    let Description: String?
+}
+
+struct QuickBooksTimeActivityResponse: Codable {
+    let TimeActivity: QuickBooksTimeActivity
 }
 
 struct QuickBooksPaymentQueryResponse: Codable {

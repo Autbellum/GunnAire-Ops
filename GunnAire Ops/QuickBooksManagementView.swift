@@ -972,17 +972,18 @@ struct QuickBooksManagementView: View {
         Task { @MainActor in
             var failures: [String] = []
 
+            @MainActor
             func run<T>(
                 id: String,
                 required: Bool,
                 fetch: (@escaping (Result<[T], Error>) -> Void) -> Void,
                 apply: @escaping ([T]) -> Void
             ) async -> Bool {
-                guard await !quickBooksReconnectRequired else {
+                guard !quickBooksReconnectRequired else {
                     return false
                 }
 
-                await updateSyncStatus(id: id, state: .syncing, detail: "Loading...", count: nil)
+                updateSyncStatus(id: id, state: .syncing, detail: "Loading...", count: nil)
                 let result: Result<[T], Error> = await withCheckedContinuation { continuation in
                     fetch { result in
                         DispatchQueue.main.async {
@@ -994,21 +995,21 @@ struct QuickBooksManagementView: View {
                 switch result {
                 case .success(let records):
                     apply(records)
-                    await updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
+                    updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
                     return true
                 case .failure(let error):
-                    let message = await userFacingQuickBooksMessage(for: error)
+                    let message = userFacingQuickBooksMessage(for: error)
                     if let qbError = error as? QuickBooksDataAPI.QBError,
                        qbError.requiresReconnect {
                         quickBooksReconnectRequired = true
-                        await updateSyncStatus(id: id, state: .failed, detail: message, count: nil)
-                        await markPendingSyncStatusesFailed("Reconnect QuickBooks. The saved QuickBooks session was rejected before this resource could sync.")
+                        updateSyncStatus(id: id, state: .failed, detail: message, count: nil)
+                        markPendingSyncStatusesFailed("Reconnect QuickBooks. The saved QuickBooks session was rejected before this resource could sync.")
                     } else {
-                        await updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
+                        updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
                     }
-                    let prefix = await syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
+                    let prefix = syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
                     failures.append("\(prefix): \(message)")
-                    return await !quickBooksReconnectRequired
+                    return !quickBooksReconnectRequired
                 }
             }
 
@@ -1810,9 +1811,20 @@ private struct QuickBooksDocumentComposeView: View {
     let customerRefs: [QuickBooksReference]
     let onCreate: (QuickBooksReference, Double, String?) -> Void
 
-    @State private var selectedCustomerIndex = 0
+    @State private var selectedCustomerID: String?
     @State private var amountText = ""
     @State private var note = ""
+
+    private var customerOptions: [SearchableDropdownOption] {
+        customerRefs.map { SearchableDropdownOption(id: $0.value, title: $0.displayName, subtitle: $0.value) }
+    }
+
+    private var selectedCustomer: QuickBooksReference? {
+        if let selectedCustomerID, let match = customerRefs.first(where: { $0.value == selectedCustomerID }) {
+            return match
+        }
+        return customerRefs.first
+    }
 
     var body: some View {
         NavigationStack {
@@ -1822,11 +1834,12 @@ private struct QuickBooksDocumentComposeView: View {
                         Text("Sync QuickBooks customers first.")
                             .foregroundColor(.secondary)
                     } else {
-                        Picker("Customer", selection: $selectedCustomerIndex) {
-                            ForEach(customerRefs.indices, id: \.self) { index in
-                                Text(customerRefs[index].displayName).tag(index)
-                            }
-                        }
+                        SearchableDropdownPicker(
+                            title: "Customer",
+                            options: customerOptions,
+                            selectedID: $selectedCustomerID,
+                            placeholder: "Choose customer"
+                        )
                     }
 
                     TextField("Amount", text: $amountText)
@@ -1841,12 +1854,15 @@ private struct QuickBooksDocumentComposeView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
-                        guard !customerRefs.isEmpty, let amount = Double(amountText), amount > 0 else { return }
-                        onCreate(customerRefs[selectedCustomerIndex], amount, note.isEmpty ? nil : note)
+                        guard let selectedCustomer, let amount = Double(amountText), amount > 0 else { return }
+                        onCreate(selectedCustomer, amount, note.isEmpty ? nil : note)
                         dismiss()
                     }
-                    .disabled(customerRefs.isEmpty || Double(amountText) == nil)
+                    .disabled(selectedCustomer == nil || Double(amountText) == nil)
                 }
+            }
+            .onAppear {
+                selectedCustomerID = selectedCustomerID ?? customerRefs.first?.value
             }
         }
     }
@@ -1858,9 +1874,20 @@ private struct QuickBooksBillComposeView: View {
     let vendorRefs: [QuickBooksReference]
     let onCreate: (QuickBooksReference, Double, String?) -> Void
 
-    @State private var selectedVendorIndex = 0
+    @State private var selectedVendorID: String?
     @State private var amountText = ""
     @State private var note = ""
+
+    private var vendorOptions: [SearchableDropdownOption] {
+        vendorRefs.map { SearchableDropdownOption(id: $0.value, title: $0.displayName, subtitle: $0.value) }
+    }
+
+    private var selectedVendor: QuickBooksReference? {
+        if let selectedVendorID, let match = vendorRefs.first(where: { $0.value == selectedVendorID }) {
+            return match
+        }
+        return vendorRefs.first
+    }
 
     var body: some View {
         NavigationStack {
@@ -1870,11 +1897,12 @@ private struct QuickBooksBillComposeView: View {
                         Text("Sync QuickBooks vendors first.")
                             .foregroundColor(.secondary)
                     } else {
-                        Picker("Vendor", selection: $selectedVendorIndex) {
-                            ForEach(vendorRefs.indices, id: \.self) { index in
-                                Text(vendorRefs[index].displayName).tag(index)
-                            }
-                        }
+                        SearchableDropdownPicker(
+                            title: "Vendor",
+                            options: vendorOptions,
+                            selectedID: $selectedVendorID,
+                            placeholder: "Choose vendor"
+                        )
                     }
 
                     TextField("Amount", text: $amountText)
@@ -1889,12 +1917,15 @@ private struct QuickBooksBillComposeView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
-                        guard !vendorRefs.isEmpty, let amount = Double(amountText), amount > 0 else { return }
-                        onCreate(vendorRefs[selectedVendorIndex], amount, note.isEmpty ? nil : note)
+                        guard let selectedVendor, let amount = Double(amountText), amount > 0 else { return }
+                        onCreate(selectedVendor, amount, note.isEmpty ? nil : note)
                         dismiss()
                     }
-                    .disabled(vendorRefs.isEmpty || Double(amountText) == nil)
+                    .disabled(selectedVendor == nil || Double(amountText) == nil)
                 }
+            }
+            .onAppear {
+                selectedVendorID = selectedVendorID ?? vendorRefs.first?.value
             }
         }
     }
@@ -1906,10 +1937,21 @@ private struct QuickBooksPurchaseComposeView: View {
     let vendorRefs: [QuickBooksReference]
     let onCreate: (QuickBooksReference, Double, String?, String) -> Void
 
-    @State private var selectedVendorIndex = 0
+    @State private var selectedVendorID: String?
     @State private var amountText = ""
     @State private var note = ""
     @State private var paymentType = "Cash"
+
+    private var vendorOptions: [SearchableDropdownOption] {
+        vendorRefs.map { SearchableDropdownOption(id: $0.value, title: $0.displayName, subtitle: $0.value) }
+    }
+
+    private var selectedVendor: QuickBooksReference? {
+        if let selectedVendorID, let match = vendorRefs.first(where: { $0.value == selectedVendorID }) {
+            return match
+        }
+        return vendorRefs.first
+    }
 
     var body: some View {
         NavigationStack {
@@ -1919,17 +1961,28 @@ private struct QuickBooksPurchaseComposeView: View {
                         Text("Sync QuickBooks vendors first.")
                             .foregroundColor(.secondary)
                     } else {
-                        Picker("Vendor", selection: $selectedVendorIndex) {
-                            ForEach(vendorRefs.indices, id: \.self) { index in
-                                Text(vendorRefs[index].displayName).tag(index)
-                            }
-                        }
+                        SearchableDropdownPicker(
+                            title: "Vendor",
+                            options: vendorOptions,
+                            selectedID: $selectedVendorID,
+                            placeholder: "Choose vendor"
+                        )
                     }
 
-                    Picker("Payment Type", selection: $paymentType) {
-                        Text("Cash").tag("Cash")
-                        Text("Check").tag("Check")
-                        Text("Credit Card").tag("CreditCard")
+                    Menu {
+                        Button("Cash") { paymentType = "Cash" }
+                        Button("Check") { paymentType = "Check" }
+                        Button("Credit Card") { paymentType = "CreditCard" }
+                    } label: {
+                        HStack {
+                            Text("Payment Type")
+                            Spacer()
+                            Text(paymentType == "CreditCard" ? "Credit Card" : paymentType)
+                                .foregroundColor(.secondary)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     TextField("Amount", text: $amountText)
@@ -1944,12 +1997,15 @@ private struct QuickBooksPurchaseComposeView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
-                        guard !vendorRefs.isEmpty, let amount = Double(amountText), amount > 0 else { return }
-                        onCreate(vendorRefs[selectedVendorIndex], amount, note.isEmpty ? nil : note, paymentType)
+                        guard let selectedVendor, let amount = Double(amountText), amount > 0 else { return }
+                        onCreate(selectedVendor, amount, note.isEmpty ? nil : note, paymentType)
                         dismiss()
                     }
-                    .disabled(vendorRefs.isEmpty || Double(amountText) == nil)
+                    .disabled(selectedVendor == nil || Double(amountText) == nil)
                 }
+            }
+            .onAppear {
+                selectedVendorID = selectedVendorID ?? vendorRefs.first?.value
             }
         }
     }
@@ -1962,10 +2018,33 @@ private struct QuickBooksPaymentComposeView: View {
     let paymentMethods: [QuickBooksPaymentMethod]
     let onAdd: (QuickBooksInvoice, Double, String?, QuickBooksReference?) -> Void
 
-    @State private var selectedInvoiceIndex = 0
-    @State private var selectedPaymentMethodID = ""
+    @State private var selectedInvoiceID: String?
+    @State private var selectedPaymentMethodID: String?
     @State private var amountText = ""
     @State private var note = ""
+
+    private var invoiceOptions: [SearchableDropdownOption] {
+        invoices.map { invoice in
+            let title = "\(invoice.DocNumber ?? invoice.Id) · \(invoice.CustomerRef.displayName)"
+            let balance = invoice.Balance ?? invoice.TotalAmt
+            return SearchableDropdownOption(
+                id: invoice.Id,
+                title: title,
+                subtitle: balance.formatted(.currency(code: "USD"))
+            )
+        }
+    }
+
+    private var paymentMethodOptions: [SearchableDropdownOption] {
+        paymentMethods.map { SearchableDropdownOption(id: $0.Id, title: $0.Name) }
+    }
+
+    private var selectedInvoice: QuickBooksInvoice? {
+        if let selectedInvoiceID, let match = invoices.first(where: { $0.Id == selectedInvoiceID }) {
+            return match
+        }
+        return invoices.first
+    }
 
     var body: some View {
         NavigationStack {
@@ -1975,19 +2054,20 @@ private struct QuickBooksPaymentComposeView: View {
                         Text("Sync QuickBooks invoices first.")
                             .foregroundColor(.secondary)
                     } else {
-                        Picker("Invoice", selection: $selectedInvoiceIndex) {
-                            ForEach(invoices.indices, id: \.self) { index in
-                                let invoice = invoices[index]
-                                Text("\(invoice.DocNumber ?? invoice.Id) · \(invoice.CustomerRef.displayName)").tag(index)
-                            }
-                        }
+                        SearchableDropdownPicker(
+                            title: "Invoice",
+                            options: invoiceOptions,
+                            selectedID: $selectedInvoiceID,
+                            placeholder: "Choose invoice"
+                        )
 
-                        Picker("Payment Method", selection: $selectedPaymentMethodID) {
-                            Text("None").tag("")
-                            ForEach(paymentMethods) { method in
-                                Text(method.Name).tag(method.Id)
-                            }
-                        }
+                        SearchableDropdownPicker(
+                            title: "Payment Method",
+                            options: paymentMethodOptions,
+                            selectedID: $selectedPaymentMethodID,
+                            placeholder: "None",
+                            showsClearButton: true
+                        )
                     }
 
                     TextField("Amount", text: $amountText)
@@ -2002,27 +2082,26 @@ private struct QuickBooksPaymentComposeView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
-                        guard !invoices.isEmpty, let amount = Double(amountText), amount > 0 else { return }
+                        guard let selectedInvoice, let amount = Double(amountText), amount > 0 else { return }
                         let paymentMethodRef = paymentMethods.first(where: { $0.Id == selectedPaymentMethodID })?.reference
-                        onAdd(invoices[selectedInvoiceIndex], amount, note.isEmpty ? nil : note, paymentMethodRef)
+                        onAdd(selectedInvoice, amount, note.isEmpty ? nil : note, paymentMethodRef)
                         dismiss()
                     }
-                    .disabled(invoices.isEmpty || Double(amountText) == nil)
+                    .disabled(selectedInvoice == nil || Double(amountText) == nil)
                 }
             }
             .onAppear {
-                if let firstInvoice = invoices.first {
-                    amountText = String(format: "%.2f", max(firstInvoice.Balance ?? firstInvoice.TotalAmt, 0))
+                selectedInvoiceID = selectedInvoiceID ?? invoices.first?.Id
+                if let selectedInvoice, amountText.isEmpty {
+                    amountText = String(format: "%.2f", max(selectedInvoice.Balance ?? selectedInvoice.TotalAmt, 0))
                 }
-                if selectedPaymentMethodID.isEmpty {
+                if selectedPaymentMethodID == nil {
                     selectedPaymentMethodID = paymentMethods.first(where: { $0.Name.caseInsensitiveCompare("QuickBooks Card") == .orderedSame })?.Id
                         ?? paymentMethods.first?.Id
-                        ?? ""
                 }
             }
-            .onChange(of: selectedInvoiceIndex) { _, newValue in
-                guard invoices.indices.contains(newValue) else { return }
-                let invoice = invoices[newValue]
+            .onChange(of: selectedInvoiceID) { _, _ in
+                guard let invoice = selectedInvoice else { return }
                 amountText = String(format: "%.2f", max(invoice.Balance ?? invoice.TotalAmt, 0))
             }
         }
@@ -2035,7 +2114,7 @@ private struct QuickBooksStoreCardComposeView: View {
     let customers: [QuickBooksCustomer]
     let onStore: (QuickBooksCustomer, QuickBooksPaymentsCardInput) -> Void
 
-    @State private var selectedCustomerIndex = 0
+    @State private var selectedCustomerID: String?
     @State private var cardholderName = ""
     @State private var cardNumber = ""
     @State private var expirationMonth = ""
@@ -2047,8 +2126,20 @@ private struct QuickBooksStoreCardComposeView: View {
     @State private var postalCode = ""
 
     private var selectedCustomer: QuickBooksCustomer? {
-        guard customers.indices.contains(selectedCustomerIndex) else { return nil }
-        return customers[selectedCustomerIndex]
+        if let selectedCustomerID, let match = customers.first(where: { $0.Id == selectedCustomerID }) {
+            return match
+        }
+        return customers.first
+    }
+
+    private var customerOptions: [SearchableDropdownOption] {
+        customers.map { customer in
+            SearchableDropdownOption(
+                id: customer.Id,
+                title: customer.DisplayName,
+                subtitle: customer.PrimaryEmailAddr?.Address ?? customer.PrimaryPhone?.FreeFormNumber
+            )
+        }
     }
 
     var body: some View {
@@ -2059,11 +2150,12 @@ private struct QuickBooksStoreCardComposeView: View {
                         Text("Sync QuickBooks customers before storing a card.")
                             .foregroundColor(.secondary)
                     } else {
-                        Picker("QuickBooks Customer", selection: $selectedCustomerIndex) {
-                            ForEach(customers.indices, id: \.self) { index in
-                                Text(customers[index].DisplayName).tag(index)
-                            }
-                        }
+                        SearchableDropdownPicker(
+                            title: "QuickBooks Customer",
+                            options: customerOptions,
+                            selectedID: $selectedCustomerID,
+                            placeholder: "Choose customer"
+                        )
                     }
                 }
 
@@ -2125,11 +2217,12 @@ private struct QuickBooksStoreCardComposeView: View {
                 }
             }
             .onAppear {
+                selectedCustomerID = selectedCustomerID ?? customers.first?.Id
                 if let selectedCustomer, cardholderName.isEmpty {
                     cardholderName = selectedCustomer.DisplayName
                 }
             }
-            .onChange(of: selectedCustomerIndex) { _, _ in
+            .onChange(of: selectedCustomerID) { _, _ in
                 if let selectedCustomer, cardholderName.isEmpty {
                     cardholderName = selectedCustomer.DisplayName
                 }
@@ -2145,7 +2238,7 @@ private struct QuickBooksCardChargeComposeView: View {
     let payments: [Payment]
     let onProcess: (Invoice, Double, QuickBooksPaymentsCardInput, String?) -> Void
 
-    @State private var selectedInvoiceIndex = 0
+    @State private var selectedInvoiceID: String?
     @State private var amountText = ""
     @State private var note = ""
     @State private var cardholderName = ""
@@ -2155,6 +2248,23 @@ private struct QuickBooksCardChargeComposeView: View {
     @State private var cvc = ""
     @State private var postalCode = ""
 
+    private var selectedInvoice: Invoice? {
+        if let selectedInvoiceID, let match = invoices.first(where: { $0.id.uuidString == selectedInvoiceID }) {
+            return match
+        }
+        return invoices.first
+    }
+
+    private var invoiceOptions: [SearchableDropdownOption] {
+        invoices.map { invoice in
+            SearchableDropdownOption(
+                id: invoice.id.uuidString,
+                title: "\(invoice.customer.name) · \(invoice.amount.formatted(.currency(code: "USD")))",
+                subtitle: invoice.quickBooksID.map { "QBO \($0)" }
+            )
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -2163,13 +2273,12 @@ private struct QuickBooksCardChargeComposeView: View {
                         Text("Create and sync an invoice first.")
                             .foregroundColor(.secondary)
                     } else {
-                        Picker("Invoice", selection: $selectedInvoiceIndex) {
-                            ForEach(invoices.indices, id: \.self) { index in
-                                let invoice = invoices[index]
-                                Text("\(invoice.customer.name) · \(invoice.amount.formatted(.currency(code: "USD")))")
-                                    .tag(index)
-                            }
-                        }
+                        SearchableDropdownPicker(
+                            title: "Invoice",
+                            options: invoiceOptions,
+                            selectedID: $selectedInvoiceID,
+                            placeholder: "Choose invoice"
+                        )
                     }
 
                     TextField("Amount", text: $amountText)
@@ -2202,8 +2311,7 @@ private struct QuickBooksCardChargeComposeView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Process") {
-                        guard !invoices.isEmpty, let amount = Double(amountText), amount > 0 else { return }
-                        let invoice = invoices[selectedInvoiceIndex]
+                        guard let invoice = selectedInvoice, let amount = Double(amountText), amount > 0 else { return }
                         let input = QuickBooksPaymentsCardInput(
                             cardholderName: cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? invoice.customer.name : cardholderName.trimmingCharacters(in: .whitespacesAndNewlines),
                             cardNumber: cardNumber.filter(\.isNumber),
@@ -2220,7 +2328,7 @@ private struct QuickBooksCardChargeComposeView: View {
                         dismiss()
                     }
                     .disabled(
-                        invoices.isEmpty ||
+                        selectedInvoice == nil ||
                         Double(amountText) == nil ||
                         cardNumber.filter(\.isNumber).count < 12 ||
                         expirationYear.filter(\.isNumber).count != 4 ||
@@ -2229,13 +2337,13 @@ private struct QuickBooksCardChargeComposeView: View {
                 }
             }
             .onAppear {
-                guard let firstInvoice = invoices.first else { return }
-                amountText = String(format: "%.2f", outstandingBalance(for: firstInvoice))
-                cardholderName = firstInvoice.customer.name
+                selectedInvoiceID = selectedInvoiceID ?? invoices.first?.id.uuidString
+                guard let selectedInvoice else { return }
+                amountText = String(format: "%.2f", outstandingBalance(for: selectedInvoice))
+                cardholderName = selectedInvoice.customer.name
             }
-            .onChange(of: selectedInvoiceIndex) { _, newValue in
-                guard invoices.indices.contains(newValue) else { return }
-                let invoice = invoices[newValue]
+            .onChange(of: selectedInvoiceID) { _, _ in
+                guard let invoice = selectedInvoice else { return }
                 amountText = String(format: "%.2f", outstandingBalance(for: invoice))
                 cardholderName = invoice.customer.name
             }

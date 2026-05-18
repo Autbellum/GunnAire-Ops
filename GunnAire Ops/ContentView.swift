@@ -51,7 +51,7 @@ struct ContentView: View {
     private var visibleSidebarItems: [SidebarItem] {
         SidebarItem.allCases.filter { item in
             switch item {
-            case .quickBooksManagement:
+            case .estimates, .invoices, .payments, .receiptsBills, .quickBooksManagement, .onsiteDocumentation:
                 return isAdminUser
             case .syncIntegrations:
                 return true
@@ -269,10 +269,13 @@ struct ContentView: View {
     private func applyPendingAppRouteIfNeeded() {
         guard let route = pendingAppRoute else { return }
         let targetItem = route.sidebarItem
-        if visibleSidebarItems.contains(targetItem) {
-            selectedSidebarItem = targetItem
-        } else {
-            selectedSidebarItem = .commandCenter
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if visibleSidebarItems.contains(targetItem) {
+                selectedSidebarItem = targetItem
+            } else {
+                selectedSidebarItem = .commandCenter
+            }
+            columnVisibility = UIDevice.current.userInterfaceIdiom == .pad ? .doubleColumn : .detailOnly
         }
     }
 }
@@ -298,6 +301,7 @@ struct ServiceCallDetailView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
     @AppStorage("enablePhotoDocumentation") private var enablePhotoDocumentation = true
@@ -491,6 +495,11 @@ GunnAire
 
     private var selectedProcessor: OnsitePaymentProcessor {
         OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
+    }
+
+    private var canViewFinancials: Bool {
+        let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        return AppAccess.isAdmin(email: email, users: users)
     }
 
     private var tapToPayReady: Bool {
@@ -744,11 +753,13 @@ GunnAire
                                     .foregroundColor(.secondary)
                             }
 
-                            Text("\(call.customer.serviceCalls.count) jobs • \(call.customer.invoices.count) invoices • \(call.customer.activeContractsCount) active agreements")
+                            Text(canViewFinancials
+                                 ? "\(call.customer.serviceCalls.count) jobs • \(call.customer.invoices.count) invoices • \(call.customer.activeContractsCount) active agreements"
+                                 : "\(call.customer.serviceCalls.count) jobs • \(call.customer.activeContractsCount) active agreements")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
 
-                            if customerLifetimeInvoiceTotal > 0 {
+                            if canViewFinancials && customerLifetimeInvoiceTotal > 0 {
                                 Text("Lifetime invoiced: \(customerLifetimeInvoiceTotal, format: .currency(code: "USD"))")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
@@ -859,7 +870,8 @@ GunnAire
                         }
                     }
 
-                    GroupBox("Documentation") {
+                    if canViewFinancials {
+                        GroupBox("Documentation") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(call.linkedEstimateID == nil && call.linkedInvoiceID == nil ? "No estimate or invoice linked yet." : "This job already has linked billing documentation.")
                                 .foregroundColor(.secondary)
@@ -956,6 +968,30 @@ GunnAire
                                     .foregroundColor(.red)
                             }
                         }
+                        }
+                    } else {
+                        GroupBox("Documentation") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Checklist: \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                if enablePhotoDocumentation {
+                                    Text("Photos: \(call.beforePhotoCount) before • \(call.afterPhotoCount) after")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                if let startedAt = call.documentationStartedAt {
+                                    Text("Started: \(startedAt.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                if let completedAt = call.documentationCompletedAt {
+                                    Text("Completed: \(completedAt.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
                     }
 
                     GroupBox("Completion Checklist") {
@@ -976,10 +1012,12 @@ GunnAire
                                 get: { call.documentationChecklist },
                                 set: { call.documentationChecklist = $0 }
                             ))
-                            Toggle("Payment or billing follow-up handled", isOn: Binding(
-                                get: { call.paymentCollectedChecklist },
-                                set: { call.paymentCollectedChecklist = $0 }
-                            ))
+                            if canViewFinancials {
+                                Toggle("Payment or billing follow-up handled", isOn: Binding(
+                                    get: { call.paymentCollectedChecklist },
+                                    set: { call.paymentCollectedChecklist = $0 }
+                                ))
+                            }
 
                             if enablePhotoDocumentation {
                                 Stepper("Before photos: \(call.beforePhotoCount)", value: Binding(
@@ -1057,17 +1095,19 @@ GunnAire
                         .foregroundStyle(Color.primaryBlack)
                     }
 
-                    Button {
-                        GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
-                    } label: {
-                        Label(documentationActionLabel, systemImage: "doc.text")
-                            .frame(maxWidth: .infinity)
+                    if canViewFinancials {
+                        Button {
+                            GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
+                        } label: {
+                            Label(documentationActionLabel, systemImage: "doc.text")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.brandGold)
+                        .foregroundStyle(Color.primaryBlack)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.brandGold)
-                    .foregroundStyle(Color.primaryBlack)
 
-                    if hasOpenInvoiceBalance {
+                    if canViewFinancials && hasOpenInvoiceBalance {
                         VStack(spacing: 10) {
                             Button {
                                 if let linkedInvoiceID = call.linkedInvoiceID {

@@ -48,7 +48,6 @@ struct PaymentsAndReceiptsView: View {
     @State private var achPhone = ""
     @State private var achCheckNumber = ""
     @State private var achAccountType: QuickBooksBankAccountType = .businessChecking
-    @State private var didLoadPendingIntentInvoice = false
     @State private var quickBooksPaymentReceipts: [String: QuickBooksPaymentsPaymentReceipt] = [:]
 
     private let liveAPI = QuickBooksDataAPI.shared
@@ -393,6 +392,9 @@ struct PaymentsAndReceiptsView: View {
             refundSheet
         }
         .onAppear(perform: applyPendingIntentInvoiceIfNeeded)
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
+            applyPendingIntentInvoiceIfNeeded()
+        }
     }
 
     private var paymentSheet: some View {
@@ -608,14 +610,14 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private func applyPendingIntentInvoiceIfNeeded() {
-        guard !didLoadPendingIntentInvoice else { return }
-        didLoadPendingIntentInvoice = true
         guard let pendingInvoiceID = GunnAireAppIntentRouter.consumePendingInvoiceCollectionID(),
               let invoice = invoices.first(where: { $0.id == pendingInvoiceID }) else {
             return
         }
-        preparePaymentForm(for: invoice)
-        showingRecordPaymentSheet = true
+        withAnimation(.easeInOut(duration: 0.2)) {
+            preparePaymentForm(for: invoice)
+            showingRecordPaymentSheet = true
+        }
     }
 
     private func preparePaymentForm(for invoice: Invoice, preferredMethod: PaymentMethod = .card) {

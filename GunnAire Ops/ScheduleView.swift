@@ -24,7 +24,6 @@ struct ScheduleView: View {
     @State private var openDocumentationInTapToPay = false
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
-    @State private var didApplyPendingScheduleIntent = false
 
     private var selectedDayCalls: [ServiceCall] {
         callsForSignedInUser
@@ -207,7 +206,7 @@ struct ScheduleView: View {
                                     ForEach(selectedDayCalls) { call in
                                         serviceCallCard(for: call)
                                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                            if let invoice = invoice(for: call), invoice.status != "paid" {
+                                            if isAdminUser, let invoice = invoice(for: call), invoice.status != "paid" {
                                                 Button {
                                                     openDocumentationInCloseout = true
                                                     openDocumentationInTapToPay = tapToPayReady
@@ -218,14 +217,16 @@ struct ScheduleView: View {
                                                 .tint(.green)
                                             }
 
-                                            Button {
-                                                openDocumentationInCloseout = false
-                                                openDocumentationInTapToPay = false
-                                                documentationCall = call
-                                            } label: {
-                                                Label(documentationActionTitle(for: call, compact: true), systemImage: "doc.text")
+                                            if isAdminUser {
+                                                Button {
+                                                    openDocumentationInCloseout = false
+                                                    openDocumentationInTapToPay = false
+                                                    documentationCall = call
+                                                } label: {
+                                                    Label(documentationActionTitle(for: call, compact: true), systemImage: "doc.text")
+                                                }
+                                                .tint(Color.brandGold)
                                             }
-                                            .tint(Color.brandGold)
                                         }
                                         .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                             if hasNavigableAddress(for: call) {
@@ -293,6 +294,9 @@ struct ScheduleView: View {
                         .tint(Color.brandGold)
                 }
                 .onAppear(perform: applyPendingScheduleIntentIfNeeded)
+                .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
+                    applyPendingScheduleIntentIfNeeded()
+                }
                 .sheet(isPresented: $showingAddCallSheet) {
                     AddServiceCallView(selectedDate: selectedDate) { createdCall in
                         openDocumentationInCloseout = false
@@ -320,14 +324,15 @@ struct ScheduleView: View {
     }
 
     private func applyPendingScheduleIntentIfNeeded() {
-        guard !didApplyPendingScheduleIntent else { return }
-        didApplyPendingScheduleIntent = true
         guard let pendingID = GunnAireAppIntentRouter.consumePendingScheduleCallID(),
               let call = callsForSignedInUser.first(where: { $0.id == pendingID }) ?? serviceCalls.first(where: { $0.id == pendingID }) else {
             return
         }
-        selectedDate = Calendar.current.startOfDay(for: call.scheduledDate)
-        navigationPath.append(call)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            selectedDate = Calendar.current.startOfDay(for: call.scheduledDate)
+            navigationPath = NavigationPath()
+            navigationPath.append(call)
+        }
     }
 
     @ViewBuilder
@@ -475,7 +480,7 @@ struct ScheduleView: View {
                 }
             }
 
-            if !approvedEstimateCalls.isEmpty {
+            if isAdminUser && !approvedEstimateCalls.isEmpty {
                 Divider()
                 Text("Approved Work")
                     .font(.subheadline.weight(.semibold))
@@ -561,7 +566,7 @@ struct ScheduleView: View {
                 }
             }
 
-            if !readyToInvoiceCalls.isEmpty {
+            if isAdminUser && !readyToInvoiceCalls.isEmpty {
                 Divider()
                 Text("Ready To Bill")
                     .font(.subheadline.weight(.semibold))
@@ -595,7 +600,7 @@ struct ScheduleView: View {
                 }
             }
 
-            if !needsCloseoutCalls.isEmpty {
+            if isAdminUser && !needsCloseoutCalls.isEmpty {
                 Divider()
                 Text("Needs Closeout")
                     .font(.subheadline.weight(.semibold))
@@ -629,7 +634,7 @@ struct ScheduleView: View {
                 }
             }
 
-            if !quickBooksAttentionPayments.isEmpty {
+            if isAdminUser && !quickBooksAttentionPayments.isEmpty {
                 Divider()
                 Text("QuickBooks Attention")
                     .font(.subheadline.weight(.semibold))
@@ -687,26 +692,28 @@ struct ScheduleView: View {
                     .buttonStyle(.bordered)
                 }
 
-                Button(documentationActionTitle(for: call, compact: true)) {
-                    openDocumentationInCloseout = false
-                    openDocumentationInTapToPay = false
-                    documentationCall = call
+                if isAdminUser {
+                    Button(documentationActionTitle(for: call, compact: true)) {
+                        openDocumentationInCloseout = false
+                        openDocumentationInTapToPay = false
+                        documentationCall = call
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
 
                 if call.assignedTechnician == nil, let signedInTechnician {
                     Button("Assign To Me") {
                         assign(call, to: signedInTechnician)
                     }
                     .buttonStyle(.bordered)
-                } else if call.linkedInvoiceID == nil && (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
+                } else if isAdminUser && call.linkedInvoiceID == nil && (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
                     Button("Invoice") {
                         openDocumentationInCloseout = false
                         openDocumentationInTapToPay = false
                         documentationCall = call
                     }
                     .buttonStyle(.bordered)
-                } else if let invoice = invoice(for: call), invoice.status != "paid" {
+                } else if isAdminUser, let invoice = invoice(for: call), invoice.status != "paid" {
                     Button(tapToPayReady ? "Pay" : "Collect") {
                         openDocumentationInCloseout = true
                         openDocumentationInTapToPay = tapToPayReady
@@ -761,27 +768,27 @@ struct ScheduleView: View {
                 if call.documentationStartedAt != nil {
                     Label("Started", systemImage: "doc.text")
                 }
-                if call.linkedInvoiceID == nil && (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
+                if isAdminUser && call.linkedInvoiceID == nil && (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
                     Label("Ready to Bill", systemImage: "doc.badge.plus")
                 }
-                if let invoice = invoice(for: call), invoice.finalizedAt == nil || invoice.customerSignedAt == nil {
+                if isAdminUser, let invoice = invoice(for: call), invoice.finalizedAt == nil || invoice.customerSignedAt == nil {
                     Label("Closeout", systemImage: "signature")
                 }
                 if call.followUpRequired {
                     Label("Follow-Up", systemImage: "arrow.uturn.forward.circle.fill")
                 }
-                if let estimate = estimate(for: call) {
+                if isAdminUser, let estimate = estimate(for: call) {
                     Label(estimate.status.capitalized, systemImage: "list.clipboard.fill")
                 }
-                if let invoice = invoice(for: call) {
+                if isAdminUser, let invoice = invoice(for: call) {
                     Label(invoice.status.capitalized, systemImage: invoice.status == "paid" ? "checkmark.circle.fill" : "creditcard.fill")
                 }
-                if isCollectionOverdue(for: call) {
+                if isAdminUser && isCollectionOverdue(for: call) {
                     Label("Overdue", systemImage: "exclamationmark.triangle.fill")
                 }
-                if let balanceDue = balanceDue(for: call), balanceDue > 0 {
+                if isAdminUser, let balanceDue = balanceDue(for: call), balanceDue > 0 {
                     Text("Due \(balanceDue, format: .currency(code: "USD"))")
-                } else if call.linkedInvoiceID != nil {
+                } else if isAdminUser && call.linkedInvoiceID != nil {
                     Text("Paid")
                 }
             }

@@ -241,6 +241,20 @@ struct SettingsView: View {
 
                         Section("Technician Workflow") {
                             settingsToggle("Require Technician Clock In", systemImage: "clock", isOn: $requireTechnicianClockIn)
+                            if Config.QuickBooksTime.enabled {
+                                Label(
+                                    Config.QuickBooksTime.isConfiguredForSync
+                                        ? "QBO TimeActivity sync is enabled after clock-out."
+                                        : "QBO TimeActivity sync is enabled but missing QB_TIME_ACTIVITY_ENTITY_REF.",
+                                    systemImage: Config.QuickBooksTime.isConfiguredForSync ? "checkmark.circle" : "exclamationmark.triangle"
+                                )
+                                .font(.caption)
+                                .foregroundColor(Config.QuickBooksTime.isConfiguredForSync ? .secondary : .orange)
+
+                                Text("QBO supports completed TimeActivity records with EmployeeRef or VendorRef, duration hours/minutes, and optional CustomerRef, ItemRef, ProjectRef, and PayrollItemRef. It does not provide a live clock-in session API through QBO Accounting.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                             settingsToggle("Require Completion Checklist", systemImage: "checklist", isOn: $requireJobCompletionChecklist)
                             settingsToggle("Require Customer Signature", systemImage: "signature", isOn: $requireCustomerSignature)
                             settingsToggle("Customer Appointment Notifications", systemImage: "bell", isOn: $enableCustomerNotifications)
@@ -334,12 +348,10 @@ struct SettingsView: View {
                 } else {
                     Section("Account") {
                         Text(currentUserEmail ?? "Signed in")
-                        Text("Google and QuickBooks connections can be managed here. Company workflow and user management remain admin-only.")
+                        Text("Standard users can use field operations, schedule, customer, and mail tools. Admin controls are managed by office leadership.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
-
-                    integrationsSections
                 }
 
                 Section("Application") {

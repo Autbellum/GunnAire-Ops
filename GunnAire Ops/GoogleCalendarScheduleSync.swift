@@ -17,8 +17,9 @@ enum GoogleCalendarScheduleSync {
             case .failure(let error):
                 completion(.failure(error))
             case .success(let calendars):
-                let availableCalendarIDs = Set(["primary"] + calendars.map(\.id))
-                let writableCalendarIDs = Set(["primary"] + calendars.filter(\.isWritable).map(\.id))
+                let filteredCalendars = calendars.filter { !isExcludedCalendarID($0.id) }
+                let availableCalendarIDs = Set(["primary"] + filteredCalendars.map(\.id))
+                let writableCalendarIDs = Set(["primary"] + filteredCalendars.filter(\.isWritable).map(\.id))
                 fetchEvents(
                     auth: auth,
                     calendarIDs: Array(availableCalendarIDs),
@@ -185,7 +186,7 @@ enum GoogleCalendarScheduleSync {
                 calls: calls,
                 auth: auth,
                 modelContext: modelContext,
-                remoteEventsByFingerprint: remoteEventsByFingerprint(from: calendarEvents),
+                remoteEventsByFingerprint: remoteEventsByFingerprint(from: calendarEvents, writableCalendarIDs: writableCalendarIDs),
                 availableCalendarIDs: availableCalendarIDs,
                 writableCalendarIDs: writableCalendarIDs,
                 completion: completion
@@ -314,7 +315,8 @@ enum GoogleCalendarScheduleSync {
     }
 
     private static func remoteEventsByFingerprint(
-        from calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)]
+        from calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)],
+        writableCalendarIDs: Set<String>
     ) -> [String: (calendarID: String, event: GoogleCalendarEvent)] {
         var indexed: [String: (calendarID: String, event: GoogleCalendarEvent)] = [:]
         for calendarEvent in calendarEvents {
@@ -328,7 +330,14 @@ enum GoogleCalendarScheduleSync {
                 startDate: startDate,
                 endDate: endDate
             )
-            if indexed[fingerprint] == nil || calendarEvent.calendarID == "primary" {
+            if let existing = indexed[fingerprint] {
+                let existingWritable = contains(existing.calendarID, in: writableCalendarIDs)
+                let newWritable = contains(calendarEvent.calendarID, in: writableCalendarIDs)
+                // Prefer writable calendars over read-only; if equal, prefer primary as a stable tie-breaker.
+                if (!existingWritable && newWritable) || (existingWritable == newWritable && calendarEvent.calendarID == "primary") {
+                    indexed[fingerprint] = calendarEvent
+                }
+            } else {
                 indexed[fingerprint] = calendarEvent
             }
         }
@@ -448,6 +457,16 @@ enum GoogleCalendarScheduleSync {
             return "primary"
         }
         return nil
+    }
+
+    private static func isExcludedCalendarID(_ id: String) -> Bool {
+        let normalizedID = id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Common Google holiday calendars end with or contain "holiday@group.v.calendar.google.com".
+        if normalizedID.contains("#holiday@group.v.calendar.google.com") { return true }
+        if normalizedID.contains("holiday@group.v.calendar.google.com") { return true }
+        // Exclude Contacts/Birthdays calendar as well.
+        if normalizedID.contains("addressbook#contacts@group.v.calendar.google.com") { return true }
+        return false
     }
 
     private static func contains(_ calendarID: String, in calendarIDs: Set<String>) -> Bool {

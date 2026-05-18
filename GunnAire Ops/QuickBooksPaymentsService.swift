@@ -667,10 +667,17 @@ final class QuickBooksPaymentsService {
         // sync with “Feature not supported error : true”.
         let creditCardPayment: QuickBooksCreditCardPayment? = nil
 
+        let privateNote: String?
+        if let clientTransactionID {
+            privateNote = accountingNote(baseNote: note, clientTransactionID: clientTransactionID)
+        } else {
+            privateNote = note
+        }
+
         return QuickBooksPaymentCreate(
             CustomerRef: QuickBooksReference(value: customerQBID, name: invoice.customer.name),
             TotalAmt: amount,
-            PrivateNote: clientTransactionID == nil ? note : accountingNote(baseNote: note, clientTransactionID: clientTransactionID!),
+            PrivateNote: privateNote,
             PaymentRefNum: Self.quickBooksPaymentRefNum(paymentRef),
             Line: lines,
             PaymentMethodRef: paymentMethodRef,

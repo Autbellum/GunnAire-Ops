@@ -1,19 +1,27 @@
-// Machine-local overrides for GunnAire Ops.
-// This file is intentionally ignored by git. Keep production OAuth secrets here, not in Info.plist or Xcode schemes.
+// Shared, safe defaults for GunnAire Ops.
+// Put real OAuth secrets and production account references in ignored Config/Local.xcconfig.
 // NOTE: URLs in .xcconfig files escape // as /$()/ because // starts a comment in xcconfig syntax.
 
-QB_CLIENT_ID = ABUeWKrqnanv8jakA8Hgui7zF8mMpsHkxdtSlHEtkyclaDFMLH
-QB_CLIENT_SECRET = garGog2E3NF3fWN6GcFW9eEsoGRfhB2p2yvYrV8p
-QB_REDIRECT_URI = https:/$()/gunnaire.com/wp-json/ga/v1/qbo/oauth/callback
+QB_CLIENT_ID = YOUR_QUICKBOOKS_CLIENT_ID
+QB_CLIENT_SECRET = YOUR_QUICKBOOKS_CLIENT_SECRET
+QB_REDIRECT_URI = https:/$()/example.com/qbo/oauth/callback
 QB_CALLBACK_SCHEME = gunnaireops
-QB_ENVIRONMENT = production
-QB_DEFAULT_ITEM_REF = 1
+QB_ENVIRONMENT = sandbox
+QB_DEFAULT_ITEM_REF = your_default_item_ref
 QB_DEFAULT_INCOME_ACCOUNT_REF = your_income_account_ref
 QB_DEFAULT_EXPENSE_ACCOUNT_REF = your_expense_account_ref
-QB_ENABLE_PAYMENTS_SCOPE = true
+QB_ENABLE_PAYMENTS_SCOPE = false
+QB_TIME_ACTIVITY_SYNC_ENABLED = false
+QB_TIME_ACTIVITY_NAME_OF = Employee
+QB_TIME_ACTIVITY_ENTITY_REF =
+QB_TIME_ACTIVITY_ITEM_REF =
+QB_TIME_ACTIVITY_PAYROLL_ITEM_REF =
+QB_TIME_ACTIVITY_PROJECT_REF =
 
-GOOGLE_CLIENT_ID = 539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e.apps.googleusercontent.com
-GOOGLE_REDIRECT_URI = com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e:/oauth2redirect
-GOOGLE_CALLBACK_SCHEME = com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e
-GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e
-GOOGLE_ALLOWED_HOSTED_DOMAIN = gunnaire.com
+GOOGLE_CLIENT_ID = YOUR_GOOGLE_CLIENT_ID
+GOOGLE_REDIRECT_URI = YOUR_GOOGLE_REVERSED_CLIENT_ID:/oauth2redirect
+GOOGLE_CALLBACK_SCHEME = YOUR_GOOGLE_REVERSED_CLIENT_ID
+GOOGLE_REVERSED_CLIENT_ID = YOUR_GOOGLE_REVERSED_CLIENT_ID
+GOOGLE_ALLOWED_HOSTED_DOMAIN = example.com
+
+#include? "Local.xcconfig"
