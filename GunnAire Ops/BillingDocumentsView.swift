@@ -43,6 +43,7 @@ struct BillingDocumentsView: View {
     @State private var pendingIntentServiceCallID: UUID?
     @State private var showingItemSelector = false
     @State private var showingItemCreator = false
+    @State private var generatedCustomerDocumentURL: URL?
     private let workspaceMode: BillingWorkspaceMode
 
     init(
@@ -551,6 +552,42 @@ GunnAire
                         }
                     }
 
+                    Section("Customer Documents") {
+                        Button {
+                            generateOnsiteReport(for: call)
+                        } label: {
+                            Label("Generate Onsite Report", systemImage: "doc.badge.gearshape")
+                        }
+                        .buttonStyle(.bordered)
+
+                        if let estimate = currentJobEstimate {
+                            Button {
+                                generateEstimateDocument(estimate)
+                            } label: {
+                                Label("Generate Estimate PDF", systemImage: "doc.text")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        if let invoice = currentJobInvoice, invoice.status == "paid" || (currentJobBalanceDue ?? invoiceBalanceDue(for: invoice)) <= 0.009 {
+                            Button {
+                                generatePaidInvoiceDocument(invoice)
+                            } label: {
+                                Label("Generate Paid Invoice PDF", systemImage: "doc.text.fill")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        if let generatedCustomerDocumentURL {
+                            ShareLink(item: generatedCustomerDocumentURL) {
+                                Label("Share Last Generated Document", systemImage: "square.and.arrow.up")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                        }
+                    }
+
                     Section("Job Progress") {
                         Toggle("Work Completed", isOn: Binding(
                             get: { call.workCompletedChecklist },
@@ -624,6 +661,17 @@ GunnAire
                     }
                 }
 
+                if !isJobDocumentationMode, let generatedCustomerDocumentURL {
+                    Section("Customer Documents") {
+                        ShareLink(item: generatedCustomerDocumentURL) {
+                            Label("Share Last Generated Document", systemImage: "square.and.arrow.up")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.brandGold)
+                        .foregroundStyle(Color.primaryBlack)
+                    }
+                }
+
                 if currentJobEstimate != nil || currentJobInvoice != nil {
                     Section("Current Job Documents") {
                         if let estimate = currentJobEstimate {
@@ -638,6 +686,11 @@ GunnAire
                                     .foregroundColor(.secondary)
                                 Button("Resume Estimate") {
                                     loadEstimateIntoBuilder(estimate)
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button("Generate Estimate PDF") {
+                                    generateEstimateDocument(estimate)
                                 }
                                 .buttonStyle(.bordered)
 
@@ -737,6 +790,13 @@ GunnAire
                                     loadInvoiceIntoBuilder(invoice)
                                 }
                                 .buttonStyle(.bordered)
+
+                                if invoice.status == "paid" || (currentJobBalanceDue ?? invoiceBalanceDue(for: invoice)) <= 0.009 {
+                                    Button("Generate Paid Invoice PDF") {
+                                        generatePaidInvoiceDocument(invoice)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
 
                                 if invoice.status != "paid" {
                                     Button("Record Additional Payment") {
@@ -1317,6 +1377,11 @@ GunnAire
                                     }
                                     .buttonStyle(.bordered)
                                     .disabled(estimate.status == "invoiced")
+
+                                    Button("Generate Estimate PDF") {
+                                        generateEstimateDocument(estimate)
+                                    }
+                                    .buttonStyle(.bordered)
                                 }
                                 .padding(.vertical, 4)
                             }
@@ -1363,6 +1428,13 @@ GunnAire
                                     .tint(Color.brandGold)
                                     .foregroundStyle(Color.primaryBlack)
                                     .disabled(invoice.status == "paid")
+
+                                    if invoice.status == "paid" || invoiceBalanceDue(for: invoice) <= 0.009 {
+                                        Button("Generate Paid Invoice PDF") {
+                                            generatePaidInvoiceDocument(invoice)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
                                 }
                                 .padding(.vertical, 4)
                             }
@@ -1656,6 +1728,48 @@ GunnAire
 
         if announce {
             actionMessage = "Loaded the saved \(preferredKind.rawValue.lowercased()) back into the builder."
+        }
+    }
+
+    private func generateOnsiteReport(for serviceCall: ServiceCall) {
+        do {
+            let url = try CustomerDocumentExporter.exportOnsiteReport(
+                serviceCall: serviceCall,
+                estimate: currentJobEstimate,
+                invoice: currentJobInvoice,
+                payments: currentJobPayments
+            )
+            generatedCustomerDocumentURL = url
+            serviceCall.documentationChecklist = true
+            serviceCall.documentationCompletedAt = serviceCall.documentationCompletedAt ?? Date()
+            actionMessage = "Onsite report generated."
+        } catch {
+            actionMessage = "Could not generate onsite report: \(error.localizedDescription)"
+        }
+    }
+
+    private func generateEstimateDocument(_ estimate: Estimate) {
+        do {
+            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: serviceCall(for: estimate))
+            generatedCustomerDocumentURL = url
+            actionMessage = "Estimate PDF generated."
+        } catch {
+            actionMessage = "Could not generate estimate PDF: \(error.localizedDescription)"
+        }
+    }
+
+    private func generatePaidInvoiceDocument(_ invoice: Invoice) {
+        do {
+            let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
+            let url = try CustomerDocumentExporter.exportPaidInvoice(
+                invoice,
+                serviceCall: serviceCall(for: invoice),
+                payments: invoicePayments
+            )
+            generatedCustomerDocumentURL = url
+            actionMessage = "Paid invoice PDF generated."
+        } catch {
+            actionMessage = "Could not generate paid invoice PDF: \(error.localizedDescription)"
         }
     }
 
