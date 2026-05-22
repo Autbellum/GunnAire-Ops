@@ -27,6 +27,7 @@ final class QuickBooksDataAPI: ObservableObject {
     @Published private(set) var storedRealmID: String?
     @Published private(set) var storedEnvironment: String?
     @Published private(set) var lastAuthorizationFailureDetail: String?
+    @Published private(set) var lastRefreshFailureDetail: String?
     @Published private(set) var lastRejectedRealmID: String?
     @Published private(set) var lastRejectedEnvironment: String?
 
@@ -119,11 +120,27 @@ final class QuickBooksDataAPI: ObservableObject {
 
     var environmentMismatchDiagnostic: String? {
         guard savedSessionEnvironmentDiffersFromCurrentBuild else { return nil }
-        return "Saved QuickBooks session was authorized for \(currentEnvironment.capitalized), but this build is configured for \(Config.QuickBooks.environment.capitalized). Disconnect and reconnect after changing QB_ENVIRONMENT, client keys, or Intuit app credentials."
+        return "Saved QuickBooks session was authorized for \(currentEnvironment.capitalized), but this build is configured for \(Config.QuickBooks.environment.capitalized). Disconnect and reconnect with the production Intuit app credentials after changing QB_ENVIRONMENT, client keys, or redirect URI."
     }
 
     var canStartOAuthFlow: Bool {
         Config.QuickBooks.isConfigured
+    }
+
+    func resetConnectionForReconnect(completion: ((Bool) -> Void)? = nil) {
+        let tokenToRevoke = tokens?.refreshToken ?? tokens?.accessToken
+        guard let tokenToRevoke, !tokenToRevoke.isEmpty else {
+            clearTokens()
+            completion?(true)
+            return
+        }
+
+        revoke(token: tokenToRevoke) { [weak self] ok in
+            Task { @MainActor in
+                self?.clearTokens()
+                completion?(ok)
+            }
+        }
     }
 
     func storeTokens(_ tokens: QuickBooksOAuthTokens, realmID: String) {
@@ -156,7 +173,7 @@ final class QuickBooksDataAPI: ObservableObject {
     func loadTokens() {
         if let payload = try? KeychainStore.loadCodable(QuickBooksKeychainPayload.self, account: keychainAccount) {
             guard savedPayloadMatchesCurrentConfiguration(payload) else {
-                lastAuthorizationFailureDetail = "Saved QuickBooks session was created by a different Intuit client, redirect URI, scope set, or sandbox/production environment. Reconnect once with the current build settings."
+                lastAuthorizationFailureDetail = "Saved QuickBooks session was created by a different Intuit client, redirect URI, scope set, or sandbox/production environment. Reconnect once with the production Intuit app settings in this build."
                 lastRejectedRealmID = payload.realmID.trimmingCharacters(in: .whitespacesAndNewlines)
                 lastRejectedEnvironment = payload.environment
                 clearTokens(clearAuthorizationFailure: false)
@@ -175,7 +192,7 @@ final class QuickBooksDataAPI: ObservableObject {
         }
 
         if UserDefaults.standard.data(forKey: tokenStorageKey) != nil || UserDefaults.standard.string(forKey: realmIDKey) != nil {
-            lastAuthorizationFailureDetail = "Legacy QuickBooks tokens did not include the Intuit client/redirect/scope binding needed for safe reuse. Reconnect once to create a clean session."
+            lastAuthorizationFailureDetail = "Legacy QuickBooks tokens did not include the Intuit client/redirect/scope binding needed for safe reuse. Reconnect once with the production Intuit app settings to create a clean session."
             clearTokens(clearAuthorizationFailure: false)
         }
     }
@@ -186,6 +203,7 @@ final class QuickBooksDataAPI: ObservableObject {
         storedEnvironment = nil
         if clearAuthorizationFailure {
             lastAuthorizationFailureDetail = nil
+            lastRefreshFailureDetail = nil
             lastRejectedRealmID = nil
             lastRejectedEnvironment = nil
         }
@@ -193,6 +211,36 @@ final class QuickBooksDataAPI: ObservableObject {
         UserDefaults.standard.removeObject(forKey: tokenStorageKey)
         UserDefaults.standard.removeObject(forKey: realmIDKey)
         NotificationCenter.default.post(name: .quickBooksAuthenticationDidChange, object: nil)
+    }
+
+    private func revoke(token: String, completion: @escaping (Bool) -> Void) {
+        guard let url = URL(string: Config.QuickBooks.revocationEndpoint) else {
+            completion(false)
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = Config.QuickBooks.requestTimeoutSeconds
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let credentials = "\(clientId):\(clientSecret)"
+        if let credData = credentials.data(using: .utf8) {
+            request.setValue("Basic \(credData.base64EncodedString())", forHTTPHeaderField: "Authorization")
+        }
+
+        var bodyComponents = URLComponents()
+        bodyComponents.queryItems = [URLQueryItem(name: "token", value: token)]
+        request.httpBody = bodyComponents.percentEncodedQuery?.data(using: .utf8)
+
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            guard error == nil, let http = response as? HTTPURLResponse else {
+                completion(false)
+                return
+            }
+            completion((200...299).contains(http.statusCode))
+        }.resume()
     }
 
     func refreshTokensIfNeeded(completion: @escaping (Bool) -> Void) {
@@ -253,35 +301,62 @@ final class QuickBooksDataAPI: ObservableObject {
 
         URLSession.shared.dataTask(with: request) { data, response, error in
             Task { @MainActor in
-                if error != nil {
+                if let error {
+                    self.lastRefreshFailureDetail = "QuickBooks token refresh failed before Intuit responded: \(error.localizedDescription)"
                     self.completeOnMain(completion, value: false)
                     return
                 }
 
                 guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                    let raw = data.flatMap { String(data: $0, encoding: .utf8) }?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.lastRefreshFailureDetail = Self.refreshFailureMessage(statusCode: statusCode, raw: raw)
                     if let httpResponse = response as? HTTPURLResponse, [400, 401, 403].contains(httpResponse.statusCode) {
-                        self.clearTokens()
+                        self.clearTokens(clearAuthorizationFailure: false)
                     }
                     self.completeOnMain(completion, value: false)
                     return
                 }
 
                 guard let data,
-                      let payload = try? JSONDecoder().decode(QuickBooksRefreshTokenResponse.self, from: data),
                       let realmID = self.realmID else {
+                    self.lastRefreshFailureDetail = "QuickBooks token refresh succeeded, but the app could not read the saved company realm. Reconnect QuickBooks."
+                    self.clearTokens(clearAuthorizationFailure: false)
+                    self.completeOnMain(completion, value: false)
+                    return
+                }
+
+                guard let payload = try? JSONDecoder().decode(QuickBooksRefreshTokenResponse.self, from: data) else {
+                    let raw = String(data: data, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.lastRefreshFailureDetail = "QuickBooks token refresh returned an unreadable token response.\(raw.map { " Intuit detail: \($0)" } ?? "")"
                     self.completeOnMain(completion, value: false)
                     return
                 }
 
                 let refreshed = QuickBooksOAuthTokens(
                     accessToken: payload.access_token,
-                    refreshToken: payload.refresh_token,
+                    refreshToken: payload.refresh_token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? payload.refresh_token! : refreshToken,
                     expiration: Date().addingTimeInterval(payload.expires_in)
                 )
+                self.lastRefreshFailureDetail = nil
                 self.storeTokens(refreshed, realmID: realmID)
                 self.completeOnMain(completion, value: true)
             }
         }.resume()
+    }
+
+    private static func refreshFailureMessage(statusCode: Int, raw: String?) -> String {
+        let detail = raw?.isEmpty == false ? " Intuit detail: \(String(raw!.prefix(700)))" : ""
+        switch statusCode {
+        case 400, 401, 403:
+            return "QuickBooks token refresh was rejected (HTTP \(statusCode)). The saved refresh token is expired, revoked, already rotated, or belongs to different production credentials. Disconnect QuickBooks, then connect again with a QuickBooks company admin.\(detail)"
+        case -1:
+            return "QuickBooks token refresh failed because the app did not receive a valid HTTP response.\(detail)"
+        default:
+            return "QuickBooks token refresh failed (HTTP \(statusCode)).\(detail)"
+        }
     }
 
     private func completeOnMain(_ completion: @escaping (Bool) -> Void, value: Bool) {
@@ -308,6 +383,9 @@ final class QuickBooksDataAPI: ObservableObject {
         if !mergedQueryItems.contains(where: { $0.name == "minorversion" }) {
             mergedQueryItems.append(URLQueryItem(name: "minorversion", value: minorVersion))
         }
+        if method.uppercased() != "GET", !mergedQueryItems.contains(where: { $0.name.lowercased() == "requestid" }) {
+            mergedQueryItems.append(URLQueryItem(name: "requestid", value: UUID().uuidString))
+        }
         components.queryItems = mergedQueryItems
 
         guard let url = components.url else { return nil }
@@ -316,9 +394,6 @@ final class QuickBooksDataAPI: ObservableObject {
         request.timeoutInterval = Config.QuickBooks.requestTimeoutSeconds
         request.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if method.uppercased() != "GET" {
-            request.setValue(UUID().uuidString, forHTTPHeaderField: "Request-Id")
-        }
         if let contentType {
             request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
@@ -485,7 +560,7 @@ final class QuickBooksDataAPI: ObservableObject {
         let intuitDetail = cleanedDetail.isEmpty || cleanedDetail == "QuickBooks rejected this app session."
             ? ""
             : " Intuit detail: \(String(cleanedDetail.prefix(700)))"
-        return "QuickBooks rejected this app session for \(company). This usually means the saved token was issued for the wrong sandbox/production environment, the app connection was revoked, the app is not authorized for this company, or the user reconnected before the required Accounting scope was granted. Reconnect QuickBooks with a company admin, confirm the app is authorized for \(environment), then retry sync.\(intuitDetail)"
+        return "QuickBooks rejected the saved connection for company realm \(company) in \(environment). Your production keys can still be correct; this 403 means Intuit does not consider the current saved token authorized for QBO Accounting on that company. Use Disconnect QuickBooks, then Connect QuickBooks again with a QuickBooks company admin and accept the Accounting permission.\(intuitDetail)"
     }
 
     private func paymentsAuthorizationFailureMessage(detail: String) -> String {
@@ -563,6 +638,10 @@ final class QuickBooksDataAPI: ObservableObject {
         completion: @escaping (Result<T, Error>) -> Void,
         attempt: Int = 0
     ) {
+        guard Config.QuickBooks.enablePaymentsScope else {
+            completion(.failure(QBError.paymentsScopeDisabled))
+            return
+        }
         let typeBox = DecodableTypeBox(type: type)
         refreshTokensIfNeeded { ok in
             guard ok, let request = requestBuilder() else {
@@ -612,6 +691,19 @@ final class QuickBooksDataAPI: ObservableObject {
             decode: QuickBooksCustomerQueryResponse.self
         ) { result in
             completion(result.map { $0.QueryResponse.Customer ?? [] })
+        }
+    }
+
+    func validateAccountingConnection(completion: @escaping (Result<QuickBooksCompanyInfo, Error>) -> Void) {
+        guard let realmID else {
+            completion(.failure(QBError.unauthorized))
+            return
+        }
+        performAuthorizedDecodingRequest(
+            { self.authorizedRequest(path: "companyinfo/\(realmID)") },
+            decode: QuickBooksCompanyInfoResponse.self
+        ) { result in
+            completion(result.map(\.CompanyInfo))
         }
     }
 
@@ -1097,13 +1189,15 @@ final class QuickBooksDataAPI: ObservableObject {
         let lineBreak = "\r\n"
 
         body.append("--\(boundary)\(lineBreak)")
-        body.append("Content-Disposition: form-data; name=\"file_metadata_01\"\(lineBreak)")
-        body.append("Content-Type: application/json\(lineBreak)\(lineBreak)")
+        body.append("Content-Disposition: form-data; name=\"file_metadata_01\"; filename=\"attachment.json\"\(lineBreak)")
+        body.append("Content-Type: application/json; charset=UTF-8\(lineBreak)")
+        body.append("Content-Transfer-Encoding: 8bit\(lineBreak)\(lineBreak)")
         body.append("\(metadataJSON)\(lineBreak)")
 
         body.append("--\(boundary)\(lineBreak)")
         body.append("Content-Disposition: form-data; name=\"file_content_01\"; filename=\"\(filename)\"\(lineBreak)")
-        body.append("Content-Type: \(contentType)\(lineBreak)\(lineBreak)")
+        body.append("Content-Type: \(contentType)\(lineBreak)")
+        body.append("Content-Transfer-Encoding: binary\(lineBreak)\(lineBreak)")
         body.append(fileData)
         body.append(lineBreak)
         body.append("--\(boundary)--\(lineBreak)")
@@ -1132,6 +1226,7 @@ final class QuickBooksDataAPI: ObservableObject {
         case httpDetail(statusCode: Int, detail: String)
         case authorizationFailed(statusCode: Int, detail: String)
         case paymentsAuthorizationFailed(statusCode: Int, detail: String)
+        case paymentsScopeDisabled
         case rateLimited(detail: String)
         case missingCustomerIDForStoredCards
 
@@ -1166,6 +1261,8 @@ final class QuickBooksDataAPI: ObservableObject {
                 return "QuickBooks authorization needs attention (HTTP \(statusCode)). \(detail) Reconnect QuickBooks, then retry sync."
             case .paymentsAuthorizationFailed(let statusCode, let detail):
                 return "QuickBooks Payments authorization needs attention (HTTP \(statusCode)). \(detail) Accounting sync can remain connected; reconnect only after enabling Payments access in Intuit."
+            case .paymentsScopeDisabled:
+                return "QuickBooks Payments scope is disabled for this build. Enable QB_ENABLE_PAYMENTS_SCOPE, authorize the Payments permission in Intuit, then reconnect QuickBooks before using live payment endpoints."
             case .rateLimited(let detail):
                 return detail
             case .missingCustomerIDForStoredCards:
@@ -1181,6 +1278,10 @@ private extension QuickBooksDataAPI {
         completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void,
         attempt: Int = 0
     ) {
+        guard Config.QuickBooks.enablePaymentsScope else {
+            completion(.failure(QBError.paymentsScopeDisabled))
+            return
+        }
         refreshTokensIfNeeded { ok in
             guard ok, let request = requestBuilder() else {
                 completion(.failure(QBError.unauthorized))
@@ -1229,6 +1330,10 @@ private extension QuickBooksDataAPI {
         completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void,
         attempt: Int = 0
     ) {
+        guard Config.QuickBooks.enablePaymentsScope else {
+            completion(.failure(QBError.paymentsScopeDisabled))
+            return
+        }
         refreshTokensIfNeeded { ok in
             guard ok, let request = requestBuilder() else {
                 completion(.failure(QBError.unauthorized))
@@ -1381,8 +1486,24 @@ private extension QuickBooksDataAPI {
 
 private struct QuickBooksRefreshTokenResponse: Codable {
     let access_token: String
-    let refresh_token: String
+    let refresh_token: String?
     let expires_in: Double
+}
+
+struct QuickBooksCompanyInfoResponse: Codable {
+    let CompanyInfo: QuickBooksCompanyInfo
+}
+
+struct QuickBooksCompanyInfo: Codable {
+    let Id: String?
+    let CompanyName: String?
+    let LegalName: String?
+    let Country: String?
+    let Email: QuickBooksCompanyEmailAddress?
+}
+
+struct QuickBooksCompanyEmailAddress: Codable {
+    let Address: String?
 }
 
 struct QuickBooksReference: Codable, Hashable {

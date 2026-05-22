@@ -21,15 +21,18 @@ struct Config {
     }
 
     struct QuickBooks {
-        // Prefer env / Info.plist overrides for local and CI workflows.
-        // Keep the sandbox as the default so a missing QB_ENVIRONMENT never sends test traffic to production.
+        // Prefer env / Info.plist overrides for local and CI workflows. Production is the app default;
+        // use QB_ENVIRONMENT=sandbox only for an intentional Intuit sandbox test build.
         static let clientID = Config.value("QB_CLIENT_ID", fallback: "YOUR_CLIENT_ID")
         static let clientSecret = Config.value("QB_CLIENT_SECRET", fallback: "YOUR_CLIENT_SECRET")
         static let redirectURI = Config.value("QB_REDIRECT_URI", fallback: "YOUR_REDIRECT_URI")
         // ASWebAuthenticationSession callback scheme. For production, use an HTTPS Intuit redirect URI
         // that forwards back into this custom scheme after your backend exchanges / validates the callback.
         static let callbackScheme = Config.value("QB_CALLBACK_SCHEME", fallback: "gunnaireops")
-        static let environment = Config.value("QB_ENVIRONMENT", fallback: "sandbox").lowercased() // sandbox or production
+        private static let configuredEnvironment = Config.value("QB_ENVIRONMENT", fallback: "production")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        static let environment = configuredEnvironment == "sandbox" ? "sandbox" : "production"
 
         // Required QBO references. These must be IDs from the same connected company / realm.
         static let defaultSalesItemRef = Config.value("QB_DEFAULT_ITEM_REF", fallback: "")
@@ -58,7 +61,7 @@ struct Config {
         static let accountingScope = "com.intuit.quickbooks.accounting"
         static let paymentsScope = "com.intuit.quickbooks.payment"
         static var oauthScopes: [String] {
-            var scopes = [accountingScope, "openid", "profile", "email", "phone", "address"]
+            var scopes = [accountingScope]
             if enablePaymentsScope { scopes.append(paymentsScope) }
             return scopes
         }
@@ -81,6 +84,7 @@ struct Config {
         // OAuth 2.0 endpoints for QuickBooks Online.
         static let authorizationEndpoint = "https://appcenter.intuit.com/connect/oauth2"
         static let tokenEndpoint = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+        static let revocationEndpoint = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
 
         static var isSandbox: Bool { environment == "sandbox" }
         static var isProduction: Bool { environment == "production" }
@@ -100,6 +104,9 @@ struct Config {
             var warnings: [String] = []
             if isProduction && !redirectURIIsHTTPS {
                 warnings.append("Production QuickBooks redirect URIs must be HTTPS and must exactly match the Intuit Developer Portal entry.")
+            }
+            if configuredEnvironment != "production" && configuredEnvironment != "sandbox" {
+                warnings.append("QB_ENVIRONMENT was '\(configuredEnvironment)'. The app is using production; set it to production or sandbox explicitly.")
             }
             if !hasExplicitDefaultSalesItemRef {
                 warnings.append("Set QB_DEFAULT_ITEM_REF to a valid QBO Service/NonInventory Item.Id before creating estimates, invoices, or refund receipts.")

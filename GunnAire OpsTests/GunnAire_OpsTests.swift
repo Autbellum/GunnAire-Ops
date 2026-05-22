@@ -10,6 +10,7 @@ import Testing
 import Foundation
 import SwiftData
 
+@MainActor
 struct GunnAire_OpsTests {
 
     @Test func serviceCallIsUpcomingThisWeekForFutureDate() async throws {

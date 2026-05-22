@@ -6,31 +6,24 @@ import os
 struct AppRootView: View {
     @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
     @AppStorage("enableSplashVideo") private var enableSplashVideo = true
-    @State private var showingSplash = false
+    @State private var showingSplash = true
 
     var body: some View {
-        ZStack {
-            if showingSplash {
+        Group {
+            if showingSplash && enableSplashVideo && SplashVideoLocator.resolveURL() != nil {
                 VideoSplashView {
-                    withAnimation(.easeInOut(duration: 0.35)) {
-                        showingSplash = false
-                    }
+                    showingSplash = false
                 }
-                .transition(.opacity)
             } else {
                 if hasAuthenticatedUser {
                     ContentView()
-                        .transition(.opacity)
                 } else {
                     LoginView(hasAuthenticatedUser: $hasAuthenticatedUser)
-                        .transition(.opacity)
                 }
             }
         }
         .onAppear {
-            if enableSplashVideo && SplashVideoLocator.resolveURL() != nil {
-                showingSplash = true
-            } else {
+            if !enableSplashVideo || SplashVideoLocator.resolveURL() == nil {
                 showingSplash = false
             }
         }
@@ -105,13 +98,7 @@ private struct VideoSplashView: View {
                 finishOnce()
             }
             timeoutWork = work
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + SplashVideoLocator.preferredFinishDelay(
-                    for: url,
-                    maximumDuration: maximumSplashDurationSeconds
-                ),
-                execute: work
-            )
+            DispatchQueue.main.asyncAfter(deadline: .now() + splashTimeoutDelay, execute: work)
 
             let item = AVPlayerItem(url: url)
             let player = AVPlayer(playerItem: item)
@@ -146,10 +133,16 @@ private struct VideoSplashView: View {
         }
     }
 
+    private var splashTimeoutDelay: TimeInterval {
+        min(max(maximumSplashDurationSeconds, 1.2), 6.0)
+    }
+
     private func cleanup() {
         timeoutWork?.cancel()
         timeoutWork = nil
         player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        player = nil
         if let playbackEndObserver {
             NotificationCenter.default.removeObserver(playbackEndObserver)
             self.playbackEndObserver = nil
@@ -169,12 +162,12 @@ private struct VideoSplashView: View {
 }
 
 enum SplashVideoLocator {
-    enum Source {
+    enum Source: Sendable {
         case custom
         case bundled
         case fallback
 
-        var description: String {
+        nonisolated var description: String {
             switch self {
             case .custom:
                 return "Custom Loading.mp4"
@@ -209,13 +202,13 @@ enum SplashVideoLocator {
         }
     }
 
-    static func resolveURL(fileManager: FileManager = .default) -> URL? {
+    nonisolated static func resolveURL(fileManager: FileManager = .default) -> URL? {
         let bundledURL = Bundle.main.url(forResource: "Loading", withExtension: "mp4")
         let storedCandidates = storedCandidateURLs(fileManager: fileManager)
         return preferredURL(bundledURL: bundledURL, storedCandidates: storedCandidates, fileManager: fileManager)
     }
 
-    static func currentSource(fileManager: FileManager = .default) -> Source {
+    nonisolated static func currentSource(fileManager: FileManager = .default) -> Source {
         if let storedURL = storedCandidateURLs(fileManager: fileManager).first,
            fileManager.fileExists(atPath: storedURL.path) {
             return .custom
@@ -226,7 +219,7 @@ enum SplashVideoLocator {
         return .fallback
     }
 
-    static func preferredURL(
+    nonisolated static func preferredURL(
         bundledURL: URL?,
         storedCandidates: [URL],
         fileManager: FileManager = .default
@@ -237,7 +230,7 @@ enum SplashVideoLocator {
         return bundledURL
     }
 
-    static func storedCandidateURLs(fileManager: FileManager = .default) -> [URL] {
+    nonisolated static func storedCandidateURLs(fileManager: FileManager = .default) -> [URL] {
         var urls: [URL] = []
         if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             urls.append(appSupport.appendingPathComponent("Loading.mp4"))
@@ -248,7 +241,7 @@ enum SplashVideoLocator {
         return urls
     }
 
-    static func installVideo(from sourceURL: URL, fileManager: FileManager = .default) throws -> VideoDetails {
+    nonisolated static func installVideo(from sourceURL: URL, fileManager: FileManager = .default) throws -> VideoDetails {
         _ = try inspectVideo(at: sourceURL, fileManager: fileManager)
         let destinationURL = try ensureStorageURL(fileManager: fileManager)
         let shouldStopAccessing = sourceURL.startAccessingSecurityScopedResource()
@@ -265,18 +258,18 @@ enum SplashVideoLocator {
         return try inspectVideo(at: destinationURL, fileManager: fileManager)
     }
 
-    static func removeStoredVideo(fileManager: FileManager = .default) throws {
+    nonisolated static func removeStoredVideo(fileManager: FileManager = .default) throws {
         guard let storedURL = storedCandidateURLs(fileManager: fileManager).first else { return }
         guard fileManager.fileExists(atPath: storedURL.path) else { return }
         try fileManager.removeItem(at: storedURL)
     }
 
-    static func currentSourceDescription(fileManager: FileManager = .default) -> String {
+    nonisolated static func currentSourceDescription(fileManager: FileManager = .default) -> String {
         currentSource(fileManager: fileManager).description
     }
 
-    static func currentStoredVideoDetails(fileManager: FileManager = .default) -> VideoDetails? {
-        guard currentSource(fileManager: fileManager) == .custom else { return nil }
+    nonisolated static func currentStoredVideoDetails(fileManager: FileManager = .default) -> VideoDetails? {
+        guard case .custom = currentSource(fileManager: fileManager) else { return nil }
         guard let storedURL = storedCandidateURLs(fileManager: fileManager).first,
               fileManager.fileExists(atPath: storedURL.path),
               let attributes = try? fileManager.attributesOfItem(atPath: storedURL.path) else {
@@ -300,17 +293,23 @@ enum SplashVideoLocator {
         )
     }
 
-    static func currentResolvedVideoDetails(fileManager: FileManager = .default) -> VideoDetails? {
+    nonisolated static func currentResolvedVideoDetails(fileManager: FileManager = .default) -> VideoDetails? {
         guard let resolvedURL = resolveURL(fileManager: fileManager) else { return nil }
         return try? inspectVideo(at: resolvedURL, fileManager: fileManager)
     }
 
-    static func preferredFinishDelay(for url: URL, maximumDuration: TimeInterval = 6.0) -> TimeInterval {
+    nonisolated static func currentResolvedVideoDetailsAsync(fileManager: FileManager = .default) async -> VideoDetails? {
+        await Task.detached(priority: .utility) {
+            currentResolvedVideoDetails(fileManager: fileManager)
+        }.value
+    }
+
+    nonisolated static func preferredFinishDelay(for url: URL, maximumDuration: TimeInterval = 6.0) -> TimeInterval {
         let durationSeconds = inspectVideoMetrics(at: url)?.durationSeconds ?? 0
         return preferredFinishDelay(durationSeconds: durationSeconds, maximumDuration: maximumDuration)
     }
 
-    static func preferredFinishDelay(durationSeconds: TimeInterval, maximumDuration: TimeInterval = 6.0) -> TimeInterval {
+    nonisolated static func preferredFinishDelay(durationSeconds: TimeInterval, maximumDuration: TimeInterval = 6.0) -> TimeInterval {
         let fallbackDelay: TimeInterval = 3.0
         guard durationSeconds.isFinite, durationSeconds > 0 else {
             return fallbackDelay
@@ -320,7 +319,7 @@ enum SplashVideoLocator {
         return min(max(paddedDuration, 1.2), max(maximumDuration, 1.2))
     }
 
-    private static func inspectVideo(at url: URL, fileManager: FileManager) throws -> VideoDetails {
+    nonisolated private static func inspectVideo(at url: URL, fileManager: FileManager) throws -> VideoDetails {
         guard url.pathExtension.lowercased() == "mp4" else {
             throw ValidationError.unsupportedFormat
         }
@@ -353,7 +352,7 @@ enum SplashVideoLocator {
         )
     }
 
-    private static func inspectVideoMetrics(at url: URL) -> (durationSeconds: TimeInterval, pixelSize: CGSize?)? {
+    nonisolated private static func inspectVideoMetrics(at url: URL) -> (durationSeconds: TimeInterval, pixelSize: CGSize?)? {
         let semaphore = DispatchSemaphore(value: 0)
         var result: (durationSeconds: TimeInterval, pixelSize: CGSize?)?
 
@@ -393,7 +392,7 @@ enum SplashVideoLocator {
         return result
     }
 
-    private static func describe(duration: TimeInterval?) -> String? {
+    nonisolated private static func describe(duration: TimeInterval?) -> String? {
         guard let duration, duration.isFinite, duration > 0 else { return nil }
         if duration < 10 {
             return String(format: "%.1f seconds", duration)
@@ -401,12 +400,12 @@ enum SplashVideoLocator {
         return String(format: "%.0f seconds", duration.rounded())
     }
 
-    private static func describe(size: CGSize?) -> String? {
+    nonisolated private static func describe(size: CGSize?) -> String? {
         guard let size, size.width > 0, size.height > 0 else { return nil }
         return "\(Int(size.width.rounded())) x \(Int(size.height.rounded()))"
     }
 
-    private static func advisoryMessage(forDuration duration: TimeInterval?) -> String? {
+    nonisolated private static func advisoryMessage(forDuration duration: TimeInterval?) -> String? {
         guard let duration, duration.isFinite, duration > 0 else { return nil }
         if duration > 6 {
             return "Long splash videos are trimmed to roughly the first 6 seconds during app launch."
@@ -417,7 +416,7 @@ enum SplashVideoLocator {
         return nil
     }
 
-    private static func ensureStorageURL(fileManager: FileManager) throws -> URL {
+    nonisolated private static func ensureStorageURL(fileManager: FileManager) throws -> URL {
         guard let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             throw CocoaError(.fileNoSuchFile)
         }

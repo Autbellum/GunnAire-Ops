@@ -27,7 +27,9 @@ struct SettingsView: View {
     @State private var showingSplashLaunchSimulation = false
     @State private var splashVideoMessage: String?
     @State private var splashVideoStatus = SplashVideoLocator.currentSource()
-    @State private var splashVideoDetails = SplashVideoLocator.currentResolvedVideoDetails()
+    @State private var splashVideoDetails: SplashVideoLocator.VideoDetails?
+    @State private var quickBooksConnectionMessage: String?
+    @State private var resettingQuickBooksConnection = false
 
     @AppStorage("companyName") private var companyName = "GunnAire"
     @AppStorage("dispatchStartHour") private var dispatchStartHour = 8
@@ -67,12 +69,8 @@ struct SettingsView: View {
 
     private var splashLaunchBehaviorDescription: String {
         guard enableSplashVideo else { return "Disabled. The app will open straight to the main UI." }
-        guard let resolvedURL = SplashVideoLocator.resolveURL() else { return "No MP4 found. The app will show the logo briefly." }
-        let effectiveDelay = SplashVideoLocator.preferredFinishDelay(
-            for: resolvedURL,
-            maximumDuration: maximumSplashDurationSeconds
-        )
-        return "Plays \(splashVideoStatus.description) for about \(effectiveDelay.formatted(.number.precision(.fractionLength(0...1)))) seconds at launch."
+        guard SplashVideoLocator.resolveURL() != nil else { return "No MP4 found. The app will show the logo briefly." }
+        return "Plays \(splashVideoStatus.description) and opens the app after playback or \(maximumSplashDurationSeconds.formatted(.number.precision(.fractionLength(0...1)))) seconds."
     }
     
     var body: some View {
@@ -382,6 +380,9 @@ struct SettingsView: View {
             .fullScreenCover(isPresented: $showingSplashLaunchSimulation) {
                 SplashLaunchSimulationSheet()
             }
+            .task {
+                refreshSplashVideoState(loadDetails: true)
+            }
         }
     }
 
@@ -410,6 +411,9 @@ struct SettingsView: View {
 
         Section("QuickBooks") {
             connectionStatusRow(title: "Status", isConnected: isQuickBooksAuthenticated)
+            Text(QuickBooksDataAPI.shared.connectionDiagnosticSummary)
+                .font(.caption)
+                .foregroundColor(.secondary)
 
             if isQuickBooksAuthenticated {
                 Button("Disconnect QuickBooks", role: .destructive) {
@@ -422,6 +426,36 @@ struct SettingsView: View {
                 } label: {
                     Label("Connect QuickBooks", systemImage: "link")
                 }
+            }
+
+            Button {
+                resetAndReconnectQuickBooks()
+            } label: {
+                Label(resettingQuickBooksConnection ? "Resetting..." : "Reset and Reconnect QuickBooks", systemImage: "arrow.clockwise.circle")
+            }
+            .disabled(resettingQuickBooksConnection)
+
+            Button("Validate QuickBooks Access") {
+                validateQuickBooksAccess()
+            }
+            .disabled(!QuickBooksDataAPI.shared.isAuthenticated)
+
+            if let refreshDetail = QuickBooksDataAPI.shared.lastRefreshFailureDetail {
+                Text(refreshDetail)
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+            }
+
+            if let authorizationDetail = QuickBooksDataAPI.shared.lastAuthorizationFailureDetail {
+                Text(authorizationDetail)
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+            }
+
+            if let quickBooksConnectionMessage {
+                Text(quickBooksConnectionMessage)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
 
@@ -497,7 +531,8 @@ struct SettingsView: View {
             }
             do {
                 let details = try SplashVideoLocator.installVideo(from: url)
-                refreshSplashVideoState()
+                refreshSplashVideoState(loadDetails: false)
+                splashVideoDetails = details
                 splashVideoMessage = "Splash MP4 loaded successfully: \(details.durationDescription ?? "ready for launch")."
             } catch {
                 splashVideoMessage = "Failed to load splash MP4: \(error.localizedDescription)"
@@ -510,7 +545,7 @@ struct SettingsView: View {
     private func removeSplashVideo() {
         do {
             try SplashVideoLocator.removeStoredVideo()
-            refreshSplashVideoState()
+            refreshSplashVideoState(loadDetails: false)
             splashVideoMessage = "Custom splash MP4 removed."
         } catch {
             splashVideoMessage = "Failed to remove splash MP4: \(error.localizedDescription)"
@@ -521,13 +556,54 @@ struct SettingsView: View {
         enableSplashVideo = true
         maximumSplashDurationSeconds = 6.0
         allowSplashTapToSkip = true
-        refreshSplashVideoState()
+        refreshSplashVideoState(loadDetails: true)
         splashVideoMessage = "Splash playback settings were reset to defaults."
     }
 
-    private func refreshSplashVideoState() {
+    private func resetAndReconnectQuickBooks() {
+        resettingQuickBooksConnection = true
+        quickBooksConnectionMessage = "Resetting the saved QuickBooks session..."
+        QuickBooksDataAPI.shared.resetConnectionForReconnect { _ in
+            DispatchQueue.main.async {
+                resettingQuickBooksConnection = false
+                isQuickBooksAuthenticated = false
+                quickBooksConnectionMessage = "Saved QuickBooks session cleared. Starting a fresh production connection..."
+                authenticateQuickBooks()
+            }
+        }
+    }
+
+    private func validateQuickBooksAccess() {
+        quickBooksConnectionMessage = "Checking QuickBooks Accounting access..."
+        QuickBooksDataAPI.shared.validateAccountingConnection { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let company):
+                    let name = company.CompanyName ?? company.LegalName ?? company.Id ?? "the selected company"
+                    quickBooksConnectionMessage = "QuickBooks Accounting access confirmed for \(name)."
+                    isQuickBooksAuthenticated = true
+                case .failure(let error):
+                    quickBooksConnectionMessage = "QuickBooks Accounting access failed: \(error.localizedDescription)"
+                    isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+                }
+            }
+        }
+    }
+
+    private func refreshSplashVideoState(loadDetails: Bool) {
         splashVideoStatus = SplashVideoLocator.currentSource()
-        splashVideoDetails = SplashVideoLocator.currentResolvedVideoDetails()
+        guard loadDetails else {
+            if splashVideoStatus == .fallback {
+                splashVideoDetails = nil
+            }
+            return
+        }
+        Task {
+            let details = await SplashVideoLocator.currentResolvedVideoDetailsAsync()
+            await MainActor.run {
+                splashVideoDetails = details
+            }
+        }
     }
 
     private func deleteUsers(offsets: IndexSet) {
@@ -600,12 +676,7 @@ private struct SplashLaunchSimulationSheet: View {
                         player.isMuted = true
                         self.player = player
                         player.play()
-                        scheduleDismiss(
-                            after: SplashVideoLocator.preferredFinishDelay(
-                                for: url,
-                                maximumDuration: maximumSplashDurationSeconds
-                            )
-                        )
+                        scheduleDismiss(after: min(max(maximumSplashDurationSeconds, 1.2), 6.0))
                     }
                     .onDisappear {
                         cleanup()

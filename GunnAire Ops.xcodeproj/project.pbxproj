@@ -6,6 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		3F4B8A202FAD000100000001 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3F4B8A212FAD000100000001 /* AppIntents.framework */; };
+		3F4B8A222FAD000100000001 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3F4B8A212FAD000100000001 /* AppIntents.framework */; };
+		3F4B8A232FAD000100000001 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3F4B8A212FAD000100000001 /* AppIntents.framework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		642980F62F4CAB5A00A62E15 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -26,6 +32,7 @@
 /* Begin PBXFileReference section */
 		3F4B8A102FAD000100000001 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		3F4B8A112FAD000100000001 /* Local.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.example.xcconfig; sourceTree = "<group>"; };
+		3F4B8A212FAD000100000001 /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
 		642980E62F4CAB5900A62E15 /* GunnAire Ops.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "GunnAire Ops.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		642980F52F4CAB5A00A62E15 /* GunnAire OpsTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "GunnAire OpsTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		642980FF2F4CAB5A00A62E15 /* GunnAire OpsUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "GunnAire OpsUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -68,6 +75,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3F4B8A202FAD000100000001 /* AppIntents.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -75,6 +83,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3F4B8A222FAD000100000001 /* AppIntents.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -82,6 +91,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3F4B8A232FAD000100000001 /* AppIntents.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -100,6 +110,7 @@
 		4226A7412FABAAB90087A3F8 /* Recovered References */ = {
 			isa = PBXGroup;
 			children = (
+				3F4B8A212FAD000100000001 /* AppIntents.framework */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";

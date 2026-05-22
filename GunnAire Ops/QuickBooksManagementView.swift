@@ -243,8 +243,9 @@ struct QuickBooksManagementView: View {
                             .font(.caption)
                             .foregroundStyle(.orange)
 
-                            if let authorizationDetail = QuickBooksDataAPI.shared.lastAuthorizationFailureDetail {
-                                Text(authorizationDetail)
+                            if let reconnectDetail = QuickBooksDataAPI.shared.lastRefreshFailureDetail
+                                ?? QuickBooksDataAPI.shared.lastAuthorizationFailureDetail {
+                                Text(reconnectDetail)
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
@@ -957,10 +958,12 @@ struct QuickBooksManagementView: View {
 
         QuickBooksDataAPI.shared.refreshTokensIfNeeded { tokenReady in
             guard tokenReady else {
+                let detail = QuickBooksDataAPI.shared.lastRefreshFailureDetail
+                    ?? "Reconnect QuickBooks. The saved token could not be refreshed."
                 isLoading = false
                 quickBooksReconnectRequired = true
-                markAllSyncStatusesFailed("Reconnect QuickBooks. The saved token could not be refreshed.")
-                statusMessage = "QuickBooks reconnect required. The saved session could not be refreshed before sync."
+                markAllSyncStatusesFailed(detail)
+                statusMessage = "QuickBooks reconnect required. \(detail)"
                 return
             }
 
@@ -1036,11 +1039,20 @@ struct QuickBooksManagementView: View {
                 paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
             }) else { finishQuickBooksResourceSync(with: failures); return }
 
-            guard await run(id: "storedCards", required: false, fetch: { completion in
-                liveAPI.fetchCards(forCustomerIDs: customers.map(\.Id), completion: completion)
-            }, apply: { records in
-                storedCards = records
-            }) else { finishQuickBooksResourceSync(with: failures); return }
+            if Config.QuickBooks.enablePaymentsScope {
+                guard await run(id: "storedCards", required: false, fetch: { completion in
+                    liveAPI.fetchCards(forCustomerIDs: customers.map(\.Id), completion: completion)
+                }, apply: { records in
+                    storedCards = records
+                }) else { finishQuickBooksResourceSync(with: failures); return }
+            } else {
+                updateSyncStatus(
+                    id: "storedCards",
+                    state: .warning,
+                    detail: "Skipped because QB_ENABLE_PAYMENTS_SCOPE is off for Accounting-only login.",
+                    count: 0
+                )
+            }
 
             guard await run(id: "salesReceipts", required: true, fetch: liveAPI.fetchSalesReceipts, apply: { records in salesReceipts = records }) else { finishQuickBooksResourceSync(with: failures); return }
             guard await run(id: "deposits", required: true, fetch: liveAPI.fetchDeposits, apply: { records in deposits = records }) else { finishQuickBooksResourceSync(with: failures); return }

@@ -71,6 +71,10 @@ struct PaymentsAndReceiptsView: View {
         enableOnsitePayments && selectedProcessor.supportsTapToPay && onsitePaymentManager.processorReady()
     }
 
+    private var quickBooksPaymentsEnabled: Bool {
+        Config.QuickBooks.enablePaymentsScope && isQuickBooksConnected
+    }
+
     private var outstandingInvoices: [(invoice: Invoice, balanceDue: Double)] {
         invoices
             .compactMap { invoice in
@@ -365,6 +369,7 @@ struct PaymentsAndReceiptsView: View {
                                             }
                                             .buttonStyle(.borderedProminent)
                                             .tint(.red)
+                                            .disabled(!quickBooksPaymentsEnabled)
                                         }
 
                                         if payment.quickBooksChargeID?.isEmpty == false,
@@ -373,7 +378,7 @@ struct PaymentsAndReceiptsView: View {
                                                 loadQuickBooksPaymentReceipt(for: payment)
                                             }
                                             .buttonStyle(.bordered)
-                                            .disabled(syncingPaymentID != nil || !isQuickBooksConnected)
+                                            .disabled(syncingPaymentID != nil || !quickBooksPaymentsEnabled)
                                         }
                                     }
                                 }
@@ -437,7 +442,7 @@ struct PaymentsAndReceiptsView: View {
                             }
                         }
 
-                        if isQuickBooksConnected {
+                        if quickBooksPaymentsEnabled {
                             Text("QuickBooks card processing")
                                 .font(.subheadline.weight(.semibold))
                             TextField("Cardholder name", text: $cardholderName)
@@ -462,12 +467,12 @@ struct PaymentsAndReceiptsView: View {
                             TextField("Card last 4", text: $cardLast4)
                                 .keyboardType(.numberPad)
                             TextField("Authorization ref", text: $authorizationReference)
-                            Text("QuickBooks Payments is not connected. This card entry will only record a manual payment note.")
+                            Text(Config.QuickBooks.enablePaymentsScope ? "QuickBooks Payments is not connected. This card entry will only record a manual payment note." : "QuickBooks Payments scope is disabled. This card entry will only record a manual payment note.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
                     }
-                    if selectedMethod == .ach, isQuickBooksConnected {
+                    if selectedMethod == .ach, quickBooksPaymentsEnabled {
                         TextField("Account holder name", text: $achAccountHolderName)
                         SecureField("Bank account number", text: $achAccountNumber)
                             .keyboardType(.numberPad)
@@ -529,10 +534,10 @@ struct PaymentsAndReceiptsView: View {
         if isProcessingQuickBooksPayment {
             return "Processing..."
         }
-        if selectedMethod == .card, isQuickBooksConnected {
+        if selectedMethod == .card, quickBooksPaymentsEnabled {
             return "Process Card Payment"
         }
-        if selectedMethod == .ach, isQuickBooksConnected {
+        if selectedMethod == .ach, quickBooksPaymentsEnabled {
             return "Process ACH Payment"
         }
         return "Save Payment"
@@ -583,14 +588,14 @@ struct PaymentsAndReceiptsView: View {
 
     private var paymentFormIsValid: Bool {
         guard Double(amountText) != nil else { return false }
-        if selectedMethod == .card, isQuickBooksConnected {
+        if selectedMethod == .card, quickBooksPaymentsEnabled {
             return !cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                 cardNumber.filter(\.isNumber).count >= 12 &&
                 expirationMonth.filter(\.isNumber).count >= 1 &&
                 expirationYear.filter(\.isNumber).count == 4 &&
                 cardCVC.filter(\.isNumber).count >= 3
         }
-        if selectedMethod == .ach, isQuickBooksConnected {
+        if selectedMethod == .ach, quickBooksPaymentsEnabled {
             return !achAccountHolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                 achAccountNumber.filter(\.isNumber).count >= 4 &&
                 achRoutingNumber.filter(\.isNumber).count == 9 &&
@@ -715,7 +720,7 @@ struct PaymentsAndReceiptsView: View {
             return
         }
 
-        if selectedMethod == .card, isQuickBooksConnected {
+        if selectedMethod == .card, quickBooksPaymentsEnabled {
             isProcessingQuickBooksPayment = true
             defer { isProcessingQuickBooksPayment = false }
 
@@ -756,7 +761,7 @@ struct PaymentsAndReceiptsView: View {
             return
         }
 
-        if selectedMethod == .ach, isQuickBooksConnected {
+        if selectedMethod == .ach, quickBooksPaymentsEnabled {
             isProcessingQuickBooksPayment = true
             defer { isProcessingQuickBooksPayment = false }
 
@@ -1047,8 +1052,8 @@ GunnAire
             actionMessage = "This payment does not have a QuickBooks charge ID."
             return
         }
-        guard isQuickBooksConnected else {
-            actionMessage = "Connect QuickBooks before loading the payment receipt."
+        guard quickBooksPaymentsEnabled else {
+            actionMessage = Config.QuickBooks.enablePaymentsScope ? "Connect QuickBooks before loading the payment receipt." : "Enable and reauthorize the QuickBooks Payments scope before loading payment receipts."
             return
         }
 
@@ -1097,6 +1102,10 @@ GunnAire
 
     private func submitRefund() async {
         guard let payment = selectedRefundPayment, refundAmountValue > 0 else {
+            return
+        }
+        guard quickBooksPaymentsEnabled else {
+            actionMessage = Config.QuickBooks.enablePaymentsScope ? "Connect QuickBooks before issuing refunds." : "Enable and reauthorize the QuickBooks Payments scope before issuing refunds."
             return
         }
 

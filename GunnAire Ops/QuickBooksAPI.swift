@@ -54,6 +54,16 @@ final class QuickBooksAuthAPI: ObservableObject {
     
     // MARK: - OAuth2 Flow
     func startSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding, completion: @escaping (Result<Void, Error>) -> Void) {
+        if QuickBooksDataAPI.shared.tokens != nil {
+            QuickBooksDataAPI.shared.resetConnectionForReconnect { [weak self] _ in
+                self?.beginSignIn(presentationContext: presentationContext, completion: completion)
+            }
+            return
+        }
+        beginSignIn(presentationContext: presentationContext, completion: completion)
+    }
+
+    private func beginSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding, completion: @escaping (Result<Void, Error>) -> Void) {
         guard Config.QuickBooks.isConfigured else {
             completion(Result<Void, Error>.failure(QBOError.missingConfiguration))
             return
@@ -87,7 +97,7 @@ final class QuickBooksAuthAPI: ObservableObject {
             self.handleAuthCallback(url: callbackURL, completion: completion)
         }
         session.presentationContextProvider = presentationContext
-        session.prefersEphemeralWebBrowserSession = true
+        session.prefersEphemeralWebBrowserSession = false
         activeAuthSession = session
         if !session.start() {
             activeAuthSession = nil
@@ -103,7 +113,7 @@ final class QuickBooksAuthAPI: ObservableObject {
         tokenExpiry = nil
         pendingOAuthState = nil
         activeAuthSession = nil
-        QuickBooksDataAPI.shared.clearTokens()
+        QuickBooksDataAPI.shared.resetConnectionForReconnect()
     }
 
     private func isCallbackSchemeRegistered(_ scheme: String) -> Bool {
@@ -288,9 +298,9 @@ enum QBOError: Error, LocalizedError {
         case .invalidEndpoint: return "API endpoint is invalid."
         case .invalidRedirectURI(let uri): return "QuickBooks redirect URI is invalid: \(uri)"
         case .callbackSchemeNotRegistered(let scheme): return "QuickBooks callback scheme '\(scheme)' is not registered in app URL Types."
-        case .missingConfiguration: return "QuickBooks OAuth credentials are missing in Config/environment variables."
-        case .providerError(let code, let description): return "QuickBooks OAuth error: \(code)\(description.map { " - \($0)" } ?? "")"
-        case .tokenExchangeFailed(let statusCode, let detail): return "QuickBooks token exchange failed (HTTP \(statusCode))\(detail.map { ": \($0)" } ?? ""). Confirm the redirect URI exactly matches the Intuit Developer Portal and the client credentials match the selected environment."
+        case .missingConfiguration: return "QuickBooks OAuth credentials are missing. For production, set QB_ENVIRONMENT=production, the production Intuit client ID/secret, and the production HTTPS redirect URI from the Intuit Developer Portal."
+        case .providerError(let code, let description): return "QuickBooks OAuth error: \(code)\(description.map { " - \($0)" } ?? ""). Confirm this build is using the production Intuit app credentials and production redirect URI."
+        case .tokenExchangeFailed(let statusCode, let detail): return "QuickBooks token exchange failed (HTTP \(statusCode))\(detail.map { ": \($0)" } ?? ""). Confirm QB_ENVIRONMENT=production, the client ID/secret are from the Intuit production keys, and the redirect URI exactly matches the production Intuit Developer Portal entry."
         case .unknown: return "An unknown error occurred."
         }
     }

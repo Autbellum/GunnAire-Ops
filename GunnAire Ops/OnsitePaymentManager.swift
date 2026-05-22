@@ -38,6 +38,7 @@ enum OnsitePaymentError: LocalizedError {
     case processorUnavailable
     case invalidAmount
     case quickBooksAuthenticationRequired
+    case quickBooksPaymentsScopeRequired
     case quickBooksSDKNotIntegrated
 
     var errorDescription: String? {
@@ -48,6 +49,8 @@ enum OnsitePaymentError: LocalizedError {
             return "Enter a valid payment amount before starting Tap to Pay."
         case .quickBooksAuthenticationRequired:
             return "QuickBooks Payments requires an active QuickBooks connection before Tap to Pay can start."
+        case .quickBooksPaymentsScopeRequired:
+            return "QuickBooks Payments scope is disabled. Enable the payments scope and reconnect QuickBooks before starting Tap to Pay."
         case .quickBooksSDKNotIntegrated:
             return "QuickBooks Payments is selected, but the Tap to Pay support package is not installed in this build."
         }
@@ -86,6 +89,7 @@ final class OnsitePaymentManager: ObservableObject {
             return false
         }
         if processor.requiresQuickBooksSession {
+            guard Config.QuickBooks.enablePaymentsScope else { return false }
             return QuickBooksDataAPI.shared.isAuthenticated
         }
         return true
@@ -101,6 +105,9 @@ final class OnsitePaymentManager: ObservableObject {
         case .quickBooksPayments:
             guard tapToPayAvailableInCurrentBuild else {
                 return "Tap to Pay is hidden in this build until the QuickBooks Tap to Pay support package is installed."
+            }
+            if !Config.QuickBooks.enablePaymentsScope {
+                return "Enable the QuickBooks Payments scope and reconnect QuickBooks before using live Tap to Pay capture."
             }
             if !QuickBooksDataAPI.shared.isAuthenticated {
                 return "Connect QuickBooks first, then mark this device ready for Tap to Pay."
@@ -126,6 +133,9 @@ final class OnsitePaymentManager: ObservableObject {
         defer { isProcessing = false }
 
         if processor.requiresQuickBooksSession {
+            guard Config.QuickBooks.enablePaymentsScope else {
+                throw OnsitePaymentError.quickBooksPaymentsScopeRequired
+            }
             guard QuickBooksDataAPI.shared.isAuthenticated else {
                 throw OnsitePaymentError.quickBooksAuthenticationRequired
             }

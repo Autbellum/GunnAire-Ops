@@ -1870,10 +1870,25 @@ extension ContentView {
         QuickBooksAuthAPI.shared.startSignIn(presentationContext: authPresentationContextProvider) { result in
             switch result {
             case .success:
-                fetchAndSyncQuickBooksData()
-                DispatchQueue.main.async {
-                    isQuickBooksAuthenticated = true
-                    quickBooksOAuthState = nil
+                QuickBooksDataAPI.shared.validateAccountingConnection { validationResult in
+                    DispatchQueue.main.async {
+                        switch validationResult {
+                        case .success(let company):
+                            isQuickBooksAuthenticated = true
+                            quickBooksOAuthState = nil
+                            let name = company.CompanyName ?? company.LegalName ?? company.Id ?? "the selected company"
+                            presentAuthAlert(
+                                title: "QuickBooks Connected",
+                                message: "Connected to \(name). Use QuickBooks Management to run a full sync."
+                            )
+                        case .failure(let error):
+                            isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+                            presentAuthAlert(
+                                title: "QuickBooks Connected, Access Check Failed",
+                                message: error.localizedDescription
+                            )
+                        }
+                    }
                 }
             case .failure(let error):
                 DispatchQueue.main.async {

@@ -1,14 +1,17 @@
 {
   "images" : [
     {
+      "filename" : "fulllogo_nobuffer.png",
       "idiom" : "universal",
       "scale" : "1x"
     },
     {
+      "filename" : "fulllogo_nobuffer 1.png",
       "idiom" : "universal",
       "scale" : "2x"
     },
     {
+      "filename" : "fulllogo_nobuffer 2.png",
       "idiom" : "universal",
       "scale" : "3x"
     }
