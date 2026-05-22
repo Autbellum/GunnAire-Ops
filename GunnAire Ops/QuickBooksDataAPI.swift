@@ -26,6 +26,7 @@ final class QuickBooksDataAPI: ObservableObject {
     @Published private(set) var tokens: QuickBooksOAuthTokens?
     @Published private(set) var storedRealmID: String?
     @Published private(set) var storedEnvironment: String?
+    @Published private(set) var storedScopeSignature: String?
     @Published private(set) var lastAuthorizationFailureDetail: String?
     @Published private(set) var lastRefreshFailureDetail: String?
     @Published private(set) var lastRejectedRealmID: String?
@@ -85,7 +86,8 @@ final class QuickBooksDataAPI: ObservableObject {
     var connectionDiagnosticSummary: String {
         let company = realmID ?? "Not connected"
         let expiration = tokenExpiration?.formatted(date: .abbreviated, time: .shortened) ?? "No token"
-        return "Environment: \(currentEnvironment.capitalized) • Realm: \(company) • Client: \(Self.currentClientIDFingerprint) • Scopes: \(Self.currentScopeSignature) • Token expires: \(expiration)"
+        let authorizedScopes = storedScopeSignature?.isEmpty == false ? storedScopeSignature! : "Unknown"
+        return "Environment: \(currentEnvironment.capitalized) • Realm: \(company) • Client: \(Self.currentClientIDFingerprint) • Requested scopes: \(Self.currentScopeSignature) • Authorized scopes: \(authorizedScopes) • Token expires: \(expiration)"
     }
 
     private static var currentClientIDFingerprint: String {
@@ -94,6 +96,32 @@ final class QuickBooksDataAPI: ObservableObject {
 
     private static var currentScopeSignature: String {
         Config.QuickBooks.oauthScopes.sorted().joined(separator: " ")
+    }
+
+    var missingRequestedScopes: [String] {
+        guard let storedScopeSignature, !storedScopeSignature.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        let authorized = Self.scopeSet(from: storedScopeSignature)
+        let requested = Set(Config.QuickBooks.oauthScopes)
+        return requested.subtracting(authorized).sorted()
+    }
+
+    var savedSessionNeedsScopeReauthorization: Bool {
+        !missingRequestedScopes.isEmpty
+    }
+
+    var savedSessionIncludesPaymentsScope: Bool {
+        guard let storedScopeSignature, !storedScopeSignature.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return true
+        }
+        return Self.scopeSet(from: storedScopeSignature).contains(Config.QuickBooks.paymentsScope)
+    }
+
+    var scopeReauthorizationDiagnostic: String? {
+        let missing = missingRequestedScopes
+        guard !missing.isEmpty else { return nil }
+        return "QuickBooks is connected for the previously authorized scopes, but this build now requests \(missing.joined(separator: ", ")). Reconnect QuickBooks to authorize the new scope set. Accounting sync can keep using the saved session until Intuit rejects it."
     }
 
     private static func stableFingerprint(_ value: String) -> String {
@@ -105,11 +133,15 @@ final class QuickBooksDataAPI: ObservableObject {
         return String(format: "%016llx", hash)
     }
 
+    private static func scopeSet(from signature: String) -> Set<String> {
+        let separators = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "|,"))
+        return Set(signature.components(separatedBy: separators).filter { !$0.isEmpty })
+    }
+
     private func savedPayloadMatchesCurrentConfiguration(_ payload: QuickBooksKeychainPayload) -> Bool {
         guard payload.environment?.lowercased() == Config.QuickBooks.environment.lowercased() else { return false }
         guard payload.clientIDFingerprint == Self.currentClientIDFingerprint else { return false }
         guard payload.redirectURI == Config.QuickBooks.redirectURI else { return false }
-        guard payload.scopeSignature == Self.currentScopeSignature else { return false }
         return true
     }
 
@@ -144,10 +176,15 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     func storeTokens(_ tokens: QuickBooksOAuthTokens, realmID: String) {
+        storeTokens(tokens, realmID: realmID, authorizedScopeSignature: QuickBooksDataAPI.currentScopeSignature)
+    }
+
+    private func storeTokens(_ tokens: QuickBooksOAuthTokens, realmID: String, authorizedScopeSignature: String?) {
         let normalizedRealmID = realmID.trimmingCharacters(in: .whitespacesAndNewlines)
         self.tokens = tokens
         self.storedRealmID = normalizedRealmID.isEmpty ? nil : normalizedRealmID
         self.storedEnvironment = Config.QuickBooks.environment
+        self.storedScopeSignature = authorizedScopeSignature
         guard !normalizedRealmID.isEmpty else {
             UserDefaults.standard.removeObject(forKey: realmIDKey)
             return
@@ -159,7 +196,7 @@ final class QuickBooksDataAPI: ObservableObject {
                 environment: self.storedEnvironment,
                 clientIDFingerprint: Self.currentClientIDFingerprint,
                 redirectURI: Config.QuickBooks.redirectURI,
-                scopeSignature: Self.currentScopeSignature
+                scopeSignature: authorizedScopeSignature
             ),
             account: keychainAccount
         )
@@ -173,7 +210,7 @@ final class QuickBooksDataAPI: ObservableObject {
     func loadTokens() {
         if let payload = try? KeychainStore.loadCodable(QuickBooksKeychainPayload.self, account: keychainAccount) {
             guard savedPayloadMatchesCurrentConfiguration(payload) else {
-                lastAuthorizationFailureDetail = "Saved QuickBooks session was created by a different Intuit client, redirect URI, scope set, or sandbox/production environment. Reconnect once with the production Intuit app settings in this build."
+                lastAuthorizationFailureDetail = "Saved QuickBooks session was created by a different Intuit client, redirect URI, or sandbox/production environment. Reconnect once with the production Intuit app settings in this build."
                 lastRejectedRealmID = payload.realmID.trimmingCharacters(in: .whitespacesAndNewlines)
                 lastRejectedEnvironment = payload.environment
                 clearTokens(clearAuthorizationFailure: false)
@@ -182,6 +219,7 @@ final class QuickBooksDataAPI: ObservableObject {
 
             tokens = payload.tokens
             storedEnvironment = payload.environment ?? Config.QuickBooks.environment
+            storedScopeSignature = payload.scopeSignature
             let keychainRealmID = payload.realmID.trimmingCharacters(in: .whitespacesAndNewlines)
             if !keychainRealmID.isEmpty {
                 storedRealmID = keychainRealmID
@@ -191,8 +229,21 @@ final class QuickBooksDataAPI: ObservableObject {
             return
         }
 
+        if let data = UserDefaults.standard.data(forKey: tokenStorageKey),
+           let legacyTokens = try? JSONDecoder().decode(QuickBooksOAuthTokens.self, from: data),
+           let legacyRealmID = UserDefaults.standard.string(forKey: realmIDKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !legacyRealmID.isEmpty {
+            tokens = legacyTokens
+            storedRealmID = legacyRealmID
+            storedEnvironment = Config.QuickBooks.environment
+            storedScopeSignature = nil
+            lastAuthorizationFailureDetail = "QuickBooks loaded a legacy saved session. Reconnect once when possible so the app can record the exact authorized scope set."
+            return
+        }
+
         if UserDefaults.standard.data(forKey: tokenStorageKey) != nil || UserDefaults.standard.string(forKey: realmIDKey) != nil {
-            lastAuthorizationFailureDetail = "Legacy QuickBooks tokens did not include the Intuit client/redirect/scope binding needed for safe reuse. Reconnect once with the production Intuit app settings to create a clean session."
+            lastAuthorizationFailureDetail = "Legacy QuickBooks tokens were present but unreadable. Reconnect once with the production Intuit app settings to create a clean session."
             clearTokens(clearAuthorizationFailure: false)
         }
     }
@@ -201,6 +252,7 @@ final class QuickBooksDataAPI: ObservableObject {
         tokens = nil
         storedRealmID = nil
         storedEnvironment = nil
+        storedScopeSignature = nil
         if clearAuthorizationFailure {
             lastAuthorizationFailureDetail = nil
             lastRefreshFailureDetail = nil
@@ -341,7 +393,7 @@ final class QuickBooksDataAPI: ObservableObject {
                     expiration: Date().addingTimeInterval(payload.expires_in)
                 )
                 self.lastRefreshFailureDetail = nil
-                self.storeTokens(refreshed, realmID: realmID)
+                self.storeTokens(refreshed, realmID: realmID, authorizedScopeSignature: self.storedScopeSignature)
                 self.completeOnMain(completion, value: true)
             }
         }.resume()
@@ -582,7 +634,9 @@ final class QuickBooksDataAPI: ObservableObject {
         }
         lastRejectedRealmID = realmID ?? storedRealmID
         lastRejectedEnvironment = currentEnvironment
-        clearTokens(clearAuthorizationFailure: false)
+        if case .unauthorized = error {
+            clearTokens(clearAuthorizationFailure: false)
+        }
     }
 
     private struct DecodableTypeBox<T: Decodable>: @unchecked Sendable {
@@ -644,8 +698,8 @@ final class QuickBooksDataAPI: ObservableObject {
         completion: @escaping (Result<T, Error>) -> Void,
         attempt: Int = 0
     ) {
-        guard Config.QuickBooks.enablePaymentsScope else {
-            completion(.failure(QBError.paymentsScopeDisabled))
+        if let scopeError = paymentsScopeReadinessError() {
+            completion(.failure(scopeError))
             return
         }
         let typeBox = DecodableTypeBox(type: type)
@@ -1279,13 +1333,26 @@ final class QuickBooksDataAPI: ObservableObject {
 }
 
 private extension QuickBooksDataAPI {
+    func paymentsScopeReadinessError() -> QBError? {
+        guard Config.QuickBooks.enablePaymentsScope else {
+            return .paymentsScopeDisabled
+        }
+        guard !savedSessionIncludesPaymentsScope else {
+            return nil
+        }
+        return .paymentsAuthorizationFailed(
+            statusCode: 403,
+            detail: "This saved QuickBooks session was authorized before the Payments scope was granted. Accounting can remain connected, but QuickBooks Payments calls require reconnecting QuickBooks and accepting \(Config.QuickBooks.paymentsScope)."
+        )
+    }
+
     func performPaymentsTokenRequest(
         _ requestBuilder: @escaping () -> URLRequest?,
         completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void,
         attempt: Int = 0
     ) {
-        guard Config.QuickBooks.enablePaymentsScope else {
-            completion(.failure(QBError.paymentsScopeDisabled))
+        if let scopeError = paymentsScopeReadinessError() {
+            completion(.failure(scopeError))
             return
         }
         refreshTokensIfNeeded { ok in
@@ -1336,8 +1403,8 @@ private extension QuickBooksDataAPI {
         completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void,
         attempt: Int = 0
     ) {
-        guard Config.QuickBooks.enablePaymentsScope else {
-            completion(.failure(QBError.paymentsScopeDisabled))
+        if let scopeError = paymentsScopeReadinessError() {
+            completion(.failure(scopeError))
             return
         }
         refreshTokensIfNeeded { ok in

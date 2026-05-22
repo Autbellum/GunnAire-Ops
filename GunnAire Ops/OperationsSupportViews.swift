@@ -862,8 +862,12 @@ struct SyncIntegrationsView: View {
 struct OnsiteDocumentationView: View {
     @Query(sort: \ServiceCall.scheduledDate, order: .forward) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
+    @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
+    @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @State private var selectedServiceCallID: UUID?
     @State private var didLoadPendingRoute = false
+    @State private var generatedCustomerDocumentURL: URL?
+    @State private var documentExportMessage = ""
 
     private var quickBooksConnected: Bool {
         QuickBooksDataAPI.shared.isAuthenticated
@@ -908,6 +912,36 @@ struct OnsiteDocumentationView: View {
         return serviceCalls.first(where: { $0.id == serviceCallID })
     }
 
+    private func estimate(for call: ServiceCall) -> Estimate? {
+        if let linkedEstimateID = call.linkedEstimateID,
+           let linkedEstimate = estimates.first(where: { $0.id == linkedEstimateID }) {
+            return linkedEstimate
+        }
+        return estimates.first(where: { $0.serviceCallID == call.id })
+    }
+
+    private func invoice(for call: ServiceCall) -> Invoice? {
+        if let linkedInvoiceID = call.linkedInvoiceID,
+           let linkedInvoice = invoices.first(where: { $0.id == linkedInvoiceID }) {
+            return linkedInvoice
+        }
+        return invoices.first(where: { $0.serviceCallID == call.id })
+    }
+
+    private func payments(for invoice: Invoice?) -> [Payment] {
+        guard let invoice else { return [] }
+        return payments.filter { $0.invoice.id == invoice.id }
+    }
+
+    private func invoiceBalanceDue(for invoice: Invoice) -> Double {
+        max(invoice.amount - payments(for: invoice).reduce(0) { $0 + $1.amount }, 0)
+    }
+
+    private func canGeneratePaidInvoice(_ invoice: Invoice?) -> Bool {
+        guard let invoice else { return false }
+        return invoice.status == "paid" || invoiceBalanceDue(for: invoice) <= 0.009
+    }
+
     private func documentationQueueLabel(for call: ServiceCall) -> String {
         let hasDocumentation = call.linkedInvoiceID != nil || call.linkedEstimateID != nil || call.documentationStartedAt != nil
         switch call.type {
@@ -937,6 +971,25 @@ struct OnsiteDocumentationView: View {
                             documentationQueueSection(title: "Estimate Queue", calls: estimateDocumentationCalls)
                             documentationQueueSection(title: "Invoice Queue", calls: invoiceDocumentationCalls)
                             documentationQueueSection(title: "Field Documentation Queue", calls: fieldDocumentationCalls)
+                        }
+
+                        if !documentExportMessage.isEmpty || generatedCustomerDocumentURL != nil {
+                            Section("Customer Documents") {
+                                if !documentExportMessage.isEmpty {
+                                    Text(documentExportMessage)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                if let generatedCustomerDocumentURL {
+                                    ShareLink(item: generatedCustomerDocumentURL) {
+                                        Label("Share Last Generated Document", systemImage: "square.and.arrow.up")
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(Color.brandGold)
+                                    .foregroundStyle(Color.primaryBlack)
+                                }
+                            }
                         }
 
                         Section("Invoices Awaiting Closeout") {
@@ -975,6 +1028,17 @@ struct OnsiteDocumentationView: View {
                                                 }
                                                 .buttonStyle(.borderedProminent)
                                                 .tint(.green)
+                                            }
+
+                                            if canGeneratePaidInvoice(invoice) {
+                                                Menu {
+                                                    Button("Generate Paid Invoice PDF") {
+                                                        generatePaidInvoiceDocument(invoice)
+                                                    }
+                                                } label: {
+                                                    Label("Documents", systemImage: "doc.on.doc")
+                                                }
+                                                .buttonStyle(.bordered)
                                             }
                                         }
                                     }
@@ -1052,6 +1116,27 @@ struct OnsiteDocumentationView: View {
                             }
                             .buttonStyle(.bordered)
 
+                            Menu {
+                                Button("Generate Onsite Report") {
+                                    generateOnsiteReport(for: call)
+                                }
+
+                                if estimate(for: call) != nil {
+                                    Button("Generate Estimate PDF") {
+                                        generateEstimateDocument(for: call)
+                                    }
+                                }
+
+                                if let invoice = invoice(for: call), canGeneratePaidInvoice(invoice) {
+                                    Button("Generate Paid Invoice PDF") {
+                                        generatePaidInvoiceDocument(invoice)
+                                    }
+                                }
+                            } label: {
+                                Label("Documents", systemImage: "doc.on.doc")
+                            }
+                            .buttonStyle(.bordered)
+
                             if call.linkedInvoiceID != nil {
                                 Button("Collect Payment") {
                                     if let linkedInvoiceID = call.linkedInvoiceID {
@@ -1074,6 +1159,52 @@ struct OnsiteDocumentationView: View {
         }
         guard let pendingID = GunnAireAppIntentRouter.consumePendingServiceCallID() else { return }
         selectedServiceCallID = pendingID
+    }
+
+    private func generateOnsiteReport(for call: ServiceCall) {
+        let linkedInvoice = invoice(for: call)
+        do {
+            let url = try CustomerDocumentExporter.exportOnsiteReport(
+                serviceCall: call,
+                estimate: estimate(for: call),
+                invoice: linkedInvoice,
+                payments: payments(for: linkedInvoice)
+            )
+            generatedCustomerDocumentURL = url
+            documentExportMessage = "Onsite report generated for \(call.customer.name)."
+            call.documentationChecklist = true
+            call.documentationCompletedAt = call.documentationCompletedAt ?? Date()
+        } catch {
+            documentExportMessage = "Could not generate onsite report: \(error.localizedDescription)"
+        }
+    }
+
+    private func generateEstimateDocument(for call: ServiceCall) {
+        guard let estimate = estimate(for: call) else {
+            documentExportMessage = "No estimate is linked to this job yet."
+            return
+        }
+        do {
+            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: call)
+            generatedCustomerDocumentURL = url
+            documentExportMessage = "Estimate PDF generated for \(estimate.customer.name)."
+        } catch {
+            documentExportMessage = "Could not generate estimate PDF: \(error.localizedDescription)"
+        }
+    }
+
+    private func generatePaidInvoiceDocument(_ invoice: Invoice) {
+        do {
+            let url = try CustomerDocumentExporter.exportPaidInvoice(
+                invoice,
+                serviceCall: serviceCall(for: invoice),
+                payments: payments(for: invoice)
+            )
+            generatedCustomerDocumentURL = url
+            documentExportMessage = "Paid invoice PDF generated for \(invoice.customer.name)."
+        } catch {
+            documentExportMessage = "Could not generate paid invoice PDF: \(error.localizedDescription)"
+        }
     }
 }
 

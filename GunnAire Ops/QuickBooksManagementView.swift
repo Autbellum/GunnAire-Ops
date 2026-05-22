@@ -239,6 +239,12 @@ struct QuickBooksManagementView: View {
                                 .foregroundStyle(.orange)
                         }
 
+                        if let scopeReauthorization = QuickBooksDataAPI.shared.scopeReauthorizationDiagnostic {
+                            Label(scopeReauthorization, systemImage: "key.horizontal")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+
                         if quickBooksReconnectRequired {
                             Label(
                                 "Reconnect QuickBooks in Settings with a company admin, then retry sync.",

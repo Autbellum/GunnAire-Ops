@@ -452,6 +452,12 @@ struct SettingsView: View {
                     .foregroundColor(.orange)
             }
 
+            if let scopeReauthorization = QuickBooksDataAPI.shared.scopeReauthorizationDiagnostic {
+                Text(scopeReauthorization)
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+            }
+
             if let quickBooksConnectionMessage {
                 Text(quickBooksConnectionMessage)
                     .font(.caption)
