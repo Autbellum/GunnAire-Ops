@@ -89,8 +89,7 @@ final class OnsitePaymentManager: ObservableObject {
             return false
         }
         if processor.requiresQuickBooksSession {
-            guard Config.QuickBooks.enablePaymentsScope else { return false }
-            return QuickBooksDataAPI.shared.isAuthenticated
+            return QuickBooksDataAPI.shared.canUseQuickBooksPaymentsAPI
         }
         return true
     }
@@ -111,6 +110,9 @@ final class OnsitePaymentManager: ObservableObject {
             }
             if !QuickBooksDataAPI.shared.isAuthenticated {
                 return "Connect QuickBooks first, then mark this device ready for Tap to Pay."
+            }
+            if let diagnostic = QuickBooksDataAPI.shared.paymentsAuthorizationDiagnostic {
+                return diagnostic
             }
             if !UserDefaults.standard.bool(forKey: "onsitePaymentProcessorReady") {
                 return "QuickBooks Payments is connected. Mark this device ready after the Tap to Pay support package is installed."

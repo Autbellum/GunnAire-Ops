@@ -90,7 +90,16 @@ struct QuickBooksManagementView: View {
     }
 
     private var quickBooksPaymentsEnabled: Bool {
-        Config.QuickBooks.enablePaymentsScope && isAuthenticated
+        QuickBooksDataAPI.shared.canUseQuickBooksPaymentsAPI
+    }
+
+    private var quickBooksPaymentsUnavailableMessage: String {
+        if let diagnostic = QuickBooksDataAPI.shared.paymentsAuthorizationDiagnostic {
+            return diagnostic
+        }
+        return Config.QuickBooks.enablePaymentsScope
+            ? "QuickBooks Payments is not authorized for this connection yet."
+            : "Enable the QuickBooks Payments scope before using live payment endpoints."
     }
 
     private var quickBooksConfigReady: Bool {
@@ -241,6 +250,12 @@ struct QuickBooksManagementView: View {
 
                         if let scopeReauthorization = QuickBooksDataAPI.shared.scopeReauthorizationDiagnostic {
                             Label(scopeReauthorization, systemImage: "key.horizontal")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+
+                        if let paymentsAuthorization = QuickBooksDataAPI.shared.paymentsAuthorizationDiagnostic {
+                            Label(paymentsAuthorization, systemImage: "creditcard.trianglebadge.exclamationmark")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
                         }
@@ -1051,12 +1066,20 @@ struct QuickBooksManagementView: View {
                 paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
             }) else { finishQuickBooksResourceSync(with: failures); return }
 
-            if Config.QuickBooks.enablePaymentsScope {
+            if QuickBooksDataAPI.shared.canUseQuickBooksPaymentsAPI {
                 guard await run(id: "storedCards", required: false, fetch: { completion in
                     liveAPI.fetchCards(forCustomerIDs: customers.map(\.Id), completion: completion)
                 }, apply: { records in
                     storedCards = records
                 }) else { finishQuickBooksResourceSync(with: failures); return }
+            } else if Config.QuickBooks.enablePaymentsScope {
+                storedCards = []
+                updateSyncStatus(
+                    id: "storedCards",
+                    state: .warning,
+                    detail: "Skipped because this QuickBooks token is not authorized for \(Config.QuickBooks.paymentsScope). Accounting sync remains active.",
+                    count: 0
+                )
             } else {
                 updateSyncStatus(
                     id: "storedCards",
@@ -1387,7 +1410,7 @@ struct QuickBooksManagementView: View {
 
     private func processCardCharge(for invoice: Invoice, amount: Double, cardInput: QuickBooksPaymentsCardInput, note: String?) {
         guard quickBooksPaymentsEnabled else {
-            actionMessage = Config.QuickBooks.enablePaymentsScope ? "Connect QuickBooks before processing card charges." : "Enable and reauthorize the QuickBooks Payments scope before processing card charges."
+            actionMessage = quickBooksPaymentsUnavailableMessage
             return
         }
 
@@ -1441,7 +1464,7 @@ struct QuickBooksManagementView: View {
 
     private func storeCard(_ input: QuickBooksPaymentsCardInput, for customer: QuickBooksCustomer) {
         guard quickBooksPaymentsEnabled else {
-            actionMessage = Config.QuickBooks.enablePaymentsScope ? "Connect QuickBooks before storing cards." : "Enable and reauthorize the QuickBooks Payments scope before storing cards."
+            actionMessage = quickBooksPaymentsUnavailableMessage
             return
         }
 
@@ -1470,7 +1493,7 @@ struct QuickBooksManagementView: View {
 
     private func refundPayment(_ payment: Payment, amount: Double, note: String?) {
         guard quickBooksPaymentsEnabled else {
-            actionMessage = Config.QuickBooks.enablePaymentsScope ? "Connect QuickBooks before refunding payments." : "Enable and reauthorize the QuickBooks Payments scope before refunding payments."
+            actionMessage = quickBooksPaymentsUnavailableMessage
             return
         }
 
@@ -1564,7 +1587,7 @@ struct QuickBooksManagementView: View {
             return
         }
         guard quickBooksPaymentsEnabled else {
-            actionMessage = Config.QuickBooks.enablePaymentsScope ? "Connect QuickBooks before loading payment receipts." : "Enable and reauthorize the QuickBooks Payments scope before loading payment receipts."
+            actionMessage = quickBooksPaymentsUnavailableMessage
             return
         }
 

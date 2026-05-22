@@ -2025,7 +2025,7 @@ extension ContentView {
             salesReceipts = await fetch(label: "Sales Receipts", QuickBooksDataAPI.shared.fetchSalesReceipts)
             deposits = await fetch(label: "Deposits", QuickBooksDataAPI.shared.fetchDeposits)
             paymentMethods = await fetch(label: "Payment Methods", QuickBooksDataAPI.shared.fetchPaymentMethods)
-            if Config.QuickBooks.enablePaymentsScope {
+            if QuickBooksDataAPI.shared.canUseQuickBooksPaymentsAPI {
                 storedCards = await withCheckedContinuation { continuation in
                     QuickBooksDataAPI.shared.fetchCards(forCustomerIDs: customers.map(\.Id)) { result in
                         DispatchQueue.main.async {
@@ -2039,6 +2039,8 @@ extension ContentView {
                         }
                     }
                 }
+            } else if Config.QuickBooks.enablePaymentsScope {
+                paymentsWarnings.append("Stored Cards: skipped because this QuickBooks token is not authorized for \(Config.QuickBooks.paymentsScope). Accounting sync remains active.")
             } else {
                 paymentsWarnings.append("Stored Cards: skipped because QuickBooks Payments scope is disabled for this build.")
             }

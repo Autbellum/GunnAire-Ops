@@ -2432,7 +2432,7 @@ private struct RecordInvoicePaymentView: View {
     }
 
     private var quickBooksPaymentsEnabled: Bool {
-        Config.QuickBooks.enablePaymentsScope && QuickBooksDataAPI.shared.isAuthenticated
+        QuickBooksDataAPI.shared.canUseQuickBooksPaymentsAPI
     }
 
     private var closeoutPaymentFormIsValid: Bool {

@@ -72,7 +72,16 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private var quickBooksPaymentsEnabled: Bool {
-        Config.QuickBooks.enablePaymentsScope && isQuickBooksConnected
+        QuickBooksDataAPI.shared.canUseQuickBooksPaymentsAPI
+    }
+
+    private var quickBooksPaymentsUnavailableMessage: String {
+        if let diagnostic = QuickBooksDataAPI.shared.paymentsAuthorizationDiagnostic {
+            return diagnostic
+        }
+        return Config.QuickBooks.enablePaymentsScope
+            ? "QuickBooks Payments is not authorized for this connection yet."
+            : "Enable the QuickBooks Payments scope before using live payment endpoints."
     }
 
     private var outstandingInvoices: [(invoice: Invoice, balanceDue: Double)] {
@@ -1053,7 +1062,7 @@ GunnAire
             return
         }
         guard quickBooksPaymentsEnabled else {
-            actionMessage = Config.QuickBooks.enablePaymentsScope ? "Connect QuickBooks before loading the payment receipt." : "Enable and reauthorize the QuickBooks Payments scope before loading payment receipts."
+            actionMessage = quickBooksPaymentsUnavailableMessage
             return
         }
 
@@ -1105,7 +1114,7 @@ GunnAire
             return
         }
         guard quickBooksPaymentsEnabled else {
-            actionMessage = Config.QuickBooks.enablePaymentsScope ? "Connect QuickBooks before issuing refunds." : "Enable and reauthorize the QuickBooks Payments scope before issuing refunds."
+            actionMessage = quickBooksPaymentsUnavailableMessage
             return
         }
 

@@ -87,7 +87,7 @@ final class QuickBooksDataAPI: ObservableObject {
         let company = realmID ?? "Not connected"
         let expiration = tokenExpiration?.formatted(date: .abbreviated, time: .shortened) ?? "No token"
         let authorizedScopes = storedScopeSignature?.isEmpty == false ? storedScopeSignature! : "Unknown"
-        return "Environment: \(currentEnvironment.capitalized) • Realm: \(company) • Client: \(Self.currentClientIDFingerprint) • Requested scopes: \(Self.currentScopeSignature) • Authorized scopes: \(authorizedScopes) • Token expires: \(expiration)"
+        return "Environment: \(currentEnvironment.capitalized) • Realm: \(company) • Client: \(Self.currentClientIDFingerprint) • Accounting scopes: \(Self.currentScopeSignature) • Authorized scopes: \(authorizedScopes) • Token expires: \(expiration)"
     }
 
     private static var currentClientIDFingerprint: String {
@@ -95,7 +95,7 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     private static var currentScopeSignature: String {
-        Config.QuickBooks.oauthScopes.sorted().joined(separator: " ")
+        Config.QuickBooks.accountingOAuthScopes.sorted().joined(separator: " ")
     }
 
     var missingRequestedScopes: [String] {
@@ -113,15 +113,28 @@ final class QuickBooksDataAPI: ObservableObject {
 
     var savedSessionIncludesPaymentsScope: Bool {
         guard let storedScopeSignature, !storedScopeSignature.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return true
+            return false
         }
         return Self.scopeSet(from: storedScopeSignature).contains(Config.QuickBooks.paymentsScope)
+    }
+
+    var canUseQuickBooksPaymentsAPI: Bool {
+        Config.QuickBooks.enablePaymentsScope && isAuthenticated && savedSessionIncludesPaymentsScope
     }
 
     var scopeReauthorizationDiagnostic: String? {
         let missing = missingRequestedScopes
         guard !missing.isEmpty else { return nil }
         return "QuickBooks is connected for the previously authorized scopes, but this build now requests \(missing.joined(separator: ", ")). Reconnect QuickBooks to authorize the new scope set. Accounting sync can keep using the saved session until Intuit rejects it."
+    }
+
+    var paymentsAuthorizationDiagnostic: String? {
+        guard Config.QuickBooks.enablePaymentsScope else { return nil }
+        guard isAuthenticated else {
+            return "QuickBooks Payments is off until QuickBooks Accounting is connected."
+        }
+        guard !savedSessionIncludesPaymentsScope else { return nil }
+        return "QuickBooks Accounting is connected, but this saved token is not authorized for \(Config.QuickBooks.paymentsScope). Accounting sync will continue; card, stored-card, and charge endpoints stay disabled until Intuit grants Payments access for this company and a Payments-authorized token is saved."
     }
 
     private static func stableFingerprint(_ value: String) -> String {
@@ -1342,7 +1355,7 @@ private extension QuickBooksDataAPI {
         }
         return .paymentsAuthorizationFailed(
             statusCode: 403,
-            detail: "This saved QuickBooks session was authorized before the Payments scope was granted. Accounting can remain connected, but QuickBooks Payments calls require reconnecting QuickBooks and accepting \(Config.QuickBooks.paymentsScope)."
+            detail: "This saved QuickBooks session is not authorized for \(Config.QuickBooks.paymentsScope). Accounting can remain connected, but QuickBooks Payments calls require Intuit Payments access for this company and a Payments-authorized token."
         )
     }
 

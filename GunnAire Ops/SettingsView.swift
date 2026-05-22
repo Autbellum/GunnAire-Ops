@@ -458,6 +458,12 @@ struct SettingsView: View {
                     .foregroundColor(.orange)
             }
 
+            if let paymentsAuthorization = QuickBooksDataAPI.shared.paymentsAuthorizationDiagnostic {
+                Text(paymentsAuthorization)
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+            }
+
             if let quickBooksConnectionMessage {
                 Text(quickBooksConnectionMessage)
                     .font(.caption)

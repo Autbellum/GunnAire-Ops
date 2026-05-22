@@ -60,10 +60,10 @@ struct Config {
 
         static let accountingScope = "com.intuit.quickbooks.accounting"
         static let paymentsScope = "com.intuit.quickbooks.payment"
+        static let accountingOAuthScopes = [accountingScope]
+        static let paymentsOAuthScopes = [accountingScope, paymentsScope]
         static var oauthScopes: [String] {
-            var scopes = [accountingScope]
-            if enablePaymentsScope { scopes.append(paymentsScope) }
-            return scopes
+            accountingOAuthScopes
         }
 
         static var oauthScopeSignature: String {
@@ -118,7 +118,7 @@ struct Config {
                 warnings.append("Set QB_DEFAULT_EXPENSE_ACCOUNT_REF before creating bills or expense purchases.")
             }
             if enablePaymentsScope {
-                warnings.append("QuickBooks Payments scope is enabled. Confirm the Intuit production app has QuickBooks Payments enabled and reconnect after any scope change.")
+                warnings.append("QuickBooks Payments features are enabled, but Accounting login stays Accounting-only so Payments authorization failures do not break core QBO sync.")
             }
             return warnings
         }
