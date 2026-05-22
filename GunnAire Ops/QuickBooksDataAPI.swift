@@ -564,7 +564,13 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     private func paymentsAuthorizationFailureMessage(detail: String) -> String {
-        "QuickBooks Payments rejected this app session. Reconnect QuickBooks and confirm Payments access is enabled for this company before retrying card, stored-card, or payment-method sync."
+        let cleanedDetail = detail
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\n", with: " ")
+        let intuitDetail = cleanedDetail.isEmpty || cleanedDetail == "QuickBooks Payments rejected this app session."
+            ? ""
+            : " Intuit detail: \(String(cleanedDetail.prefix(700)))"
+        return "QuickBooks Payments rejected this app session. This means Accounting is connected, but this company/token is not authorized for the QuickBooks Payments API. Reconnect QuickBooks after confirming Payments access is enabled for this company in Intuit.\(intuitDetail)"
     }
 
     private func clearRejectedSessionIfNeeded(_ error: QBError) {

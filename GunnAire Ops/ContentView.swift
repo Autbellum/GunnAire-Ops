@@ -1954,6 +1954,7 @@ extension ContentView {
     func fetchAndSyncQuickBooksData() {
         Task { @MainActor in
             var failures: [String] = []
+            var paymentsWarnings: [String] = []
             var customers: [QuickBooksCustomer] = []
             var items: [QuickBooksItem] = []
             var estimates: [QuickBooksEstimate] = []
@@ -2024,8 +2025,22 @@ extension ContentView {
             salesReceipts = await fetch(label: "Sales Receipts", QuickBooksDataAPI.shared.fetchSalesReceipts)
             deposits = await fetch(label: "Deposits", QuickBooksDataAPI.shared.fetchDeposits)
             paymentMethods = await fetch(label: "Payment Methods", QuickBooksDataAPI.shared.fetchPaymentMethods)
-            storedCards = await fetch(label: "Stored Cards") { completion in
-                QuickBooksDataAPI.shared.fetchCards(forCustomerIDs: customers.map(\.Id), completion: completion)
+            if Config.QuickBooks.enablePaymentsScope {
+                storedCards = await withCheckedContinuation { continuation in
+                    QuickBooksDataAPI.shared.fetchCards(forCustomerIDs: customers.map(\.Id)) { result in
+                        DispatchQueue.main.async {
+                            switch result {
+                            case .success(let records):
+                                continuation.resume(returning: records)
+                            case .failure(let error):
+                                paymentsWarnings.append("Stored Cards: \(error.localizedDescription)")
+                                continuation.resume(returning: [])
+                            }
+                        }
+                    }
+                }
+            } else {
+                paymentsWarnings.append("Stored Cards: skipped because QuickBooks Payments scope is disabled for this build.")
             }
 
             guard QuickBooksDataAPI.shared.isAuthenticated else {
@@ -2051,7 +2066,13 @@ extension ContentView {
             }
 
             if failures.isEmpty {
-                let message = "All QuickBooks features checked successfully. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, \(storedCards.count) stored cards, and \(deposits.count) deposits."
+                let baseMessage = "QuickBooks Accounting sync completed. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, and \(deposits.count) deposits."
+                let message: String
+                if paymentsWarnings.isEmpty {
+                    message = "\(baseMessage) Loaded \(storedCards.count) stored cards."
+                } else {
+                    message = "\(baseMessage)\n\nQuickBooks Payments warning:\n\(paymentsWarnings.joined(separator: "\n"))"
+                }
                 presentAuthAlert(title: "QuickBooks Sync Complete", message: message)
             } else {
                 presentAuthAlert(

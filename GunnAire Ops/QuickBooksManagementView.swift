@@ -89,6 +89,10 @@ struct QuickBooksManagementView: View {
         QuickBooksDataAPI.shared.isAuthenticated
     }
 
+    private var quickBooksPaymentsEnabled: Bool {
+        Config.QuickBooks.enablePaymentsScope && isAuthenticated
+    }
+
     private var quickBooksConfigReady: Bool {
         QuickBooksDataAPI.shared.canStartOAuthFlow
     }
@@ -678,7 +682,7 @@ struct QuickBooksManagementView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(Color.brandGold)
                         .foregroundStyle(Color.primaryBlack)
-                        .disabled(!isAuthenticated || collectibleLocalInvoices.isEmpty)
+                        .disabled(!quickBooksPaymentsEnabled || collectibleLocalInvoices.isEmpty)
 
                         Button("Store Card") {
                             showingStoreCardSheet = true
@@ -686,7 +690,7 @@ struct QuickBooksManagementView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(Color.brandGold)
                         .foregroundStyle(Color.primaryBlack)
-                        .disabled(!isAuthenticated || customers.isEmpty)
+                        .disabled(!quickBooksPaymentsEnabled || customers.isEmpty)
 
                         Text("Stored cards are fetched and created with the customer-scoped QuickBooks Payments Cards API.")
                             .font(.caption)
@@ -761,6 +765,7 @@ struct QuickBooksManagementView: View {
                                             loadPaymentReceipt(for: payment)
                                         }
                                         .buttonStyle(.bordered)
+                                        .disabled(!quickBooksPaymentsEnabled)
                                     }
                                     if payment.needsQuickBooksAttention,
                                        let detail = payment.quickBooksAccountingSyncDetail,
@@ -783,6 +788,7 @@ struct QuickBooksManagementView: View {
                                             showingRefundPaymentSheet = true
                                         }
                                         .buttonStyle(.bordered)
+                                        .disabled(!quickBooksPaymentsEnabled)
                                     }
                                     HStack {
                                         Button("Open Customer") {
@@ -1374,6 +1380,11 @@ struct QuickBooksManagementView: View {
     }
 
     private func processCardCharge(for invoice: Invoice, amount: Double, cardInput: QuickBooksPaymentsCardInput, note: String?) {
+        guard quickBooksPaymentsEnabled else {
+            actionMessage = Config.QuickBooks.enablePaymentsScope ? "Connect QuickBooks before processing card charges." : "Enable and reauthorize the QuickBooks Payments scope before processing card charges."
+            return
+        }
+
         performAction(message: "Processing QuickBooks card charge...") {
             Task {
                 do {
@@ -1423,6 +1434,11 @@ struct QuickBooksManagementView: View {
     }
 
     private func storeCard(_ input: QuickBooksPaymentsCardInput, for customer: QuickBooksCustomer) {
+        guard quickBooksPaymentsEnabled else {
+            actionMessage = Config.QuickBooks.enablePaymentsScope ? "Connect QuickBooks before storing cards." : "Enable and reauthorize the QuickBooks Payments scope before storing cards."
+            return
+        }
+
         performAction(message: "Storing QuickBooks card for \(customer.DisplayName)...") {
             Task {
                 do {
@@ -1447,6 +1463,11 @@ struct QuickBooksManagementView: View {
     }
 
     private func refundPayment(_ payment: Payment, amount: Double, note: String?) {
+        guard quickBooksPaymentsEnabled else {
+            actionMessage = Config.QuickBooks.enablePaymentsScope ? "Connect QuickBooks before refunding payments." : "Enable and reauthorize the QuickBooks Payments scope before refunding payments."
+            return
+        }
+
         performAction(message: "Refunding QuickBooks payment...") {
             Task {
                 do {
@@ -1534,6 +1555,10 @@ struct QuickBooksManagementView: View {
     private func loadPaymentReceipt(for payment: Payment) {
         guard let chargeID = payment.quickBooksChargeID?.trimmingCharacters(in: .whitespacesAndNewlines), !chargeID.isEmpty else {
             actionMessage = "This payment does not have a QuickBooks charge ID."
+            return
+        }
+        guard quickBooksPaymentsEnabled else {
+            actionMessage = Config.QuickBooks.enablePaymentsScope ? "Connect QuickBooks before loading payment receipts." : "Enable and reauthorize the QuickBooks Payments scope before loading payment receipts."
             return
         }
 
@@ -1652,8 +1677,8 @@ struct QuickBooksManagementView: View {
             QuickBooksSyncResourceStatus(id: "deposits", name: "Deposits", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
             QuickBooksSyncResourceStatus(id: "bills", name: "Bills", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
             QuickBooksSyncResourceStatus(id: "purchases", name: "Purchases", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
-            QuickBooksSyncResourceStatus(id: "paymentMethods", name: "Payment Methods", lane: "Payments", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
-            QuickBooksSyncResourceStatus(id: "storedCards", name: "Stored Cards", lane: "Payments", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil)
+            QuickBooksSyncResourceStatus(id: "paymentMethods", name: "Payment Methods", lane: "Accounting", required: true, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil),
+            QuickBooksSyncResourceStatus(id: "storedCards", name: "Stored Cards", lane: "Payments", required: false, state: .idle, detail: "Not synced this session.", count: nil, updatedAt: nil)
         ]
     }
 

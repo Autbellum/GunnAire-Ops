@@ -2317,16 +2317,20 @@ private struct RecordInvoicePaymentView: View {
         OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
     }
 
+    private var quickBooksPaymentsEnabled: Bool {
+        Config.QuickBooks.enablePaymentsScope && QuickBooksDataAPI.shared.isAuthenticated
+    }
+
     private var closeoutPaymentFormIsValid: Bool {
         guard shouldRecordPayment else { return true }
-        if method == "card", QuickBooksDataAPI.shared.isAuthenticated {
+        if method == "card", quickBooksPaymentsEnabled {
             return !cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                 cardNumber.filter(\.isNumber).count >= 12 &&
                 expirationMonth.filter(\.isNumber).count >= 1 &&
                 expirationYear.filter(\.isNumber).count == 4 &&
                 cardCVC.filter(\.isNumber).count >= 3
         }
-        if method == "ach", QuickBooksDataAPI.shared.isAuthenticated {
+        if method == "ach", quickBooksPaymentsEnabled {
             return !achAccountHolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                 achAccountNumber.filter(\.isNumber).count >= 4 &&
                 achRoutingNumber.filter(\.isNumber).count == 9 &&
@@ -2410,7 +2414,7 @@ private struct RecordInvoicePaymentView: View {
                                 }
                             }
 
-                            if QuickBooksDataAPI.shared.isAuthenticated {
+                            if quickBooksPaymentsEnabled {
                                 Text("QuickBooks card processing")
                                     .font(.subheadline.weight(.semibold))
                                 TextField("Cardholder name", text: $cardholderName)
@@ -2435,12 +2439,12 @@ private struct RecordInvoicePaymentView: View {
                                 TextField("Card last 4", text: $cardLast4)
                                     .keyboardType(.numberPad)
                                 TextField("Authorization ref", text: $authorizationCode)
-                                Text("QuickBooks Payments is not connected. This card entry will only record a manual payment note.")
+                                Text(Config.QuickBooks.enablePaymentsScope ? "QuickBooks Payments is not connected. This card entry will only record a manual payment note." : "QuickBooks Payments scope is disabled. This card entry will only record a manual payment note.")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
                         }
-                        if method == "ach", QuickBooksDataAPI.shared.isAuthenticated {
+                        if method == "ach", quickBooksPaymentsEnabled {
                             TextField("Account holder name", text: $achAccountHolderName)
                             SecureField("Bank account number", text: $achAccountNumber)
                                 .keyboardType(.numberPad)
@@ -2505,7 +2509,7 @@ private struct RecordInvoicePaymentView: View {
             amount = String(format: "%.2f", balanceDue > 0 ? balanceDue : invoice.amount)
         }
         cardholderName = invoice.customer.name
-        processCardWithQuickBooks = QuickBooksDataAPI.shared.isAuthenticated && method == "card"
+        processCardWithQuickBooks = quickBooksPaymentsEnabled && method == "card"
         achAccountHolderName = invoice.customer.name
         achAccountNumber = ""
         achRoutingNumber = ""
@@ -2558,7 +2562,7 @@ private struct RecordInvoicePaymentView: View {
         invoice.finalizedAt = Date()
 
         if shouldRecordPayment {
-            if method == "card", QuickBooksDataAPI.shared.isAuthenticated {
+            if method == "card", quickBooksPaymentsEnabled {
                 isProcessingQuickBooksPayment = true
                 defer { isProcessingQuickBooksPayment = false }
 
@@ -2614,7 +2618,7 @@ private struct RecordInvoicePaymentView: View {
                     tapToPayMessage = error.localizedDescription
                     return
                 }
-            } else if method == "ach", QuickBooksDataAPI.shared.isAuthenticated {
+            } else if method == "ach", quickBooksPaymentsEnabled {
                 isProcessingQuickBooksPayment = true
                 defer { isProcessingQuickBooksPayment = false }
 
