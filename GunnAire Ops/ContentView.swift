@@ -355,18 +355,26 @@ struct ServiceCallDetailView: View {
     }
 
     private var totalPaid: Double {
-        linkedPayments.reduce(0) { $0 + $1.amount }
+        linkedPayments.reduce(0) { partial, payment in
+            partial + (payment.isRefund ? -payment.amount : payment.amount)
+        }
+    }
+
+    private var invoiceBalanceDue: Double {
+        guard let invoice = linkedInvoice else { return 0 }
+        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
+            return 0
+        }
+        return max(invoice.amount - totalPaid, 0)
     }
 
     private var balanceLabel: String? {
-        guard let invoice = linkedInvoice else { return nil }
-        let balance = max(invoice.amount - totalPaid, 0)
-        return balance.formatted(.currency(code: "USD"))
+        guard linkedInvoice != nil else { return nil }
+        return invoiceBalanceDue.formatted(.currency(code: "USD"))
     }
 
     private var hasOpenInvoiceBalance: Bool {
-        guard let invoice = linkedInvoice else { return false }
-        return invoice.status != "paid" && max(invoice.amount - totalPaid, 0) > 0
+        linkedInvoice != nil && invoiceBalanceDue > 0.009
     }
 
     private var collectionIsOverdue: Bool {
@@ -399,7 +407,7 @@ struct ServiceCallDetailView: View {
             body: """
 Hello \(call.customer.name),
 
-This is a reminder that your current invoice balance is \(max(invoice.amount - totalPaid, 0).formatted(.currency(code: "USD"))).
+This is a reminder that your current invoice balance is \(invoiceBalanceDue.formatted(.currency(code: "USD"))).
 
 Invoice reference: \(reference)
 

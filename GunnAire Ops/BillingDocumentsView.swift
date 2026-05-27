@@ -43,6 +43,7 @@ struct BillingDocumentsView: View {
     @State private var pendingIntentServiceCallID: UUID?
     @State private var showingItemSelector = false
     @State private var showingItemCreator = false
+    @State private var selectedInvoiceForCloseout: Invoice?
     @State private var generatedCustomerDocumentURL: URL?
     private let workspaceMode: BillingWorkspaceMode
 
@@ -152,13 +153,10 @@ struct BillingDocumentsView: View {
     }
 
     private var invoiceMetrics: (open: Int, overdue: Int, outstandingBalance: Double) {
-        let now = Date()
         let openInvoices = invoices.filter { invoice in
             invoiceBalanceDue(for: invoice) > 0.009
         }
-        let overdueInvoices = openInvoices.filter { invoice in
-            Calendar.current.dateComponents([.day], from: invoice.createdAt, to: now).day ?? 0 >= 30
-        }
+        let overdueInvoices = openInvoices.filter(isInvoiceOverdue)
         let balance = openInvoices.reduce(0) { partial, invoice in
             partial + invoiceBalanceDue(for: invoice)
         }
@@ -182,10 +180,7 @@ struct BillingDocumentsView: View {
     }
 
     private var overdueInvoices: [Invoice] {
-        let now = Date()
-        return collectibleInvoices.filter { invoice in
-            Calendar.current.dateComponents([.day], from: invoice.createdAt, to: now).day ?? 0 >= 30
-        }
+        collectibleInvoices.filter(isInvoiceOverdue)
     }
 
     private var contextCustomer: Customer? {
@@ -569,7 +564,7 @@ GunnAire
                             .buttonStyle(.bordered)
                         }
 
-                        if let invoice = currentJobInvoice, invoice.status == "paid" || (currentJobBalanceDue ?? invoiceBalanceDue(for: invoice)) <= 0.009 {
+                        if let invoice = currentJobInvoice, isInvoicePaid(invoice) || (currentJobBalanceDue ?? invoiceBalanceDue(for: invoice)) <= 0.009 {
                             Button {
                                 generatePaidInvoiceDocument(invoice)
                             } label: {
@@ -734,7 +729,7 @@ GunnAire
 
                                 if currentJobInvoice == nil {
                                     Button("Create Invoice From Estimate") {
-                                        prepareInvoiceFromEstimate(estimate)
+                                        createInvoiceFromEstimate(estimate)
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .tint(Color.brandGold)
@@ -748,7 +743,7 @@ GunnAire
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Invoice")
                                     .font(.headline)
-                                Text("\(invoice.amount, format: .currency(code: "USD")) • \(invoice.status.capitalized)")
+                                Text("\(invoice.amount, format: .currency(code: "USD")) • \(invoiceDisplayStatus(for: invoice))")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                                 if let currentJobBalanceDue {
@@ -778,29 +773,29 @@ GunnAire
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
-                                Button(invoice.status == "paid" ? "Invoice Paid" : "Collect Payment") {
-                                    openPaymentsForInvoice(invoice)
+                                Button(isInvoicePaid(invoice) ? "Invoice Paid" : "Collect Payment") {
+                                    openInvoiceCloseout(invoice)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(Color.brandGold)
                                 .foregroundStyle(Color.primaryBlack)
-                                .disabled(invoice.status == "paid")
+                                .disabled(isInvoicePaid(invoice))
 
                                 Button("Resume Invoice") {
-                                    loadInvoiceIntoBuilder(invoice)
+                                    openInvoiceCloseout(invoice)
                                 }
                                 .buttonStyle(.bordered)
 
-                                if invoice.status == "paid" || (currentJobBalanceDue ?? invoiceBalanceDue(for: invoice)) <= 0.009 {
+                                if isInvoicePaid(invoice) || (currentJobBalanceDue ?? invoiceBalanceDue(for: invoice)) <= 0.009 {
                                     Button("Generate Paid Invoice PDF") {
                                         generatePaidInvoiceDocument(invoice)
                                     }
                                     .buttonStyle(.bordered)
                                 }
 
-                                if invoice.status != "paid" {
+                                if !isInvoicePaid(invoice) {
                                     Button("Record Additional Payment") {
-                                        openPaymentsForInvoice(invoice)
+                                        openInvoiceCloseout(invoice)
                                     }
                                     .buttonStyle(.bordered)
                                 }
@@ -908,7 +903,7 @@ GunnAire
                                     }
 
                                     Button("Create Invoice") {
-                                        prepareInvoiceFromEstimate(estimate)
+                                        createInvoiceFromEstimate(estimate)
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .tint(Color.brandGold)
@@ -951,7 +946,7 @@ GunnAire
                                     }
 
                                     Button("Create Invoice") {
-                                        prepareInvoiceFromEstimate(estimate)
+                                        createInvoiceFromEstimate(estimate)
                                     }
                                     .buttonStyle(.bordered)
                                 }
@@ -981,7 +976,7 @@ GunnAire
                                 }
                                 HStack {
                                     Button("Open Invoice") {
-                                        loadInvoiceIntoBuilder(invoice)
+                                        openInvoiceCloseout(invoice)
                                     }
                                     .buttonStyle(.bordered)
 
@@ -1003,7 +998,7 @@ GunnAire
                                     }
 
                                     Button("Collect Payment") {
-                                        openPaymentsForInvoice(invoice)
+                                        openInvoiceCloseout(invoice)
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .tint(.green)
@@ -1029,7 +1024,7 @@ GunnAire
                                     .foregroundColor(.secondary)
                                 HStack {
                                     Button("Open Invoice") {
-                                        loadInvoiceIntoBuilder(invoice)
+                                        openInvoiceCloseout(invoice)
                                     }
                                     .buttonStyle(.bordered)
 
@@ -1051,7 +1046,7 @@ GunnAire
                                     }
 
                                     Button("Collect Payment") {
-                                        openPaymentsForInvoice(invoice)
+                                        openInvoiceCloseout(invoice)
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .tint(.green)
@@ -1372,8 +1367,8 @@ GunnAire
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
-                                    Button("Convert to Invoice") {
-                                        convertEstimate(estimate)
+                                    Button("Create Invoice") {
+                                        createInvoiceFromEstimate(estimate)
                                     }
                                     .buttonStyle(.bordered)
                                     .disabled(estimate.status == "invoiced")
@@ -1401,7 +1396,7 @@ GunnAire
                                         VStack(alignment: .leading) {
                                             Text(invoice.customer.name)
                                                 .font(.headline)
-                                            Text("\(invoice.status.capitalized) - \(invoice.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                            Text("\(invoiceDisplayStatus(for: invoice)) - \(invoice.createdAt.formatted(date: .abbreviated, time: .shortened))")
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
                                         }
@@ -1421,15 +1416,20 @@ GunnAire
                                             .font(.caption2)
                                             .foregroundColor(.green)
                                     }
-                                    Button(invoice.status == "paid" ? "Paid" : "Collect Payment") {
-                                        openPaymentsForInvoice(invoice)
+                                    Button("Open Invoice") {
+                                        openInvoiceCloseout(invoice)
+                                    }
+                                    .buttonStyle(.bordered)
+
+                                    Button(isInvoicePaid(invoice) ? "Paid" : "Collect Payment") {
+                                        openInvoiceCloseout(invoice)
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .tint(Color.brandGold)
                                     .foregroundStyle(Color.primaryBlack)
-                                    .disabled(invoice.status == "paid")
+                                    .disabled(isInvoicePaid(invoice))
 
-                                    if invoice.status == "paid" || invoiceBalanceDue(for: invoice) <= 0.009 {
+                                    if isInvoicePaid(invoice) || invoiceBalanceDue(for: invoice) <= 0.009 {
                                         Button("Generate Paid Invoice PDF") {
                                             generatePaidInvoiceDocument(invoice)
                                         }
@@ -1478,6 +1478,10 @@ GunnAire
                     selectedItems.insert(createdItemID)
                     itemSearchText = ""
                 }
+            }
+            .sheet(item: $selectedInvoiceForCloseout) { invoice in
+                RecordInvoicePaymentView(invoice: invoice)
+                    .tint(Color.brandGold)
             }
             .onAppear(perform: loadInitialContextIfNeeded)
             .onChange(of: selectedCustomerID) { _, newValue in
@@ -1694,6 +1698,26 @@ GunnAire
         actionMessage = "Estimate loaded into the invoice builder for this job."
     }
 
+    private func createInvoiceFromEstimate(_ estimate: Estimate) {
+        if let existingInvoice = invoice(for: estimate) {
+            selectedInvoiceForCloseout = existingInvoice
+            actionMessage = "Opened the existing invoice for this estimate."
+            return
+        }
+
+        let invoice = convertEstimate(estimate)
+        selectedInvoiceForCloseout = invoice
+        let restoredItems = items.filter { matchingItemIDs(from: estimate.lineItemSummary).contains($0.id) }
+        if isQuickBooksConnected, !restoredItems.isEmpty {
+            actionMessage = "Invoice created from estimate. Syncing to QuickBooks..."
+            syncInvoiceIfNeeded(invoice, customer: estimate.customer, items: restoredItems)
+        } else if isQuickBooksConnected {
+            actionMessage = "Invoice created from estimate. QuickBooks sync skipped because the estimate lines do not match local catalog items."
+        } else {
+            actionMessage = "Invoice created from estimate."
+        }
+    }
+
     private func loadInvoiceIntoBuilder(_ invoice: Invoice, announce: Bool = true) {
         applyDocumentContext(
             customer: invoice.customer,
@@ -1783,6 +1807,18 @@ GunnAire
         return serviceCalls.first(where: { $0.id == serviceCallID })
     }
 
+    private func invoice(for estimate: Estimate) -> Invoice? {
+        if let serviceCallID = estimate.serviceCallID,
+           let linkedInvoiceID = serviceCalls.first(where: { $0.id == serviceCallID })?.linkedInvoiceID {
+            return invoices.first(where: { $0.id == linkedInvoiceID })
+        }
+        return invoices.first { invoice in
+            invoice.customer.id == estimate.customer.id &&
+            invoice.lineItemSummary == estimate.lineItemSummary &&
+            abs(invoice.amount - estimate.amount) < 0.01
+        }
+    }
+
     private func openDocumentation(for serviceCall: ServiceCall) {
         GunnAireAppIntentRouter.storeDocumentationRoute(serviceCall.id)
     }
@@ -1828,9 +1864,41 @@ GunnAire
     }
 
     private func invoiceBalanceDue(for invoice: Invoice) -> Double {
+        if isInvoicePaid(invoice) {
+            return 0
+        }
         let paid = payments
             .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { $0 + $1.amount }
+            .reduce(0) { partial, payment in
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
+            }
+        return max(invoice.amount - paid, 0)
+    }
+
+    private func isInvoicePaid(_ invoice: Invoice) -> Bool {
+        invoice.status.caseInsensitiveCompare("paid") == .orderedSame || invoiceBalanceDueIgnoringStatus(for: invoice) <= 0.009
+    }
+
+    private func isInvoiceOverdue(_ invoice: Invoice) -> Bool {
+        guard invoiceBalanceDue(for: invoice) > 0.009 else { return false }
+        let daysOpen = Calendar.current.dateComponents([.day], from: invoice.createdAt, to: Date()).day ?? 0
+        return daysOpen >= 30
+    }
+
+    private func invoiceDisplayStatus(for invoice: Invoice) -> String {
+        if isInvoicePaid(invoice) { return "Paid" }
+        if isInvoiceOverdue(invoice) { return "Overdue" }
+        let balance = invoiceBalanceDue(for: invoice)
+        if balance > 0.009 && balance < invoice.amount { return "Partial" }
+        return "Open"
+    }
+
+    private func invoiceBalanceDueIgnoringStatus(for invoice: Invoice) -> Double {
+        let paid = payments
+            .filter { $0.invoice.id == invoice.id }
+            .reduce(0) { partial, payment in
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
+            }
         return max(invoice.amount - paid, 0)
     }
 
@@ -2043,6 +2111,10 @@ GunnAire
         GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
     }
 
+    private func openInvoiceCloseout(_ invoice: Invoice) {
+        selectedInvoiceForCloseout = invoice
+    }
+
     private func syncEstimateIfNeeded(_ estimate: Estimate, customer: Customer, items: [Item]) {
         guard isQuickBooksConnected else { return }
         ensureQuickBooksDocumentInputs(customer: customer, items: items) { result in
@@ -2201,7 +2273,8 @@ GunnAire
         }
     }
 
-    private func convertEstimate(_ estimate: Estimate) {
+    @discardableResult
+    private func convertEstimate(_ estimate: Estimate) -> Invoice {
         let invoice = Invoice(
             serviceCallID: estimate.serviceCallID,
             customer: estimate.customer,
@@ -2218,6 +2291,7 @@ GunnAire
             call.status = .invoiced
             call.documentationCompletedAt = Date()
         }
+        return invoice
     }
 
     @ViewBuilder
@@ -2422,9 +2496,14 @@ private struct RecordInvoicePaymentView: View {
     }
 
     private var paidAmountRecorded: Double {
-        payments
+        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
+            return invoice.amount
+        }
+        return payments
             .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { $0 + $1.amount }
+            .reduce(0) { partial, payment in
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
+            }
     }
 
     private var selectedProcessor: OnsitePaymentProcessor {

@@ -78,6 +78,13 @@ enum GoogleCalendarScheduleSync {
         var callsByFingerprint = Dictionary(uniqueKeysWithValues: existingCalls.map { (eventFingerprint(for: $0), $0) })
         var importedEventFingerprints: Set<String> = []
         var customersByName = Dictionary(uniqueKeysWithValues: existingCustomers.map { (normalized($0.name), $0) })
+        var customersByEmail: [String: Customer] = [:]
+        for customer in existingCustomers {
+            guard let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                  !email.isEmpty,
+                  customersByEmail[email] == nil else { continue }
+            customersByEmail[email] = customer
+        }
         var techniciansByEmail = Dictionary(uniqueKeysWithValues: existingTechnicians.compactMap { tech in
             tech.contactInfo.map { ($0.lowercased(), tech) }
         })
@@ -100,15 +107,33 @@ enum GoogleCalendarScheduleSync {
                 continue
             }
             let duration = max(endDate.timeIntervalSince(startDate), 1800)
-            let customerName = inferCustomerName(from: event.summary)
-            let customer = customersByName[normalized(customerName)] ?? {
-                let newCustomer = Customer(name: customerName)
-                modelContext.insert(newCustomer)
-                customersByName[normalized(customerName)] = newCustomer
-                return newCustomer
-            }()
-            if let location = event.location?.trimmingCharacters(in: .whitespacesAndNewlines), !location.isEmpty {
-                customer.address = location
+            let customerCandidate = inferCustomer(
+                from: event,
+                signedInEmail: signedInEmail,
+                technicianEmails: Set(techniciansByEmail.keys)
+            )
+            let customer = customerCandidate.email.flatMap { customersByEmail[$0] }
+                ?? customersByName[normalized(customerCandidate.name)]
+                ?? {
+                    let newCustomer = Customer(
+                        name: customerCandidate.name,
+                        email: customerCandidate.email,
+                        address: customerCandidate.address
+                    )
+                    modelContext.insert(newCustomer)
+                    return newCustomer
+                }()
+            customer.name = customerCandidate.name
+            if customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                customer.email = customerCandidate.email
+            }
+            if let address = customerCandidate.address, !address.isEmpty {
+                customer.address = address
+            }
+            customersByName[normalized(customer.name)] = customer
+            if let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+               !email.isEmpty {
+                customersByEmail[email] = customer
             }
 
             let call = callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint] ?? ServiceCall(
@@ -298,7 +323,11 @@ enum GoogleCalendarScheduleSync {
     private static func makeGoogleEvent(for call: ServiceCall) -> GoogleWritableCalendarEvent {
         let timeZone = TimeZone.current.identifier
         let endDate = call.scheduledDate.addingTimeInterval(call.duration)
-        let summary = "\(call.type.rawValue.capitalized): \(call.customer.name)"
+        let summary = calendarSummary(for: call.type)
+        let customerEmail = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let attendees = customerEmail?.isEmpty == false
+            ? [GoogleWritableCalendarAttendee(email: customerEmail!, displayName: call.customer.name)]
+            : nil
         return GoogleWritableCalendarEvent(
             summary: summary,
             description: call.notes,
@@ -310,8 +339,22 @@ enum GoogleCalendarScheduleSync {
             end: GoogleWritableCalendarEventDate(
                 dateTime: ISO8601DateFormatter().string(from: endDate),
                 timeZone: timeZone
-            )
+            ),
+            attendees: attendees
         )
+    }
+
+    private static func calendarSummary(for type: ServiceCallType) -> String {
+        switch type {
+        case .service:
+            return "Service Call"
+        case .estimate:
+            return "Estimate"
+        case .install:
+            return "Install"
+        case .maintenance:
+            return "Maintenance"
+        }
     }
 
     private static func remoteEventsByFingerprint(
@@ -380,6 +423,52 @@ enum GoogleCalendarScheduleSync {
         return nil
     }
 
+    private struct CalendarCustomerCandidate {
+        let name: String
+        let email: String?
+        let address: String?
+    }
+
+    private static func inferCustomer(
+        from event: GoogleCalendarEvent,
+        signedInEmail: String?,
+        technicianEmails: Set<String>
+    ) -> CalendarCustomerCandidate {
+        let normalizedSignedInEmail = signedInEmail?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let excludedEmails = technicianEmails.union([normalizedSignedInEmail].compactMap { $0 })
+        if let attendee = event.attendees?.first(where: { attendee in
+            guard attendee.selfAttendee != true,
+                  attendee.resource != true,
+                  let email = attendee.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                  !email.isEmpty,
+                  !excludedEmails.contains(email),
+                  !email.contains("calendar.google.com"),
+                  !email.hasSuffix("@resource.calendar.google.com") else {
+                return false
+            }
+            return true
+        }) {
+            let email = attendee.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let displayName = attendee.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fallbackName = email.map(nameFromEmail) ?? "Google Calendar Customer"
+            return CalendarCustomerCandidate(
+                name: displayName?.isEmpty == false ? displayName! : fallbackName,
+                email: email,
+                address: normalizedOptional(event.location)
+            )
+        }
+
+        let summaryName = inferCustomerName(from: event.summary)
+        let name = summaryLooksLikeJobType(summaryName)
+            ? calendarCustomerNameFromLocation(event.location)
+            : summaryName
+        return CalendarCustomerCandidate(
+            name: name,
+            email: nil,
+            address: normalizedOptional(event.location)
+        )
+    }
+
     private static func inferCustomerName(from summary: String?) -> String {
         guard let summary, !summary.isEmpty else { return "Google Calendar Customer" }
         if let separator = summary.firstIndex(of: ":") {
@@ -387,6 +476,46 @@ enum GoogleCalendarScheduleSync {
             return candidate.isEmpty ? summary : candidate
         }
         return summary
+    }
+
+    private static func summaryLooksLikeJobType(_ value: String) -> Bool {
+        let normalizedValue = normalized(value)
+        let genericTitles: Set<String> = [
+            "service call",
+            "service",
+            "install",
+            "installation",
+            "maintenance",
+            "maintenance visit",
+            "estimate",
+            "quote",
+            "repair",
+            "diagnostic"
+        ]
+        return genericTitles.contains(normalizedValue)
+    }
+
+    private static func calendarCustomerNameFromLocation(_ location: String?) -> String {
+        guard let location = normalizedOptional(location) else { return "Google Calendar Customer" }
+        let firstLine = location
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? location
+        return "Customer at \(firstLine)"
+    }
+
+    private static func nameFromEmail(_ email: String) -> String {
+        let localPart = email.components(separatedBy: "@").first ?? email
+        let separators = CharacterSet(charactersIn: "._-+")
+        let words = localPart
+            .components(separatedBy: separators)
+            .filter { !$0.isEmpty && !$0.allSatisfy(\.isNumber) }
+        return words.isEmpty ? email : words.joined(separator: " ").capitalized
+    }
+
+    private static func normalizedOptional(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
     }
 
     private static func inferCallType(from summary: String?, description: String?) -> ServiceCallType {

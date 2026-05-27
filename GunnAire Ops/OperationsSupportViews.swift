@@ -934,7 +934,12 @@ struct OnsiteDocumentationView: View {
     }
 
     private func invoiceBalanceDue(for invoice: Invoice) -> Double {
-        max(invoice.amount - payments(for: invoice).reduce(0) { $0 + $1.amount }, 0)
+        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
+            return 0
+        }
+        return max(invoice.amount - payments(for: invoice).reduce(0) { partial, payment in
+            partial + (payment.isRefund ? -payment.amount : payment.amount)
+        }, 0)
     }
 
     private func canGeneratePaidInvoice(_ invoice: Invoice?) -> Bool {

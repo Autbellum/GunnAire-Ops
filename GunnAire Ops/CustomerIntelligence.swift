@@ -235,6 +235,9 @@ enum CustomerIntelligence {
     }
 
     static func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
+        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
+            return 0
+        }
         let paid = payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in

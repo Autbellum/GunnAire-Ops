@@ -79,8 +79,23 @@ struct GoogleCalendarEvent: Codable, Identifiable {
     let description: String?
     let location: String?
     let htmlLink: String?
+    let attendees: [GoogleCalendarAttendee]?
     let start: GoogleCalendarEventDate
     let end: GoogleCalendarEventDate
+}
+
+struct GoogleCalendarAttendee: Codable {
+    let email: String?
+    let displayName: String?
+    let selfAttendee: Bool?
+    let resource: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case email
+        case displayName
+        case selfAttendee = "self"
+        case resource
+    }
 }
 
 struct GoogleCalendarEventDate: Codable {
@@ -100,6 +115,12 @@ struct GoogleWritableCalendarEvent: Codable {
     let location: String?
     let start: GoogleWritableCalendarEventDate
     let end: GoogleWritableCalendarEventDate
+    let attendees: [GoogleWritableCalendarAttendee]?
+}
+
+struct GoogleWritableCalendarAttendee: Codable {
+    let email: String
+    let displayName: String?
 }
 
 struct GmailMessageListResponse: Codable {
@@ -476,7 +497,11 @@ final class GoogleAuthManager: NSObject, ObservableObject {
 
     func fetchCalendarEvents(calendarID: String, timeMin: Date? = nil, timeMax: Date? = nil, completion: @escaping (Result<[GoogleCalendarEvent], Error>) -> Void) {
         var components = URLComponents(string: "https://www.googleapis.com/calendar/v3/calendars/\(calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID)/events")
-        var queryItems = [URLQueryItem(name: "singleEvents", value: "true"), URLQueryItem(name: "orderBy", value: "startTime")]
+        var queryItems = [
+            URLQueryItem(name: "singleEvents", value: "true"),
+            URLQueryItem(name: "orderBy", value: "startTime"),
+            URLQueryItem(name: "maxAttendees", value: "20")
+        ]
         let iso = ISO8601DateFormatter()
         if let timeMin {
             queryItems.append(URLQueryItem(name: "timeMin", value: iso.string(from: timeMin)))
