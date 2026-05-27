@@ -1634,6 +1634,9 @@ struct QuickBooksManagementView: View {
     }
 
     private func localOutstandingBalance(for invoice: Invoice) -> Double {
+        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
+            return 0
+        }
         let netPayments = localPayments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
@@ -2417,6 +2420,9 @@ private struct QuickBooksCardChargeComposeView: View {
     }
 
     private func outstandingBalance(for invoice: Invoice) -> Double {
+        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
+            return 0
+        }
         let netPayments = payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in

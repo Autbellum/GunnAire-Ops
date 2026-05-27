@@ -356,7 +356,7 @@ struct ServiceCallDetailView: View {
 
     private var totalPaid: Double {
         linkedPayments.reduce(0) { partial, payment in
-            partial + (payment.isRefund ? -payment.amount : payment.amount)
+            partial + payment.amount
         }
     }
 
@@ -965,7 +965,8 @@ GunnAire
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }
-                            } else if let linkedInvoice, linkedInvoice.status != "paid" {
+                            } else if let linkedInvoice,
+                                      linkedInvoice.status.caseInsensitiveCompare("paid") != .orderedSame {
                                 Text("Remaining balance: \(linkedInvoice.amount, format: .currency(code: "USD"))")
                                     .font(.caption)
                                     .foregroundColor(.secondary)

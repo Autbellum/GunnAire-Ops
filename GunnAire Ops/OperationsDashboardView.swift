@@ -123,7 +123,7 @@ struct OperationsDashboardView: View {
     private var monthPaymentsCollected: Double {
         payments
             .filter { calendar.isDate($0.date, equalTo: Date(), toGranularity: .month) }
-            .reduce(0) { $0 + ($1.isRefund ? -$1.amount : $1.amount) }
+            .reduce(0) { $0 + $1.amount }
     }
 
     private var openReceivablesTotal: Double {
@@ -1326,7 +1326,7 @@ struct OperationsDashboardView: View {
         let netPaid = payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
+                partial + payment.amount
             }
         return max(invoice.amount - netPaid, 0)
     }

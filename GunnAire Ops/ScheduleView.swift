@@ -206,7 +206,7 @@ struct ScheduleView: View {
                                     ForEach(selectedDayCalls) { call in
                                         serviceCallCard(for: call)
                                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                            if isAdminUser, let invoice = invoice(for: call), invoice.status != "paid" {
+                                            if isAdminUser, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
                                                 Button {
                                                     openDocumentationInCloseout = true
                                                     openDocumentationInTapToPay = tapToPayReady
@@ -713,7 +713,7 @@ struct ScheduleView: View {
                         documentationCall = call
                     }
                     .buttonStyle(.bordered)
-                } else if isAdminUser, let invoice = invoice(for: call), invoice.status != "paid" {
+                } else if isAdminUser, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
                     Button(tapToPayReady ? "Pay" : "Collect") {
                         openDocumentationInCloseout = true
                         openDocumentationInTapToPay = tapToPayReady
@@ -781,7 +781,7 @@ struct ScheduleView: View {
                     Label(estimate.status.capitalized, systemImage: "list.clipboard.fill")
                 }
                 if isAdminUser, let invoice = invoice(for: call) {
-                    Label(invoice.status.capitalized, systemImage: invoice.status == "paid" ? "checkmark.circle.fill" : "creditcard.fill")
+                    Label(invoice.status.capitalized, systemImage: isInvoicePaid(invoice) ? "checkmark.circle.fill" : "creditcard.fill")
                 }
                 if isAdminUser && isCollectionOverdue(for: call) {
                     Label("Overdue", systemImage: "exclamationmark.triangle.fill")
@@ -901,10 +901,19 @@ struct ScheduleView: View {
 
     private func balanceDue(for call: ServiceCall) -> Double? {
         guard let invoice = invoice(for: call) else { return nil }
+        if isInvoicePaid(invoice) {
+            return 0
+        }
         let paid = payments
             .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { $0 + $1.amount }
+            .reduce(0) { partial, payment in
+                partial + payment.amount
+            }
         return max(invoice.amount - paid, 0)
+    }
+
+    private func isInvoicePaid(_ invoice: Invoice) -> Bool {
+        invoice.status.caseInsensitiveCompare("paid") == .orderedSame
     }
 
     private func isCollectionOverdue(for call: ServiceCall) -> Bool {

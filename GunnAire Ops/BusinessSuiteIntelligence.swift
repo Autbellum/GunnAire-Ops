@@ -140,7 +140,7 @@ enum BusinessSuiteIntelligence {
             $0.documentationStartedAt != nil && $0.documentationCompletedAt == nil
         }
         let invoicesAwaitingCloseout = invoices.filter {
-            $0.finalizedAt == nil || $0.status.caseInsensitiveCompare("paid") != .orderedSame
+            $0.finalizedAt == nil || CustomerIntelligence.outstandingBalance(for: $0, payments: payments) > 0
         }
 
         let openInvoiceBalances = invoices.compactMap { invoice -> (invoice: Invoice, balance: Double)? in
@@ -218,7 +218,7 @@ enum BusinessSuiteIntelligence {
             .reduce(0) { $0 + $1.amount }
         let monthPaymentTotal = payments
             .filter { calendar.isDate($0.date, equalTo: now, toGranularity: .month) }
-            .reduce(0) { $0 + ($1.isRefund ? -$1.amount : $1.amount) }
+            .reduce(0) { $0 + $1.amount }
 
         let accountScore = customerSnapshots.isEmpty ? 100 : average(customerSnapshots.map(\.healthScore))
         let dispatchScore = score(
@@ -642,7 +642,9 @@ enum BusinessSuiteIntelligence {
 
     private static func quickBooksGapCount(estimates: [Estimate], invoices: [Invoice]) -> Int {
         estimates.filter { isOpenEstimate($0) && $0.quickBooksID?.isEmpty != false }.count +
-        invoices.filter { $0.status.caseInsensitiveCompare("paid") != .orderedSame && $0.quickBooksID?.isEmpty != false }.count
+        invoices.filter {
+            CustomerIntelligence.outstandingBalance(for: $0, payments: []) > 0 && $0.quickBooksID?.isEmpty != false
+        }.count
     }
 
     private nonisolated static func isOpenEstimate(_ estimate: Estimate) -> Bool {

@@ -899,7 +899,7 @@ struct OnsiteDocumentationView: View {
     }
 
     private var invoicesAwaitingCloseout: [Invoice] {
-        invoices.filter { $0.status != "paid" || $0.finalizedAt == nil }
+        invoices.filter { invoiceBalanceDue(for: $0) > 0 || $0.finalizedAt == nil }
     }
 
     private var selectedServiceCall: ServiceCall? {
@@ -938,13 +938,13 @@ struct OnsiteDocumentationView: View {
             return 0
         }
         return max(invoice.amount - payments(for: invoice).reduce(0) { partial, payment in
-            partial + (payment.isRefund ? -payment.amount : payment.amount)
+            partial + payment.amount
         }, 0)
     }
 
     private func canGeneratePaidInvoice(_ invoice: Invoice?) -> Bool {
         guard let invoice else { return false }
-        return invoice.status == "paid" || invoiceBalanceDue(for: invoice) <= 0.009
+        return invoice.status.caseInsensitiveCompare("paid") == .orderedSame || invoiceBalanceDue(for: invoice) <= 0.009
     }
 
     private func documentationQueueLabel(for call: ServiceCall) -> String {
@@ -1027,7 +1027,7 @@ struct OnsiteDocumentationView: View {
                                                 .buttonStyle(.bordered)
                                             }
 
-                                            if invoice.status != "paid" {
+                                            if invoice.status.caseInsensitiveCompare("paid") != .orderedSame {
                                                 Button("Collect Payment") {
                                                     GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
                                                 }

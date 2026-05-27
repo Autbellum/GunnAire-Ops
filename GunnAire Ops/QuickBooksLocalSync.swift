@@ -43,6 +43,7 @@ enum QuickBooksLocalSync {
         var paymentsByQBID = Dictionary(uniqueKeysWithValues: existingPayments.compactMap { payment in
             payment.quickBooksID.map { ($0, payment) }
         })
+        let importedPaymentTotalsByInvoiceID = paymentTotalsByInvoiceID(from: payments)
 
         for quickBooksCustomer in customers {
             let customer = customersByQBID[quickBooksCustomer.Id]
@@ -126,10 +127,11 @@ enum QuickBooksLocalSync {
             invoice.lineItemSummary = quickBooksInvoice.DocNumber ?? "QuickBooks Invoice"
             invoice.notes = quickBooksInvoice.PrivateNote
             invoice.createdAt = parseQuickBooksDate(quickBooksInvoice.TxnDate) ?? invoice.createdAt
-            let balance = quickBooksInvoice.Balance ?? quickBooksInvoice.TotalAmt
-            if balance <= 0 {
+            let balance = quickBooksInvoice.Balance
+                ?? max(quickBooksInvoice.TotalAmt - (importedPaymentTotalsByInvoiceID[quickBooksInvoice.Id] ?? 0), 0)
+            if balance <= 0.009 {
                 invoice.status = "paid"
-            } else if balance < quickBooksInvoice.TotalAmt {
+            } else if balance < quickBooksInvoice.TotalAmt - 0.009 {
                 invoice.status = "partial"
             } else {
                 invoice.status = "unpaid"
@@ -205,6 +207,23 @@ enum QuickBooksLocalSync {
 
     private static func normalized(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func paymentTotalsByInvoiceID(from payments: [QuickBooksPayment]) -> [String: Double] {
+        var totals: [String: Double] = [:]
+        for payment in payments {
+            for line in payment.Line ?? [] {
+                let invoiceIDs = (line.LinkedTxn ?? [])
+                    .filter { $0.TxnType.caseInsensitiveCompare("Invoice") == .orderedSame }
+                    .map(\.TxnId)
+                guard !invoiceIDs.isEmpty else { continue }
+                let amount = invoiceIDs.count == 1 ? line.Amount : line.Amount / Double(invoiceIDs.count)
+                for invoiceID in invoiceIDs {
+                    totals[invoiceID, default: 0] += amount
+                }
+            }
+        }
+        return totals
     }
 
     private static func defaultImportedPaymentMethod(for quickBooksPayment: QuickBooksPayment) -> String {

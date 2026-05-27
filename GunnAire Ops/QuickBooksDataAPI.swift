@@ -1833,10 +1833,23 @@ struct QuickBooksInvoice: Codable, Identifiable {
         DocNumber = try container.decodeIfPresent(String.self, forKey: .DocNumber)
         CustomerRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .CustomerRef)
             ?? QuickBooksReference(value: "", name: "Unknown Customer")
-        TotalAmt = try container.decodeIfPresent(Double.self, forKey: .TotalAmt) ?? 0
-        Balance = try container.decodeIfPresent(Double.self, forKey: .Balance)
+        TotalAmt = Self.decodeFlexibleDouble(container, key: .TotalAmt) ?? 0
+        Balance = Self.decodeFlexibleDouble(container, key: .Balance)
         TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
         PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
+    }
+
+    private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
+        if let doubleValue = try? container.decodeIfPresent(Double.self, forKey: key) {
+            return doubleValue
+        }
+        if let intValue = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return Double(intValue)
+        }
+        if let stringValue = try? container.decodeIfPresent(String.self, forKey: key) {
+            return Double(stringValue)
+        }
+        return nil
     }
 }
 

@@ -1870,7 +1870,7 @@ GunnAire
         let paid = payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
+                partial + payment.amount
             }
         return max(invoice.amount - paid, 0)
     }
@@ -1897,7 +1897,7 @@ GunnAire
         let paid = payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
+                partial + payment.amount
             }
         return max(invoice.amount - paid, 0)
     }
@@ -2478,7 +2478,7 @@ private struct RecordInvoicePaymentView: View {
         self.invoice = invoice
         self.autoStartTapToPay = autoStartTapToPay
         _amount = State(initialValue: String(format: "%.2f", invoice.amount))
-        _shouldRecordPayment = State(initialValue: invoice.status != "paid")
+        _shouldRecordPayment = State(initialValue: invoice.status.caseInsensitiveCompare("paid") != .orderedSame)
         _completionNotes = State(initialValue: invoice.completionNotes ?? "")
         _signatureName = State(initialValue: invoice.customerSignatureName ?? "")
     }
@@ -2502,7 +2502,7 @@ private struct RecordInvoicePaymentView: View {
         return payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
+                partial + payment.amount
             }
     }
 
@@ -2892,7 +2892,7 @@ private struct RecordInvoicePaymentView: View {
             call.documentationChecklist = true
             call.workCompletedChecklist = true
             call.paymentCollectedChecklist = totalPaid > 0
-            call.status = invoice.status == "paid" ? .completed : .invoiced
+            call.status = invoice.status.caseInsensitiveCompare("paid") == .orderedSame ? .completed : .invoiced
             if !trimmedCompletionNotes.isEmpty {
                 call.notes = mergedJobNotes(existing: call.notes, completionNotes: trimmedCompletionNotes)
             }

@@ -241,7 +241,7 @@ enum CustomerIntelligence {
         let paid = payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
+                partial + payment.amount
             }
         return max(invoice.amount - paid, 0)
     }
