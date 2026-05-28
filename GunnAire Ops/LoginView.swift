@@ -4,6 +4,7 @@ import SwiftData
 struct LoginView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
 
     @Binding var hasAuthenticatedUser: Bool
 
@@ -88,17 +89,13 @@ struct LoginView: View {
                 case .success:
                     googleAuth.validateSignedInDomain { validation in
                         DispatchQueue.main.async {
-                            isAuthenticating = false
                             switch validation {
                             case .success(let profile):
-                                guard AppAccess.isAuthorized(email: profile.email, users: users) else {
-                                    googleAuth.signOut()
-                                    authErrorMessage = "Your GunnAire account has not been added to this app by an administrator."
-                                    return
+                                Task { @MainActor in
+                                    await completeValidatedSignIn(for: profile)
                                 }
-                                ensurePrimaryAdminExists()
-                                hasAuthenticatedUser = true
                             case .failure(let error):
+                                isAuthenticating = false
                                 authErrorMessage = error.localizedDescription
                             }
                         }
@@ -109,6 +106,38 @@ struct LoginView: View {
                 }
             }
         }
+    }
+
+    @MainActor
+    private func completeValidatedSignIn(for profile: GoogleUserProfile) async {
+        var authorizationUsers = users
+        var sharedUserError: Error?
+
+        if GunnAireBackendService.isConfigured {
+            do {
+                authorizationUsers = try await GunnAireBackendService.refreshUsers(
+                    into: modelContext,
+                    currentUsers: users,
+                    technicians: technicians
+                )
+            } catch {
+                sharedUserError = error
+            }
+        }
+
+        isAuthenticating = false
+        guard AppAccess.isAuthorized(email: profile.email, users: authorizationUsers) else {
+            googleAuth.signOut()
+            if let sharedUserError, GunnAireBackendService.isConfigured {
+                authErrorMessage = "Could not verify shared user access from the Mac Studio backend: \(sharedUserError.localizedDescription)"
+            } else {
+                authErrorMessage = "Your GunnAire account has not been added to this app by an administrator."
+            }
+            return
+        }
+
+        ensurePrimaryAdminExists()
+        hasAuthenticatedUser = true
     }
 
     private func ensurePrimaryAdminExists() {

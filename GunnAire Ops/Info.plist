@@ -40,12 +40,23 @@
 	<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
 	<key>GOOGLE_REDIRECT_URI</key>
 	<string>$(GOOGLE_REDIRECT_URI)</string>
+	<key>GUNNAIRE_BACKEND_API_TOKEN</key>
+	<string>$(GUNNAIRE_BACKEND_API_TOKEN)</string>
+	<key>GUNNAIRE_BACKEND_BASE_URL</key>
+	<string>$(GUNNAIRE_BACKEND_BASE_URL)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>
 	<string>$(IPHONEOS_DEPLOYMENT_TARGET)</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Capture receipt photos to attach to customer payments and vendor bills.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Connect to the GunnAire Mac Studio backend for shared users, roles, and document uploads.</string>
 	<key>QB_CALLBACK_SCHEME</key>
 	<string>$(QB_CALLBACK_SCHEME)</string>
 	<key>QB_CLIENT_ID</key>

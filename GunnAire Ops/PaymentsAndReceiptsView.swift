@@ -18,6 +18,7 @@ struct PaymentsAndReceiptsView: View {
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
 
     @StateObject private var onsitePaymentManager = OnsitePaymentManager.shared
     @State private var showingRecordPaymentSheet = false
@@ -65,6 +66,13 @@ struct PaymentsAndReceiptsView: View {
 
     private var selectedProcessor: OnsitePaymentProcessor {
         OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
+    }
+
+    private var isAdminUser: Bool {
+        AppAccess.isAdmin(
+            email: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
+            users: users
+        )
     }
 
     private var processorIsReady: Bool {
@@ -268,21 +276,23 @@ struct PaymentsAndReceiptsView: View {
                                     }
 
                                     HStack {
-                                        Text(payment.quickBooksID == nil ? "Not synced to QuickBooks accounting" : "QuickBooks ID: \(payment.quickBooksID ?? "")")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                        Spacer()
-                                        Button(syncingPaymentID == payment.id ? "Syncing..." : "Sync") {
-                                            syncPaymentToQuickBooks(payment)
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .disabled(payment.quickBooksID != nil || syncingPaymentID != nil || !isQuickBooksConnected || payment.isRefund || payment.amount <= 0)
-                                        if payment.needsQuickBooksAttention {
-                                            Button("Retry QB Sync") {
-                                                retryQuickBooksFollowUp(for: payment)
+                                        if isAdminUser {
+                                            Text(payment.quickBooksID == nil ? "Not synced to QuickBooks accounting" : "QuickBooks ID: \(payment.quickBooksID ?? "")")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                            Spacer()
+                                            Button(syncingPaymentID == payment.id ? "Syncing..." : "Sync") {
+                                                syncPaymentToQuickBooks(payment)
                                             }
-                                            .buttonStyle(.borderedProminent)
-                                            .disabled(syncingPaymentID != nil || !isQuickBooksConnected)
+                                            .buttonStyle(.bordered)
+                                            .disabled(payment.quickBooksID != nil || syncingPaymentID != nil || !isQuickBooksConnected || payment.isRefund || payment.amount <= 0)
+                                            if payment.needsQuickBooksAttention {
+                                                Button("Retry QB Sync") {
+                                                    retryQuickBooksFollowUp(for: payment)
+                                                }
+                                                .buttonStyle(.borderedProminent)
+                                                .disabled(syncingPaymentID != nil || !isQuickBooksConnected)
+                                            }
                                         }
                                     }
                                     if let cardLast4 = payment.cardLast4, !cardLast4.isEmpty {
@@ -295,22 +305,25 @@ struct PaymentsAndReceiptsView: View {
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
-                                    if let chargeID = payment.quickBooksChargeID, !chargeID.isEmpty {
-                                        Text(payment.isRefund ? "Refund charge ID: \(chargeID)" : "Charge ID: \(chargeID)")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    if let refundReceiptID = payment.quickBooksRefundReceiptID, !refundReceiptID.isEmpty {
-                                        Text("Refund receipt ID: \(refundReceiptID)")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
+                                    if isAdminUser {
+                                        if let chargeID = payment.quickBooksChargeID, !chargeID.isEmpty {
+                                            Text(payment.isRefund ? "Refund charge ID: \(chargeID)" : "Charge ID: \(chargeID)")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        if let refundReceiptID = payment.quickBooksRefundReceiptID, !refundReceiptID.isEmpty {
+                                            Text("Refund receipt ID: \(refundReceiptID)")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
                                     }
                                     if let processorDisplayName = payment.processorDisplayName {
                                         Text("Processor: \(processorDisplayName)")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
-                                    if payment.needsQuickBooksAttention,
+                                    if isAdminUser,
+                                       payment.needsQuickBooksAttention,
                                        let detail = payment.quickBooksAccountingSyncDetail,
                                        !detail.isEmpty {
                                         Text("QuickBooks follow-up: \(detail)")
@@ -369,7 +382,8 @@ struct PaymentsAndReceiptsView: View {
                                             .buttonStyle(.bordered)
                                         }
 
-                                        if payment.quickBooksChargeID?.isEmpty == false,
+                                        if isAdminUser,
+                                           payment.quickBooksChargeID?.isEmpty == false,
                                            !payment.isRefund,
                                            payment.amount > 0 {
                                             Button("Refund") {

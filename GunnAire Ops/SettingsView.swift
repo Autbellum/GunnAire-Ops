@@ -30,6 +30,7 @@ struct SettingsView: View {
     @State private var splashVideoDetails: SplashVideoLocator.VideoDetails?
     @State private var quickBooksConnectionMessage: String?
     @State private var resettingQuickBooksConnection = false
+    @State private var isSyncingSharedUsers = false
 
     @AppStorage("companyName") private var companyName = "GunnAire"
     @AppStorage("dispatchStartHour") private var dispatchStartHour = 8
@@ -292,6 +293,11 @@ struct SettingsView: View {
 
                     case .users:
                         Section("Application Users") {
+                            LabeledContent("Shared Backend") {
+                                Text(GunnAireBackendService.isConfigured ? Config.Backend.displayHost : "Not configured")
+                                    .foregroundColor(GunnAireBackendService.isConfigured ? .secondary : .orange)
+                            }
+
                             HStack {
                                 TextField("user@gunnaire.com", text: $newUserEmail)
                                     .textInputAutocapitalization(.never)
@@ -312,6 +318,22 @@ struct SettingsView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
+
+                            Button {
+                                Task {
+                                    await refreshSharedUsers(showSuccess: true)
+                                }
+                            } label: {
+                                Label(isSyncingSharedUsers ? "Syncing Users..." : "Sync Users From Mac Studio", systemImage: "arrow.triangle.2.circlepath")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isSyncingSharedUsers || !GunnAireBackendService.isConfigured)
+
+                            if !GunnAireBackendService.isConfigured {
+                                Text("Set GUNNAIRE_BACKEND_BASE_URL and GUNNAIRE_BACKEND_API_TOKEN to let every iPad use the same approved user list.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
 
                             if let userAdminMessage {
                                 Text(userAdminMessage)
@@ -339,6 +361,7 @@ struct SettingsView: View {
                                             if isActive {
                                                 AppAccess.ensureTechnicianRecord(for: user.email, technicians: technicians, modelContext: modelContext)
                                             }
+                                            syncSharedUser(email: user.email, role: user.role, isActive: isActive)
                                         }
                                     ))
                                     .labelsHidden()
@@ -351,7 +374,7 @@ struct SettingsView: View {
                 } else {
                     Section("Account") {
                         Text(currentUserEmail ?? "Signed in")
-                        Text("Standard users can use field operations, schedule, customer, and mail tools. Admin controls are managed by office leadership.")
+                        Text("Standard users can use field operations, onsite documentation, invoices, payment collection, receipts, schedule, customers, and mail. Admin controls and sync settings are managed by office leadership.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -388,6 +411,7 @@ struct SettingsView: View {
             .task {
                 refreshSplashVideoState(loadDetails: true)
                 syncUserTechnicians()
+                await refreshSharedUsers(showSuccess: false)
             }
         }
     }
@@ -535,6 +559,7 @@ struct SettingsView: View {
         }
         modelContext.insert(AppUser(email: email, role: newUserRole))
         AppAccess.ensureTechnicianRecord(for: email, technicians: technicians, modelContext: modelContext)
+        syncSharedUser(email: email, role: newUserRole, isActive: true)
         userAdminMessage = "Added \(email) as \(newUserRole.rawValue) and provisioned the technician calendar record."
         newUserEmail = ""
         newUserRole = .standard
@@ -542,6 +567,41 @@ struct SettingsView: View {
 
     private func syncUserTechnicians() {
         AppAccess.ensureTechnicianRecords(for: users, technicians: technicians, modelContext: modelContext)
+    }
+
+    @MainActor
+    private func refreshSharedUsers(showSuccess: Bool) async {
+        guard GunnAireBackendService.isConfigured else { return }
+        isSyncingSharedUsers = true
+        defer { isSyncingSharedUsers = false }
+        do {
+            let refreshedUsers = try await GunnAireBackendService.refreshUsers(
+                into: modelContext,
+                currentUsers: users,
+                technicians: technicians
+            )
+            if showSuccess {
+                userAdminMessage = "Synced \(refreshedUsers.count) shared user(s) from the Mac Studio backend."
+            }
+        } catch {
+            userAdminMessage = "Shared user sync failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func syncSharedUser(email: String, role: AppUserRole, isActive: Bool) {
+        guard GunnAireBackendService.isConfigured else { return }
+        Task {
+            do {
+                try await GunnAireBackendService.upsertUser(email: email, role: role, isActive: isActive)
+                await MainActor.run {
+                    userAdminMessage = "Shared user access updated for \(email)."
+                }
+            } catch {
+                await MainActor.run {
+                    userAdminMessage = "Saved locally, but shared backend update failed for \(email): \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     private func handleSplashVideoImport(_ result: Result<[URL], Error>) {
@@ -632,7 +692,25 @@ struct SettingsView: View {
         for index in offsets {
             let user = users[index]
             if user.email != AppAccess.primaryAdminEmail {
+                let email = user.email
                 modelContext.delete(user)
+                deactivateSharedUser(email: email)
+            }
+        }
+    }
+
+    private func deactivateSharedUser(email: String) {
+        guard GunnAireBackendService.isConfigured else { return }
+        Task {
+            do {
+                try await GunnAireBackendService.deactivateUser(email: email)
+                await MainActor.run {
+                    userAdminMessage = "Shared user access deactivated for \(email)."
+                }
+            } catch {
+                await MainActor.run {
+                    userAdminMessage = "Deleted locally, but shared backend deactivation failed for \(email): \(error.localizedDescription)"
+                }
             }
         }
     }

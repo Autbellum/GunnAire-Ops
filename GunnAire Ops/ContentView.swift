@@ -51,10 +51,8 @@ struct ContentView: View {
     private var visibleSidebarItems: [SidebarItem] {
         SidebarItem.allCases.filter { item in
             switch item {
-            case .estimates, .invoices, .payments, .receiptsBills, .quickBooksManagement, .onsiteDocumentation:
+            case .estimates, .quickBooksManagement, .syncIntegrations:
                 return isAdminUser
-            case .syncIntegrations:
-                return true
             default:
                 return true
             }

@@ -20,6 +20,34 @@ struct Config {
         static let allowTestingBypass = false
     }
 
+    struct Backend {
+        static let baseURL = Config.value("GUNNAIRE_BACKEND_BASE_URL", fallback: "")
+        static let apiToken = Config.value("GUNNAIRE_BACKEND_API_TOKEN", fallback: "")
+
+        static var normalizedBaseURL: String {
+            baseURL
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+
+        static var isConfigured: Bool {
+            !normalizedBaseURL.isEmpty &&
+            URL(string: normalizedBaseURL) != nil &&
+            !apiToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            !apiToken.contains("$(")
+        }
+
+        static var displayHost: String {
+            guard let url = URL(string: normalizedBaseURL), let host = url.host else {
+                return "Not configured"
+            }
+            if let port = url.port {
+                return "\(host):\(port)"
+            }
+            return host
+        }
+    }
+
     struct QuickBooks {
         // Prefer env / Info.plist overrides for local and CI workflows. Production is the app default;
         // use QB_ENVIRONMENT=sandbox only for an intentional Intuit sandbox test build.

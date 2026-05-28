@@ -37,6 +37,8 @@ struct ReceiptsAndBillsView: View {
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     @State private var showingReceiptPicker = false
     @State private var showingBillPicker = false
@@ -64,6 +66,8 @@ struct ReceiptsAndBillsView: View {
     @State private var selectedPendingUploadForDetail: PendingUploadRecord?
     @State private var queueFilter: QueueFilter = .all
     @State private var queueSort: QueueSort = .nextRetry
+    @State private var isUploadingReceiptToBackend = false
+    @State private var backendUploadMessage: String?
 
     private enum QueueFilter: String, CaseIterable, Identifiable {
         case all = "All"
@@ -141,6 +145,13 @@ struct ReceiptsAndBillsView: View {
         }
     }
 
+    private var isAdminUser: Bool {
+        AppAccess.isAdmin(
+            email: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
+            users: users
+        )
+    }
+
     var body: some View {
         ZStack {
             WatermarkBackground()
@@ -176,26 +187,49 @@ struct ReceiptsAndBillsView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
-                    }
 
-                    Section(header: Text("Upload Vendor Bills")
-                        .font(.headline)
-                        .foregroundColor(Color.brandGold)) {
-                        Button(action: {
-                            showingBillPicker = true
-                        }) {
-                            Label("Select Bill File or Image", systemImage: "doc.plaintext")
-                                .bold()
-                                .foregroundColor(Color.brandGold)
+                        Button {
+                            Task {
+                                await uploadReceiptToBackend()
+                            }
+                        } label: {
+                            Label(isUploadingReceiptToBackend ? "Uploading Receipt..." : "Upload Receipt to Company Storage", systemImage: "icloud.and.arrow.up")
                         }
-                        if billImage != nil {
-                            Text("Bill selected")
-                                .foregroundColor(.secondary)
-                        }
-                        if let billImportMessage {
-                            Text(billImportMessage)
+                        .disabled(isUploadingReceiptToBackend || receiptURL == nil || !GunnAireBackendService.isConfigured)
+
+                        if !GunnAireBackendService.isConfigured {
+                            Text("Shared receipt storage is not configured yet.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                        }
+
+                        if let backendUploadMessage {
+                            Text(backendUploadMessage)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    if isAdminUser {
+                        Section(header: Text("Upload Vendor Bills")
+                            .font(.headline)
+                            .foregroundColor(Color.brandGold)) {
+                            Button(action: {
+                                showingBillPicker = true
+                            }) {
+                                Label("Select Bill File or Image", systemImage: "doc.plaintext")
+                                    .bold()
+                                    .foregroundColor(Color.brandGold)
+                            }
+                            if billImage != nil {
+                                Text("Bill selected")
+                                    .foregroundColor(.secondary)
+                            }
+                            if let billImportMessage {
+                                Text(billImportMessage)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
 
@@ -236,19 +270,25 @@ struct ReceiptsAndBillsView: View {
                             }
                         }
 
-                        Picker("Attach To", selection: $selectedAttachEntityType) {
-                            ForEach(QuickBooksAttachableEntityType.allCases, id: \.self) { type in
-                                Text(type.rawValue).tag(type)
+                        if isAdminUser {
+                            Picker("Attach To", selection: $selectedAttachEntityType) {
+                                ForEach(QuickBooksAttachableEntityType.allCases, id: \.self) { type in
+                                    Text(type.rawValue).tag(type)
+                                }
                             }
-                        }
-                        TextField("QuickBooks Entity ID (optional)", text: $attachEntityID)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
+                            TextField("QuickBooks Entity ID (optional)", text: $attachEntityID)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled(true)
 
-                        Button("Load QuickBooks IDs") {
-                            loadAttachableTargets()
+                            Button("Load QuickBooks IDs") {
+                                loadAttachableTargets()
+                            }
+                            .disabled(isLoadingAttachTargets)
+                        } else {
+                            Text("QuickBooks receipt and bill sync is admin-only. Field users can upload receipts to company storage from this screen.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
-                        .disabled(isLoadingAttachTargets)
 
                         if isLoadingAttachTargets {
                             ProgressView("Loading IDs...")
@@ -275,11 +315,13 @@ struct ReceiptsAndBillsView: View {
                                 .foregroundColor(.secondary)
                         }
 
-                        Button("Sync Receipts and Bills with QuickBooks") {
-                            syncDocuments()
+                        if isAdminUser {
+                            Button("Sync Receipts and Bills with QuickBooks") {
+                                syncDocuments()
+                            }
+                            .tint(Color.brandGold)
+                            .disabled(isSyncing || (receiptURL == nil && billURL == nil))
                         }
-                        .tint(Color.brandGold)
-                        .disabled(isSyncing || (receiptURL == nil && billURL == nil))
 
                         if isSyncing {
                             ProgressView("Syncing...")
@@ -292,103 +334,105 @@ struct ReceiptsAndBillsView: View {
                         }
                     }
 
-                    Section(header: Text("Failed Upload Queue")
-                        .font(.headline)
-                        .foregroundColor(Color.brandGold)) {
-                        if pendingUploads.isEmpty {
-                            Text("No pending uploads.")
-                                .foregroundColor(.secondary)
-                                .italic()
-                        } else {
-                            Text("Queued: \(pendingUploads.count) • Due now: \(duePendingUploadsCount) • Terminal: \(terminalPendingUploadsCount)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Picker("View", selection: $queueFilter) {
-                                ForEach(QueueFilter.allCases) { filter in
-                                    Text(filter.rawValue).tag(filter)
+                    if isAdminUser {
+                        Section(header: Text("Failed Upload Queue")
+                            .font(.headline)
+                            .foregroundColor(Color.brandGold)) {
+                            if pendingUploads.isEmpty {
+                                Text("No pending uploads.")
+                                    .foregroundColor(.secondary)
+                                    .italic()
+                            } else {
+                                Text("Queued: \(pendingUploads.count) • Due now: \(duePendingUploadsCount) • Terminal: \(terminalPendingUploadsCount)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Picker("View", selection: $queueFilter) {
+                                    ForEach(QueueFilter.allCases) { filter in
+                                        Text(filter.rawValue).tag(filter)
+                                    }
                                 }
-                            }
-                            .pickerStyle(.segmented)
-                            Picker("Sort", selection: $queueSort) {
-                                ForEach(QueueSort.allCases) { sort in
-                                    Text(sort.rawValue).tag(sort)
+                                .pickerStyle(.segmented)
+                                Picker("Sort", selection: $queueSort) {
+                                    ForEach(QueueSort.allCases) { sort in
+                                        Text(sort.rawValue).tag(sort)
+                                    }
                                 }
-                            }
-                            .pickerStyle(.menu)
-                            Text("Showing \(filteredPendingUploads.count) item(s)")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .pickerStyle(.menu)
+                                Text("Showing \(filteredPendingUploads.count) item(s)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
 
-                            ForEach(filteredPendingUploads) { pending in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(pending.displayName)
-                                        .font(.subheadline)
-                                    Text("Queued: \(pending.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                    Text("Retries: \(pending.retryCount)")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                    if let entityTypeRaw = pending.entityTypeRaw, let entityID = pending.entityID {
-                                        Text("Target: \(entityTypeRaw) \(entityID)")
+                                ForEach(filteredPendingUploads) { pending in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(pending.displayName)
+                                            .font(.subheadline)
+                                        Text("Queued: \(pending.createdAt.formatted(date: .abbreviated, time: .shortened))")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
-                                    }
-                                    if let nextRetryAt = pending.nextRetryAt, nextRetryAt > Date() {
-                                        Text("Next retry: \(nextRetryAt.formatted(date: .abbreviated, time: .shortened))")
+                                        Text("Retries: \(pending.retryCount)")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
-                                    }
-                                    if pending.isTerminalFailure {
-                                        Text("Status: Terminal failure (auto retry disabled)")
-                                            .font(.caption2)
-                                            .foregroundColor(.orange)
-                                    }
-                                    if let lastError = pending.lastError, !lastError.isEmpty {
-                                        Text("Last error: \(lastError)")
-                                            .font(.caption2)
-                                            .foregroundColor(.red)
-                                    }
-
-                                    HStack {
-                                        Button("Details") {
-                                            selectedPendingUploadForDetail = pending
+                                        if let entityTypeRaw = pending.entityTypeRaw, let entityID = pending.entityID {
+                                            Text("Target: \(entityTypeRaw) \(entityID)")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
                                         }
-                                        .buttonStyle(.bordered)
-                                        .disabled(isSyncing)
-
-                                        Button("Retry Now") {
-                                            retryPendingUpload(pending, ignoreBackoff: true)
+                                        if let nextRetryAt = pending.nextRetryAt, nextRetryAt > Date() {
+                                            Text("Next retry: \(nextRetryAt.formatted(date: .abbreviated, time: .shortened))")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
                                         }
-                                        .buttonStyle(.bordered)
-                                        .disabled(isSyncing)
-
-                                        Button("Delete", role: .destructive) {
-                                            removePendingUpload(pending.id)
+                                        if pending.isTerminalFailure {
+                                            Text("Status: Terminal failure (auto retry disabled)")
+                                                .font(.caption2)
+                                                .foregroundColor(.orange)
                                         }
-                                        .buttonStyle(.bordered)
-                                        .disabled(isSyncing)
+                                        if let lastError = pending.lastError, !lastError.isEmpty {
+                                            Text("Last error: \(lastError)")
+                                                .font(.caption2)
+                                                .foregroundColor(.red)
+                                        }
+
+                                        HStack {
+                                            Button("Details") {
+                                                selectedPendingUploadForDetail = pending
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .disabled(isSyncing)
+
+                                            Button("Retry Now") {
+                                                retryPendingUpload(pending, ignoreBackoff: true)
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .disabled(isSyncing)
+
+                                            Button("Delete", role: .destructive) {
+                                                removePendingUpload(pending.id)
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .disabled(isSyncing)
+                                        }
+                                        .padding(.top, 4)
                                     }
-                                    .padding(.top, 4)
                                 }
                             }
-                        }
 
-                        Button("Retry Pending Uploads") {
-                            retryPendingUploads()
-                        }
-                        .disabled(isSyncing || pendingUploads.isEmpty)
+                            Button("Retry Pending Uploads") {
+                                retryPendingUploads()
+                            }
+                            .disabled(isSyncing || pendingUploads.isEmpty)
 
-                        Button("Clear Queue", role: .destructive) {
-                            pendingUploads = []
-                            savePendingUploads()
-                        }
-                        .disabled(isSyncing || pendingUploads.isEmpty)
+                            Button("Clear Queue", role: .destructive) {
+                                pendingUploads = []
+                                savePendingUploads()
+                            }
+                            .disabled(isSyncing || pendingUploads.isEmpty)
 
-                        Button("Purge Missing Files", role: .destructive) {
-                            purgeMissingFileEntries()
+                            Button("Purge Missing Files", role: .destructive) {
+                                purgeMissingFileEntries()
+                            }
+                            .disabled(isSyncing || pendingUploads.isEmpty)
                         }
-                        .disabled(isSyncing || pendingUploads.isEmpty)
                     }
 
                     Section(header: Text("Selected Files")
@@ -398,11 +442,11 @@ struct ReceiptsAndBillsView: View {
                             Text("Receipt: \(receiptURL.lastPathComponent)")
                                 .foregroundColor(.secondary)
                         }
-                        if let billURL {
+                        if isAdminUser, let billURL {
                             Text("Bill: \(billURL.lastPathComponent)")
                                 .foregroundColor(.secondary)
                         }
-                        if receiptURL == nil && billURL == nil {
+                        if receiptURL == nil && (!isAdminUser || billURL == nil) {
                             Text("No files selected.")
                                 .foregroundColor(.secondary)
                                 .italic()
@@ -571,6 +615,44 @@ private extension ReceiptsAndBillsView {
     enum DocumentType {
         case receipt
         case bill
+    }
+
+    @MainActor
+    func uploadReceiptToBackend() async {
+        guard let receiptURL else {
+            backendUploadMessage = "Select a receipt first."
+            return
+        }
+        guard GunnAireBackendService.isConfigured else {
+            backendUploadMessage = "Shared company storage is not configured."
+            return
+        }
+
+        isUploadingReceiptToBackend = true
+        defer { isUploadingReceiptToBackend = false }
+
+        do {
+            let didStartAccessing = receiptURL.startAccessingSecurityScopedResource()
+            defer {
+                if didStartAccessing {
+                    receiptURL.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            let data = try Data(contentsOf: receiptURL)
+            let contentType = UTType(filenameExtension: receiptURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+            let response = try await GunnAireBackendService.uploadDocument(
+                data: data,
+                filename: receiptURL.lastPathComponent,
+                contentType: contentType,
+                kind: "receipt",
+                serviceCallID: selectedServiceCallID,
+                customerName: selectedServiceCall?.customer.name
+            )
+            backendUploadMessage = "Receipt uploaded to company storage: \(response.filename)."
+        } catch {
+            backendUploadMessage = "Receipt upload failed: \(error.localizedDescription)"
+        }
     }
 
     func importDocument(from url: URL, as type: DocumentType) throws {
