@@ -110,6 +110,14 @@ struct QuickBooksManagementView: View {
         Config.QuickBooks.hasExplicitDefaultSalesItemRef
     }
 
+    private var expenseAccountConfigReady: Bool {
+        Config.QuickBooks.hasExplicitDefaultExpenseAccountRef
+    }
+
+    private var catalogItemCreationReady: Bool {
+        QuickBooksItemAccountResolver.incomeAccountRef(from: items) != nil
+    }
+
     private var totalInvoiceAmount: Double {
         invoices.reduce(0) { $0 + $1.TotalAmt }
     }
@@ -390,8 +398,8 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
-                        if Config.QuickBooks.defaultIncomeAccountRef.isEmpty {
-                            Text("Set `QB_DEFAULT_INCOME_ACCOUNT_REF` before creating live catalog items.")
+                        if !catalogItemCreationReady {
+                            Text("Sync the catalog or set `QB_DEFAULT_INCOME_ACCOUNT_REF` before creating live catalog items.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -400,7 +408,7 @@ struct QuickBooksManagementView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || Config.QuickBooks.defaultIncomeAccountRef.isEmpty)
+                            .disabled(!isAuthenticated || !catalogItemCreationReady)
                     }
 
                     Section(header: Text("Estimates").foregroundColor(Color.brandGold)) {
@@ -539,7 +547,7 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
-                        if Config.QuickBooks.defaultExpenseAccountRef.isEmpty {
+                        if !expenseAccountConfigReady {
                             Text("Set `QB_DEFAULT_EXPENSE_ACCOUNT_REF` before creating live bills.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -549,7 +557,7 @@ struct QuickBooksManagementView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || vendors.isEmpty || Config.QuickBooks.defaultExpenseAccountRef.isEmpty)
+                            .disabled(!isAuthenticated || vendors.isEmpty || !expenseAccountConfigReady)
                     }
 
                     Section(header: Text("Purchases").foregroundColor(Color.brandGold)) {
@@ -573,7 +581,7 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
-                        if Config.QuickBooks.defaultExpenseAccountRef.isEmpty {
+                        if !expenseAccountConfigReady {
                             Text("Set `QB_DEFAULT_EXPENSE_ACCOUNT_REF` before creating live purchases.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -583,7 +591,7 @@ struct QuickBooksManagementView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || vendors.isEmpty || Config.QuickBooks.defaultExpenseAccountRef.isEmpty)
+                            .disabled(!isAuthenticated || vendors.isEmpty || !expenseAccountConfigReady)
                     }
 
                     Section(header: Text("Vendors").foregroundColor(Color.brandGold)) {
@@ -1135,6 +1143,11 @@ struct QuickBooksManagementView: View {
     }
 
     private func createCatalogItem(_ draft: QuickBooksCatalogItemDraft) {
+        guard let incomeAccountRef = QuickBooksItemAccountResolver.incomeAccountRef(from: items) else {
+            actionMessage = QuickBooksDataAPI.QBError.missingDefaultIncomeAccountRef.localizedDescription
+            return
+        }
+
         let payload = QuickBooksItemCreate(
             Name: draft.name,
             ItemType: draft.itemType.rawValue,
@@ -1144,10 +1157,8 @@ struct QuickBooksManagementView: View {
             UnitPrice: draft.price,
             PurchaseCost: draft.purchaseCost,
             Taxable: nil,
-            IncomeAccountRef: QuickBooksReference(value: Config.QuickBooks.defaultIncomeAccountRef, name: nil),
-            ExpenseAccountRef: Config.QuickBooks.defaultExpenseAccountRef.isEmpty
-                ? nil
-                : QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil),
+            IncomeAccountRef: incomeAccountRef,
+            ExpenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(),
             PrefVendorRef: draft.vendorRef
         )
 
@@ -1239,6 +1250,11 @@ struct QuickBooksManagementView: View {
     }
 
     private func createBill(vendorRef: QuickBooksReference, amount: Double, note: String?) {
+        guard expenseAccountConfigReady else {
+            actionMessage = "Set QB_DEFAULT_EXPENSE_ACCOUNT_REF to a valid QBO expense Account.Id before creating bills."
+            return
+        }
+
         let expenseAccount = QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil)
         let payload = QuickBooksBillCreate(
             VendorRef: vendorRef,
@@ -1263,6 +1279,11 @@ struct QuickBooksManagementView: View {
     }
 
     private func createPurchase(vendorRef: QuickBooksReference, amount: Double, note: String?, paymentType: String) {
+        guard expenseAccountConfigReady else {
+            actionMessage = "Set QB_DEFAULT_EXPENSE_ACCOUNT_REF to a valid QBO expense Account.Id before creating purchases."
+            return
+        }
+
         let expenseAccount = QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil)
         let payload = QuickBooksPurchaseCreate(
             AccountRef: expenseAccount,

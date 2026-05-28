@@ -1300,6 +1300,7 @@ final class QuickBooksDataAPI: ObservableObject {
         case authorizationFailed(statusCode: Int, detail: String)
         case paymentsAuthorizationFailed(statusCode: Int, detail: String)
         case paymentsScopeDisabled
+        case missingDefaultIncomeAccountRef
         case rateLimited(detail: String)
         case missingCustomerIDForStoredCards
 
@@ -1336,6 +1337,8 @@ final class QuickBooksDataAPI: ObservableObject {
                 return "QuickBooks Payments authorization needs attention (HTTP \(statusCode)). \(detail) Accounting sync can remain connected; reconnect only after enabling Payments access in Intuit."
             case .paymentsScopeDisabled:
                 return "QuickBooks Payments scope is disabled for this build. Enable QB_ENABLE_PAYMENTS_SCOPE, authorize the Payments permission in Intuit, then reconnect QuickBooks before using live payment endpoints."
+            case .missingDefaultIncomeAccountRef:
+                return "QuickBooks needs an income account before the app can create new Products and Services. Set QB_DEFAULT_INCOME_ACCOUNT_REF to a valid QBO income Account.Id, or sync a default QuickBooks item that already has an IncomeAccountRef."
             case .rateLimited(let detail):
                 return detail
             case .missingCustomerIDForStoredCards:
@@ -1748,12 +1751,14 @@ struct QuickBooksItem: Codable, Identifiable {
     let PurchaseCost: Double?
     let Taxable: Bool?
     let Active: Bool?
+    let IncomeAccountRef: QuickBooksReference?
+    let ExpenseAccountRef: QuickBooksReference?
     let PrefVendorRef: QuickBooksReference?
 
     var id: String { Id }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, Name, Description, Sku, PurchaseDesc, UnitPrice, PurchaseCost, Taxable, Active, PrefVendorRef
+        case Id, Name, Description, Sku, PurchaseDesc, UnitPrice, PurchaseCost, Taxable, Active, IncomeAccountRef, ExpenseAccountRef, PrefVendorRef
         case ItemType = "Type"
     }
 }
@@ -1779,6 +1784,43 @@ struct QuickBooksItemCreate: Codable {
 
 struct QuickBooksItemResponse: Codable {
     let Item: QuickBooksItem
+}
+
+enum QuickBooksItemAccountResolver {
+    static func configuredIncomeAccountRef() -> QuickBooksReference? {
+        guard Config.QuickBooks.hasExplicitDefaultIncomeAccountRef else { return nil }
+        return QuickBooksReference(value: Config.QuickBooks.defaultIncomeAccountRef, name: nil)
+    }
+
+    static func configuredExpenseAccountRef() -> QuickBooksReference? {
+        guard Config.QuickBooks.hasExplicitDefaultExpenseAccountRef else { return nil }
+        return QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil)
+    }
+
+    static func incomeAccountRef(from quickBooksItems: [QuickBooksItem]) -> QuickBooksReference? {
+        if let configured = configuredIncomeAccountRef() {
+            return configured
+        }
+
+        let defaultItemID = Config.QuickBooks.defaultSalesItemRef.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !defaultItemID.isEmpty,
+           let defaultItem = quickBooksItems.first(where: { $0.Id == defaultItemID }),
+           let reference = usableReference(defaultItem.IncomeAccountRef) {
+            return reference
+        }
+
+        return quickBooksItems
+            .filter { $0.Active != false }
+            .compactMap { usableReference($0.IncomeAccountRef) }
+            .first
+    }
+
+    private static func usableReference(_ reference: QuickBooksReference?) -> QuickBooksReference? {
+        guard let reference else { return nil }
+        let value = reference.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        return QuickBooksReference(value: value, name: reference.name)
+    }
 }
 
 struct QuickBooksEstimateQueryResponse: Codable {

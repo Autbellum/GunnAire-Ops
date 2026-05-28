@@ -109,10 +109,10 @@ struct Config {
                 warnings.append("QB_ENVIRONMENT was '\(configuredEnvironment)'. The app is using production; set it to production or sandbox explicitly.")
             }
             if !hasExplicitDefaultSalesItemRef {
-                warnings.append("Set QB_DEFAULT_ITEM_REF to a valid QBO Service/NonInventory Item.Id before creating estimates, invoices, or refund receipts.")
+                warnings.append("Set QB_DEFAULT_ITEM_REF to a valid QBO Service/NonInventory Item.Id for generic fallback items and refund receipts.")
             }
             if !hasExplicitDefaultIncomeAccountRef {
-                warnings.append("Set QB_DEFAULT_INCOME_ACCOUNT_REF to a valid QBO income Account.Id before creating catalog items.")
+                warnings.append("Set QB_DEFAULT_INCOME_ACCOUNT_REF to a valid QBO income Account.Id, or sync catalog items so the app can reuse the income account from your default QBO item.")
             }
             if !hasExplicitDefaultExpenseAccountRef {
                 warnings.append("Set QB_DEFAULT_EXPENSE_ACCOUNT_REF before creating bills or expense purchases.")

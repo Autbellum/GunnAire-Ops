@@ -1785,18 +1785,7 @@ GunnAire
                     for quickBooksItem in quickBooksItems {
                         let normalizedID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
                         if let existing = items.first(where: { $0.quickBooksID == normalizedID }) {
-                            existing.name = quickBooksItem.Name
-                            if let itemType = quickBooksItem.ItemType {
-                                existing.itemTypeRawValue = itemType
-                            }
-                            existing.unitPrice = quickBooksItem.UnitPrice ?? existing.unitPrice
-                            existing.purchaseCost = quickBooksItem.PurchaseCost ?? existing.purchaseCost
-                            existing.isTaxable = quickBooksItem.Taxable ?? existing.isTaxable
-                            existing.itemDescription = quickBooksItem.Description ?? existing.itemDescription
-                            existing.sku = quickBooksItem.Sku ?? existing.sku
-                            existing.purchaseDescription = quickBooksItem.PurchaseDesc ?? existing.purchaseDescription
-                            existing.preferredVendorName = quickBooksItem.PrefVendorRef?.name ?? existing.preferredVendorName
-                            existing.preferredVendorQuickBooksID = quickBooksItem.PrefVendorRef?.value ?? existing.preferredVendorQuickBooksID
+                            applyQuickBooksItem(quickBooksItem, to: existing)
                             continue
                         }
 
@@ -1816,6 +1805,7 @@ GunnAire
                         modelContext.insert(localItem)
                         imported += 1
                     }
+                    saveQuickBooksSyncState()
                     actionMessage = imported == 0
                         ? "QuickBooks catalog is already up to date."
                         : "Imported \(imported) catalog items from QuickBooks."
@@ -1829,6 +1819,30 @@ GunnAire
         didAttemptInitialCatalogImport = true
         guard isQuickBooksConnected, items.isEmpty else { return }
         importQuickBooksItems()
+    }
+
+    private func applyQuickBooksItem(_ quickBooksItem: QuickBooksItem, to item: Item) {
+        item.quickBooksID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
+        item.name = quickBooksItem.Name
+        if let itemType = quickBooksItem.ItemType {
+            item.itemTypeRawValue = itemType
+        }
+        item.unitPrice = quickBooksItem.UnitPrice ?? item.unitPrice
+        item.purchaseCost = quickBooksItem.PurchaseCost ?? item.purchaseCost
+        item.isTaxable = quickBooksItem.Taxable ?? item.isTaxable
+        item.itemDescription = quickBooksItem.Description ?? item.itemDescription
+        item.sku = quickBooksItem.Sku ?? item.sku
+        item.purchaseDescription = quickBooksItem.PurchaseDesc ?? item.purchaseDescription
+        item.preferredVendorName = quickBooksItem.PrefVendorRef?.name ?? item.preferredVendorName
+        item.preferredVendorQuickBooksID = quickBooksItem.PrefVendorRef?.value ?? item.preferredVendorQuickBooksID
+    }
+
+    private func saveQuickBooksSyncState() {
+        do {
+            try modelContext.save()
+        } catch {
+            actionMessage = "QuickBooks sync saved remotely, but the app could not save the updated local IDs: \(error.localizedDescription)"
+        }
     }
 
     private func loadEstimateIntoBuilder(_ estimate: Estimate, announce: Bool = true) {
@@ -2309,6 +2323,7 @@ GunnAire
                         switch apiResult {
                         case .success(let quickBooksEstimate):
                             estimate.quickBooksID = quickBooksEstimate.Id
+                            saveQuickBooksSyncState()
                             actionMessage = "Estimate created and synced to QuickBooks."
                         case .failure(let error):
                             actionMessage = "Estimate saved locally. QuickBooks sync failed: \(error.localizedDescription)"
@@ -2336,6 +2351,7 @@ GunnAire
                         switch apiResult {
                         case .success(let quickBooksInvoice):
                             invoice.quickBooksID = quickBooksInvoice.Id
+                            saveQuickBooksSyncState()
                             actionMessage = "Invoice created and synced to QuickBooks."
                         case .failure(let error):
                             actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
@@ -2356,20 +2372,9 @@ GunnAire
             case .failure(let error):
                 completion(.failure(error))
             case .success:
-                if canUseDefaultQuickBooksLineItem(for: items) {
-                    completion(.success(items))
-                    return
-                }
-                ensureQuickBooksItems(items, index: 0, synced: [], completion: completion)
+                prepareQuickBooksItemsForDocument(items, completion: completion)
             }
         }
-    }
-
-    private func canUseDefaultQuickBooksLineItem(for items: [Item]) -> Bool {
-        let hasLocalOnlyItems = items.contains { item in
-            item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
-        }
-        return hasLocalOnlyItems && Config.QuickBooks.hasExplicitDefaultSalesItemRef
     }
 
     private func ensureQuickBooksCustomer(_ customer: Customer, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -2389,6 +2394,7 @@ GunnAire
                 switch result {
                 case .success(let quickBooksCustomer):
                     customer.quickBooksID = quickBooksCustomer.Id
+                    saveQuickBooksSyncState()
                     completion(.success(()))
                 case .failure(let error):
                     completion(.failure(error))
@@ -2397,9 +2403,69 @@ GunnAire
         }
     }
 
+    private func prepareQuickBooksItemsForDocument(
+        _ items: [Item],
+        completion: @escaping (Result<[Item], Error>) -> Void
+    ) {
+        guard items.contains(where: itemNeedsQuickBooksSync) else {
+            completion(.success(items))
+            return
+        }
+
+        liveAPI.fetchItems { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .failure(let error):
+                    completion(.failure(error))
+                case .success(let quickBooksItems):
+                    let quickBooksItemsByName = Dictionary(
+                        quickBooksItems
+                            .filter { $0.Active != false }
+                            .map { (normalizedItemLookupKey($0.Name), $0) },
+                        uniquingKeysWith: { first, _ in first }
+                    )
+
+                    for item in items where itemNeedsQuickBooksSync(item) {
+                        let key = normalizedItemLookupKey(item.name)
+                        if let quickBooksItem = quickBooksItemsByName[key] {
+                            applyQuickBooksItem(quickBooksItem, to: item)
+                        }
+                    }
+
+                    let remainingLocalItems = items.filter(itemNeedsQuickBooksSync)
+                    guard !remainingLocalItems.isEmpty else {
+                        saveQuickBooksSyncState()
+                        completion(.success(items))
+                        return
+                    }
+
+                    guard let incomeAccountRef = QuickBooksItemAccountResolver.incomeAccountRef(from: quickBooksItems) else {
+                        completion(.failure(QuickBooksDataAPI.QBError.missingDefaultIncomeAccountRef))
+                        return
+                    }
+
+                    ensureQuickBooksItems(
+                        items,
+                        index: 0,
+                        incomeAccountRef: incomeAccountRef,
+                        expenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(),
+                        synced: [],
+                        completion: completion
+                    )
+                }
+            }
+        }
+    }
+
+    private func itemNeedsQuickBooksSync(_ item: Item) -> Bool {
+        item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+    }
+
     private func ensureQuickBooksItems(
         _ items: [Item],
         index: Int,
+        incomeAccountRef: QuickBooksReference,
+        expenseAccountRef: QuickBooksReference?,
         synced: [Item],
         completion: @escaping (Result<[Item], Error>) -> Void
     ) {
@@ -2410,12 +2476,14 @@ GunnAire
 
         let item = items[index]
         if let quickBooksID = item.quickBooksID, !quickBooksID.isEmpty {
-            ensureQuickBooksItems(items, index: index + 1, synced: synced + [item], completion: completion)
-            return
-        }
-
-        guard !Config.QuickBooks.defaultIncomeAccountRef.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            completion(.failure(QuickBooksDataAPI.QBError.missingConfiguration))
+            ensureQuickBooksItems(
+                items,
+                index: index + 1,
+                incomeAccountRef: incomeAccountRef,
+                expenseAccountRef: expenseAccountRef,
+                synced: synced + [item],
+                completion: completion
+            )
             return
         }
 
@@ -2428,12 +2496,8 @@ GunnAire
             UnitPrice: item.unitPrice,
             PurchaseCost: item.purchaseCost,
             Taxable: item.isTaxable,
-            IncomeAccountRef: Config.QuickBooks.defaultIncomeAccountRef.isEmpty
-                ? nil
-                : QuickBooksReference(value: Config.QuickBooks.defaultIncomeAccountRef, name: nil),
-            ExpenseAccountRef: Config.QuickBooks.defaultExpenseAccountRef.isEmpty
-                ? nil
-                : QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil),
+            IncomeAccountRef: incomeAccountRef,
+            ExpenseAccountRef: expenseAccountRef,
             PrefVendorRef: item.preferredVendorQuickBooksID.flatMap { quickBooksID in
                 quickBooksID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? nil
@@ -2445,7 +2509,15 @@ GunnAire
                 switch result {
                 case .success(let quickBooksItem):
                     item.quickBooksID = quickBooksItem.Id
-                    ensureQuickBooksItems(items, index: index + 1, synced: synced + [item], completion: completion)
+                    saveQuickBooksSyncState()
+                    ensureQuickBooksItems(
+                        items,
+                        index: index + 1,
+                        incomeAccountRef: incomeAccountRef,
+                        expenseAccountRef: expenseAccountRef,
+                        synced: synced + [item],
+                        completion: completion
+                    )
                 case .failure(let error):
                     completion(.failure(error))
                 }
@@ -2456,10 +2528,7 @@ GunnAire
     private func quickBooksLineItems(for items: [Item]) -> [QuickBooksLineItem] {
         items.compactMap { item in
             let explicitQuickBooksID = item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let fallbackQuickBooksID = Config.QuickBooks.defaultSalesItemRef.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let quickBooksID = explicitQuickBooksID?.isEmpty == false
-                    ? explicitQuickBooksID
-                    : (fallbackQuickBooksID.isEmpty ? nil : fallbackQuickBooksID) else { return nil }
+            guard let quickBooksID = explicitQuickBooksID, !quickBooksID.isEmpty else { return nil }
             return QuickBooksLineItem(
                 Amount: item.unitPrice,
                 DetailType: "SalesItemLineDetail",
