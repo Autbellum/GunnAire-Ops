@@ -83,4 +83,37 @@ enum AppAccess {
         modelContext.insert(technician)
         return technician
     }
+
+    static func ensureTechnicianRecords(
+        for users: [AppUser],
+        technicians: [Technician],
+        modelContext: ModelContext
+    ) {
+        for user in users where user.isActive {
+            ensureTechnicianRecord(for: user.email, technicians: technicians, modelContext: modelContext)
+        }
+    }
+
+    static func schedulableTechnicians(_ technicians: [Technician], users: [AppUser]) -> [Technician] {
+        let activeUserEmails = Set(users.filter(\.isActive).map(\.email))
+        let allUserEmails = Set(users.map(\.email))
+
+        return technicians
+            .filter { technician in
+                let email = normalizedEmail(technician.contactInfo)
+                guard !email.isEmpty, allUserEmails.contains(email) else {
+                    return true
+                }
+                return activeUserEmails.contains(email)
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    static func scheduleLabel(for technician: Technician) -> String {
+        let email = normalizedEmail(technician.contactInfo)
+        guard !email.isEmpty, email != technician.name.lowercased() else {
+            return technician.name
+        }
+        return "\(technician.name) (\(email))"
+    }
 }

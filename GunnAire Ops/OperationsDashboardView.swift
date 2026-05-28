@@ -26,6 +26,10 @@ struct OperationsDashboardView: View {
         googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
     }
 
+    private var assignableTechnicians: [Technician] {
+        AppAccess.schedulableTechnicians(technicians, users: users)
+    }
+
     private var canViewFinancials: Bool {
         AppAccess.isAdmin(email: currentUserEmail, users: users)
     }
@@ -1406,7 +1410,7 @@ struct OperationsDashboardView: View {
                 }
             }
 
-            ForEach(technicians) { technician in
+            ForEach(assignableTechnicians) { technician in
                 Button(assignmentTitle(for: call, technician: technician)) {
                     assign(call, to: technician)
                 }
@@ -1417,11 +1421,12 @@ struct OperationsDashboardView: View {
     }
 
     private func assignmentTitle(for call: ServiceCall, technician: Technician) -> String {
+        let technicianLabel = AppAccess.scheduleLabel(for: technician)
         guard let nextStart = nextAvailableStart(for: technician, proposedStart: call.scheduledDate, duration: call.duration),
               nextStart > call.scheduledDate else {
-            return technician.name
+            return technicianLabel
         }
-        return "\(technician.name) • move to \(nextStart.formatted(date: .omitted, time: .shortened))"
+        return "\(technicianLabel) • move to \(nextStart.formatted(date: .omitted, time: .shortened))"
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician) {
@@ -1440,7 +1445,7 @@ struct OperationsDashboardView: View {
     }
 
     private func bestTechnician(for call: ServiceCall) -> Technician? {
-        technicians
+        assignableTechnicians
             .sorted { lhs, rhs in
                 let lhsStart = nextAvailableStart(for: lhs, proposedStart: call.scheduledDate, duration: call.duration) ?? call.scheduledDate
                 let rhsStart = nextAvailableStart(for: rhs, proposedStart: call.scheduledDate, duration: call.duration) ?? call.scheduledDate

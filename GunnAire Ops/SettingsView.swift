@@ -334,7 +334,12 @@ struct SettingsView: View {
                                     Spacer()
                                     Toggle("Active", isOn: Binding(
                                         get: { user.isActive },
-                                        set: { user.isActive = $0 }
+                                        set: { isActive in
+                                            user.isActive = isActive
+                                            if isActive {
+                                                AppAccess.ensureTechnicianRecord(for: user.email, technicians: technicians, modelContext: modelContext)
+                                            }
+                                        }
                                     ))
                                     .labelsHidden()
                                     .disabled(user.email == AppAccess.primaryAdminEmail)
@@ -382,6 +387,7 @@ struct SettingsView: View {
             }
             .task {
                 refreshSplashVideoState(loadDetails: true)
+                syncUserTechnicians()
             }
         }
     }
@@ -532,6 +538,10 @@ struct SettingsView: View {
         userAdminMessage = "Added \(email) as \(newUserRole.rawValue) and provisioned the technician calendar record."
         newUserEmail = ""
         newUserRole = .standard
+    }
+
+    private func syncUserTechnicians() {
+        AppAccess.ensureTechnicianRecords(for: users, technicians: technicians, modelContext: modelContext)
     }
 
     private func handleSplashVideoImport(_ result: Result<[URL], Error>) {

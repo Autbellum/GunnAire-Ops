@@ -83,7 +83,7 @@ struct ScheduleView: View {
     }
 
     private var assignableTechnicians: [Technician] {
-        technicians.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        AppAccess.schedulableTechnicians(technicians, users: users)
     }
 
     private var unassignedUpcomingCalls: [ServiceCall] {
@@ -293,7 +293,10 @@ struct ScheduleView: View {
                     ServiceCallDetailView(call: call)
                         .tint(Color.brandGold)
                 }
-                .onAppear(perform: applyPendingScheduleIntentIfNeeded)
+                .onAppear {
+                    AppAccess.ensureTechnicianRecords(for: users, technicians: technicians, modelContext: modelContext)
+                    applyPendingScheduleIntentIfNeeded()
+                }
                 .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                     applyPendingScheduleIntentIfNeeded()
                 }
@@ -548,11 +551,11 @@ struct ScheduleView: View {
                                 ForEach(assignableTechnicians) { technician in
                                     if let nextAvailableStart = nextAvailableStart(for: technician, proposedStart: job.scheduledDate, duration: job.duration),
                                        nextAvailableStart > job.scheduledDate {
-                                        Button("\(technician.name) • move to \(nextAvailableStart.formatted(date: .omitted, time: .shortened))") {
+                                        Button("\(AppAccess.scheduleLabel(for: technician)) • move to \(nextAvailableStart.formatted(date: .omitted, time: .shortened))") {
                                             assign(job, to: technician, reschedulingTo: nextAvailableStart)
                                         }
                                     } else {
-                                        Button(technician.name) {
+                                        Button(AppAccess.scheduleLabel(for: technician)) {
                                             assign(job, to: technician)
                                         }
                                     }

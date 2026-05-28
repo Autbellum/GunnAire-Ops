@@ -1258,6 +1258,7 @@ struct AddServiceCallView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var customers: [Customer]
     @Query private var technicians: [Technician]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query private var existingServiceCalls: [ServiceCall]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("defaultJobDurationMinutes") private var defaultJobDurationMinutes = 90
@@ -1313,6 +1314,10 @@ struct AddServiceCallView: View {
 
     private var canSaveNewCustomer: Bool {
         !newCustomerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var assignableTechnicians: [Technician] {
+        AppAccess.schedulableTechnicians(technicians, users: users)
     }
 
     private var conflictingCalls: [ServiceCall] {
@@ -1476,8 +1481,8 @@ struct AddServiceCallView: View {
                 }
                 Picker("Technician", selection: $technician) {
                     Text("Unassigned").tag(Technician?.none)
-                    ForEach(technicians) { t in
-                        Text(t.name).tag(Technician?.some(t))
+                    ForEach(assignableTechnicians) { t in
+                        Text(AppAccess.scheduleLabel(for: t)).tag(Technician?.some(t))
                     }
                 }
                 Picker("Calendar", selection: $selectedCalendarID) {
@@ -1550,6 +1555,7 @@ struct AddServiceCallView: View {
         }
         .tint(Color.brandGold) // Accent color gold for form controls using Color
         .onAppear {
+            AppAccess.ensureTechnicianRecords(for: users, technicians: technicians, modelContext: modelContext)
             duration = TimeInterval(defaultJobDurationMinutes * 60)
             loadAccessibleCalendarsIfNeeded()
         }
@@ -1634,8 +1640,10 @@ struct AddServiceCallView: View {
 
 struct EditServiceCallView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
     @Query private var customers: [Customer]
     @Query private var technicians: [Technician]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query private var existingServiceCalls: [ServiceCall]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
@@ -1706,6 +1714,15 @@ struct EditServiceCallView: View {
             .max()
     }
 
+    private var assignableTechnicians: [Technician] {
+        let activeTechnicians = AppAccess.schedulableTechnicians(technicians, users: users)
+        guard let technician, !activeTechnicians.contains(where: { $0.id == technician.id }) else {
+            return activeTechnicians
+        }
+        return ([technician] + activeTechnicians)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -1721,8 +1738,8 @@ struct EditServiceCallView: View {
                 }
                 Picker("Technician", selection: $technician) {
                     Text("Unassigned").tag(Technician?.none)
-                    ForEach(technicians) { technician in
-                        Text(technician.name).tag(Technician?.some(technician))
+                    ForEach(assignableTechnicians) { technician in
+                        Text(AppAccess.scheduleLabel(for: technician)).tag(Technician?.some(technician))
                     }
                 }
                 Picker("Status", selection: $status) {
@@ -1806,7 +1823,10 @@ struct EditServiceCallView: View {
             }
         }
         .tint(Color.brandGold)
-        .onAppear(perform: loadAccessibleCalendarsIfNeeded)
+        .onAppear {
+            AppAccess.ensureTechnicianRecords(for: users, technicians: technicians, modelContext: modelContext)
+            loadAccessibleCalendarsIfNeeded()
+        }
         .onChange(of: technician) { _, newTechnician in
             selectedCalendarID = ServiceCalendarRouting.preferredCalendarID(for: newTechnician, calendars: accessibleCalendars)
         }
