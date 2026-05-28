@@ -264,6 +264,7 @@ enum GoogleCalendarScheduleSync {
                 calls: calls,
                 auth: auth,
                 modelContext: modelContext,
+                remoteEventsByKey: remoteEventsByKey(from: calendarEvents),
                 remoteEventsByFingerprint: remoteEventsByFingerprint(from: calendarEvents, writableCalendarIDs: writableCalendarIDs),
                 availableCalendarIDs: availableCalendarIDs,
                 writableCalendarIDs: writableCalendarIDs,
@@ -281,6 +282,7 @@ enum GoogleCalendarScheduleSync {
         calls: [ServiceCall],
         auth: GoogleAuthManager,
         modelContext: ModelContext,
+        remoteEventsByKey: [String: (calendarID: String, event: GoogleCalendarEvent)],
         remoteEventsByFingerprint: [String: (calendarID: String, event: GoogleCalendarEvent)],
         availableCalendarIDs: Set<String>,
         writableCalendarIDs: Set<String>,
@@ -313,6 +315,7 @@ enum GoogleCalendarScheduleSync {
                 calls: calls,
                 auth: auth,
                 modelContext: modelContext,
+                remoteEventsByKey: remoteEventsByKey,
                 remoteEventsByFingerprint: remoteEventsByFingerprint,
                 availableCalendarIDs: availableCalendarIDs,
                 writableCalendarIDs: writableCalendarIDs,
@@ -321,7 +324,6 @@ enum GoogleCalendarScheduleSync {
             return
         }
 
-        let event = makeGoogleEvent(for: call)
         let finish: (String, Result<GoogleCalendarEvent, Error>) -> Void = { savedCalendarID, result in
             Task { @MainActor in
                 switch result {
@@ -337,6 +339,7 @@ enum GoogleCalendarScheduleSync {
                         calls: calls,
                         auth: auth,
                         modelContext: modelContext,
+                        remoteEventsByKey: remoteEventsByKey,
                         remoteEventsByFingerprint: remoteEventsByFingerprint,
                         availableCalendarIDs: availableCalendarIDs,
                         writableCalendarIDs: writableCalendarIDs,
@@ -353,6 +356,8 @@ enum GoogleCalendarScheduleSync {
         if let eventID = call.googleEventID,
            !eventID.isEmpty,
            canUpdateExistingEvent {
+            let eventKey = calendarEventStorageKey(calendarID: currentCalendarID, eventID: eventID)
+            let event = makeGoogleEvent(for: call, existingSummary: remoteEventsByKey[eventKey]?.event.summary)
             auth.updateCalendarEvent(calendarID: currentCalendarID, eventID: eventID, event: event) { result in
                 finish(currentCalendarID, result)
             }
@@ -360,6 +365,7 @@ enum GoogleCalendarScheduleSync {
                   contains(remote.calendarID, in: writableCalendarIDs) {
             call.googleCalendarID = remote.calendarID
             call.googleEventID = remote.event.id
+            let event = makeGoogleEvent(for: call, existingSummary: remote.event.summary)
             auth.updateCalendarEvent(calendarID: remote.calendarID, eventID: remote.event.id, event: event) { result in
                 finish(remote.calendarID, result)
             }
@@ -367,16 +373,19 @@ enum GoogleCalendarScheduleSync {
             if call.googleCalendarID != nil, normalized(call.googleCalendarID ?? "") != normalized(targetCalendarID) {
                 call.googleEventID = nil
             }
+            let event = makeGoogleEvent(for: call, existingSummary: nil)
             auth.createCalendarEvent(calendarID: targetCalendarID, event: event) { result in
                 finish(targetCalendarID, result)
             }
         }
     }
 
-    private static func makeGoogleEvent(for call: ServiceCall) -> GoogleWritableCalendarEvent {
+    private static func makeGoogleEvent(for call: ServiceCall, existingSummary: String?) -> GoogleWritableCalendarEvent {
         let timeZone = TimeZone.current.identifier
         let endDate = call.scheduledDate.addingTimeInterval(call.duration)
-        let summary = calendarSummary(for: call.type)
+        let summary = normalizedOptional(existingSummary)
+            ?? calendarEventSummary(from: call.notes)
+            ?? calendarSummary(for: call.type)
         let customerEmail = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
         let attendees = customerEmail?.isEmpty == false
             ? [GoogleWritableCalendarAttendee(email: customerEmail!, displayName: call.customer.name)]
@@ -414,6 +423,20 @@ enum GoogleCalendarScheduleSync {
         case .other:
             return "Other"
         }
+    }
+
+    private static func remoteEventsByKey(
+        from calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)]
+    ) -> [String: (calendarID: String, event: GoogleCalendarEvent)] {
+        var indexed: [String: (calendarID: String, event: GoogleCalendarEvent)] = [:]
+        for calendarEvent in calendarEvents {
+            guard !isCalendarEventDeleted(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id) else {
+                continue
+            }
+            let eventKey = calendarEventStorageKey(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id)
+            indexed[eventKey] = indexed[eventKey] ?? calendarEvent
+        }
+        return indexed
     }
 
     private static func remoteEventsByFingerprint(
