@@ -309,19 +309,19 @@ struct ScheduleView: View {
                     }
                         .tint(Color.brandGold)
                 }
-                .sheet(item: $editingCall) { call in
+                .fullScreenCover(item: $editingCall) { call in
                     EditServiceCallView(call: call)
                         .tint(Color.brandGold)
                 }
-                .sheet(item: $documentationCall) { call in
-                    NavigationStack {
-                        BillingDocumentsView(
-                            initialServiceCall: call,
-                            openCloseoutOnAppear: openDocumentationInCloseout,
-                            openTapToPayOnAppear: openDocumentationInTapToPay
-                        )
-                            .tint(Color.brandGold)
-                    }
+                .fullScreenCover(item: $documentationCall) { call in
+                    BillingDocumentsView(
+                        initialServiceCall: call,
+                        openCloseoutOnAppear: openDocumentationInCloseout,
+                        openTapToPayOnAppear: openDocumentationInTapToPay,
+                        showsDismissButton: true,
+                        dismissButtonTitle: "Minimize"
+                    )
+                    .tint(Color.brandGold)
                     .onDisappear {
                         openDocumentationInCloseout = false
                         openDocumentationInTapToPay = false
@@ -682,19 +682,25 @@ struct ScheduleView: View {
     @ViewBuilder
     private func serviceCallCard(for call: ServiceCall) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            NavigationLink(value: call) {
-                serviceCallSummary(for: call)
+            HStack(alignment: .top, spacing: 10) {
+                NavigationLink(value: call) {
+                    serviceCallSummary(for: call)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    editingCall = call
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Edit schedule")
             }
-            .buttonStyle(.plain)
 
             HStack(spacing: 10) {
                 Button("Customer") {
                     GunnAireAppIntentRouter.storeCustomerRoute(call.customer.id)
-                }
-                .buttonStyle(.bordered)
-
-                Button("Edit") {
-                    editingCall = call
                 }
                 .buttonStyle(.bordered)
 

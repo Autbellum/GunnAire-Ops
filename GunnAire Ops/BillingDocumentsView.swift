@@ -3,6 +3,7 @@ import SwiftData
 import UIKit
 
 struct BillingDocumentsView: View {
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
@@ -13,6 +14,8 @@ struct BillingDocumentsView: View {
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
 
     private let initialServiceCall: ServiceCall?
+    private let showsDismissButton: Bool
+    private let dismissButtonTitle: String
     private let liveAPI = QuickBooksDataAPI.shared
     private let googleAuth = GoogleAuthManager.shared
 
@@ -51,9 +54,13 @@ struct BillingDocumentsView: View {
         initialServiceCall: ServiceCall? = nil,
         workspaceMode: BillingWorkspaceMode = .all,
         openCloseoutOnAppear: Bool = false,
-        openTapToPayOnAppear: Bool = false
+        openTapToPayOnAppear: Bool = false,
+        showsDismissButton: Bool = false,
+        dismissButtonTitle: String = "Minimize"
     ) {
         self.initialServiceCall = initialServiceCall
+        self.showsDismissButton = showsDismissButton
+        self.dismissButtonTitle = dismissButtonTitle
         self.workspaceMode = workspaceMode
         let initialKind: BillingDocumentKind
         if let initialServiceCall {
@@ -1470,6 +1477,15 @@ GunnAire
                 }
             }
             .navigationTitle(navigationTitle)
+            .toolbar {
+                if showsDismissButton {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(dismissButtonTitle) {
+                            dismiss()
+                        }
+                    }
+                }
+            }
             .sheet(isPresented: $showingItemSelector) {
                 DocumentationItemSelectorView(items: items, selectedItems: $selectedItems)
             }

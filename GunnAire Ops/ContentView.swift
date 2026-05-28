@@ -1049,14 +1049,6 @@ GunnAire
 
                     GroupBox("Job Actions") {
                         VStack(spacing: 12) {
-                            Button {
-                                showingEditSheet = true
-                            } label: {
-                                Label("Edit Call Details", systemImage: "square.and.pencil")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.bordered)
-
                             HStack {
                                 if call.status == .scheduled {
                                     Button {
@@ -1150,9 +1142,19 @@ GunnAire
             }
         }
         .navigationTitle("Call Details")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingEditSheet = true
+                } label: {
+                    Label("Edit", systemImage: "square.and.pencil")
+                }
+            }
+        }
         .foregroundColor(Color.brandGold)
-        .sheet(isPresented: $showingEditSheet) {
+        .fullScreenCover(isPresented: $showingEditSheet) {
             EditServiceCallView(call: call)
+                .tint(Color.brandGold)
         }
     }
 }

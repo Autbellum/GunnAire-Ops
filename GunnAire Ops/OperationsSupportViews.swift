@@ -17,6 +17,8 @@ struct CustomersView: View {
     @State private var newCustomerAddress = ""
     @State private var selectedCustomer: Customer?
     @State private var customerSearchText = ""
+    @State private var customerSyncMessage: String?
+    @State private var isSyncingCustomers = false
 
     private var filteredCustomers: [Customer] {
         let search = customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -84,6 +86,12 @@ struct CustomersView: View {
                 Section("Customer Directory") {
                     TextField("Search customers", text: $customerSearchText)
                         .textInputAutocapitalization(.never)
+
+                    if let customerSyncMessage {
+                        Text(customerSyncMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
 
                     if filteredCustomers.isEmpty {
                         Text("No customers saved yet.")
@@ -174,6 +182,18 @@ struct CustomersView: View {
                 }
             }
             .navigationTitle("Customers")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    if canViewFinancials {
+                        Button {
+                            syncCustomersToQuickBooks()
+                        } label: {
+                            Label(isSyncingCustomers ? "Syncing" : "Sync", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .disabled(isSyncingCustomers || !QuickBooksDataAPI.shared.isAuthenticated)
+                    }
+                }
+            }
             .onAppear(perform: applyPendingIntentCustomerIfNeeded)
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                 applyPendingIntentCustomerIfNeeded()
@@ -280,6 +300,65 @@ struct CustomersView: View {
             return "arrow.uturn.forward.circle"
         }
         return snapshot.healthScore >= 70 ? "checkmark.seal" : "exclamationmark.triangle"
+    }
+
+    private func syncCustomersToQuickBooks() {
+        guard QuickBooksDataAPI.shared.isAuthenticated else {
+            customerSyncMessage = "Connect QuickBooks before syncing customers."
+            return
+        }
+        let pendingCustomers = customers.filter {
+            $0.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+        }
+        guard !pendingCustomers.isEmpty else {
+            customerSyncMessage = "All app customers already have QuickBooks links."
+            return
+        }
+
+        isSyncingCustomers = true
+        customerSyncMessage = "Syncing \(pendingCustomers.count) customer\(pendingCustomers.count == 1 ? "" : "s") to QuickBooks..."
+        syncCustomerBatch(pendingCustomers, created: 0, failed: 0)
+    }
+
+    private func syncCustomerBatch(_ pendingCustomers: [Customer], created: Int, failed: Int) {
+        guard let customer = pendingCustomers.first else {
+            isSyncingCustomers = false
+            customerSyncMessage = "Customer sync complete: \(created) created, \(failed) failed."
+            return
+        }
+
+        QuickBooksDataAPI.shared.createCustomer(quickBooksPayload(for: customer)) { result in
+            DispatchQueue.main.async {
+                var createdCount = created
+                var failedCount = failed
+                switch result {
+                case .success(let quickBooksCustomer):
+                    customer.quickBooksID = quickBooksCustomer.Id
+                    createdCount += 1
+                case .failure:
+                    failedCount += 1
+                }
+                syncCustomerBatch(Array(pendingCustomers.dropFirst()), created: createdCount, failed: failedCount)
+            }
+        }
+    }
+
+    private func quickBooksPayload(for customer: Customer) -> QuickBooksCustomerCreate {
+        QuickBooksCustomerCreate(
+            DisplayName: customer.name,
+            PrimaryPhone: customer.phone.flatMap { value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : QuickBooksPhoneNumber(FreeFormNumber: trimmed)
+            },
+            PrimaryEmailAddr: customer.email.flatMap { value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
+            },
+            BillAddr: customer.address.flatMap { value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
+            }
+        )
     }
 }
 
@@ -962,11 +1041,7 @@ struct OnsiteDocumentationView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if let selectedServiceCall {
-                    BillingDocumentsView(initialServiceCall: selectedServiceCall)
-                } else {
-                    Form {
+            Form {
                         if jobsNeedingDocumentation.isEmpty {
                             Section("Documentation Queue") {
                                 Text("No active jobs are waiting for documentation.")
@@ -1016,7 +1091,7 @@ struct OnsiteDocumentationView: View {
                                         }
                                         HStack {
                                             if let linkedCall = serviceCall(for: invoice) {
-                                                Button("Open Job") {
+                                                Button("Open Documents") {
                                                     selectedServiceCallID = linkedCall.id
                                                 }
                                                 .buttonStyle(.bordered)
@@ -1059,17 +1134,23 @@ struct OnsiteDocumentationView: View {
                             Text(quickBooksConnected ? "QuickBooks is connected and ready for live billing document workflows." : "Connect QuickBooks in Settings before expecting live billing document sync.")
                         }
                         .foregroundColor(.secondary)
-                    }
-                }
             }
             .navigationTitle("Onsite Documentation")
-            .toolbar {
-                if selectedServiceCall != nil {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Documentation Queue") {
-                            selectedServiceCallID = nil
-                        }
+            .fullScreenCover(isPresented: Binding(
+                get: { selectedServiceCall != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        selectedServiceCallID = nil
                     }
+                }
+            )) {
+                if let selectedServiceCall {
+                    BillingDocumentsView(
+                        initialServiceCall: selectedServiceCall,
+                        showsDismissButton: true,
+                        dismissButtonTitle: "Back"
+                    )
+                    .tint(Color.brandGold)
                 }
             }
             .onAppear(perform: applyPendingDocumentationRouteIfNeeded)
@@ -1111,7 +1192,7 @@ struct OnsiteDocumentationView: View {
                         .buttonStyle(.plain)
 
                         HStack {
-                            Button("Open Job") {
+                            Button("Open Documents") {
                                 selectedServiceCallID = call.id
                             }
                             .buttonStyle(.bordered)
@@ -1238,6 +1319,9 @@ private struct CustomerEditorView: View {
     @State private var phone: String
     @State private var newContractPattern: String = ""
     @State private var newContractDate: Date = Date()
+    @State private var customerActionMessage: String?
+    @State private var isSyncingCustomer = false
+    @State private var showingDeleteConfirmation = false
 
     private var customerServiceCalls: [ServiceCall] {
         serviceCalls.filter { $0.customer.id == customer.id }
@@ -1274,6 +1358,13 @@ private struct CustomerEditorView: View {
             email: GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
             users: users
         )
+    }
+
+    private var canDeleteCustomer: Bool {
+        customerServiceCalls.isEmpty &&
+        invoices.filter { $0.customer.id == customer.id }.isEmpty &&
+        estimates.filter { $0.customer.id == customer.id }.isEmpty &&
+        recurringContracts.filter { $0.customer.id == customer.id }.isEmpty
     }
 
     init(customer: Customer) {
@@ -1335,6 +1426,12 @@ private struct CustomerEditorView: View {
                     .keyboardType(.phonePad)
                 if canViewFinancials, let quickBooksID = customer.quickBooksID, !quickBooksID.isEmpty {
                     Text("QuickBooks ID: \(quickBooksID)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if let customerActionMessage {
+                    Text(customerActionMessage)
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -1510,6 +1607,30 @@ private struct CustomerEditorView: View {
                     }
                     .disabled(newContractPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+
+                Section("Customer Actions") {
+                    if canViewFinancials {
+                        Button {
+                            syncCustomerToQuickBooks()
+                        } label: {
+                            Label(isSyncingCustomer ? "Syncing Customer" : "Sync Customer to QuickBooks", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .disabled(isSyncingCustomer || !QuickBooksDataAPI.shared.isAuthenticated)
+                    }
+
+                    Button(role: .destructive) {
+                        showingDeleteConfirmation = true
+                    } label: {
+                        Label("Remove Customer from App", systemImage: "trash")
+                    }
+                    .disabled(!canDeleteCustomer)
+
+                    if !canDeleteCustomer {
+                        Text("Customers with jobs, estimates, invoices, or service agreements stay locked to preserve history. Remove or reassign those records first.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
             }
             .navigationTitle("Edit Customer")
             .toolbar {
@@ -1526,6 +1647,14 @@ private struct CustomerEditorView: View {
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+            }
+            .confirmationDialog("Remove this customer from the app?", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
+                Button("Remove Customer", role: .destructive) {
+                    deleteCustomer()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This only removes the local app customer. QuickBooks records are not deleted.")
             }
         }
         .tint(Color.brandGold)
@@ -1544,6 +1673,54 @@ private struct CustomerEditorView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func deleteCustomer() {
+        guard canDeleteCustomer else {
+            customerActionMessage = "Remove or reassign related records before deleting this customer."
+            return
+        }
+        modelContext.delete(customer)
+        dismiss()
+    }
+
+    private func syncCustomerToQuickBooks() {
+        guard QuickBooksDataAPI.shared.isAuthenticated else {
+            customerActionMessage = "Connect QuickBooks before syncing this customer."
+            return
+        }
+        isSyncingCustomer = true
+        customerActionMessage = "Syncing \(customer.name) to QuickBooks..."
+        QuickBooksDataAPI.shared.createCustomer(quickBooksPayload(for: customer)) { result in
+            DispatchQueue.main.async {
+                isSyncingCustomer = false
+                switch result {
+                case .success(let quickBooksCustomer):
+                    customer.quickBooksID = quickBooksCustomer.Id
+                    customerActionMessage = "\(customer.name) is linked to QuickBooks."
+                case .failure(let error):
+                    customerActionMessage = "QuickBooks customer sync failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func quickBooksPayload(for customer: Customer) -> QuickBooksCustomerCreate {
+        QuickBooksCustomerCreate(
+            DisplayName: customer.name,
+            PrimaryPhone: customer.phone.flatMap { value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : QuickBooksPhoneNumber(FreeFormNumber: trimmed)
+            },
+            PrimaryEmailAddr: customer.email.flatMap { value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
+            },
+            BillAddr: customer.address.flatMap { value in
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
+            }
+        )
     }
 
     private func perform(_ action: CustomerIntelligenceAction) {

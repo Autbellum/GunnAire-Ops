@@ -125,24 +125,15 @@ enum GoogleCalendarScheduleSync {
                 continue
             }
             let nameKey = normalized(customerCandidate.name)
-            let customer = customerCandidate.email.flatMap { customersByEmail[$0] }
-                ?? customersByName[nameKey]
-                ?? {
-                    let newCustomer = Customer(
-                        name: customerCandidate.name,
-                        email: customerCandidate.email,
-                        address: customerCandidate.address
-                    )
-                    modelContext.insert(newCustomer)
-                    return newCustomer
-                }()
-            if !isGenericCustomerName(customerCandidate.name, matching: event.summary) {
-                customer.name = customerCandidate.name
+            guard let customer = customerCandidate.email.flatMap({ customersByEmail[$0] }) ?? customersByName[nameKey] else {
+                continue
             }
             if customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                 customer.email = customerCandidate.email
             }
-            if let address = customerCandidate.address, !address.isEmpty {
+            if customer.address?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+               let address = customerCandidate.address,
+               !address.isEmpty {
                 customer.address = address
             }
             customersByName[normalized(customer.name)] = customer
