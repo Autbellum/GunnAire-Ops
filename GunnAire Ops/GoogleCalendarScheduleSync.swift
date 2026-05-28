@@ -107,11 +107,13 @@ enum GoogleCalendarScheduleSync {
                 continue
             }
             let duration = max(endDate.timeIntervalSince(startDate), 1800)
-            let customerCandidate = inferCustomer(
+            guard let customerCandidate = inferCustomer(
                 from: event,
                 signedInEmail: signedInEmail,
                 technicianEmails: Set(techniciansByEmail.keys)
-            )
+            ) else {
+                continue
+            }
             let customer = customerCandidate.email.flatMap { customersByEmail[$0] }
                 ?? customersByName[normalized(customerCandidate.name)]
                 ?? {
@@ -433,7 +435,7 @@ enum GoogleCalendarScheduleSync {
         from event: GoogleCalendarEvent,
         signedInEmail: String?,
         technicianEmails: Set<String>
-    ) -> CalendarCustomerCandidate {
+    ) -> CalendarCustomerCandidate? {
         let normalizedSignedInEmail = signedInEmail?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let excludedEmails = technicianEmails.union([normalizedSignedInEmail].compactMap { $0 })
         if let attendee = event.attendees?.first(where: { attendee in
@@ -458,50 +460,7 @@ enum GoogleCalendarScheduleSync {
             )
         }
 
-        let summaryName = inferCustomerName(from: event.summary)
-        let name = summaryLooksLikeJobType(summaryName)
-            ? calendarCustomerNameFromLocation(event.location)
-            : summaryName
-        return CalendarCustomerCandidate(
-            name: name,
-            email: nil,
-            address: normalizedOptional(event.location)
-        )
-    }
-
-    private static func inferCustomerName(from summary: String?) -> String {
-        guard let summary, !summary.isEmpty else { return "Google Calendar Customer" }
-        if let separator = summary.firstIndex(of: ":") {
-            let candidate = summary[summary.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
-            return candidate.isEmpty ? summary : candidate
-        }
-        return summary
-    }
-
-    private static func summaryLooksLikeJobType(_ value: String) -> Bool {
-        let normalizedValue = normalized(value)
-        let genericTitles: Set<String> = [
-            "service call",
-            "service",
-            "install",
-            "installation",
-            "maintenance",
-            "maintenance visit",
-            "estimate",
-            "quote",
-            "repair",
-            "diagnostic"
-        ]
-        return genericTitles.contains(normalizedValue)
-    }
-
-    private static func calendarCustomerNameFromLocation(_ location: String?) -> String {
-        guard let location = normalizedOptional(location) else { return "Google Calendar Customer" }
-        let firstLine = location
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { !$0.isEmpty }) ?? location
-        return "Customer at \(firstLine)"
+        return inferCustomerFromDescription(event.description, address: normalizedOptional(event.location))
     }
 
     private static func nameFromEmail(_ email: String) -> String {
@@ -511,6 +470,67 @@ enum GoogleCalendarScheduleSync {
             .components(separatedBy: separators)
             .filter { !$0.isEmpty && !$0.allSatisfy(\.isNumber) }
         return words.isEmpty ? email : words.joined(separator: " ").capitalized
+    }
+
+    private static func inferCustomerFromDescription(_ description: String?, address: String?) -> CalendarCustomerCandidate? {
+        guard let body = normalizedCalendarBody(description) else { return nil }
+        let email = firstEmail(in: body)
+        let labeledName = firstLabeledValue(
+            in: body,
+            labels: ["customer", "customer name", "client", "client name", "name"]
+        )
+        let name = labeledName ?? email.map(nameFromEmail)
+        guard let name, !name.isEmpty else { return nil }
+        return CalendarCustomerCandidate(
+            name: name,
+            email: email,
+            address: address ?? firstLabeledValue(in: body, labels: ["address", "service address", "location"])
+        )
+    }
+
+    private static func normalizedCalendarBody(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let withoutBreaks = value
+            .replacingOccurrences(of: "<br>", with: "\n", options: .caseInsensitive)
+            .replacingOccurrences(of: "<br/>", with: "\n", options: .caseInsensitive)
+            .replacingOccurrences(of: "<br />", with: "\n", options: .caseInsensitive)
+        let withoutTags = withoutBreaks.replacingOccurrences(
+            of: "<[^>]+>",
+            with: " ",
+            options: .regularExpression
+        )
+        let decoded = withoutTags
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+        let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func firstLabeledValue(in body: String, labels: [String]) -> String? {
+        let lines = body
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for line in lines {
+            guard let separator = line.firstIndex(where: { $0 == ":" || $0 == "-" }) else { continue }
+            let label = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard labels.contains(label) else { continue }
+            let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private static func firstEmail(in body: String) -> String? {
+        let pattern = #"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"#
+        guard let range = body.range(of: pattern, options: [.regularExpression, .caseInsensitive]) else {
+            return nil
+        }
+        return String(body[range]).lowercased()
     }
 
     private static func normalizedOptional(_ value: String?) -> String? {
