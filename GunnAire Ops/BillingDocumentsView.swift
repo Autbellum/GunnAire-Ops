@@ -30,6 +30,7 @@ struct BillingDocumentsView: View {
     @State private var customerAddress = ""
     @State private var itemSearchText = ""
     @State private var catalogFilter: DocumentationCatalogFilter = .recommended
+    @State private var newlyCreatedLineItems: [UUID: Item] = [:]
     @State private var newItemName = ""
     @State private var newItemType: CatalogItemType = .service
     @State private var newItemDescription = ""
@@ -100,7 +101,15 @@ struct BillingDocumentsView: View {
     }
 
     private var selectedLineItems: [Item] {
-        items.filter { selectedItems.contains($0.id) }
+        var selectedByID: [UUID: Item] = [:]
+        for item in items where selectedItems.contains(item.id) {
+            selectedByID[item.id] = item
+        }
+        for item in newlyCreatedLineItems.values where selectedItems.contains(item.id) {
+            selectedByID[item.id] = item
+        }
+        return Array(selectedByID.values)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var selectedCostTotal: Double {
@@ -1169,6 +1178,17 @@ GunnAire
                             Text("No items match that search.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                            if let suggestedItemName = nonBlank(itemSearchText) {
+                                Button {
+                                    newItemName = suggestedItemName
+                                    catalogFilter = .selected
+                                    showingItemCreator = true
+                                } label: {
+                                    Label("Create \"\(suggestedItemName)\"", systemImage: "plus.circle")
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(Color.brandGold)
+                            }
                         } else {
                             ForEach(builderItemResults) { item in
                                 Button {
@@ -1242,7 +1262,7 @@ GunnAire
                                 } label: {
                                     Label("Add", systemImage: "plus")
                                 }
-                                .disabled(newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Double(newItemPrice) == nil)
+                                .disabled(newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || CatalogItemAmountParser.parse(newItemPrice) == nil)
                             }
                         }
                     }
@@ -1490,10 +1510,10 @@ GunnAire
                 DocumentationItemSelectorView(items: items, selectedItems: $selectedItems)
             }
             .sheet(isPresented: $showingItemCreator) {
-                DocumentationItemCreatorView { createdItemID in
-                    selectedItems.insert(createdItemID)
-                    itemSearchText = ""
-                }
+                DocumentationItemCreatorView(
+                    initialName: itemCreatorInitialName,
+                    onCreated: handleCreatedItem
+                )
             }
             .sheet(item: $selectedInvoiceForCloseout) { invoice in
                 RecordInvoicePaymentView(invoice: invoice)
@@ -1619,8 +1639,8 @@ GunnAire
     }
 
     private func addItem() {
-        guard let price = Double(newItemPrice) else { return }
-        let cost = Double(newItemCost)
+        guard let price = CatalogItemAmountParser.parse(newItemPrice) else { return }
+        let cost = CatalogItemAmountParser.parse(newItemCost)
         let item = Item(
             name: newItemName.trimmingCharacters(in: .whitespacesAndNewlines),
             itemType: newItemType,
@@ -1630,7 +1650,13 @@ GunnAire
             itemDescription: newItemDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : newItemDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         modelContext.insert(item)
-        selectedItems.insert(item.id)
+        do {
+            try modelContext.save()
+            selectCreatedItem(item)
+            actionMessage = "Added \(item.name) to this \(selectedDocumentKind.rawValue.lowercased())."
+        } catch {
+            actionMessage = "Could not save \(item.name): \(error.localizedDescription)"
+        }
         itemSearchText = ""
         newItemName = ""
         newItemType = .service
@@ -1638,6 +1664,28 @@ GunnAire
         newItemPrice = ""
         newItemCost = ""
         newItemTaxable = false
+    }
+
+    private func selectCreatedItem(_ item: Item) {
+        newlyCreatedLineItems[item.id] = item
+        selectedItems.insert(item.id)
+        catalogFilter = .selected
+    }
+
+    private var itemCreatorInitialName: String {
+        nonBlank(newItemName) ?? nonBlank(itemSearchText) ?? ""
+    }
+
+    private func handleCreatedItem(_ item: Item) {
+        selectCreatedItem(item)
+        itemSearchText = ""
+        newItemName = ""
+        actionMessage = "Added \(item.name) to this \(selectedDocumentKind.rawValue.lowercased())."
+    }
+
+    private func nonBlank(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func importQuickBooksItems() {
@@ -3037,18 +3085,44 @@ private struct DocumentationItemSelectorView: View {
     }
 }
 
+private enum CatalogItemAmountParser {
+    static func parse(_ value: String) -> Double? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let normalized = trimmed
+            .replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: " ", with: "")
+
+        if normalized.hasPrefix("("), normalized.hasSuffix(")") {
+            let start = normalized.index(after: normalized.startIndex)
+            let end = normalized.index(before: normalized.endIndex)
+            return Double(String(normalized[start..<end])).map { -$0 }
+        }
+
+        return Double(normalized)
+    }
+}
+
 private struct DocumentationItemCreatorView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
-    let onCreated: (UUID) -> Void
+    let onCreated: (Item) -> Void
 
-    @State private var name = ""
+    @State private var name: String
     @State private var itemType: CatalogItemType = .service
     @State private var description = ""
     @State private var price = ""
     @State private var cost = ""
     @State private var isTaxable = false
+    @State private var creationMessage = ""
+
+    init(initialName: String = "", onCreated: @escaping (Item) -> Void) {
+        self.onCreated = onCreated
+        _name = State(initialValue: initialName)
+    }
 
     var body: some View {
         NavigationStack {
@@ -3066,6 +3140,11 @@ private struct DocumentationItemCreatorView: View {
                     .keyboardType(.decimalPad)
                 TextField("Cost", text: $cost)
                     .keyboardType(.decimalPad)
+                if !creationMessage.isEmpty {
+                    Text(creationMessage)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             .navigationTitle("Create Item")
             .toolbar {
@@ -3076,19 +3155,19 @@ private struct DocumentationItemCreatorView: View {
                     Button("Save") {
                         saveItem()
                     }
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Double(price) == nil)
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || CatalogItemAmountParser.parse(price) == nil)
                 }
             }
         }
     }
 
     private func saveItem() {
-        guard let salesPrice = Double(price) else { return }
+        guard let salesPrice = CatalogItemAmountParser.parse(price) else { return }
         let item = Item(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             itemType: itemType,
             unitPrice: salesPrice,
-            purchaseCost: Double(cost),
+            purchaseCost: CatalogItemAmountParser.parse(cost),
             isTaxable: isTaxable,
             itemDescription: {
                 let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3096,8 +3175,13 @@ private struct DocumentationItemCreatorView: View {
             }()
         )
         modelContext.insert(item)
-        onCreated(item.id)
-        dismiss()
+        do {
+            try modelContext.save()
+            onCreated(item)
+            dismiss()
+        } catch {
+            creationMessage = "Could not save item: \(error.localizedDescription)"
+        }
     }
 }
 
