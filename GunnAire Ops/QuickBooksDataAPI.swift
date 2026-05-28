@@ -87,7 +87,7 @@ final class QuickBooksDataAPI: ObservableObject {
         let company = realmID ?? "Not connected"
         let expiration = tokenExpiration?.formatted(date: .abbreviated, time: .shortened) ?? "No token"
         let authorizedScopes = storedScopeSignature?.isEmpty == false ? storedScopeSignature! : "Unknown"
-        return "Environment: \(currentEnvironment.capitalized) • Realm: \(company) • Client: \(Self.currentClientIDFingerprint) • Accounting scopes: \(Self.currentScopeSignature) • Authorized scopes: \(authorizedScopes) • Token expires: \(expiration)"
+        return "Environment: \(currentEnvironment.capitalized) • Realm: \(company) • Client: \(Self.currentClientIDFingerprint) • Requested scopes: \(Self.currentScopeSignature) • Authorized scopes: \(authorizedScopes) • Token expires: \(expiration)"
     }
 
     private static var currentClientIDFingerprint: String {
@@ -95,7 +95,7 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     private static var currentScopeSignature: String {
-        Config.QuickBooks.accountingOAuthScopes.sorted().joined(separator: " ")
+        Config.QuickBooks.oauthScopes.sorted().joined(separator: " ")
     }
 
     var missingRequestedScopes: [String] {
