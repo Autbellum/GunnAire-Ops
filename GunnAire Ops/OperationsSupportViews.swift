@@ -1,6 +1,144 @@
 import SwiftUI
 import SwiftData
 
+@MainActor
+enum CustomerDataMaintenance {
+    struct DeletionSummary {
+        var customers = 0
+        var serviceCalls = 0
+        var estimates = 0
+        var invoices = 0
+        var payments = 0
+        var contracts = 0
+        var timeEntries = 0
+    }
+
+    private static let genericCalendarCustomerNames: Set<String> = [
+        "service",
+        "service call",
+        "install",
+        "installation",
+        "maintenance",
+        "maintenance call",
+        "repair",
+        "estimate",
+        "quote",
+        "job",
+        "appointment",
+        "site visit",
+        "tune up",
+        "no heat",
+        "no cool",
+        "ac call",
+        "hvac service"
+    ]
+
+    static func isGenericCalendarCustomer(_ customer: Customer) -> Bool {
+        let name = customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let hasQuickBooksLink = customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        return genericCalendarCustomerNames.contains(name) && !hasQuickBooksLink
+    }
+
+    static func cleanupCalendarNamedCustomers(modelContext: ModelContext) -> DeletionSummary {
+        let customers = (try? modelContext.fetch(FetchDescriptor<Customer>())) ?? []
+        let genericCustomers = customers.filter(isGenericCalendarCustomer)
+        guard !genericCustomers.isEmpty else { return DeletionSummary() }
+
+        let serviceCalls = (try? modelContext.fetch(FetchDescriptor<ServiceCall>())) ?? []
+        let estimates = (try? modelContext.fetch(FetchDescriptor<Estimate>())) ?? []
+        let invoices = (try? modelContext.fetch(FetchDescriptor<Invoice>())) ?? []
+        let payments = (try? modelContext.fetch(FetchDescriptor<Payment>())) ?? []
+        let contracts = (try? modelContext.fetch(FetchDescriptor<RecurringMaintenanceContract>())) ?? []
+        let timeEntries = (try? modelContext.fetch(FetchDescriptor<TimeEntry>())) ?? []
+
+        var summary = DeletionSummary()
+        for customer in genericCustomers {
+            summary.merge(deleteCustomer(
+                customer,
+                modelContext: modelContext,
+                serviceCalls: serviceCalls,
+                estimates: estimates,
+                invoices: invoices,
+                payments: payments,
+                contracts: contracts,
+                timeEntries: timeEntries
+            ))
+        }
+        try? modelContext.save()
+        return summary
+    }
+
+    static func deleteCustomer(
+        _ customer: Customer,
+        modelContext: ModelContext,
+        serviceCalls: [ServiceCall],
+        estimates: [Estimate],
+        invoices: [Invoice],
+        payments: [Payment],
+        contracts: [RecurringMaintenanceContract],
+        timeEntries: [TimeEntry]
+    ) -> DeletionSummary {
+        var summary = DeletionSummary()
+        let customerID = customer.id
+        let customerCalls = serviceCalls.filter { $0.customer.id == customerID }
+        let customerCallIDs = Set(customerCalls.map(\.id))
+        let customerInvoices = invoices.filter { $0.customer.id == customerID }
+        let customerInvoiceIDs = Set(customerInvoices.map(\.id))
+
+        for entry in timeEntries {
+            guard let serviceCallID = entry.serviceCall?.id,
+                  customerCallIDs.contains(serviceCallID) else { continue }
+            modelContext.delete(entry)
+            summary.timeEntries += 1
+        }
+        for payment in payments where customerInvoiceIDs.contains(payment.invoice.id) {
+            modelContext.delete(payment)
+            summary.payments += 1
+        }
+        for invoice in customerInvoices {
+            modelContext.delete(invoice)
+            summary.invoices += 1
+        }
+        for estimate in estimates where estimate.customer.id == customerID {
+            modelContext.delete(estimate)
+            summary.estimates += 1
+        }
+        for call in customerCalls {
+            modelContext.delete(call)
+            summary.serviceCalls += 1
+        }
+        for contract in contracts where contract.customer.id == customerID {
+            modelContext.delete(contract)
+            summary.contracts += 1
+        }
+        modelContext.delete(customer)
+        summary.customers += 1
+        return summary
+    }
+}
+
+private extension CustomerDataMaintenance.DeletionSummary {
+    mutating func merge(_ other: CustomerDataMaintenance.DeletionSummary) {
+        customers += other.customers
+        serviceCalls += other.serviceCalls
+        estimates += other.estimates
+        invoices += other.invoices
+        payments += other.payments
+        contracts += other.contracts
+        timeEntries += other.timeEntries
+    }
+
+    var deletedAnything: Bool {
+        customers + serviceCalls + estimates + invoices + payments + contracts + timeEntries > 0
+    }
+
+    var customerScreenMessage: String {
+        deletedAnything
+            ? "Cleaned \(customers) calendar-created customer\(customers == 1 ? "" : "s") and \(serviceCalls) related local job\(serviceCalls == 1 ? "" : "s")."
+            : "No calendar-created generic customers found."
+    }
+}
+
 struct CustomersView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
@@ -183,6 +321,15 @@ struct CustomersView: View {
             }
             .navigationTitle("Customers")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if canViewFinancials {
+                        Button {
+                            cleanupCalendarCreatedCustomers()
+                        } label: {
+                            Label("Clean Calendar Imports", systemImage: "wand.and.stars")
+                        }
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     if canViewFinancials {
                         Button {
@@ -300,6 +447,11 @@ struct CustomersView: View {
             return "arrow.uturn.forward.circle"
         }
         return snapshot.healthScore >= 70 ? "checkmark.seal" : "exclamationmark.triangle"
+    }
+
+    private func cleanupCalendarCreatedCustomers() {
+        let summary = CustomerDataMaintenance.cleanupCalendarNamedCustomers(modelContext: modelContext)
+        customerSyncMessage = summary.customerScreenMessage
     }
 
     private func syncCustomersToQuickBooks() {
@@ -1309,6 +1461,7 @@ private struct CustomerEditorView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
+    @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
 
     let customer: Customer
@@ -1358,13 +1511,6 @@ private struct CustomerEditorView: View {
             email: GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
             users: users
         )
-    }
-
-    private var canDeleteCustomer: Bool {
-        customerServiceCalls.isEmpty &&
-        invoices.filter { $0.customer.id == customer.id }.isEmpty &&
-        estimates.filter { $0.customer.id == customer.id }.isEmpty &&
-        recurringContracts.filter { $0.customer.id == customer.id }.isEmpty
     }
 
     init(customer: Customer) {
@@ -1623,13 +1769,10 @@ private struct CustomerEditorView: View {
                     } label: {
                         Label("Remove Customer from App", systemImage: "trash")
                     }
-                    .disabled(!canDeleteCustomer)
 
-                    if !canDeleteCustomer {
-                        Text("Customers with jobs, estimates, invoices, or service agreements stay locked to preserve history. Remove or reassign those records first.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                    Text("This removes the customer and related local app records. It does not delete QuickBooks records.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
             }
             .navigationTitle("Edit Customer")
@@ -1649,12 +1792,12 @@ private struct CustomerEditorView: View {
                 }
             }
             .confirmationDialog("Remove this customer from the app?", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
-                Button("Remove Customer", role: .destructive) {
+                Button("Remove Customer and Local Records", role: .destructive) {
                     deleteCustomer()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This only removes the local app customer. QuickBooks records are not deleted.")
+                Text("This removes this customer, local jobs, estimates, invoices, payments, and service agreements tied to the customer. QuickBooks records are not deleted.")
             }
         }
         .tint(Color.brandGold)
@@ -1676,11 +1819,17 @@ private struct CustomerEditorView: View {
     }
 
     private func deleteCustomer() {
-        guard canDeleteCustomer else {
-            customerActionMessage = "Remove or reassign related records before deleting this customer."
-            return
-        }
-        modelContext.delete(customer)
+        _ = CustomerDataMaintenance.deleteCustomer(
+            customer,
+            modelContext: modelContext,
+            serviceCalls: serviceCalls,
+            estimates: estimates,
+            invoices: invoices,
+            payments: payments,
+            contracts: recurringContracts,
+            timeEntries: timeEntries
+        )
+        try? modelContext.save()
         dismiss()
     }
 

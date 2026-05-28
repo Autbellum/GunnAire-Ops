@@ -182,6 +182,7 @@ struct ContentView: View {
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
             ensurePrimaryAdminExists()
+            cleanupCalendarCreatedCustomersIfNeeded()
             refreshGoogleAccountIdentityIfNeeded()
             if let selectedSidebarItem, !visibleSidebarItems.contains(selectedSidebarItem) {
                 self.selectedSidebarItem = .commandCenter
@@ -264,6 +265,10 @@ struct ContentView: View {
     private func ensurePrimaryAdminExists() {
         guard !users.contains(where: { $0.email == AppAccess.primaryAdminEmail }) else { return }
         modelContext.insert(AppUser(email: AppAccess.primaryAdminEmail, role: .admin))
+    }
+
+    private func cleanupCalendarCreatedCustomersIfNeeded() {
+        _ = CustomerDataMaintenance.cleanupCalendarNamedCustomers(modelContext: modelContext)
     }
 
     private func applyPendingAppRouteIfNeeded() {
