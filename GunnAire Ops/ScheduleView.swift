@@ -18,6 +18,7 @@ struct ScheduleView: View {
     
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showingAddCallSheet = false
+    @State private var editingCall: ServiceCall?
     @State private var documentationCall: ServiceCall?
     @State private var navigationPath = NavigationPath()
     @State private var openDocumentationInCloseout = false
@@ -306,6 +307,10 @@ struct ScheduleView: View {
                         openDocumentationInTapToPay = false
                         documentationCall = createdCall
                     }
+                        .tint(Color.brandGold)
+                }
+                .sheet(item: $editingCall) { call in
+                    EditServiceCallView(call: call)
                         .tint(Color.brandGold)
                 }
                 .sheet(item: $documentationCall) { call in
@@ -685,6 +690,11 @@ struct ScheduleView: View {
             HStack(spacing: 10) {
                 Button("Customer") {
                     GunnAireAppIntentRouter.storeCustomerRoute(call.customer.id)
+                }
+                .buttonStyle(.bordered)
+
+                Button("Edit") {
+                    editingCall = call
                 }
                 .buttonStyle(.bordered)
 

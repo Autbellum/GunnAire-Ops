@@ -77,7 +77,13 @@ enum GoogleCalendarScheduleSync {
         })
         var callsByFingerprint = Dictionary(uniqueKeysWithValues: existingCalls.map { (eventFingerprint(for: $0), $0) })
         var importedEventFingerprints: Set<String> = []
-        var customersByName = Dictionary(uniqueKeysWithValues: existingCustomers.map { (normalized($0.name), $0) })
+        var customersByName: [String: Customer] = [:]
+        for customer in existingCustomers {
+            let nameKey = normalized(customer.name)
+            if !nameKey.isEmpty, customersByName[nameKey] == nil {
+                customersByName[nameKey] = customer
+            }
+        }
         var customersByEmail: [String: Customer] = [:]
         for customer in existingCustomers {
             guard let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
@@ -85,9 +91,13 @@ enum GoogleCalendarScheduleSync {
                   customersByEmail[email] == nil else { continue }
             customersByEmail[email] = customer
         }
-        var techniciansByEmail = Dictionary(uniqueKeysWithValues: existingTechnicians.compactMap { tech in
-            tech.contactInfo.map { ($0.lowercased(), tech) }
-        })
+        var techniciansByEmail: [String: Technician] = [:]
+        for technician in existingTechnicians {
+            guard let email = technician.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                  !email.isEmpty,
+                  techniciansByEmail[email] == nil else { continue }
+            techniciansByEmail[email] = technician
+        }
 
         let technician = resolveTechnician(signedInEmail: signedInEmail, techniciansByEmail: &techniciansByEmail, modelContext: modelContext)
         var imported = 0
@@ -114,8 +124,9 @@ enum GoogleCalendarScheduleSync {
             ) else {
                 continue
             }
+            let nameKey = normalized(customerCandidate.name)
             let customer = customerCandidate.email.flatMap { customersByEmail[$0] }
-                ?? customersByName[normalized(customerCandidate.name)]
+                ?? customersByName[nameKey]
                 ?? {
                     let newCustomer = Customer(
                         name: customerCandidate.name,
@@ -125,7 +136,9 @@ enum GoogleCalendarScheduleSync {
                     modelContext.insert(newCustomer)
                     return newCustomer
                 }()
-            customer.name = customerCandidate.name
+            if !isGenericCustomerName(customerCandidate.name, matching: event.summary) {
+                customer.name = customerCandidate.name
+            }
             if customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                 customer.email = customerCandidate.email
             }
@@ -133,6 +146,7 @@ enum GoogleCalendarScheduleSync {
                 customer.address = address
             }
             customersByName[normalized(customer.name)] = customer
+            customersByName[nameKey] = customer
             if let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
                !email.isEmpty {
                 customersByEmail[email] = customer
@@ -451,16 +465,20 @@ enum GoogleCalendarScheduleSync {
             return true
         }) {
             let email = attendee.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let displayName = attendee.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayName = cleanCustomerName(attendee.displayName, eventSummary: event.summary)
             let fallbackName = email.map(nameFromEmail) ?? "Google Calendar Customer"
             return CalendarCustomerCandidate(
-                name: displayName?.isEmpty == false ? displayName! : fallbackName,
+                name: displayName ?? fallbackName,
                 email: email,
                 address: normalizedOptional(event.location)
             )
         }
 
-        return inferCustomerFromDescription(event.description, address: normalizedOptional(event.location))
+        return inferCustomerFromDescription(
+            event.description,
+            eventSummary: event.summary,
+            address: normalizedOptional(event.location)
+        )
     }
 
     private static func nameFromEmail(_ email: String) -> String {
@@ -472,13 +490,13 @@ enum GoogleCalendarScheduleSync {
         return words.isEmpty ? email : words.joined(separator: " ").capitalized
     }
 
-    private static func inferCustomerFromDescription(_ description: String?, address: String?) -> CalendarCustomerCandidate? {
+    private static func inferCustomerFromDescription(_ description: String?, eventSummary: String?, address: String?) -> CalendarCustomerCandidate? {
         guard let body = normalizedCalendarBody(description) else { return nil }
         let email = firstEmail(in: body)
-        let labeledName = firstLabeledValue(
+        let labeledName = cleanCustomerName(firstLabeledValue(
             in: body,
             labels: ["customer", "customer name", "client", "client name", "name"]
-        )
+        ), eventSummary: eventSummary)
         let name = labeledName ?? email.map(nameFromEmail)
         guard let name, !name.isEmpty else { return nil }
         return CalendarCustomerCandidate(
@@ -506,6 +524,43 @@ enum GoogleCalendarScheduleSync {
             .replacingOccurrences(of: "&gt;", with: ">")
         let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func cleanCustomerName(_ value: String?, eventSummary: String?) -> String? {
+        guard let trimmed = normalizedOptional(value),
+              !isGenericCustomerName(trimmed, matching: eventSummary) else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private static func isGenericCustomerName(_ value: String, matching eventSummary: String?) -> Bool {
+        let name = normalized(value)
+        guard !name.isEmpty else { return true }
+        if let eventSummary, normalized(eventSummary) == name {
+            return true
+        }
+
+        let genericTitles: Set<String> = [
+            "service",
+            "service call",
+            "install",
+            "installation",
+            "maintenance",
+            "maintenance call",
+            "repair",
+            "estimate",
+            "quote",
+            "job",
+            "appointment",
+            "site visit",
+            "tune up",
+            "no heat",
+            "no cool",
+            "ac call",
+            "hvac service"
+        ]
+        return genericTitles.contains(name)
     }
 
     private static func firstLabeledValue(in body: String, labels: [String]) -> String? {
