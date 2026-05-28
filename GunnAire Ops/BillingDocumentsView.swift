@@ -8,6 +8,7 @@ struct BillingDocumentsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
+    @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
@@ -33,9 +34,14 @@ struct BillingDocumentsView: View {
     @State private var newlyCreatedLineItems: [UUID: Item] = [:]
     @State private var newItemName = ""
     @State private var newItemType: CatalogItemType = .service
+    @State private var newItemSKU = ""
     @State private var newItemDescription = ""
     @State private var newItemPrice = ""
     @State private var newItemCost = ""
+    @State private var newItemPreferredVendor = ""
+    @State private var newItemVendorPartNumber = ""
+    @State private var newItemPurchaseURL = ""
+    @State private var newItemPurchaseDescription = ""
     @State private var newItemTaxable = false
     @State private var actionMessage = ""
     @State private var isCreatingDocument = false
@@ -130,8 +136,17 @@ struct BillingDocumentsView: View {
     private var filteredItems: [Item] {
         let query = itemSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return items.filter { item in
-            let matchesQuery = query.isEmpty || item.name.lowercased().contains(query) ||
-                (item.itemDescription?.lowercased().contains(query) ?? false)
+            let haystack = [
+                item.name,
+                item.sku,
+                item.itemDescription,
+                item.preferredVendorName,
+                item.vendorPartNumber,
+                item.purchaseDescription
+            ]
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+            let matchesQuery = query.isEmpty || haystack.contains(query)
             return matchesQuery && matchesCatalogFilter(item)
         }
     }
@@ -1206,6 +1221,7 @@ GunnAire
                                                     .foregroundColor(.secondary)
                                                     .lineLimit(1)
                                             }
+                                            itemMetaText(for: item)
                                         }
                                         Spacer()
                                         Text(item.unitPrice, format: .currency(code: "USD"))
@@ -1228,6 +1244,7 @@ GunnAire
                                                 .foregroundColor(.secondary)
                                                 .lineLimit(1)
                                         }
+                                        itemMetaText(for: item)
                                     }
                                     Spacer()
                                     Text(item.unitPrice, format: .currency(code: "USD"))
@@ -1244,6 +1261,8 @@ GunnAire
 
                         DisclosureGroup("Create Item") {
                             TextField("New item", text: $newItemName)
+                            TextField("SKU", text: $newItemSKU)
+                                .textInputAutocapitalization(.characters)
                             Picker("Item Type", selection: $newItemType) {
                                 ForEach(CatalogItemType.allCases) { type in
                                     Text(type.rawValue).tag(type)
@@ -1268,6 +1287,22 @@ GunnAire
                                     !CatalogItemAmountParser.isValidOptionalAmount(newItemCost)
                                 )
                             }
+                            TextField("Typical purchase source", text: $newItemPreferredVendor)
+                            if !vendors.isEmpty {
+                                Menu("Use Saved Vendor") {
+                                    ForEach(vendors) { vendor in
+                                        Button(vendor.name) {
+                                            newItemPreferredVendor = vendor.name
+                                        }
+                                    }
+                                }
+                            }
+                            TextField("Vendor part #", text: $newItemVendorPartNumber)
+                            TextField("Purchase URL", text: $newItemPurchaseURL)
+                                .textInputAutocapitalization(.never)
+                                .keyboardType(.URL)
+                            TextField("Purchase notes", text: $newItemPurchaseDescription, axis: .vertical)
+                                .lineLimit(2...3)
                         }
                     }
 
@@ -1516,6 +1551,7 @@ GunnAire
             .sheet(isPresented: $showingItemCreator) {
                 DocumentationItemCreatorView(
                     initialName: itemCreatorInitialName,
+                    vendors: vendors,
                     onCreated: handleCreatedItem
                 )
             }
@@ -1570,6 +1606,26 @@ GunnAire
         if let estimate = currentJobEstimate {
             loadEstimateIntoBuilder(estimate, announce: false)
             didLoadLinkedDocumentContext = true
+        }
+    }
+
+    @ViewBuilder
+    private func itemMetaText(for item: Item) -> some View {
+        let meta = [
+            item.sku.map { "SKU \($0)" },
+            item.preferredVendorName,
+            item.vendorPartNumber.map { "Vendor # \($0)" }
+        ]
+        .compactMap { value in
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed?.isEmpty == false ? trimmed : nil
+        }
+
+        if !meta.isEmpty {
+            Text(meta.joined(separator: " • "))
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
         }
     }
 
@@ -1645,13 +1701,23 @@ GunnAire
     private func addItem() {
         guard let price = CatalogItemAmountParser.parseRequiredOrZero(newItemPrice) else { return }
         let cost = CatalogItemAmountParser.parseOptional(newItemCost)
+        let preferredVendorName = nonBlank(newItemPreferredVendor)
+        let preferredVendorQuickBooksID = preferredVendorName.flatMap { vendorName in
+            vendors.first { $0.name.caseInsensitiveCompare(vendorName) == .orderedSame }?.quickBooksID
+        }
         let item = Item(
             name: newItemName.trimmingCharacters(in: .whitespacesAndNewlines),
             itemType: newItemType,
             unitPrice: price,
             purchaseCost: cost,
             isTaxable: newItemTaxable,
-            itemDescription: newItemDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : newItemDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            itemDescription: nonBlank(newItemDescription),
+            sku: nonBlank(newItemSKU),
+            preferredVendorName: preferredVendorName,
+            preferredVendorQuickBooksID: preferredVendorQuickBooksID,
+            vendorPartNumber: nonBlank(newItemVendorPartNumber),
+            purchaseURL: nonBlank(newItemPurchaseURL),
+            purchaseDescription: nonBlank(newItemPurchaseDescription)
         )
         modelContext.insert(item)
         do {
@@ -1664,9 +1730,14 @@ GunnAire
         itemSearchText = ""
         newItemName = ""
         newItemType = .service
+        newItemSKU = ""
         newItemDescription = ""
         newItemPrice = ""
         newItemCost = ""
+        newItemPreferredVendor = ""
+        newItemVendorPartNumber = ""
+        newItemPurchaseURL = ""
+        newItemPurchaseDescription = ""
         newItemTaxable = false
     }
 
@@ -1715,6 +1786,10 @@ GunnAire
                             existing.purchaseCost = quickBooksItem.PurchaseCost ?? existing.purchaseCost
                             existing.isTaxable = quickBooksItem.Taxable ?? existing.isTaxable
                             existing.itemDescription = quickBooksItem.Description ?? existing.itemDescription
+                            existing.sku = quickBooksItem.Sku ?? existing.sku
+                            existing.purchaseDescription = quickBooksItem.PurchaseDesc ?? existing.purchaseDescription
+                            existing.preferredVendorName = quickBooksItem.PrefVendorRef?.name ?? existing.preferredVendorName
+                            existing.preferredVendorQuickBooksID = quickBooksItem.PrefVendorRef?.value ?? existing.preferredVendorQuickBooksID
                             continue
                         }
 
@@ -1725,7 +1800,11 @@ GunnAire
                             unitPrice: quickBooksItem.UnitPrice ?? 0,
                             purchaseCost: quickBooksItem.PurchaseCost,
                             isTaxable: quickBooksItem.Taxable ?? false,
-                            itemDescription: quickBooksItem.Description
+                            itemDescription: quickBooksItem.Description,
+                            sku: quickBooksItem.Sku,
+                            preferredVendorName: quickBooksItem.PrefVendorRef?.name,
+                            preferredVendorQuickBooksID: quickBooksItem.PrefVendorRef?.value,
+                            purchaseDescription: quickBooksItem.PurchaseDesc
                         )
                         modelContext.insert(localItem)
                         imported += 1
@@ -2337,7 +2416,8 @@ GunnAire
             Name: item.name,
             ItemType: item.itemType.rawValue,
             Description: item.itemDescription,
-            PurchaseDesc: item.itemDescription,
+            Sku: item.sku,
+            PurchaseDesc: item.purchaseDescription ?? item.itemDescription,
             UnitPrice: item.unitPrice,
             PurchaseCost: item.purchaseCost,
             Taxable: item.isTaxable,
@@ -2346,7 +2426,12 @@ GunnAire
                 : QuickBooksReference(value: Config.QuickBooks.defaultIncomeAccountRef, name: nil),
             ExpenseAccountRef: Config.QuickBooks.defaultExpenseAccountRef.isEmpty
                 ? nil
-                : QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil)
+                : QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil),
+            PrefVendorRef: item.preferredVendorQuickBooksID.flatMap { quickBooksID in
+                quickBooksID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil
+                    : QuickBooksReference(value: quickBooksID, name: item.preferredVendorName)
+            }
         )
         liveAPI.createItem(payload) { result in
             DispatchQueue.main.async {
@@ -3060,8 +3145,17 @@ private struct DocumentationItemSelectorView: View {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return items }
         return items.filter { item in
-            item.name.lowercased().contains(query) ||
-            (item.itemDescription?.lowercased().contains(query) ?? false)
+            [
+                item.name,
+                item.sku,
+                item.itemDescription,
+                item.preferredVendorName,
+                item.vendorPartNumber,
+                item.purchaseDescription
+            ]
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+            .contains(query)
         }
     }
 
@@ -3092,6 +3186,20 @@ private struct DocumentationItemSelectorView: View {
                                     if let description = item.itemDescription, !description.isEmpty {
                                         Text(description)
                                             .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    let meta = [
+                                        item.sku.map { "SKU \($0)" },
+                                        item.preferredVendorName,
+                                        item.vendorPartNumber.map { "Vendor # \($0)" }
+                                    ]
+                                    .compactMap { value in
+                                        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        return trimmed?.isEmpty == false ? trimmed : nil
+                                    }
+                                    if !meta.isEmpty {
+                                        Text(meta.joined(separator: " • "))
+                                            .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
                                     HStack(spacing: 8) {
@@ -3163,17 +3271,24 @@ private struct DocumentationItemCreatorView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
+    let vendors: [Vendor]
     let onCreated: (Item) -> Void
 
     @State private var name: String
     @State private var itemType: CatalogItemType = .service
+    @State private var sku = ""
     @State private var description = ""
     @State private var price = ""
     @State private var cost = ""
+    @State private var preferredVendor = ""
+    @State private var vendorPartNumber = ""
+    @State private var purchaseURL = ""
+    @State private var purchaseDescription = ""
     @State private var isTaxable = false
     @State private var creationMessage = ""
 
-    init(initialName: String = "", onCreated: @escaping (Item) -> Void) {
+    init(initialName: String = "", vendors: [Vendor] = [], onCreated: @escaping (Item) -> Void) {
+        self.vendors = vendors
         self.onCreated = onCreated
         _name = State(initialValue: initialName)
     }
@@ -3181,19 +3296,42 @@ private struct DocumentationItemCreatorView: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Item name", text: $name)
-                Picker("Item Type", selection: $itemType) {
-                    ForEach(CatalogItemType.allCases) { type in
-                        Text(type.rawValue).tag(type)
+                Section("Sales") {
+                    TextField("Item name", text: $name)
+                    TextField("SKU", text: $sku)
+                        .textInputAutocapitalization(.characters)
+                    Picker("Item Type", selection: $itemType) {
+                        ForEach(CatalogItemType.allCases) { type in
+                            Text(type.rawValue).tag(type)
+                        }
                     }
+                    TextField("Description", text: $description, axis: .vertical)
+                        .lineLimit(2...3)
+                    Toggle("Taxable", isOn: $isTaxable)
+                    TextField("Sales price (optional)", text: $price)
+                        .keyboardType(.decimalPad)
                 }
-                TextField("Description", text: $description, axis: .vertical)
-                    .lineLimit(2...3)
-                Toggle("Taxable", isOn: $isTaxable)
-                TextField("Sales price (optional)", text: $price)
-                    .keyboardType(.decimalPad)
-                TextField("Cost", text: $cost)
-                    .keyboardType(.decimalPad)
+
+                Section("Purchasing") {
+                    TextField("Purchase price", text: $cost)
+                        .keyboardType(.decimalPad)
+                    TextField("Typical purchase source", text: $preferredVendor)
+                    if !vendors.isEmpty {
+                        Picker("Saved vendor", selection: $preferredVendor) {
+                            Text("Manual / none").tag("")
+                            ForEach(vendors) { vendor in
+                                Text(vendor.name).tag(vendor.name)
+                            }
+                        }
+                    }
+                    TextField("Vendor part #", text: $vendorPartNumber)
+                    TextField("Purchase URL", text: $purchaseURL)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                    TextField("Purchase notes", text: $purchaseDescription, axis: .vertical)
+                        .lineLimit(2...3)
+                }
+
                 if !creationMessage.isEmpty {
                     Text(creationMessage)
                         .font(.caption)
@@ -3221,16 +3359,23 @@ private struct DocumentationItemCreatorView: View {
 
     private func saveItem() {
         guard let salesPrice = CatalogItemAmountParser.parseRequiredOrZero(price) else { return }
+        let preferredVendorName = nonBlank(preferredVendor)
+        let preferredVendorQuickBooksID = preferredVendorName.flatMap { vendorName in
+            vendors.first { $0.name.caseInsensitiveCompare(vendorName) == .orderedSame }?.quickBooksID
+        }
         let item = Item(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             itemType: itemType,
             unitPrice: salesPrice,
             purchaseCost: CatalogItemAmountParser.parseOptional(cost),
             isTaxable: isTaxable,
-            itemDescription: {
-                let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : trimmed
-            }()
+            itemDescription: nonBlank(description),
+            sku: nonBlank(sku),
+            preferredVendorName: preferredVendorName,
+            preferredVendorQuickBooksID: preferredVendorQuickBooksID,
+            vendorPartNumber: nonBlank(vendorPartNumber),
+            purchaseURL: nonBlank(purchaseURL),
+            purchaseDescription: nonBlank(purchaseDescription)
         )
         modelContext.insert(item)
         do {
@@ -3240,6 +3385,11 @@ private struct DocumentationItemCreatorView: View {
         } catch {
             creationMessage = "Could not save item: \(error.localizedDescription)"
         }
+    }
+
+    private func nonBlank(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

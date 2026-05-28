@@ -1742,15 +1742,18 @@ struct QuickBooksItem: Codable, Identifiable {
     let Name: String
     let ItemType: String?
     let Description: String?
+    let Sku: String?
+    let PurchaseDesc: String?
     let UnitPrice: Double?
     let PurchaseCost: Double?
     let Taxable: Bool?
     let Active: Bool?
+    let PrefVendorRef: QuickBooksReference?
 
     var id: String { Id }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, Name, Description, UnitPrice, PurchaseCost, Taxable, Active
+        case Id, Name, Description, Sku, PurchaseDesc, UnitPrice, PurchaseCost, Taxable, Active, PrefVendorRef
         case ItemType = "Type"
     }
 }
@@ -1759,15 +1762,17 @@ struct QuickBooksItemCreate: Codable {
     let Name: String
     let ItemType: String
     let Description: String?
+    let Sku: String?
     let PurchaseDesc: String?
     let UnitPrice: Double?
     let PurchaseCost: Double?
     let Taxable: Bool?
     let IncomeAccountRef: QuickBooksReference?
     let ExpenseAccountRef: QuickBooksReference?
+    let PrefVendorRef: QuickBooksReference?
 
     private enum CodingKeys: String, CodingKey {
-        case Name, Description, PurchaseDesc, UnitPrice, PurchaseCost, Taxable, IncomeAccountRef, ExpenseAccountRef
+        case Name, Description, Sku, PurchaseDesc, UnitPrice, PurchaseCost, Taxable, IncomeAccountRef, ExpenseAccountRef, PrefVendorRef
         case ItemType = "Type"
     }
 }

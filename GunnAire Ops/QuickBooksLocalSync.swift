@@ -75,6 +75,10 @@ enum QuickBooksLocalSync {
             item.purchaseCost = quickBooksItem.PurchaseCost ?? item.purchaseCost
             item.isTaxable = quickBooksItem.Taxable ?? item.isTaxable
             item.itemDescription = quickBooksItem.Description
+            item.sku = quickBooksItem.Sku ?? item.sku
+            item.purchaseDescription = quickBooksItem.PurchaseDesc ?? item.purchaseDescription
+            item.preferredVendorName = quickBooksItem.PrefVendorRef?.name ?? item.preferredVendorName
+            item.preferredVendorQuickBooksID = quickBooksItem.PrefVendorRef?.value ?? item.preferredVendorQuickBooksID
             itemsByQBID[quickBooksItem.Id] = item
             itemsByName[normalized(item.name)] = item
         }

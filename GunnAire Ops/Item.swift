@@ -25,6 +25,12 @@ final class Item {
     var purchaseCost: Double?
     var isTaxable: Bool = false
     var itemDescription: String?
+    var sku: String?
+    var preferredVendorName: String?
+    var preferredVendorQuickBooksID: String?
+    var vendorPartNumber: String?
+    var purchaseURL: String?
+    var purchaseDescription: String?
     var createdAt: Date = Date()
     var timestamp: Date = Date()
 
@@ -37,6 +43,12 @@ final class Item {
         purchaseCost: Double? = nil,
         isTaxable: Bool = false,
         itemDescription: String? = nil,
+        sku: String? = nil,
+        preferredVendorName: String? = nil,
+        preferredVendorQuickBooksID: String? = nil,
+        vendorPartNumber: String? = nil,
+        purchaseURL: String? = nil,
+        purchaseDescription: String? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -47,6 +59,12 @@ final class Item {
         self.purchaseCost = purchaseCost
         self.isTaxable = isTaxable
         self.itemDescription = itemDescription
+        self.sku = sku
+        self.preferredVendorName = preferredVendorName
+        self.preferredVendorQuickBooksID = preferredVendorQuickBooksID
+        self.vendorPartNumber = vendorPartNumber
+        self.purchaseURL = purchaseURL
+        self.purchaseDescription = purchaseDescription
         self.createdAt = createdAt
         self.timestamp = createdAt
     }

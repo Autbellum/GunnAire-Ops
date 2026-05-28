@@ -363,6 +363,20 @@ struct QuickBooksManagementView: View {
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
                                         }
+                                        let meta = [
+                                            item.Sku.map { "SKU \($0)" },
+                                            item.PrefVendorRef?.displayName,
+                                            item.PurchaseCost.map { "Cost \($0.formatted(.currency(code: "USD")))" }
+                                        ]
+                                        .compactMap { value in
+                                            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+                                            return trimmed?.isEmpty == false ? trimmed : nil
+                                        }
+                                        if !meta.isEmpty {
+                                            Text(meta.joined(separator: " • "))
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
                                         Text(item.ItemType ?? "Unknown")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
@@ -868,8 +882,8 @@ struct QuickBooksManagementView: View {
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingNewCatalogItemSheet) {
-                    QuickBooksCatalogItemComposeView { name, price, description in
-                        createCatalogItem(name: name, price: price, description: description)
+                    QuickBooksCatalogItemComposeView(vendors: vendors) { draft in
+                        createCatalogItem(draft)
                     }
                     .tint(Color.brandGold)
                 }
@@ -1120,19 +1134,21 @@ struct QuickBooksManagementView: View {
         }
     }
 
-    private func createCatalogItem(name: String, price: Double, description: String?) {
+    private func createCatalogItem(_ draft: QuickBooksCatalogItemDraft) {
         let payload = QuickBooksItemCreate(
-            Name: name,
-            ItemType: "Service",
-            Description: description,
-            PurchaseDesc: description,
-            UnitPrice: price,
-            PurchaseCost: nil,
+            Name: draft.name,
+            ItemType: draft.itemType.rawValue,
+            Description: draft.description,
+            Sku: draft.sku,
+            PurchaseDesc: draft.purchaseDescription ?? draft.description,
+            UnitPrice: draft.price,
+            PurchaseCost: draft.purchaseCost,
             Taxable: nil,
             IncomeAccountRef: QuickBooksReference(value: Config.QuickBooks.defaultIncomeAccountRef, name: nil),
             ExpenseAccountRef: Config.QuickBooks.defaultExpenseAccountRef.isEmpty
                 ? nil
-                : QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil)
+                : QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil),
+            PrefVendorRef: draft.vendorRef
         )
 
         performAction(message: "Creating catalog item in QuickBooks...") {
@@ -2556,23 +2572,62 @@ private struct QuickBooksCustomerComposeView: View {
     }
 }
 
+private struct QuickBooksCatalogItemDraft {
+    let name: String
+    let itemType: CatalogItemType
+    let sku: String?
+    let price: Double
+    let purchaseCost: Double?
+    let description: String?
+    let purchaseDescription: String?
+    let vendorRef: QuickBooksReference?
+}
+
 private struct QuickBooksCatalogItemComposeView: View {
     @Environment(\.dismiss) private var dismiss
 
-    let onCreate: (String, Double, String?) -> Void
+    let vendors: [QuickBooksVendor]
+    let onCreate: (QuickBooksCatalogItemDraft) -> Void
 
     @State private var name = ""
+    @State private var itemType: CatalogItemType = .service
+    @State private var sku = ""
     @State private var price = ""
+    @State private var purchaseCost = ""
     @State private var description = ""
+    @State private var purchaseDescription = ""
+    @State private var selectedVendorID = ""
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Catalog Item") {
+                Section("Sales") {
                     TextField("Name", text: $name)
+                    TextField("SKU", text: $sku)
+                        .textInputAutocapitalization(.characters)
+                    Picker("Item Type", selection: $itemType) {
+                        ForEach(CatalogItemType.allCases) { type in
+                            Text(type.rawValue).tag(type)
+                        }
+                    }
                     TextField("Price (optional)", text: $price)
                         .keyboardType(.decimalPad)
                     TextField("Description", text: $description)
+                }
+
+                Section("Purchasing") {
+                    TextField("Purchase price", text: $purchaseCost)
+                        .keyboardType(.decimalPad)
+                    if !vendors.isEmpty {
+                        Picker("Preferred vendor", selection: $selectedVendorID) {
+                            Text("None").tag("")
+                            ForEach(vendors) { vendor in
+                                Text(vendor.DisplayName).tag(vendor.Id)
+                            }
+                        }
+                    }
+                    TextField("Purchase notes", text: $purchaseDescription, axis: .vertical)
+                        .lineLimit(2...3)
                 }
             }
             .navigationTitle("Add Catalog Item")
@@ -2583,14 +2638,25 @@ private struct QuickBooksCatalogItemComposeView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
                         guard let amount = QuickBooksCatalogAmountParser.parseRequiredOrZero(price), amount >= 0 else { return }
-                        onCreate(
-                            name.trimmingCharacters(in: .whitespacesAndNewlines),
-                            amount,
-                            description.nilIfBlank
+                        let vendorRef = vendors.first { $0.Id == selectedVendorID }?.reference
+                        onCreate(QuickBooksCatalogItemDraft(
+                            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                            itemType: itemType,
+                            sku: sku.nilIfBlank,
+                            price: amount,
+                            purchaseCost: QuickBooksCatalogAmountParser.parseOptional(purchaseCost),
+                            description: description.nilIfBlank,
+                            purchaseDescription: purchaseDescription.nilIfBlank,
+                            vendorRef: vendorRef
+                        )
                         )
                         dismiss()
                     }
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || QuickBooksCatalogAmountParser.parseRequiredOrZero(price) == nil)
+                    .disabled(
+                        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        QuickBooksCatalogAmountParser.parseRequiredOrZero(price) == nil ||
+                        !QuickBooksCatalogAmountParser.isValidOptionalAmount(purchaseCost)
+                    )
                 }
             }
         }
@@ -2606,6 +2672,17 @@ private enum QuickBooksCatalogAmountParser {
             .replacingOccurrences(of: ",", with: "")
             .replacingOccurrences(of: " ", with: "")
         return Double(normalized)
+    }
+
+    static func parseOptional(_ value: String) -> Double? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return parseRequiredOrZero(trimmed)
+    }
+
+    static func isValidOptionalAmount(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || parseRequiredOrZero(trimmed) != nil
     }
 }
 
