@@ -440,7 +440,7 @@ struct OperationsDashboardView: View {
                     priorityRow(
                         title: "Assign upcoming work",
                         subtitle: "\(call.customer.name) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))",
-                        value: call.type.rawValue.capitalized,
+                        value: call.type.displayName,
                         systemImage: "person.crop.circle.badge.plus",
                         tint: .blue,
                         actionTitle: "Open Schedule"
@@ -452,7 +452,7 @@ struct OperationsDashboardView: View {
                 if canViewFinancials, let call = readyToBillCalls.first {
                     priorityRow(
                         title: "Create invoice",
-                        subtitle: "\(call.customer.name) • \(call.type.rawValue.capitalized)",
+                        subtitle: "\(call.customer.name) • \(call.type.displayName)",
                         value: "Ready",
                         systemImage: "doc.badge.plus",
                         tint: .green,
@@ -530,7 +530,7 @@ struct OperationsDashboardView: View {
                 if let call = upcomingCalls.first {
                     priorityRow(
                         title: "Next scheduled job",
-                        subtitle: "\(call.customer.name) • \(call.type.rawValue.capitalized)",
+                        subtitle: "\(call.customer.name) • \(call.type.displayName)",
                         value: call.scheduledDate.formatted(date: .omitted, time: .shortened),
                         systemImage: "clock.badge.checkmark",
                         tint: Color.brandGold,
@@ -1074,7 +1074,7 @@ struct OperationsDashboardView: View {
                         Text(call.customer.name)
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
-                        Text(call.type.rawValue.capitalized)
+                        Text(call.type.displayName)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Color.brandGold)
                     }
@@ -1355,6 +1355,12 @@ struct OperationsDashboardView: View {
             return "hammer"
         case .maintenance:
             return "repeat.circle"
+        case .meeting:
+            return "person.2"
+        case .siteVisit:
+            return "mappin.and.ellipse"
+        case .other:
+            return "calendar"
         }
     }
 
@@ -1498,7 +1504,7 @@ struct OperationsDashboardView: View {
             }
             return action
         }
-        return "\(call.type.rawValue.capitalized) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))"
+        return "\(call.type.displayName) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))"
     }
 
     private func maintenanceTitle(for contract: RecurringMaintenanceContract) -> String {
@@ -1780,7 +1786,7 @@ private struct OperationsCommandPalette: View {
             Section("Jobs") {
                 ForEach(matchingServiceCalls) { call in
                     commandButton(
-                        "\(call.customer.name) • \(call.type.rawValue.capitalized)",
+                        "\(call.customer.name) • \(call.type.displayName)",
                         detail: "\(call.scheduledDate.formatted(date: .abbreviated, time: .shortened)) • \(call.status.rawValue.capitalized)",
                         systemImage: "wrench.and.screwdriver"
                     ) {

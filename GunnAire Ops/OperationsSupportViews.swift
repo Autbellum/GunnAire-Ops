@@ -1193,7 +1193,7 @@ struct OnsiteDocumentationView: View {
         switch call.type {
         case .estimate:
             return hasDocumentation ? "Continue Estimate" : "Start Estimate"
-        case .install, .maintenance, .service:
+        case .install, .maintenance, .service, .meeting, .siteVisit, .other:
             if call.linkedInvoiceID != nil {
                 return "Continue Invoice"
             }
@@ -1338,7 +1338,7 @@ struct OnsiteDocumentationView: View {
                                     Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
                                         .font(.caption)
                                         .foregroundColor(.secondary)
-                                    Text(call.type.rawValue.capitalized)
+                                    Text(call.type.displayName)
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                     Text("Checklist \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
@@ -1650,7 +1650,7 @@ private struct CustomerEditorView: View {
                     Section("Recent Jobs") {
                         ForEach(recentCustomerServiceCalls) { call in
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("\(call.type.rawValue.capitalized) • \(call.status.rawValue.capitalized)")
+                                Text("\(call.type.displayName) • \(call.status.rawValue.capitalized)")
                                     .font(.headline)
                                 Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
                                     .font(.caption)

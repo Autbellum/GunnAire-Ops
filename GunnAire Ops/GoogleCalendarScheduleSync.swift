@@ -407,6 +407,12 @@ enum GoogleCalendarScheduleSync {
             return "Install"
         case .maintenance:
             return "Maintenance"
+        case .meeting:
+            return "Meeting"
+        case .siteVisit:
+            return "Site Visit"
+        case .other:
+            return "Other"
         }
     }
 
@@ -449,8 +455,8 @@ enum GoogleCalendarScheduleSync {
     private static func eventFingerprint(for call: ServiceCall) -> String {
         eventFingerprint(
             summary: CustomerDataMaintenance.isSystemCalendarCustomer(call.customer)
-                ? calendarEventSummary(from: call.notes) ?? call.type.rawValue.capitalized
-                : "\(call.type.rawValue.capitalized): \(call.customer.name)",
+                ? calendarEventSummary(from: call.notes) ?? call.type.displayName
+                : "\(call.type.displayName): \(call.customer.name)",
             location: call.siteAddress ?? call.customer.address,
             startDate: call.scheduledDate,
             endDate: call.scheduledDate.addingTimeInterval(call.duration)
@@ -687,6 +693,8 @@ enum GoogleCalendarScheduleSync {
     private static func inferCallType(from summary: String?, description: String?) -> ServiceCallType {
         let haystack = [summary, description].compactMap { $0?.lowercased() }.joined(separator: " ")
         if haystack.contains("estimate") { return .estimate }
+        if haystack.contains("meeting") { return .meeting }
+        if haystack.contains("site visit") || haystack.contains("walkthrough") || haystack.contains("walk through") { return .siteVisit }
         if haystack.contains("install") { return .install }
         if haystack.contains("maintenance") { return .maintenance }
         return .service

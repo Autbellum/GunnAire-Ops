@@ -386,7 +386,7 @@ GunnAire
                             .font(.headline)
                         Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
                             .foregroundColor(.secondary)
-                        Text("Job Type: \(call.type.rawValue.capitalized)")
+                        Text("Job Type: \(call.type.displayName)")
                             .foregroundColor(.secondary)
                         if let selectedJobAddress {
                             Button {
@@ -847,7 +847,7 @@ GunnAire
                         if !recentCustomerCalls.isEmpty {
                             ForEach(recentCustomerCalls) { recentCall in
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("\(recentCall.type.rawValue.capitalized) • \(recentCall.status.rawValue.capitalized)")
+                                    Text("\(recentCall.type.displayName) • \(recentCall.status.rawValue.capitalized)")
                                         .font(.caption)
                                     Text(recentCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))
                                         .font(.caption2)
@@ -1068,7 +1068,7 @@ GunnAire
                     Section("Equipment History") {
                         ForEach(relatedEquipmentCalls.prefix(5)) { historyCall in
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("\(historyCall.type.rawValue.capitalized) • \(historyCall.status.rawValue.capitalized)")
+                                Text("\(historyCall.type.displayName) • \(historyCall.status.rawValue.capitalized)")
                                     .font(.caption)
                                 Text(historyCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))
                                     .font(.caption2)
@@ -2030,6 +2030,11 @@ GunnAire
                 haystack.contains("clean") ||
                 haystack.contains("filter") ||
                 item.itemType == .service
+        case .meeting, .siteVisit, .other:
+            return item.itemType == .service ||
+                haystack.contains("labor") ||
+                haystack.contains("trip") ||
+                haystack.contains("consult")
         case nil:
             return true
         }
@@ -2385,9 +2390,25 @@ GunnAire
                 Text("Maintenance jobs should leave with service completed, safety checked, and customer informed.")
                     .font(.caption2)
                     .foregroundColor(.secondary)
+            case .meeting, .siteVisit, .other:
+                Toggle("Arrival confirmed", isOn: Binding(
+                    get: { call.arrivalConfirmed },
+                    set: { call.arrivalConfirmed = $0 }
+                ))
+                Toggle("Action items documented", isOn: Binding(
+                    get: { call.workCompletedChecklist },
+                    set: { call.workCompletedChecklist = $0 }
+                ))
+                Toggle("Notes completed", isOn: Binding(
+                    get: { call.documentationChecklist },
+                    set: { call.documentationChecklist = $0 }
+                ))
+                Text("General appointments should capture attendance, action items, and notes before closeout.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
             }
         }
-    }
 
     private func jobWorkflowTitle(for call: ServiceCall) -> String {
         switch call.type {
@@ -2399,6 +2420,12 @@ GunnAire
             return "Install Workflow"
         case .maintenance:
             return "Maintenance Workflow"
+        case .meeting:
+            return "Meeting Workflow"
+        case .siteVisit:
+            return "Site Visit Workflow"
+        case .other:
+            return "General Workflow"
         }
     }
 

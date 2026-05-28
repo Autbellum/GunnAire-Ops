@@ -19,7 +19,7 @@ enum CustomerDocumentExporter {
         invoice: Invoice?,
         payments: [Payment]
     ) throws -> URL {
-        let title = "\(serviceCall.type.rawValue.capitalized) Report"
+        let title = "\(serviceCall.type.displayName) Report"
         let fileName = makeFileName(prefix: "GunnAire-Onsite-Report", customerName: serviceCall.customer.name)
         let sections = onsiteReportSections(serviceCall: serviceCall, estimate: estimate, invoice: invoice, payments: payments)
         return try renderPDF(title: title, customer: serviceCall.customer, sections: sections, fileName: fileName)
@@ -49,7 +49,7 @@ enum CustomerDocumentExporter {
                 rows: [
                     row("Customer", serviceCall.customer.name),
                     row("Scheduled", formattedDateTime(serviceCall.scheduledDate)),
-                    row("Job Type", serviceCall.type.rawValue.capitalized),
+                    row("Job Type", serviceCall.type.displayName),
                     row("Status", serviceCall.status.rawValue.capitalized),
                     row("Technician", serviceCall.assignedTechnician?.name),
                     row("Site Address", serviceCall.siteAddress ?? serviceCall.customer.address)
@@ -101,7 +101,7 @@ enum CustomerDocumentExporter {
                 title: "Job",
                 rows: [
                     row("Scheduled", formattedDateTime(serviceCall.scheduledDate)),
-                    row("Job Type", serviceCall.type.rawValue.capitalized),
+                    row("Job Type", serviceCall.type.displayName),
                     row("Site Address", serviceCall.siteAddress ?? serviceCall.customer.address),
                     row("Technician", serviceCall.assignedTechnician?.name)
                 ]
@@ -134,7 +134,7 @@ enum CustomerDocumentExporter {
                 title: "Job",
                 rows: [
                     row("Scheduled", formattedDateTime(serviceCall.scheduledDate)),
-                    row("Job Type", serviceCall.type.rawValue.capitalized),
+                    row("Job Type", serviceCall.type.displayName),
                     row("Site Address", serviceCall.siteAddress ?? serviceCall.customer.address),
                     row("Technician", serviceCall.assignedTechnician?.name)
                 ]

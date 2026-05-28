@@ -4,7 +4,32 @@ import Foundation
 import SwiftData
 
 enum ServiceCallType: String, Codable, CaseIterable {
-    case service, estimate, install, maintenance
+    case service
+    case estimate
+    case install
+    case maintenance
+    case meeting
+    case siteVisit = "site visit"
+    case other
+
+    var displayName: String {
+        switch self {
+        case .service:
+            return "Service"
+        case .estimate:
+            return "Estimate"
+        case .install:
+            return "Install"
+        case .maintenance:
+            return "Maintenance"
+        case .meeting:
+            return "Meeting"
+        case .siteVisit:
+            return "Site Visit"
+        case .other:
+            return "Other"
+        }
+    }
 }
 
 enum JobStatus: String, Codable, CaseIterable {
@@ -183,6 +208,8 @@ final class ServiceCall {
             return [equipmentVerifiedChecklist, startupChecklistComplete, safetyChecklistComplete]
         case .maintenance:
             return [maintenanceChecklistComplete, safetyChecklistComplete, customerNotified]
+        case .meeting, .siteVisit, .other:
+            return [arrivalConfirmed, workCompletedChecklist, documentationChecklist]
         }
     }
 }

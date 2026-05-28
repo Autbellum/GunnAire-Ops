@@ -471,7 +471,7 @@ enum BusinessSuiteIntelligence {
                 BusinessSuiteAction(
                     id: "ready-to-bill-\(call.id.uuidString)",
                     title: "Build billing document",
-                    detail: "\(call.customer.name) - \(call.type.rawValue.capitalized)",
+                    detail: "\(call.customer.name) - \(call.type.displayName)",
                     value: "Ready",
                     systemImage: "doc.badge.plus",
                     severity: .warning,
@@ -486,7 +486,7 @@ enum BusinessSuiteIntelligence {
                     id: "assign-\(call.id.uuidString)",
                     title: "Assign field technician",
                     detail: "\(call.customer.name) - \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))",
-                    value: call.type.rawValue.capitalized,
+                    value: call.type.displayName,
                     systemImage: "person.crop.circle.badge.plus",
                     severity: .warning,
                     destination: .schedule(call.id)

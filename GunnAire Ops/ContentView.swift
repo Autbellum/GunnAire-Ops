@@ -427,7 +427,7 @@ GunnAire
         switch call.type {
         case .estimate:
             return hasDocumentation ? "Continue Estimate" : "Start Estimate"
-        case .install, .maintenance, .service:
+        case .install, .maintenance, .service, .meeting, .siteVisit, .other:
             if call.linkedInvoiceID != nil {
                 return "Continue Invoice"
             }
@@ -494,6 +494,12 @@ GunnAire
             return "Install Workflow"
         case .maintenance:
             return "Maintenance Workflow"
+        case .meeting:
+            return "Meeting Workflow"
+        case .siteVisit:
+            return "Site Visit Workflow"
+        case .other:
+            return "General Workflow"
         }
     }
 
@@ -632,7 +638,7 @@ GunnAire
             WatermarkBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(call.type.rawValue.capitalized)
+                    Text(call.type.displayName)
                         .font(.largeTitle)
                         .foregroundColor(Color.brandGold)
 
@@ -781,7 +787,7 @@ GunnAire
                             if !recentCustomerCalls.isEmpty {
                                 ForEach(recentCustomerCalls) { historyCall in
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text("\(historyCall.type.rawValue.capitalized) • \(historyCall.status.rawValue.capitalized)")
+                                        Text("\(historyCall.type.displayName) • \(historyCall.status.rawValue.capitalized)")
                                             .font(.caption)
                                         Text(historyCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))
                                             .font(.caption2)
@@ -857,6 +863,19 @@ GunnAire
                                     get: { call.customerNotified },
                                     set: { call.customerNotified = $0 }
                                 ))
+                            case .meeting, .siteVisit, .other:
+                                Toggle("Arrival confirmed", isOn: Binding(
+                                    get: { call.arrivalConfirmed },
+                                    set: { call.arrivalConfirmed = $0 }
+                                ))
+                                Toggle("Action items documented", isOn: Binding(
+                                    get: { call.workCompletedChecklist },
+                                    set: { call.workCompletedChecklist = $0 }
+                                ))
+                                Toggle("Notes completed", isOn: Binding(
+                                    get: { call.documentationChecklist },
+                                    set: { call.documentationChecklist = $0 }
+                                ))
                             }
                         }
                     }
@@ -866,7 +885,7 @@ GunnAire
                             VStack(alignment: .leading, spacing: 8) {
                                 ForEach(relatedEquipmentCalls.prefix(5)) { historyCall in
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text("\(historyCall.type.rawValue.capitalized) • \(historyCall.status.rawValue.capitalized)")
+                                        Text("\(historyCall.type.displayName) • \(historyCall.status.rawValue.capitalized)")
                                             .font(.caption)
                                         Text(historyCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))
                                             .font(.caption2)
@@ -1365,7 +1384,7 @@ struct AddServiceCallView: View {
             Form {
                 Picker("Type", selection: $callType) {
                     ForEach(ServiceCallType.allCases, id: \.self) { type in
-                        Text(type.rawValue.capitalized).tag(type)
+                        Text(type.displayName).tag(type)
                     }
                 }
 
@@ -1740,7 +1759,7 @@ struct EditServiceCallView: View {
             Form {
                 Picker("Type", selection: $callType) {
                     ForEach(ServiceCallType.allCases, id: \.self) { type in
-                        Text(type.rawValue.capitalized).tag(type)
+                        Text(type.displayName).tag(type)
                     }
                 }
                 Picker("Customer", selection: $customer) {
