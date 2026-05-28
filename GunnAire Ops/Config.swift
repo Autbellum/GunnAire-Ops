@@ -145,9 +145,6 @@ struct Config {
             if !hasExplicitDefaultExpenseAccountRef {
                 warnings.append("Set QB_DEFAULT_EXPENSE_ACCOUNT_REF before creating bills or expense purchases.")
             }
-            if enablePaymentsScope {
-                warnings.append("QuickBooks Payments features are enabled. Reconnect QuickBooks so Intuit can authorize the \(paymentsScope) scope for this company.")
-            }
             return warnings
         }
     }

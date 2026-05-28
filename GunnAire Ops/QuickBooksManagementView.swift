@@ -42,6 +42,7 @@ private struct QuickBooksSyncResourceStatus: Identifiable {
 
 struct QuickBooksManagementView: View {
     @Environment(\.modelContext) private var modelContext
+    @ObservedObject private var quickBooksDataAPI = QuickBooksDataAPI.shared
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Customer.name, order: .forward) private var localCustomers: [Customer]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var localInvoices: [Invoice]
@@ -86,15 +87,15 @@ struct QuickBooksManagementView: View {
     @State private var quickBooksReconnectRequired = false
 
     private var isAuthenticated: Bool {
-        QuickBooksDataAPI.shared.isAuthenticated
+        quickBooksDataAPI.isAuthenticated
     }
 
     private var quickBooksPaymentsEnabled: Bool {
-        QuickBooksDataAPI.shared.canUseQuickBooksPaymentsAPI
+        quickBooksDataAPI.canUseQuickBooksPaymentsAPI
     }
 
     private var quickBooksPaymentsUnavailableMessage: String {
-        if let diagnostic = QuickBooksDataAPI.shared.paymentsAuthorizationDiagnostic {
+        if let diagnostic = quickBooksDataAPI.paymentsAuthorizationDiagnostic {
             return diagnostic
         }
         return Config.QuickBooks.enablePaymentsScope
@@ -103,7 +104,19 @@ struct QuickBooksManagementView: View {
     }
 
     private var quickBooksConfigReady: Bool {
-        QuickBooksDataAPI.shared.canStartOAuthFlow
+        quickBooksDataAPI.canStartOAuthFlow
+    }
+
+    private var quickBooksConfigurationWarnings: [String] {
+        var warnings = Config.QuickBooks.configurationWarnings
+        if let diagnostic = quickBooksDataAPI.scopeReauthorizationDiagnostic {
+            warnings.append(diagnostic)
+        } else if Config.QuickBooks.enablePaymentsScope,
+                  quickBooksDataAPI.isAuthenticated,
+                  !quickBooksDataAPI.savedSessionIncludesPaymentsScope {
+            warnings.append("QuickBooks Payments features are enabled. Reconnect QuickBooks so Intuit can authorize the \(Config.QuickBooks.paymentsScope) scope for this company.")
+        }
+        return warnings
     }
 
     private var salesItemConfigReady: Bool {
@@ -167,7 +180,7 @@ struct QuickBooksManagementView: View {
     }
 
     private var quickBooksCompanyURL: URL? {
-        guard let realmID = QuickBooksDataAPI.shared.realmID else { return nil }
+        guard let realmID = quickBooksDataAPI.realmID else { return nil }
         return URL(string: "https://app.qbo.intuit.com/app/homepage?companyId=\(realmID)")
     }
 
@@ -199,7 +212,7 @@ struct QuickBooksManagementView: View {
                         )
                         connectionRow(
                             title: "Company Realm",
-                            value: QuickBooksDataAPI.shared.realmID ?? "Not connected"
+                            value: quickBooksDataAPI.realmID ?? "Not connected"
                         )
                         connectionRow(
                             title: "Status",
@@ -226,7 +239,7 @@ struct QuickBooksManagementView: View {
                             .foregroundColor(.secondary)
                         }
 
-                        ForEach(Config.QuickBooks.configurationWarnings, id: \.self) { warning in
+                        ForEach(quickBooksConfigurationWarnings, id: \.self) { warning in
                             Label(warning, systemImage: "exclamationmark.triangle")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
@@ -240,29 +253,29 @@ struct QuickBooksManagementView: View {
                         )
                         connectionRow(
                             title: "Token Expires",
-                            value: QuickBooksDataAPI.shared.tokenExpiration?.formatted(date: .abbreviated, time: .shortened) ?? "No active token"
+                            value: quickBooksDataAPI.tokenExpiration?.formatted(date: .abbreviated, time: .shortened) ?? "No active token"
                         )
                         connectionRow(
                             title: "Sync Issues",
                             value: "\(syncFailureCount) failed • \(syncWarningCount) warnings"
                         )
-                        Text(QuickBooksDataAPI.shared.connectionDiagnosticSummary)
+                        Text(quickBooksDataAPI.connectionDiagnosticSummary)
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
-                        if let environmentMismatch = QuickBooksDataAPI.shared.environmentMismatchDiagnostic {
+                        if let environmentMismatch = quickBooksDataAPI.environmentMismatchDiagnostic {
                             Label(environmentMismatch, systemImage: "arrow.triangle.2.circlepath.circle.fill")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
                         }
 
-                        if let scopeReauthorization = QuickBooksDataAPI.shared.scopeReauthorizationDiagnostic {
+                        if let scopeReauthorization = quickBooksDataAPI.scopeReauthorizationDiagnostic {
                             Label(scopeReauthorization, systemImage: "key.horizontal")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
                         }
 
-                        if let paymentsAuthorization = QuickBooksDataAPI.shared.paymentsAuthorizationDiagnostic {
+                        if let paymentsAuthorization = quickBooksDataAPI.paymentsAuthorizationDiagnostic {
                             Label(paymentsAuthorization, systemImage: "creditcard.trianglebadge.exclamationmark")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
@@ -276,8 +289,8 @@ struct QuickBooksManagementView: View {
                             .font(.caption)
                             .foregroundStyle(.orange)
 
-                            if let reconnectDetail = QuickBooksDataAPI.shared.lastRefreshFailureDetail
-                                ?? QuickBooksDataAPI.shared.lastAuthorizationFailureDetail {
+                            if let reconnectDetail = quickBooksDataAPI.lastRefreshFailureDetail
+                                ?? quickBooksDataAPI.lastAuthorizationFailureDetail {
                                 Text(reconnectDetail)
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
