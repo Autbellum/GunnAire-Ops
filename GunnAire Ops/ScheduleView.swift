@@ -868,10 +868,17 @@ struct ScheduleView: View {
         if let eventTitle = call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !eventTitle.isEmpty {
             return eventTitle
         }
+        if let originalCalendarTitle = GoogleCalendarScheduleSync.calendarEventSummary(from: call.notes) {
+            return originalCalendarTitle
+        }
+        if let noteTitle = firstMeaningfulNoteLine(from: call.notes),
+           CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
+            return noteTitle
+        }
         guard CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) else {
             return call.customer.name
         }
-        return GoogleCalendarScheduleSync.calendarEventSummary(from: call.notes) ?? "Unassigned calendar event"
+        return "Unassigned calendar event"
     }
 
     private func displaySubtitle(for call: ServiceCall) -> String {
@@ -882,6 +889,14 @@ struct ScheduleView: View {
             return "\(call.customer.name) • \(call.type.displayName)"
         }
         return call.type.displayName
+    }
+
+    private func firstMeaningfulNoteLine(from notes: String?) -> String? {
+        guard let notes else { return nil }
+        return notes
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty && !$0.localizedCaseInsensitiveContains("Calendar event:") }
     }
     
     private func deleteCalls(offsets: IndexSet) {

@@ -183,7 +183,7 @@ enum GoogleCalendarScheduleSync {
                     customersByEmail[email] = customer
                 }
             }
-            let eventNotes = calendarNotes(summary: event.summary, description: event.description)
+            let eventNotes = calendarNotes(description: event.description)
 
             let call = callsByGoogleEventKey[eventKey] ?? callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint] ?? ServiceCall(
                 googleCalendarID: calendarEvent.calendarID,
@@ -385,10 +385,7 @@ enum GoogleCalendarScheduleSync {
     private static func makeGoogleEvent(for call: ServiceCall, existingSummary: String?) -> GoogleWritableCalendarEvent {
         let timeZone = TimeZone.current.identifier
         let endDate = call.scheduledDate.addingTimeInterval(call.duration)
-        let summary = normalizedOptional(existingSummary)
-            ?? normalizedOptional(call.eventTitle)
-            ?? calendarEventSummary(from: call.notes)
-            ?? calendarSummary(for: call.type)
+        let summary = calendarEventTitle(for: call, existingSummary: existingSummary)
         let customerEmail = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
         let attendees = customerEmail?.isEmpty == false
             ? [GoogleWritableCalendarAttendee(email: customerEmail!, displayName: call.customer.name)]
@@ -409,25 +406,23 @@ enum GoogleCalendarScheduleSync {
         )
     }
 
-    private static func calendarSummary(for type: ServiceCallType) -> String {
-        switch type {
-        case .service:
-            return "Service Call"
-        case .estimate:
-            return "Estimate"
-        case .install:
-            return "Install"
-        case .maintenance:
-            return "Maintenance"
-        case .meeting:
-            return "Meeting"
-        case .reminder:
-            return "Reminder"
-        case .siteVisit:
-            return "Site Visit"
-        case .other:
-            return "Other"
+    private static func calendarEventTitle(for call: ServiceCall, existingSummary: String?) -> String {
+        normalizedOptional(call.eventTitle)
+            ?? normalizedOptional(existingSummary)
+            ?? calendarEventSummary(from: call.notes)
+            ?? firstMeaningfulLine(from: call.notes)
+            ?? fallbackCalendarTitle(for: call)
+    }
+
+    private static func fallbackCalendarTitle(for call: ServiceCall) -> String {
+        if !CustomerDataMaintenance.isSystemCalendarCustomer(call.customer),
+           call.type != .meeting,
+           call.type != .reminder,
+           call.type != .siteVisit,
+           call.type != .other {
+            return "\(call.type.displayName): \(call.customer.name)"
         }
+        return call.type.displayName
     }
 
     private static func remoteEventsByKey(
@@ -482,11 +477,7 @@ enum GoogleCalendarScheduleSync {
 
     private static func eventFingerprint(for call: ServiceCall) -> String {
         eventFingerprint(
-            summary: normalizedOptional(call.eventTitle)
-                ?? calendarEventSummary(from: call.notes)
-                ?? (CustomerDataMaintenance.isSystemCalendarCustomer(call.customer)
-                    ? call.type.displayName
-                    : "\(call.type.displayName): \(call.customer.name)"),
+            summary: calendarEventTitle(for: call, existingSummary: nil),
             location: call.siteAddress ?? call.customer.address,
             startDate: call.scheduledDate,
             endDate: call.scheduledDate.addingTimeInterval(call.duration)
@@ -521,7 +512,7 @@ enum GoogleCalendarScheduleSync {
         return customer
     }
 
-    private static func calendarNotes(summary _: String?, description: String?) -> String? {
+    private static func calendarNotes(description: String?) -> String? {
         normalizedCalendarBody(description)
     }
 
@@ -534,6 +525,19 @@ enum GoogleCalendarScheduleSync {
         let value = firstLine.replacingOccurrences(of: "Calendar event:", with: "", options: .caseInsensitive)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? nil : value
+    }
+
+    private static func firstMeaningfulLine(from notes: String?) -> String? {
+        guard let notes else { return nil }
+        let ignoredPrefixes = ["calendar event:", "scheduled from", "scheduled follow-up"]
+        return notes
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { line in
+                guard !line.isEmpty else { return false }
+                let lowercased = line.lowercased()
+                return !ignoredPrefixes.contains { lowercased.hasPrefix($0) }
+            }
     }
 
     private static func eventFingerprint(
