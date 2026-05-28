@@ -1357,6 +1357,8 @@ struct OperationsDashboardView: View {
             return "repeat.circle"
         case .meeting:
             return "person.2"
+        case .reminder:
+            return "bell"
         case .siteVisit:
             return "mappin.and.ellipse"
         case .other:

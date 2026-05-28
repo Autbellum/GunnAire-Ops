@@ -2030,7 +2030,7 @@ GunnAire
                 haystack.contains("clean") ||
                 haystack.contains("filter") ||
                 item.itemType == .service
-        case .meeting, .siteVisit, .other:
+        case .meeting, .reminder, .siteVisit, .other:
             return item.itemType == .service ||
                 haystack.contains("labor") ||
                 haystack.contains("trip") ||
@@ -2390,7 +2390,7 @@ GunnAire
                 Text("Maintenance jobs should leave with service completed, safety checked, and customer informed.")
                     .font(.caption2)
                     .foregroundColor(.secondary)
-            case .meeting, .siteVisit, .other:
+            case .meeting, .reminder, .siteVisit, .other:
                 Toggle("Arrival confirmed", isOn: Binding(
                     get: { call.arrivalConfirmed },
                     set: { call.arrivalConfirmed = $0 }
@@ -2422,6 +2422,8 @@ GunnAire
             return "Maintenance Workflow"
         case .meeting:
             return "Meeting Workflow"
+        case .reminder:
+            return "Reminder Workflow"
         case .siteVisit:
             return "Site Visit Workflow"
         case .other:

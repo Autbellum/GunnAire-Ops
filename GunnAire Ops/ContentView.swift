@@ -427,7 +427,7 @@ GunnAire
         switch call.type {
         case .estimate:
             return hasDocumentation ? "Continue Estimate" : "Start Estimate"
-        case .install, .maintenance, .service, .meeting, .siteVisit, .other:
+        case .install, .maintenance, .service, .meeting, .reminder, .siteVisit, .other:
             if call.linkedInvoiceID != nil {
                 return "Continue Invoice"
             }
@@ -496,6 +496,8 @@ GunnAire
             return "Maintenance Workflow"
         case .meeting:
             return "Meeting Workflow"
+        case .reminder:
+            return "Reminder Workflow"
         case .siteVisit:
             return "Site Visit Workflow"
         case .other:
@@ -863,7 +865,7 @@ GunnAire
                                     get: { call.customerNotified },
                                     set: { call.customerNotified = $0 }
                                 ))
-                            case .meeting, .siteVisit, .other:
+                            case .meeting, .reminder, .siteVisit, .other:
                                 Toggle("Arrival confirmed", isOn: Binding(
                                     get: { call.arrivalConfirmed },
                                     set: { call.arrivalConfirmed = $0 }
@@ -1290,6 +1292,7 @@ struct AddServiceCallView: View {
     @AppStorage("defaultJobDurationMinutes") private var defaultJobDurationMinutes = 90
     
     @State private var callType: ServiceCallType = .service
+    @State private var eventTitle = ""
     @State private var customer: Customer?
     @State private var technician: Technician?
     @State private var scheduledTime: Date
@@ -1343,6 +1346,19 @@ struct AddServiceCallView: View {
         !newCustomerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var requiresCustomer: Bool {
+        switch callType {
+        case .service, .estimate, .install, .maintenance:
+            return true
+        case .meeting, .reminder, .siteVisit, .other:
+            return false
+        }
+    }
+
+    private var canSaveCall: Bool {
+        customer != nil || (!requiresCustomer && eventTitle.nilIfBlank != nil)
+    }
+
     private var assignableTechnicians: [Technician] {
         AppAccess.schedulableTechnicians(technicians, users: users)
     }
@@ -1386,6 +1402,11 @@ struct AddServiceCallView: View {
                     ForEach(ServiceCallType.allCases, id: \.self) { type in
                         Text(type.displayName).tag(type)
                     }
+                }
+
+                Section("Calendar Event") {
+                    TextField("Event Title", text: $eventTitle)
+                        .textInputAutocapitalization(.words)
                 }
 
                 Section("Customer") {
@@ -1575,7 +1596,7 @@ struct AddServiceCallView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
                         addCall()
-                    }.disabled(customer == nil)
+                    }.disabled(!canSaveCall)
                     .tint(Color.brandGold)
                 }
             }
@@ -1596,9 +1617,9 @@ struct AddServiceCallView: View {
     }
     
     private func addCall() {
-        guard let customer else { return }
+        guard let resolvedCustomer = resolvedCustomerForSave() else { return }
         let trimmedSiteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedSiteAddress = trimmedSiteAddress.isEmpty ? customer.address : trimmedSiteAddress
+        let resolvedSiteAddress = trimmedSiteAddress.isEmpty ? resolvedCustomer.address : trimmedSiteAddress
         let resolvedCalendarID = ServiceCalendarRouting.validSelection(
             selectedCalendarID,
             technician: technician,
@@ -1606,6 +1627,7 @@ struct AddServiceCallView: View {
         )
         let call = ServiceCall(
             googleCalendarID: resolvedCalendarID,
+            eventTitle: eventTitle.nilIfBlank,
             siteAddress: resolvedSiteAddress,
             equipmentName: equipmentName.nilIfBlank,
             equipmentModel: equipmentModel.nilIfBlank,
@@ -1615,7 +1637,7 @@ struct AddServiceCallView: View {
             scheduledDate: scheduledTime,
             duration: duration,
             assignedTechnician: technician,
-            customer: customer,
+            customer: resolvedCustomer,
             status: .scheduled,
             notes: notes.nilIfBlank,
             findingsSummary: findingsSummary.nilIfBlank,
@@ -1631,6 +1653,22 @@ struct AddServiceCallView: View {
                 onCreated?(call)
             }
         }
+    }
+
+    private func resolvedCustomerForSave() -> Customer? {
+        if let customer {
+            return customer
+        }
+        guard !requiresCustomer else { return nil }
+        if let existing = customers.first(where: CustomerDataMaintenance.isSystemCalendarCustomer) {
+            return existing
+        }
+        let placeholder = Customer(
+            quickBooksID: CustomerDataMaintenance.unassignedCalendarCustomerMarker,
+            name: CustomerDataMaintenance.unassignedCalendarCustomerName
+        )
+        modelContext.insert(placeholder)
+        return placeholder
     }
 
     private func resetNewCustomerFields() {
@@ -1677,6 +1715,7 @@ struct EditServiceCallView: View {
     let call: ServiceCall
 
     @State private var callType: ServiceCallType
+    @State private var eventTitle: String
     @State private var customer: Customer?
     @State private var technician: Technician?
     @State private var scheduledTime: Date
@@ -1700,6 +1739,7 @@ struct EditServiceCallView: View {
     init(call: ServiceCall) {
         self.call = call
         _callType = State(initialValue: call.type)
+        _eventTitle = State(initialValue: call.eventTitle ?? GoogleCalendarScheduleSync.calendarEventSummary(from: call.notes) ?? "")
         _customer = State(initialValue: call.customer)
         _technician = State(initialValue: call.assignedTechnician)
         _scheduledTime = State(initialValue: call.scheduledDate)
@@ -1761,6 +1801,10 @@ struct EditServiceCallView: View {
                     ForEach(ServiceCallType.allCases, id: \.self) { type in
                         Text(type.displayName).tag(type)
                     }
+                }
+                Section("Calendar Event") {
+                    TextField("Event Title", text: $eventTitle)
+                        .textInputAutocapitalization(.words)
                 }
                 Picker("Customer", selection: $customer) {
                     if CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
@@ -1869,6 +1913,7 @@ struct EditServiceCallView: View {
     private func saveChanges() {
         guard let customer else { return }
         call.type = callType
+        call.eventTitle = eventTitle.nilIfBlank
         call.customer = customer
         call.assignedTechnician = technician
         call.status = status

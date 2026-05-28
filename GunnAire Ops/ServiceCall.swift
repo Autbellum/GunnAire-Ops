@@ -9,6 +9,7 @@ enum ServiceCallType: String, Codable, CaseIterable {
     case install
     case maintenance
     case meeting
+    case reminder
     case siteVisit = "site visit"
     case other
 
@@ -24,6 +25,8 @@ enum ServiceCallType: String, Codable, CaseIterable {
             return "Maintenance"
         case .meeting:
             return "Meeting"
+        case .reminder:
+            return "Reminder"
         case .siteVisit:
             return "Site Visit"
         case .other:
@@ -41,6 +44,7 @@ final class ServiceCall {
     @Attribute(.unique) var id: UUID
     var googleCalendarID: String?
     var googleEventID: String?
+    var eventTitle: String?
     var siteAddress: String?
     var equipmentName: String?
     var equipmentModel: String?
@@ -80,6 +84,7 @@ final class ServiceCall {
         id: UUID = UUID(),
         googleCalendarID: String? = nil,
         googleEventID: String? = nil,
+        eventTitle: String? = nil,
         siteAddress: String? = nil,
         equipmentName: String? = nil,
         equipmentModel: String? = nil,
@@ -118,6 +123,7 @@ final class ServiceCall {
         self.id = id
         self.googleCalendarID = googleCalendarID
         self.googleEventID = googleEventID
+        self.eventTitle = eventTitle
         self.siteAddress = siteAddress
         self.equipmentName = equipmentName
         self.equipmentModel = equipmentModel
@@ -208,7 +214,7 @@ final class ServiceCall {
             return [equipmentVerifiedChecklist, startupChecklistComplete, safetyChecklistComplete]
         case .maintenance:
             return [maintenanceChecklistComplete, safetyChecklistComplete, customerNotified]
-        case .meeting, .siteVisit, .other:
+        case .meeting, .reminder, .siteVisit, .other:
             return [arrivalConfirmed, workCompletedChecklist, documentationChecklist]
         }
     }

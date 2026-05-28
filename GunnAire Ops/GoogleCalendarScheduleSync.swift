@@ -188,6 +188,7 @@ enum GoogleCalendarScheduleSync {
             let call = callsByGoogleEventKey[eventKey] ?? callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint] ?? ServiceCall(
                 googleCalendarID: calendarEvent.calendarID,
                 googleEventID: event.id,
+                eventTitle: normalizedOptional(event.summary),
                 siteAddress: event.location,
                 type: inferCallType(from: event.summary, description: event.description),
                 scheduledDate: startDate,
@@ -207,6 +208,7 @@ enum GoogleCalendarScheduleSync {
             }
             call.googleCalendarID = calendarEvent.calendarID
             call.googleEventID = event.id
+            call.eventTitle = normalizedOptional(event.summary)
             call.type = inferCallType(from: event.summary, description: event.description)
             call.scheduledDate = startDate
             call.duration = duration
@@ -384,6 +386,7 @@ enum GoogleCalendarScheduleSync {
         let timeZone = TimeZone.current.identifier
         let endDate = call.scheduledDate.addingTimeInterval(call.duration)
         let summary = normalizedOptional(existingSummary)
+            ?? normalizedOptional(call.eventTitle)
             ?? calendarEventSummary(from: call.notes)
             ?? calendarSummary(for: call.type)
         let customerEmail = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -418,6 +421,8 @@ enum GoogleCalendarScheduleSync {
             return "Maintenance"
         case .meeting:
             return "Meeting"
+        case .reminder:
+            return "Reminder"
         case .siteVisit:
             return "Site Visit"
         case .other:
@@ -477,9 +482,11 @@ enum GoogleCalendarScheduleSync {
 
     private static func eventFingerprint(for call: ServiceCall) -> String {
         eventFingerprint(
-            summary: CustomerDataMaintenance.isSystemCalendarCustomer(call.customer)
-                ? calendarEventSummary(from: call.notes) ?? call.type.displayName
-                : "\(call.type.displayName): \(call.customer.name)",
+            summary: normalizedOptional(call.eventTitle)
+                ?? calendarEventSummary(from: call.notes)
+                ?? (CustomerDataMaintenance.isSystemCalendarCustomer(call.customer)
+                    ? call.type.displayName
+                    : "\(call.type.displayName): \(call.customer.name)"),
             location: call.siteAddress ?? call.customer.address,
             startDate: call.scheduledDate,
             endDate: call.scheduledDate.addingTimeInterval(call.duration)
@@ -514,11 +521,8 @@ enum GoogleCalendarScheduleSync {
         return customer
     }
 
-    private static func calendarNotes(summary: String?, description: String?) -> String? {
-        let title = normalizedOptional(summary).map { "Calendar event: \($0)" }
-        let body = normalizedCalendarBody(description)
-        let combined = [title, body].compactMap { $0 }.joined(separator: "\n\n")
-        return combined.isEmpty ? nil : combined
+    private static func calendarNotes(summary _: String?, description: String?) -> String? {
+        normalizedCalendarBody(description)
     }
 
     static func calendarEventSummary(from notes: String?) -> String? {
@@ -717,10 +721,14 @@ enum GoogleCalendarScheduleSync {
         let haystack = [summary, description].compactMap { $0?.lowercased() }.joined(separator: " ")
         if haystack.contains("estimate") { return .estimate }
         if haystack.contains("meeting") { return .meeting }
+        if haystack.contains("reminder") || haystack.contains("due date") || haystack.contains("deadline") || haystack.contains("holiday") { return .reminder }
         if haystack.contains("site visit") || haystack.contains("walkthrough") || haystack.contains("walk through") { return .siteVisit }
         if haystack.contains("install") { return .install }
         if haystack.contains("maintenance") { return .maintenance }
-        return .service
+        if haystack.contains("service") || haystack.contains("repair") || haystack.contains("no heat") || haystack.contains("no cool") || haystack.contains("hvac") {
+            return .service
+        }
+        return .other
     }
 
     private static func resolveTechnician(

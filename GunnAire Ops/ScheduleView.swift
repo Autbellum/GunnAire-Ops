@@ -856,7 +856,7 @@ struct ScheduleView: View {
         switch call.type {
         case .estimate:
             return hasDocumentation ? (compact ? "Estimate" : "Continue Estimate") : "Start Estimate"
-        case .install, .maintenance, .service, .meeting, .siteVisit, .other:
+        case .install, .maintenance, .service, .meeting, .reminder, .siteVisit, .other:
             if call.linkedInvoiceID != nil {
                 return compact ? "Invoice" : "Continue Invoice"
             }
@@ -865,6 +865,9 @@ struct ScheduleView: View {
     }
 
     private func displayTitle(for call: ServiceCall) -> String {
+        if let eventTitle = call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !eventTitle.isEmpty {
+            return eventTitle
+        }
         guard CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) else {
             return call.customer.name
         }
@@ -872,9 +875,13 @@ struct ScheduleView: View {
     }
 
     private func displaySubtitle(for call: ServiceCall) -> String {
-        CustomerDataMaintenance.isSystemCalendarCustomer(call.customer)
-            ? "Unassigned customer • \(call.type.displayName)"
-            : call.type.displayName
+        if CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
+            return "Unassigned customer • \(call.type.displayName)"
+        }
+        if call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return "\(call.customer.name) • \(call.type.displayName)"
+        }
+        return call.type.displayName
     }
     
     private func deleteCalls(offsets: IndexSet) {

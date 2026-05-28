@@ -28,6 +28,9 @@ enum CustomerDataMaintenance {
         "quote",
         "job",
         "appointment",
+        "meeting",
+        "reminder",
+        "holiday",
         "site visit",
         "tune up",
         "no heat",
@@ -1193,7 +1196,7 @@ struct OnsiteDocumentationView: View {
         switch call.type {
         case .estimate:
             return hasDocumentation ? "Continue Estimate" : "Start Estimate"
-        case .install, .maintenance, .service, .meeting, .siteVisit, .other:
+        case .install, .maintenance, .service, .meeting, .reminder, .siteVisit, .other:
             if call.linkedInvoiceID != nil {
                 return "Continue Invoice"
             }
