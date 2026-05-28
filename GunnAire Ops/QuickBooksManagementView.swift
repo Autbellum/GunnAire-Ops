@@ -2610,6 +2610,7 @@ private struct QuickBooksCatalogItemComposeView: View {
                             Text(type.rawValue).tag(type)
                         }
                     }
+                    .pickerStyle(.segmented)
                     TextField("Price (optional)", text: $price)
                         .keyboardType(.decimalPad)
                     TextField("Description", text: $description)

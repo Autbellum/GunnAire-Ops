@@ -155,6 +155,12 @@ struct BillingDocumentsView: View {
         Array(filteredItems.prefix(8))
     }
 
+    private var canAddInlineItem: Bool {
+        !newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        CatalogItemAmountParser.parseRequiredOrZero(newItemPrice) != nil &&
+        CatalogItemAmountParser.isValidOptionalAmount(newItemCost)
+    }
+
     private var currentJobEstimate: Estimate? {
         guard let estimateID = activeServiceCall?.linkedEstimateID else { return nil }
         return estimates.first { $0.id == estimateID }
@@ -1268,6 +1274,7 @@ GunnAire
                                     Text(type.rawValue).tag(type)
                                 }
                             }
+                            .pickerStyle(.segmented)
                             TextField("Description", text: $newItemDescription, axis: .vertical)
                                 .lineLimit(2...3)
                             Toggle("Taxable", isOn: $newItemTaxable)
@@ -1276,16 +1283,6 @@ GunnAire
                                     .keyboardType(.decimalPad)
                                 TextField("Cost", text: $newItemCost)
                                     .keyboardType(.decimalPad)
-                                Button {
-                                    addItem()
-                                } label: {
-                                    Label("Add", systemImage: "plus")
-                                }
-                                .disabled(
-                                    newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                                    CatalogItemAmountParser.parseRequiredOrZero(newItemPrice) == nil ||
-                                    !CatalogItemAmountParser.isValidOptionalAmount(newItemCost)
-                                )
                             }
                             TextField("Typical purchase source", text: $newItemPreferredVendor)
                             if !vendors.isEmpty {
@@ -1303,6 +1300,16 @@ GunnAire
                                 .keyboardType(.URL)
                             TextField("Purchase notes", text: $newItemPurchaseDescription, axis: .vertical)
                                 .lineLimit(2...3)
+                            Button {
+                                addItem()
+                            } label: {
+                                Label("Add Item", systemImage: "plus.circle.fill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(!canAddInlineItem)
                         }
                     }
 
@@ -3305,6 +3312,7 @@ private struct DocumentationItemCreatorView: View {
                             Text(type.rawValue).tag(type)
                         }
                     }
+                    .pickerStyle(.segmented)
                     TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(2...3)
                     Toggle("Taxable", isOn: $isTaxable)
