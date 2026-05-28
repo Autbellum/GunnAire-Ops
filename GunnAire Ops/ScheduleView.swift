@@ -866,6 +866,16 @@ struct ScheduleView: View {
 
     private func displayTitle(for call: ServiceCall) -> String {
         if let eventTitle = call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !eventTitle.isEmpty {
+            if !GoogleCalendarScheduleSync.isGeneratedCalendarTitle(eventTitle) {
+                return eventTitle
+            }
+            if let originalCalendarTitle = GoogleCalendarScheduleSync.calendarEventSummary(from: call.notes) {
+                return originalCalendarTitle
+            }
+            if let noteTitle = firstMeaningfulNoteLine(from: call.notes),
+               CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
+                return noteTitle
+            }
             return eventTitle
         }
         if let originalCalendarTitle = GoogleCalendarScheduleSync.calendarEventSummary(from: call.notes) {

@@ -4,6 +4,7 @@ import SwiftData
 @MainActor
 enum GoogleCalendarScheduleSync {
     private static let deletedCalendarEventKeysStorageKey = "GunnAireDeletedGoogleCalendarEventKeys"
+    private static let locallyEditedCalendarCallIDsStorageKey = "GunnAireLocallyEditedGoogleCalendarCallIDs"
 
     static func markCalendarEventDeleted(calendarID: String?, eventID: String?) {
         guard let eventID, !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -16,6 +17,26 @@ enum GoogleCalendarScheduleSync {
         guard let eventID, !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         let deletedKeys = Set(UserDefaults.standard.stringArray(forKey: deletedCalendarEventKeysStorageKey) ?? [])
         return deletedKeys.contains(calendarEventStorageKey(calendarID: calendarID, eventID: eventID))
+    }
+
+    static func markCalendarCallLocallyEdited(_ call: ServiceCall) {
+        let hasCalendarLink = call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
+            call.googleCalendarID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        guard hasCalendarLink else { return }
+        var callIDs = Set(UserDefaults.standard.stringArray(forKey: locallyEditedCalendarCallIDsStorageKey) ?? [])
+        callIDs.insert(call.id.uuidString)
+        UserDefaults.standard.set(Array(callIDs), forKey: locallyEditedCalendarCallIDsStorageKey)
+    }
+
+    private static func isCalendarCallLocallyEdited(_ call: ServiceCall) -> Bool {
+        let callIDs = Set(UserDefaults.standard.stringArray(forKey: locallyEditedCalendarCallIDsStorageKey) ?? [])
+        return callIDs.contains(call.id.uuidString)
+    }
+
+    private static func clearCalendarCallLocallyEdited(_ call: ServiceCall) {
+        var callIDs = Set(UserDefaults.standard.stringArray(forKey: locallyEditedCalendarCallIDsStorageKey) ?? [])
+        guard callIDs.remove(call.id.uuidString) != nil else { return }
+        UserDefaults.standard.set(Array(callIDs), forKey: locallyEditedCalendarCallIDsStorageKey)
     }
 
     private static func calendarEventStorageKey(calendarID: String?, eventID: String) -> String {
@@ -52,30 +73,44 @@ enum GoogleCalendarScheduleSync {
                         completion(.failure(error))
                     case .success(let calendarEvents):
                         Task { @MainActor in
-                            do {
-                                let importedCount = try importEvents(
-                                    calendarEvents,
-                                    into: modelContext,
-                                    signedInEmail: signedInEmail
-                                )
-                                exportCalls(
-                                    auth: auth,
-                                    modelContext: modelContext,
-                                    calendarEvents: calendarEvents,
-                                    signedInEmail: signedInEmail,
-                                    isAdminUser: isAdminUser,
-                                    availableCalendarIDs: availableCalendarIDs,
-                                    writableCalendarIDs: writableCalendarIDs
-                                ) { exportResult in
-                                    switch exportResult {
-                                    case .failure(let error):
-                                        completion(.failure(error))
-                                    case .success(let exportSummary):
-                                        completion(.success("Imported \(importedCount) Google events. \(exportSummary)"))
+                            exportCalls(
+                                auth: auth,
+                                modelContext: modelContext,
+                                calendarEvents: calendarEvents,
+                                signedInEmail: signedInEmail,
+                                isAdminUser: isAdminUser,
+                                availableCalendarIDs: availableCalendarIDs,
+                                writableCalendarIDs: writableCalendarIDs
+                            ) { exportResult in
+                                switch exportResult {
+                                case .failure(let error):
+                                    completion(.failure(error))
+                                case .success(let exportSummary):
+                                    fetchEvents(
+                                        auth: auth,
+                                        calendarIDs: Array(availableCalendarIDs),
+                                        timeMin: syncStart,
+                                        timeMax: horizon
+                                    ) { refreshedFetchResult in
+                                        switch refreshedFetchResult {
+                                        case .failure(let error):
+                                            completion(.failure(error))
+                                        case .success(let refreshedCalendarEvents):
+                                            Task { @MainActor in
+                                                do {
+                                                    let importedCount = try importEvents(
+                                                        refreshedCalendarEvents,
+                                                        into: modelContext,
+                                                        signedInEmail: signedInEmail
+                                                    )
+                                                    completion(.success("\(exportSummary) Imported \(importedCount) Google events."))
+                                                } catch {
+                                                    completion(.failure(error))
+                                                }
+                                            }
+                                        }
                                     }
                                 }
-                            } catch {
-                                completion(.failure(error))
                             }
                         }
                     }
@@ -206,6 +241,19 @@ enum GoogleCalendarScheduleSync {
             if call.modelContext == nil {
                 modelContext.insert(call)
             }
+            if isCalendarCallLocallyEdited(call) {
+                if call.googleCalendarID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    call.googleCalendarID = calendarEvent.calendarID
+                }
+                if call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    call.googleEventID = event.id
+                }
+                callsByGoogleEventKey[eventKey] = call
+                callsByGoogleEventID[event.id] = call
+                callsByFingerprint[fingerprint] = call
+                imported += 1
+                continue
+            }
             call.googleCalendarID = calendarEvent.calendarID
             call.googleEventID = event.id
             call.eventTitle = normalizedOptional(event.summary)
@@ -245,7 +293,7 @@ enum GoogleCalendarScheduleSync {
             let calls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
                 .filter { call in
                     if CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
-                        return false
+                        return shouldExportSystemCalendarCall(call)
                     }
                     if isAdminUser {
                         return true
@@ -277,6 +325,21 @@ enum GoogleCalendarScheduleSync {
         }
     }
 
+    private static func shouldExportSystemCalendarCall(_ call: ServiceCall) -> Bool {
+        if call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return true
+        }
+        if call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return true
+        }
+        switch call.type {
+        case .meeting, .reminder, .siteVisit, .other:
+            return true
+        case .service, .estimate, .install, .maintenance:
+            return false
+        }
+    }
+
     private static func exportNext(
         index: Int,
         exportedCount: Int,
@@ -303,6 +366,26 @@ enum GoogleCalendarScheduleSync {
         }
 
         let call = calls[index]
+        if let eventID = call.googleEventID,
+           !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let currentCalendarID = call.googleCalendarID,
+           !contains(currentCalendarID, in: writableCalendarIDs) {
+            exportNext(
+                index: index + 1,
+                exportedCount: exportedCount,
+                skippedCount: skippedCount + 1,
+                calls: calls,
+                auth: auth,
+                modelContext: modelContext,
+                remoteEventsByKey: remoteEventsByKey,
+                remoteEventsByFingerprint: remoteEventsByFingerprint,
+                availableCalendarIDs: availableCalendarIDs,
+                writableCalendarIDs: writableCalendarIDs,
+                completion: completion
+            )
+            return
+        }
+
         let targetCalendarID = preferredCalendarID(
             for: call,
             availableCalendarIDs: availableCalendarIDs,
@@ -334,6 +417,7 @@ enum GoogleCalendarScheduleSync {
                 case .success(let saved):
                     call.googleCalendarID = savedCalendarID
                     call.googleEventID = saved.id
+                    clearCalendarCallLocallyEdited(call)
                     exportNext(
                         index: index + 1,
                         exportedCount: exportedCount + 1,
@@ -407,11 +491,34 @@ enum GoogleCalendarScheduleSync {
     }
 
     private static func calendarEventTitle(for call: ServiceCall, existingSummary: String?) -> String {
-        normalizedOptional(call.eventTitle)
-            ?? normalizedOptional(existingSummary)
-            ?? calendarEventSummary(from: call.notes)
-            ?? firstMeaningfulLine(from: call.notes)
+        let storedTitle = normalizedOptional(call.eventTitle)
+        let remoteTitle = normalizedOptional(existingSummary)
+        let recoveredTitle = calendarEventSummary(from: call.notes) ?? firstMeaningfulLine(from: call.notes)
+        if let storedTitle,
+           isGeneratedTypeTitle(storedTitle) {
+            if let remoteTitle,
+               normalized(storedTitle) != normalized(remoteTitle) {
+                return remoteTitle
+            }
+            if let recoveredTitle,
+               normalized(storedTitle) != normalized(recoveredTitle) {
+                return recoveredTitle
+            }
+        }
+        return storedTitle
+            ?? remoteTitle
+            ?? recoveredTitle
             ?? fallbackCalendarTitle(for: call)
+    }
+
+    static func isGeneratedCalendarTitle(_ title: String) -> Bool {
+        isGeneratedTypeTitle(title)
+    }
+
+    private static func isGeneratedTypeTitle(_ title: String) -> Bool {
+        let value = normalized(title)
+        let generatedTitles = Set(ServiceCallType.allCases.map { normalized($0.displayName) } + ["service call"])
+        return generatedTitles.contains(value)
     }
 
     private static func fallbackCalendarTitle(for call: ServiceCall) -> String {

@@ -1738,8 +1738,18 @@ struct EditServiceCallView: View {
 
     init(call: ServiceCall) {
         self.call = call
+        let storedEventTitle = call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let recoveredEventTitle = GoogleCalendarScheduleSync.calendarEventSummary(from: call.notes)
+        let initialEventTitle: String
+        if let storedEventTitle,
+           !storedEventTitle.isEmpty,
+           (!GoogleCalendarScheduleSync.isGeneratedCalendarTitle(storedEventTitle) || recoveredEventTitle == nil) {
+            initialEventTitle = storedEventTitle
+        } else {
+            initialEventTitle = recoveredEventTitle ?? ""
+        }
         _callType = State(initialValue: call.type)
-        _eventTitle = State(initialValue: call.eventTitle ?? GoogleCalendarScheduleSync.calendarEventSummary(from: call.notes) ?? "")
+        _eventTitle = State(initialValue: initialEventTitle)
         _customer = State(initialValue: call.customer)
         _technician = State(initialValue: call.assignedTechnician)
         _scheduledTime = State(initialValue: call.scheduledDate)
@@ -1942,6 +1952,8 @@ struct EditServiceCallView: View {
         if status == .completed || status == .invoiced {
             call.documentationCompletedAt = call.documentationCompletedAt ?? Date()
         }
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
+        try? modelContext.save()
         dismiss()
     }
 
