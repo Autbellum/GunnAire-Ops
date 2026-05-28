@@ -1309,9 +1309,10 @@ struct AddServiceCallView: View {
     }
 
     private var filteredCustomers: [Customer] {
+        let visibleCustomers = customers.filter { !CustomerDataMaintenance.isSystemCalendarCustomer($0) }
         let query = customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return customers }
-        return customers.filter { customer in
+        guard !query.isEmpty else { return visibleCustomers }
+        return visibleCustomers.filter { customer in
             customer.name.lowercased().contains(query) ||
             (customer.email?.lowercased().contains(query) ?? false) ||
             (customer.phone?.lowercased().contains(query) ?? false) ||
@@ -1730,6 +1731,10 @@ struct EditServiceCallView: View {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    private var visibleCustomers: [Customer] {
+        customers.filter { !CustomerDataMaintenance.isSystemCalendarCustomer($0) }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -1739,7 +1744,10 @@ struct EditServiceCallView: View {
                     }
                 }
                 Picker("Customer", selection: $customer) {
-                    ForEach(customers) { customer in
+                    if CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
+                        Text("Unassigned Calendar Event").tag(Customer?.some(call.customer))
+                    }
+                    ForEach(visibleCustomers) { customer in
                         Text(customer.name).tag(Customer?.some(customer))
                     }
                 }

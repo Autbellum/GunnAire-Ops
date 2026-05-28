@@ -11,7 +11,9 @@ enum GoogleCalendarScheduleSync {
         completion: @escaping (Result<String, Error>) -> Void
     ) {
         let now = Date()
-        let horizon = Calendar.current.date(byAdding: .day, value: 30, to: now) ?? now
+        let calendar = Calendar.current
+        let syncStart = calendar.date(byAdding: .day, value: -30, to: now) ?? now
+        let horizon = calendar.date(byAdding: .day, value: 90, to: now) ?? now
         auth.fetchCalendars { calendarsResult in
             switch calendarsResult {
             case .failure(let error):
@@ -23,7 +25,7 @@ enum GoogleCalendarScheduleSync {
                 fetchEvents(
                     auth: auth,
                     calendarIDs: Array(availableCalendarIDs),
-                    timeMin: now,
+                    timeMin: syncStart,
                     timeMax: horizon
                 ) { fetchResult in
                     switch fetchResult {
@@ -91,6 +93,7 @@ enum GoogleCalendarScheduleSync {
                   customersByEmail[email] == nil else { continue }
             customersByEmail[email] = customer
         }
+        var unassignedCalendarCustomer = existingCustomers.first(where: CustomerDataMaintenance.isSystemCalendarCustomer)
         var techniciansByEmail: [String: Technician] = [:]
         for technician in existingTechnicians {
             guard let email = technician.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
@@ -117,31 +120,37 @@ enum GoogleCalendarScheduleSync {
                 continue
             }
             let duration = max(endDate.timeIntervalSince(startDate), 1800)
-            guard let customerCandidate = inferCustomer(
+            let customerCandidate = inferCustomer(
                 from: event,
                 signedInEmail: signedInEmail,
                 technicianEmails: Set(techniciansByEmail.keys)
-            ) else {
-                continue
+            )
+            let customer = resolveExistingCustomer(
+                for: customerCandidate,
+                customersByEmail: &customersByEmail,
+                customersByName: &customersByName
+            ) ?? resolveUnassignedCalendarCustomer(
+                existing: &unassignedCalendarCustomer,
+                modelContext: modelContext
+            )
+            if let customerCandidate,
+               !CustomerDataMaintenance.isSystemCalendarCustomer(customer) {
+                if customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    customer.email = customerCandidate.email
+                }
+                if customer.address?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+                   let address = customerCandidate.address,
+                   !address.isEmpty {
+                    customer.address = address
+                }
+                customersByName[normalized(customer.name)] = customer
+                customersByName[normalized(customerCandidate.name)] = customer
+                if let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                   !email.isEmpty {
+                    customersByEmail[email] = customer
+                }
             }
-            let nameKey = normalized(customerCandidate.name)
-            guard let customer = customerCandidate.email.flatMap({ customersByEmail[$0] }) ?? customersByName[nameKey] else {
-                continue
-            }
-            if customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-                customer.email = customerCandidate.email
-            }
-            if customer.address?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-               let address = customerCandidate.address,
-               !address.isEmpty {
-                customer.address = address
-            }
-            customersByName[normalized(customer.name)] = customer
-            customersByName[nameKey] = customer
-            if let email = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-               !email.isEmpty {
-                customersByEmail[email] = customer
-            }
+            let eventNotes = calendarNotes(summary: event.summary, description: event.description)
 
             let call = callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint] ?? ServiceCall(
                 googleCalendarID: calendarEvent.calendarID,
@@ -158,7 +167,7 @@ enum GoogleCalendarScheduleSync {
                 ) ?? technician,
                 customer: customer,
                 status: .scheduled,
-                notes: event.description
+                notes: eventNotes
             )
             if call.modelContext == nil {
                 modelContext.insert(call)
@@ -176,7 +185,7 @@ enum GoogleCalendarScheduleSync {
             ) ?? technician
             call.customer = customer
             call.siteAddress = event.location
-            call.notes = event.description
+            call.notes = eventNotes
             callsByGoogleEventID[event.id] = call
             callsByFingerprint[fingerprint] = call
             imported += 1
@@ -199,6 +208,9 @@ enum GoogleCalendarScheduleSync {
         do {
             let calls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
                 .filter { call in
+                    if CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
+                        return false
+                    }
                     if isAdminUser {
                         return true
                     }
@@ -396,11 +408,59 @@ enum GoogleCalendarScheduleSync {
 
     private static func eventFingerprint(for call: ServiceCall) -> String {
         eventFingerprint(
-            summary: "\(call.type.rawValue.capitalized): \(call.customer.name)",
+            summary: CustomerDataMaintenance.isSystemCalendarCustomer(call.customer)
+                ? calendarEventSummary(from: call.notes) ?? call.type.rawValue.capitalized
+                : "\(call.type.rawValue.capitalized): \(call.customer.name)",
             location: call.siteAddress ?? call.customer.address,
             startDate: call.scheduledDate,
             endDate: call.scheduledDate.addingTimeInterval(call.duration)
         )
+    }
+
+    private static func resolveExistingCustomer(
+        for candidate: CalendarCustomerCandidate?,
+        customersByEmail: inout [String: Customer],
+        customersByName: inout [String: Customer]
+    ) -> Customer? {
+        guard let candidate else { return nil }
+        let nameKey = normalized(candidate.name)
+        return candidate.email.flatMap { customersByEmail[$0] } ?? customersByName[nameKey]
+    }
+
+    private static func resolveUnassignedCalendarCustomer(
+        existing: inout Customer?,
+        modelContext: ModelContext
+    ) -> Customer {
+        if let existing {
+            existing.name = CustomerDataMaintenance.unassignedCalendarCustomerName
+            existing.quickBooksID = CustomerDataMaintenance.unassignedCalendarCustomerMarker
+            return existing
+        }
+        let customer = Customer(
+            quickBooksID: CustomerDataMaintenance.unassignedCalendarCustomerMarker,
+            name: CustomerDataMaintenance.unassignedCalendarCustomerName
+        )
+        modelContext.insert(customer)
+        existing = customer
+        return customer
+    }
+
+    private static func calendarNotes(summary: String?, description: String?) -> String? {
+        let title = normalizedOptional(summary).map { "Calendar event: \($0)" }
+        let body = normalizedCalendarBody(description)
+        let combined = [title, body].compactMap { $0 }.joined(separator: "\n\n")
+        return combined.isEmpty ? nil : combined
+    }
+
+    static func calendarEventSummary(from notes: String?) -> String? {
+        guard let firstLine = notes?.components(separatedBy: .newlines).first,
+              firstLine.localizedCaseInsensitiveCompare("Calendar event:") != .orderedSame,
+              firstLine.localizedCaseInsensitiveContains("Calendar event:") else {
+            return nil
+        }
+        let value = firstLine.replacingOccurrences(of: "Calendar event:", with: "", options: .caseInsensitive)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 
     private static func eventFingerprint(

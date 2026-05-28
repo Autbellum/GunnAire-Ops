@@ -368,10 +368,10 @@ struct ScheduleView: View {
                     } label: {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(job.customer.name)
+                                Text(displayTitle(for: job))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.primary)
-                                Text(job.type.rawValue.capitalized)
+                                Text(displaySubtitle(for: job))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -402,7 +402,7 @@ struct ScheduleView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 12) {
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(job.customer.name)
+                                    Text(displayTitle(for: job))
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.primary)
                                     Text(followUpReason(for: job))
@@ -498,7 +498,7 @@ struct ScheduleView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(job.customer.name)
+                                Text(displayTitle(for: job))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.primary)
                                 Text("Estimate approved and ready to schedule")
@@ -530,10 +530,10 @@ struct ScheduleView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(job.customer.name)
+                                Text(displayTitle(for: job))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.primary)
-                                Text(job.type.rawValue.capitalized)
+                                Text(displaySubtitle(for: job))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -584,10 +584,10 @@ struct ScheduleView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(job.customer.name)
+                                Text(displayTitle(for: job))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.primary)
-                                Text(job.type.rawValue.capitalized)
+                                Text(displaySubtitle(for: job))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -618,7 +618,7 @@ struct ScheduleView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(job.customer.name)
+                                Text(displayTitle(for: job))
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.primary)
                                 Text(closeoutReason(for: job))
@@ -699,8 +699,12 @@ struct ScheduleView: View {
             }
 
             HStack(spacing: 10) {
-                Button("Customer") {
-                    GunnAireAppIntentRouter.storeCustomerRoute(call.customer.id)
+                Button(CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) ? "Assign Customer" : "Customer") {
+                    if CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
+                        editingCall = call
+                    } else {
+                        GunnAireAppIntentRouter.storeCustomerRoute(call.customer.id)
+                    }
                 }
                 .buttonStyle(.bordered)
 
@@ -753,10 +757,10 @@ struct ScheduleView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(call.customer.name)
+                    Text(displayTitle(for: call))
                         .font(.headline)
                         .foregroundColor(.primary)
-                    Text(call.type.rawValue.capitalized)
+                    Text(displaySubtitle(for: call))
                         .font(.caption.weight(.semibold))
                         .foregroundColor(Color.brandGold)
                 }
@@ -827,6 +831,19 @@ struct ScheduleView: View {
             }
             return hasDocumentation ? (compact ? "Docs" : "Continue Documentation") : "Start Docs"
         }
+    }
+
+    private func displayTitle(for call: ServiceCall) -> String {
+        guard CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) else {
+            return call.customer.name
+        }
+        return GoogleCalendarScheduleSync.calendarEventSummary(from: call.notes) ?? "Unassigned calendar event"
+    }
+
+    private func displaySubtitle(for call: ServiceCall) -> String {
+        CustomerDataMaintenance.isSystemCalendarCustomer(call.customer)
+            ? "Unassigned customer • \(call.type.rawValue.capitalized)"
+            : call.type.rawValue.capitalized
     }
     
     private func deleteCalls(offsets: IndexSet) {

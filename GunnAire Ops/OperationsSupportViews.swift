@@ -3,6 +3,9 @@ import SwiftData
 
 @MainActor
 enum CustomerDataMaintenance {
+    static let unassignedCalendarCustomerName = "Unassigned Calendar Event"
+    static let unassignedCalendarCustomerMarker = "local-calendar-unassigned"
+
     struct DeletionSummary {
         var customers = 0
         var serviceCalls = 0
@@ -39,9 +42,15 @@ enum CustomerDataMaintenance {
         return genericCalendarCustomerNames.contains(name) && !hasQuickBooksLink
     }
 
+    static func isSystemCalendarCustomer(_ customer: Customer) -> Bool {
+        customer.quickBooksID == unassignedCalendarCustomerMarker ||
+            customer.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .caseInsensitiveCompare(unassignedCalendarCustomerName) == .orderedSame
+    }
+
     static func cleanupCalendarNamedCustomers(modelContext: ModelContext) -> DeletionSummary {
         let customers = (try? modelContext.fetch(FetchDescriptor<Customer>())) ?? []
-        let genericCustomers = customers.filter(isGenericCalendarCustomer)
+        let genericCustomers = customers.filter { isGenericCalendarCustomer($0) && !isSystemCalendarCustomer($0) }
         guard !genericCustomers.isEmpty else { return DeletionSummary() }
 
         let serviceCalls = (try? modelContext.fetch(FetchDescriptor<ServiceCall>())) ?? []
@@ -160,8 +169,9 @@ struct CustomersView: View {
 
     private var filteredCustomers: [Customer] {
         let search = customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !search.isEmpty else { return customers }
-        return customers.filter { customer in
+        let visibleCustomers = customers.filter { !CustomerDataMaintenance.isSystemCalendarCustomer($0) }
+        guard !search.isEmpty else { return visibleCustomers }
+        return visibleCustomers.filter { customer in
             customer.name.localizedCaseInsensitiveContains(search) ||
             (customer.email?.localizedCaseInsensitiveContains(search) ?? false) ||
             (customer.phone?.localizedCaseInsensitiveContains(search) ?? false) ||
