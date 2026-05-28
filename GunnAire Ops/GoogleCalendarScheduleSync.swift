@@ -3,6 +3,25 @@ import SwiftData
 
 @MainActor
 enum GoogleCalendarScheduleSync {
+    private static let deletedCalendarEventKeysStorageKey = "GunnAireDeletedGoogleCalendarEventKeys"
+
+    static func markCalendarEventDeleted(calendarID: String?, eventID: String?) {
+        guard let eventID, !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        var deletedKeys = Set(UserDefaults.standard.stringArray(forKey: deletedCalendarEventKeysStorageKey) ?? [])
+        deletedKeys.insert(calendarEventStorageKey(calendarID: calendarID, eventID: eventID))
+        UserDefaults.standard.set(Array(deletedKeys), forKey: deletedCalendarEventKeysStorageKey)
+    }
+
+    static func isCalendarEventDeleted(calendarID: String?, eventID: String?) -> Bool {
+        guard let eventID, !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        let deletedKeys = Set(UserDefaults.standard.stringArray(forKey: deletedCalendarEventKeysStorageKey) ?? [])
+        return deletedKeys.contains(calendarEventStorageKey(calendarID: calendarID, eventID: eventID))
+    }
+
+    private static func calendarEventStorageKey(calendarID: String?, eventID: String) -> String {
+        "\(normalized(calendarID ?? "primary"))|\(normalized(eventID))"
+    }
+
     static func sync(
         auth: GoogleAuthManager,
         modelContext: ModelContext,
@@ -74,10 +93,19 @@ enum GoogleCalendarScheduleSync {
         let existingCustomers = try modelContext.fetch(FetchDescriptor<Customer>())
         let existingTechnicians = try modelContext.fetch(FetchDescriptor<Technician>())
 
-        var callsByGoogleEventID = Dictionary(uniqueKeysWithValues: existingCalls.compactMap { call in
-            call.googleEventID.map { ($0, call) }
-        })
-        var callsByFingerprint = Dictionary(uniqueKeysWithValues: existingCalls.map { (eventFingerprint(for: $0), $0) })
+        var callsByGoogleEventKey: [String: ServiceCall] = [:]
+        var callsByGoogleEventID: [String: ServiceCall] = [:]
+        var callsByFingerprint: [String: ServiceCall] = [:]
+        for call in existingCalls {
+            if let eventID = call.googleEventID, !eventID.isEmpty {
+                let eventKey = calendarEventStorageKey(calendarID: call.googleCalendarID, eventID: eventID)
+                callsByGoogleEventKey[eventKey] = callsByGoogleEventKey[eventKey] ?? call
+                callsByGoogleEventID[eventID] = callsByGoogleEventID[eventID] ?? call
+            }
+            let fingerprint = eventFingerprint(for: call)
+            callsByFingerprint[fingerprint] = callsByFingerprint[fingerprint] ?? call
+        }
+        var importedEventKeys: Set<String> = []
         var importedEventFingerprints: Set<String> = []
         var customersByName: [String: Customer] = [:]
         for customer in existingCustomers {
@@ -107,6 +135,11 @@ enum GoogleCalendarScheduleSync {
 
         for calendarEvent in calendarEvents {
             let event = calendarEvent.event
+            let eventKey = calendarEventStorageKey(calendarID: calendarEvent.calendarID, eventID: event.id)
+            guard !isCalendarEventDeleted(calendarID: calendarEvent.calendarID, eventID: event.id),
+                  importedEventKeys.insert(eventKey).inserted else {
+                continue
+            }
             guard let startDate = parseEventDate(event.start), let endDate = parseEventDate(event.end) else {
                 continue
             }
@@ -152,7 +185,7 @@ enum GoogleCalendarScheduleSync {
             }
             let eventNotes = calendarNotes(summary: event.summary, description: event.description)
 
-            let call = callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint] ?? ServiceCall(
+            let call = callsByGoogleEventKey[eventKey] ?? callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint] ?? ServiceCall(
                 googleCalendarID: calendarEvent.calendarID,
                 googleEventID: event.id,
                 siteAddress: event.location,
@@ -186,6 +219,7 @@ enum GoogleCalendarScheduleSync {
             call.customer = customer
             call.siteAddress = event.location
             call.notes = eventNotes
+            callsByGoogleEventKey[eventKey] = call
             callsByGoogleEventID[event.id] = call
             callsByFingerprint[fingerprint] = call
             imported += 1
@@ -381,7 +415,13 @@ enum GoogleCalendarScheduleSync {
         writableCalendarIDs: Set<String>
     ) -> [String: (calendarID: String, event: GoogleCalendarEvent)] {
         var indexed: [String: (calendarID: String, event: GoogleCalendarEvent)] = [:]
+        var indexedEventKeys: Set<String> = []
         for calendarEvent in calendarEvents {
+            let eventKey = calendarEventStorageKey(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id)
+            guard !isCalendarEventDeleted(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id),
+                  indexedEventKeys.insert(eventKey).inserted else {
+                continue
+            }
             guard let startDate = parseEventDate(calendarEvent.event.start),
                   let endDate = parseEventDate(calendarEvent.event.end) else {
                 continue

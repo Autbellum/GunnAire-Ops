@@ -541,6 +541,16 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         authorizedJSONRequest(url: url, method: "PUT", body: event, completion: completion)
     }
 
+    func deleteCalendarEvent(calendarID: String = "primary", eventID: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
+        let encodedEventID = eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID
+        guard let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events/\(encodedEventID)") else {
+            completion(.failure(GoogleAuthError.invalidEndpoint))
+            return
+        }
+        authorizedEmptyRequest(url: url, method: "DELETE", completion: completion)
+    }
+
     func fetchGmailMessages(maxResults: Int = 25, query: String? = nil, completion: @escaping (Result<[GmailMessageDetail], Error>) -> Void) {
         var components = URLComponents(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages")
         var queryItems = [URLQueryItem(name: "maxResults", value: String(maxResults))]
@@ -737,6 +747,44 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         return
                     }
                     completion(.success(decoded))
+                }.resume()
+            }
+        }
+    }
+
+    private func authorizedEmptyRequest(
+        url: URL,
+        method: String,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        refreshTokensIfNeeded { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success:
+                guard let token = self.accessToken else {
+                    completion(.failure(GoogleAuthError.notAuthenticated))
+                    return
+                }
+                var request = URLRequest(url: url)
+                request.httpMethod = method
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+                URLSession.shared.dataTask(with: request) { data, response, error in
+                    if let error {
+                        completion(.failure(error))
+                        return
+                    }
+                    guard let http = response as? HTTPURLResponse else {
+                        completion(.failure(GoogleAuthError.unknown))
+                        return
+                    }
+                    guard (200...299).contains(http.statusCode) else {
+                        completion(.failure(self.parseProviderError(data: data ?? Data(), fallbackStatus: http.statusCode)))
+                        return
+                    }
+                    completion(.success(()))
                 }.resume()
             }
         }

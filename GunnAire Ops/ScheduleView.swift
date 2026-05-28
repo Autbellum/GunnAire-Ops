@@ -25,6 +25,7 @@ struct ScheduleView: View {
     @State private var openDocumentationInTapToPay = false
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
+    @State private var deleteConfirmationCall: ServiceCall?
 
     private var selectedDayCalls: [ServiceCall] {
         callsForSignedInUser
@@ -326,6 +327,26 @@ struct ScheduleView: View {
                         openDocumentationInCloseout = false
                         openDocumentationInTapToPay = false
                     }
+                }
+                .confirmationDialog(
+                    "Delete this calendar event?",
+                    isPresented: Binding(
+                        get: { deleteConfirmationCall != nil },
+                        set: { if !$0 { deleteConfirmationCall = nil } }
+                    ),
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete Event", role: .destructive) {
+                        if let call = deleteConfirmationCall {
+                            deleteCall(call)
+                        }
+                        deleteConfirmationCall = nil
+                    }
+                    Button("Cancel", role: .cancel) {
+                        deleteConfirmationCall = nil
+                    }
+                } message: {
+                    Text("This removes the event from the app. If it came from Google Calendar, sync will remember not to import it again.")
                 }
             }
         }
@@ -696,6 +717,16 @@ struct ScheduleView: View {
                 }
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Edit schedule")
+
+                Button(role: .destructive) {
+                    deleteConfirmationCall = call
+                } label: {
+                    Image(systemName: "trash")
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .accessibilityLabel("Delete calendar event")
             }
 
             HStack(spacing: 10) {
@@ -848,8 +879,35 @@ struct ScheduleView: View {
     
     private func deleteCalls(offsets: IndexSet) {
         withAnimation {
-            for index in offsets {
-                modelContext.delete(selectedDayCalls[index])
+            for index in offsets.sorted(by: >) {
+                deleteCall(selectedDayCalls[index])
+            }
+        }
+    }
+
+    private func deleteCall(_ call: ServiceCall) {
+        GoogleCalendarScheduleSync.markCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: call.googleEventID)
+
+        let calendarID = call.googleCalendarID
+        let eventID = call.googleEventID
+        modelContext.delete(call)
+        try? modelContext.save()
+        syncMessage = "Event deleted from the app."
+
+        guard googleAuth.isAuthenticated,
+              let eventID,
+              !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        googleAuth.deleteCalendarEvent(calendarID: calendarID ?? "primary", eventID: eventID) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    syncMessage = "Event deleted from the app and Google Calendar."
+                case .failure(let error):
+                    syncMessage = "Event deleted from the app. Google Calendar did not delete it: \(error.localizedDescription)"
+                }
             }
         }
     }
