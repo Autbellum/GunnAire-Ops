@@ -509,9 +509,7 @@ final class QuickBooksDataAPI: ObservableObject {
         request.timeoutInterval = Config.QuickBooks.requestTimeoutSeconds
         request.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if method.uppercased() != "GET" {
-            request.setValue(UUID().uuidString, forHTTPHeaderField: "Request-Id")
-        }
+        request.setValue(UUID().uuidString, forHTTPHeaderField: "Request-Id")
         if let contentType {
             request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
@@ -999,6 +997,26 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
+    func fetchAccounts(
+        accountType: String? = nil,
+        completion: @escaping (Result<[QuickBooksAccount], Error>) -> Void
+    ) {
+        let fields = "Id, Name, FullyQualifiedName, AccountType, AccountSubType, Classification, Active"
+        var sql = "select \(fields) from Account where Active = true"
+        if let accountType = accountType?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !accountType.isEmpty {
+            sql += " and AccountType = '\(Self.escapeQueryString(accountType))'"
+        }
+        sql += " order by FullyQualifiedName"
+
+        performAuthorizedDecodingRequest(
+            { self.makeQueryRequest(sql) },
+            decode: QuickBooksAccountQueryResponse.self
+        ) { result in
+            completion(result.map { $0.QueryResponse.Account ?? [] })
+        }
+    }
+
     func createCardToken(_ tokenRequest: QuickBooksPaymentsTokenCreateRequest, completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void) {
         let body = try? JSONEncoder().encode(tokenRequest)
         performPaymentsTokenRequest(
@@ -1286,6 +1304,10 @@ final class QuickBooksDataAPI: ObservableObject {
         case "rtf": return "application/rtf"
         default: return "application/octet-stream"
         }
+    }
+
+    static func escapeQueryString(_ value: String) -> String {
+        value.replacingOccurrences(of: "'", with: "\\'")
     }
 
     enum QBError: Error, LocalizedError {
@@ -1730,6 +1752,28 @@ struct QuickBooksCustomerCreate: Codable {
 
 struct QuickBooksCustomerResponse: Codable {
     let Customer: QuickBooksCustomer
+}
+
+struct QuickBooksAccountQueryResponse: Codable {
+    let QueryResponse: QuickBooksAccountList
+}
+
+struct QuickBooksAccountList: Codable {
+    let Account: [QuickBooksAccount]?
+}
+
+struct QuickBooksAccount: Codable, Identifiable {
+    let Id: String
+    let Name: String
+    let FullyQualifiedName: String?
+    let AccountType: String?
+    let AccountSubType: String?
+    let Classification: String?
+    let Active: Bool?
+
+    var id: String { Id }
+    var displayName: String { FullyQualifiedName ?? Name }
+    var reference: QuickBooksReference { QuickBooksReference(value: Id, name: displayName) }
 }
 
 struct QuickBooksItemQueryResponse: Codable {

@@ -620,9 +620,10 @@ struct PaymentsAndReceiptsView: View {
         }
         if selectedMethod == .ach, quickBooksPaymentsEnabled {
             return !achAccountHolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                achAccountNumber.filter(\.isNumber).count >= 4 &&
+                achAccountHolderName.trimmingCharacters(in: .whitespacesAndNewlines).count <= 64 &&
+                (4...17).contains(achAccountNumber.filter(\.isNumber).count) &&
                 achRoutingNumber.filter(\.isNumber).count == 9 &&
-                achPhone.filter(\.isNumber).count >= 10
+                achPhone.filter(\.isNumber).count == 10
         }
         return true
     }

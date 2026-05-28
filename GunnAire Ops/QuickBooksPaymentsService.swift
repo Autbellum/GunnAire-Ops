@@ -424,13 +424,26 @@ final class QuickBooksPaymentsService {
     }
 
     private func createBankAccountToken(_ input: QuickBooksPaymentsBankAccountInput) async throws -> QuickBooksPaymentsTokenResponse {
+        let normalizedName = input.accountHolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAccountNumber = input.accountNumber.filter(\.isNumber)
+        let normalizedRoutingNumber = input.routingNumber.filter(\.isNumber)
+        let normalizedPhone = input.phone.filter(\.isNumber)
+
+        guard !normalizedName.isEmpty,
+              normalizedName.count <= 64,
+              (4...17).contains(normalizedAccountNumber.count),
+              normalizedRoutingNumber.count == 9,
+              normalizedPhone.count == 10 else {
+            throw QuickBooksPaymentsServiceError.invalidBankAccountInput
+        }
+
         let tokenRequest = QuickBooksPaymentsTokenCreateRequest(
             card: nil,
             bankAccount: QuickBooksPaymentsBankAccount(
-                name: input.accountHolderName,
-                accountNumber: input.accountNumber,
-                phone: input.phone,
-                routingNumber: input.routingNumber,
+                name: normalizedName,
+                accountNumber: normalizedAccountNumber,
+                phone: normalizedPhone,
+                routingNumber: normalizedRoutingNumber,
                 accountType: input.accountType.rawValue
             )
         )
@@ -742,6 +755,7 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
     case invoiceNotSyncedToQuickBooks
     case quickBooksSessionExpired
     case invalidPaymentInput
+    case invalidBankAccountInput
 
     var errorDescription: String? {
         switch self {
@@ -759,6 +773,8 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
             return "Reconnect QuickBooks before processing this payment. The saved QuickBooks session could not be refreshed."
         case .invalidPaymentInput:
             return "Enter a valid card number, expiration date, and CVC before sending payment details to QuickBooks Payments."
+        case .invalidBankAccountInput:
+            return "Enter valid ACH details before sending bank-account details to QuickBooks Payments: holder name up to 64 characters, account number 4-17 digits, routing number 9 digits, and phone number exactly 10 digits."
         }
     }
 }
