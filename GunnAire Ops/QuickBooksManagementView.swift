@@ -2570,7 +2570,7 @@ private struct QuickBooksCatalogItemComposeView: View {
             Form {
                 Section("Catalog Item") {
                     TextField("Name", text: $name)
-                    TextField("Price", text: $price)
+                    TextField("Price (optional)", text: $price)
                         .keyboardType(.decimalPad)
                     TextField("Description", text: $description)
                 }
@@ -2582,7 +2582,7 @@ private struct QuickBooksCatalogItemComposeView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") {
-                        guard let amount = Double(price), amount >= 0 else { return }
+                        guard let amount = QuickBooksCatalogAmountParser.parseRequiredOrZero(price), amount >= 0 else { return }
                         onCreate(
                             name.trimmingCharacters(in: .whitespacesAndNewlines),
                             amount,
@@ -2590,10 +2590,22 @@ private struct QuickBooksCatalogItemComposeView: View {
                         )
                         dismiss()
                     }
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || Double(price) == nil)
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || QuickBooksCatalogAmountParser.parseRequiredOrZero(price) == nil)
                 }
             }
         }
+    }
+}
+
+private enum QuickBooksCatalogAmountParser {
+    static func parseRequiredOrZero(_ value: String) -> Double? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        let normalized = trimmed
+            .replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: " ", with: "")
+        return Double(normalized)
     }
 }
 

@@ -1253,7 +1253,7 @@ GunnAire
                                 .lineLimit(2...3)
                             Toggle("Taxable", isOn: $newItemTaxable)
                             HStack {
-                                TextField("Price", text: $newItemPrice)
+                                TextField("Price (optional)", text: $newItemPrice)
                                     .keyboardType(.decimalPad)
                                 TextField("Cost", text: $newItemCost)
                                     .keyboardType(.decimalPad)
@@ -1262,7 +1262,11 @@ GunnAire
                                 } label: {
                                     Label("Add", systemImage: "plus")
                                 }
-                                .disabled(newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || CatalogItemAmountParser.parse(newItemPrice) == nil)
+                                .disabled(
+                                    newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                                    CatalogItemAmountParser.parseRequiredOrZero(newItemPrice) == nil ||
+                                    !CatalogItemAmountParser.isValidOptionalAmount(newItemCost)
+                                )
                             }
                         }
                     }
@@ -1639,8 +1643,8 @@ GunnAire
     }
 
     private func addItem() {
-        guard let price = CatalogItemAmountParser.parse(newItemPrice) else { return }
-        let cost = CatalogItemAmountParser.parse(newItemCost)
+        guard let price = CatalogItemAmountParser.parseRequiredOrZero(newItemPrice) else { return }
+        let cost = CatalogItemAmountParser.parseOptional(newItemCost)
         let item = Item(
             name: newItemName.trimmingCharacters(in: .whitespacesAndNewlines),
             itemType: newItemType,
@@ -2146,6 +2150,10 @@ GunnAire
             modelContext.insert(estimate)
             activeServiceCall?.linkedEstimateID = estimate.id
             actionMessage = isQuickBooksConnected ? "Estimate created locally. Syncing to QuickBooks..." : "Estimate created locally."
+            guard saveBillingContext(failureMessage: "Could not save estimate locally") else {
+                isCreatingDocument = false
+                return
+            }
             syncEstimateIfNeeded(estimate, customer: customer, items: selectedLineItems)
             if openInvoiceAfterEstimateCreation {
                 selectedDocumentKind = .invoice
@@ -2169,11 +2177,25 @@ GunnAire
             activeServiceCall?.documentationCompletedAt = Date()
             activeServiceCall?.status = .invoiced
             actionMessage = isQuickBooksConnected ? "Invoice created locally. Syncing to QuickBooks..." : "Invoice created locally."
+            guard saveBillingContext(failureMessage: "Could not save invoice locally") else {
+                isCreatingDocument = false
+                return
+            }
             syncInvoiceIfNeeded(invoice, customer: customer, items: selectedLineItems)
             selectedItems.removeAll()
             notes = ""
         }
         isCreatingDocument = false
+    }
+
+    private func saveBillingContext(failureMessage: String) -> Bool {
+        do {
+            try modelContext.save()
+            return true
+        } catch {
+            actionMessage = "\(failureMessage): \(error.localizedDescription)"
+            return false
+        }
     }
 
     private func openPaymentsForInvoice(_ invoice: Invoice) {
@@ -2248,9 +2270,20 @@ GunnAire
             case .failure(let error):
                 completion(.failure(error))
             case .success:
+                if canUseDefaultQuickBooksLineItem(for: items) {
+                    completion(.success(items))
+                    return
+                }
                 ensureQuickBooksItems(items, index: 0, synced: [], completion: completion)
             }
         }
+    }
+
+    private func canUseDefaultQuickBooksLineItem(for items: [Item]) -> Bool {
+        let hasLocalOnlyItems = items.contains { item in
+            item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        }
+        return hasLocalOnlyItems && Config.QuickBooks.hasExplicitDefaultSalesItemRef
     }
 
     private func ensureQuickBooksCustomer(_ customer: Customer, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -2330,7 +2363,11 @@ GunnAire
 
     private func quickBooksLineItems(for items: [Item]) -> [QuickBooksLineItem] {
         items.compactMap { item in
-            guard let quickBooksID = item.quickBooksID, !quickBooksID.isEmpty else { return nil }
+            let explicitQuickBooksID = item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fallbackQuickBooksID = Config.QuickBooks.defaultSalesItemRef.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let quickBooksID = explicitQuickBooksID?.isEmpty == false
+                    ? explicitQuickBooksID
+                    : (fallbackQuickBooksID.isEmpty ? nil : fallbackQuickBooksID) else { return nil }
             return QuickBooksLineItem(
                 Amount: item.unitPrice,
                 DetailType: "SalesItemLineDetail",
@@ -3103,6 +3140,23 @@ private enum CatalogItemAmountParser {
 
         return Double(normalized)
     }
+
+    static func parseRequiredOrZero(_ value: String) -> Double? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        return parse(trimmed)
+    }
+
+    static func parseOptional(_ value: String) -> Double? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return parse(trimmed)
+    }
+
+    static func isValidOptionalAmount(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || parse(trimmed) != nil
+    }
 }
 
 private struct DocumentationItemCreatorView: View {
@@ -3136,7 +3190,7 @@ private struct DocumentationItemCreatorView: View {
                 TextField("Description", text: $description, axis: .vertical)
                     .lineLimit(2...3)
                 Toggle("Taxable", isOn: $isTaxable)
-                TextField("Sales price", text: $price)
+                TextField("Sales price (optional)", text: $price)
                     .keyboardType(.decimalPad)
                 TextField("Cost", text: $cost)
                     .keyboardType(.decimalPad)
@@ -3155,19 +3209,23 @@ private struct DocumentationItemCreatorView: View {
                     Button("Save") {
                         saveItem()
                     }
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || CatalogItemAmountParser.parse(price) == nil)
+                    .disabled(
+                        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        CatalogItemAmountParser.parseRequiredOrZero(price) == nil ||
+                        !CatalogItemAmountParser.isValidOptionalAmount(cost)
+                    )
                 }
             }
         }
     }
 
     private func saveItem() {
-        guard let salesPrice = CatalogItemAmountParser.parse(price) else { return }
+        guard let salesPrice = CatalogItemAmountParser.parseRequiredOrZero(price) else { return }
         let item = Item(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             itemType: itemType,
             unitPrice: salesPrice,
-            purchaseCost: CatalogItemAmountParser.parse(cost),
+            purchaseCost: CatalogItemAmountParser.parseOptional(cost),
             isTaxable: isTaxable,
             itemDescription: {
                 let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
