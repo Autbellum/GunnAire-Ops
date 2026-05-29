@@ -66,6 +66,7 @@ struct Config {
         static let defaultSalesItemRef = Config.value("QB_DEFAULT_ITEM_REF", fallback: "")
         static let defaultIncomeAccountRef = Config.value("QB_DEFAULT_INCOME_ACCOUNT_REF", fallback: "")
         static let defaultExpenseAccountRef = Config.value("QB_DEFAULT_EXPENSE_ACCOUNT_REF", fallback: "")
+        static let defaultPaymentAccountRef = Config.value("QB_DEFAULT_PAYMENT_ACCOUNT_REF", fallback: "")
         private static func looksExplicitQuickBooksValue(_ key: String) -> Bool {
             guard let value = Config.optionalValue(key) else { return false }
             let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -79,6 +80,7 @@ struct Config {
         static let hasExplicitDefaultSalesItemRef = looksExplicitQuickBooksValue("QB_DEFAULT_ITEM_REF")
         static let hasExplicitDefaultIncomeAccountRef = looksExplicitQuickBooksValue("QB_DEFAULT_INCOME_ACCOUNT_REF")
         static let hasExplicitDefaultExpenseAccountRef = looksExplicitQuickBooksValue("QB_DEFAULT_EXPENSE_ACCOUNT_REF")
+        static let hasExplicitDefaultPaymentAccountRef = looksExplicitQuickBooksValue("QB_DEFAULT_PAYMENT_ACCOUNT_REF")
 
         // Enable only when the app is approved for QuickBooks Payments and users reconnect after scope changes.
         static let enablePaymentsScope = Config.value("QB_ENABLE_PAYMENTS_SCOPE", fallback: "false").lowercased() != "false"
@@ -139,11 +141,11 @@ struct Config {
             if !hasExplicitDefaultSalesItemRef {
                 warnings.append("Set QB_DEFAULT_ITEM_REF to a valid QBO Service/NonInventory Item.Id for generic fallback items and refund receipts.")
             }
-            if !hasExplicitDefaultIncomeAccountRef {
-                warnings.append("Set QB_DEFAULT_INCOME_ACCOUNT_REF to a valid QBO income Account.Id, or sync catalog items so the app can reuse the income account from your default QBO item.")
-            }
             if !hasExplicitDefaultExpenseAccountRef {
-                warnings.append("Set QB_DEFAULT_EXPENSE_ACCOUNT_REF before creating bills or expense purchases.")
+                warnings.append("Set QB_DEFAULT_EXPENSE_ACCOUNT_REF to a valid QBO expense/category Account.Id before creating bills or expense purchase lines.")
+            }
+            if !hasExplicitDefaultPaymentAccountRef {
+                warnings.append("Set QB_DEFAULT_PAYMENT_ACCOUNT_REF to a valid QBO bank or credit-card Account.Id before creating paid purchases.")
             }
             return warnings
         }

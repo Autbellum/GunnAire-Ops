@@ -10,6 +10,7 @@ QB_ENVIRONMENT = production
 QB_DEFAULT_ITEM_REF = your_default_item_ref
 QB_DEFAULT_INCOME_ACCOUNT_REF = your_income_account_ref
 QB_DEFAULT_EXPENSE_ACCOUNT_REF = your_expense_account_ref
+QB_DEFAULT_PAYMENT_ACCOUNT_REF = your_payment_account_ref
 QB_ENABLE_PAYMENTS_SCOPE = true
 QB_TIME_ACTIVITY_SYNC_ENABLED = false
 QB_TIME_ACTIVITY_NAME_OF = Employee

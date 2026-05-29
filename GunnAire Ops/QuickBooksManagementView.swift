@@ -116,6 +116,9 @@ struct QuickBooksManagementView: View {
                   !quickBooksDataAPI.savedSessionIncludesPaymentsScope {
             warnings.append("QuickBooks Payments features are enabled. Reconnect QuickBooks so Intuit can authorize the \(Config.QuickBooks.paymentsScope) scope for this company.")
         }
+        if !catalogItemCreationReady {
+            warnings.append("Set QB_DEFAULT_INCOME_ACCOUNT_REF to a valid QBO income Account.Id, or sync catalog items so the app can reuse the income account from your default QBO item. Do not use Accounts Receivable here.")
+        }
         return warnings
     }
 
@@ -125,6 +128,10 @@ struct QuickBooksManagementView: View {
 
     private var expenseAccountConfigReady: Bool {
         Config.QuickBooks.hasExplicitDefaultExpenseAccountRef
+    }
+
+    private var paymentAccountConfigReady: Bool {
+        Config.QuickBooks.hasExplicitDefaultPaymentAccountRef
     }
 
     private var catalogItemCreationReady: Bool {
@@ -594,8 +601,8 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
-                        if !expenseAccountConfigReady {
-                            Text("Set `QB_DEFAULT_EXPENSE_ACCOUNT_REF` before creating live purchases.")
+                        if !expenseAccountConfigReady || !paymentAccountConfigReady {
+                            Text("Set `QB_DEFAULT_EXPENSE_ACCOUNT_REF` for the expense category and `QB_DEFAULT_PAYMENT_ACCOUNT_REF` for the bank or credit-card account before creating live purchases.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -604,7 +611,7 @@ struct QuickBooksManagementView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || vendors.isEmpty || !expenseAccountConfigReady)
+                            .disabled(!isAuthenticated || vendors.isEmpty || !expenseAccountConfigReady || !paymentAccountConfigReady)
                     }
 
                     Section(header: Text("Vendors").foregroundColor(Color.brandGold)) {
@@ -1296,10 +1303,15 @@ struct QuickBooksManagementView: View {
             actionMessage = "Set QB_DEFAULT_EXPENSE_ACCOUNT_REF to a valid QBO expense Account.Id before creating purchases."
             return
         }
+        guard paymentAccountConfigReady else {
+            actionMessage = "Set QB_DEFAULT_PAYMENT_ACCOUNT_REF to a valid QBO bank or credit-card Account.Id before creating purchases."
+            return
+        }
 
         let expenseAccount = QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil)
+        let paymentAccount = QuickBooksReference(value: Config.QuickBooks.defaultPaymentAccountRef, name: nil)
         let payload = QuickBooksPurchaseCreate(
-            AccountRef: expenseAccount,
+            AccountRef: paymentAccount,
             EntityRef: vendorRef,
             Line: [QuickBooksBillLine(amount: amount, description: note, accountRef: expenseAccount)],
             PaymentType: paymentType,
