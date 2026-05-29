@@ -41,6 +41,10 @@ final class QuickBooksAPI: ObservableObject {
         data.createEstimate(estimate, completion: completion)
     }
 
+    func sendEstimate(id: String, to emailAddress: String? = nil, completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
+        data.sendEstimate(id: id, to: emailAddress, completion: completion)
+    }
+
     func fetchInvoices(completion: @escaping (Result<[QuickBooksInvoice], Error>) -> Void) {
         data.fetchInvoices(completion: completion)
     }

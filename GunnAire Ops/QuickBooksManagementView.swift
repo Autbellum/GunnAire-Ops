@@ -83,6 +83,7 @@ struct QuickBooksManagementView: View {
     @State private var lastSuccessfulSyncAt: Date? = UserDefaults.standard.object(forKey: "QuickBooksLastSuccessfulSyncAt") as? Date
     @State private var lastSyncStartedAt: Date?
     @State private var activePaymentInvoiceID: String?
+    @State private var activeEmailEstimateID: String?
     @State private var activeEmailInvoiceID: String?
     @State private var paymentToRefund: Payment?
     @State private var quickBooksReconnectRequired = false
@@ -428,12 +429,26 @@ struct QuickBooksManagementView: View {
                             emptyState("No QuickBooks estimates loaded.")
                         } else {
                             ForEach(estimates) { estimate in
-                                transactionBlock(
-                                    title: estimate.DocNumber ?? estimate.Id,
-                                    name: estimate.CustomerRef.displayName,
-                                    amount: estimate.TotalAmt,
-                                    dateText: estimate.TxnDate
-                                )
+                                VStack(alignment: .leading, spacing: 6) {
+                                    transactionBlock(
+                                        title: estimate.DocNumber ?? estimate.Id,
+                                        name: estimate.CustomerRef.displayName,
+                                        amount: estimate.TotalAmt,
+                                        dateText: estimate.TxnDate
+                                    )
+
+                                    if let emailStatus = estimate.EmailStatus, !emailStatus.isEmpty {
+                                        Text("Email: \(emailStatus)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+
+                                    Button(activeEmailEstimateID == estimate.Id ? "Sending..." : "Email Estimate") {
+                                        sendEstimateEmail(estimate)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .disabled(activeEmailEstimateID != nil || estimateEmailAddress(for: estimate) == nil)
+                                }
                             }
                         }
 
@@ -890,11 +905,14 @@ struct QuickBooksManagementView: View {
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingNewEstimateSheet) {
-                    QuickBooksDocumentComposeView(
-                        title: "Create Estimate",
-                        customerRefs: customers.map(\.reference)
-                    ) { customerRef, amount, note in
-                        createEstimate(customerRef: customerRef, amount: amount, note: note)
+                    QuickBooksEstimateComposeView(customers: customers) { customer, amount, note, email, sendAfterCreate in
+                        createEstimate(
+                            customer: customer,
+                            amount: amount,
+                            note: note,
+                            emailAddress: email,
+                            sendAfterCreate: sendAfterCreate
+                        )
                     }
                     .tint(Color.brandGold)
                 }
@@ -1175,16 +1193,29 @@ struct QuickBooksManagementView: View {
         }
     }
 
-    private func createEstimate(customerRef: QuickBooksReference, amount: Double, note: String?) {
+    private func createEstimate(
+        customer: QuickBooksCustomer,
+        amount: Double,
+        note: String?,
+        emailAddress: String?,
+        sendAfterCreate: Bool
+    ) {
         guard salesItemConfigReady else {
             actionMessage = "Set QB_DEFAULT_ITEM_REF to a valid QuickBooks sales item before creating estimates."
             return
         }
+        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let estimateEmail = trimmedEmail?.isEmpty == false ? trimmedEmail : nil
+        if sendAfterCreate, estimateEmail == nil {
+            actionMessage = "Add an email address before sending this estimate."
+            return
+        }
 
         let payload = QuickBooksEstimateCreate(
-            CustomerRef: customerRef,
+            CustomerRef: customer.reference,
             Line: [salesLineItem(amount: amount, note: note)],
-            PrivateNote: note
+            PrivateNote: note,
+            BillEmail: estimateEmail.map { QuickBooksEmailAddress(Address: $0) }
         )
 
         performAction(message: "Creating estimate in QuickBooks...") {
@@ -1192,8 +1223,13 @@ struct QuickBooksManagementView: View {
                 DispatchQueue.main.async {
                     switch result {
                     case .success(let estimate):
-                        actionMessage = "Estimate created: \(estimate.DocNumber ?? estimate.Id)"
-                        syncAllQuickBooksData()
+                        if sendAfterCreate {
+                            actionMessage = "Estimate created. Sending email..."
+                            sendCreatedEstimateEmail(estimate, to: estimateEmail)
+                        } else {
+                            actionMessage = "Estimate created: \(estimate.DocNumber ?? estimate.Id)"
+                            syncAllQuickBooksData()
+                        }
                     case .failure(let error):
                         actionMessage = "Estimate creation failed: \(error.localizedDescription)"
                         isLoading = false
@@ -1731,6 +1767,47 @@ struct QuickBooksManagementView: View {
         }
     }
 
+    private func quickBooksCustomer(for estimate: QuickBooksEstimate) -> QuickBooksCustomer? {
+        customers.first { $0.Id == estimate.CustomerRef.value }
+    }
+
+    private func estimateEmailAddress(for estimate: QuickBooksEstimate) -> String? {
+        let candidates = [
+            estimate.BillEmail?.Address,
+            quickBooksCustomer(for: estimate)?.PrimaryEmailAddr?.Address
+        ]
+        return candidates
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    private func sendEstimateEmail(_ estimate: QuickBooksEstimate) {
+        guard let emailAddress = estimateEmailAddress(for: estimate) else {
+            actionMessage = "Add an email address to this QuickBooks customer before sending the estimate."
+            return
+        }
+        activeEmailEstimateID = estimate.Id
+        actionMessage = "Sending estimate \(estimate.DocNumber ?? estimate.Id) to \(emailAddress)..."
+        sendCreatedEstimateEmail(estimate, to: emailAddress)
+    }
+
+    private func sendCreatedEstimateEmail(_ estimate: QuickBooksEstimate, to emailAddress: String?) {
+        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
+        liveAPI.sendEstimate(id: estimate.Id, to: trimmedEmail) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let sentEstimate):
+                    actionMessage = "Estimate \(sentEstimate.DocNumber ?? sentEstimate.Id) emailed to \(trimmedEmail ?? "the customer")."
+                    syncAllQuickBooksData()
+                case .failure(let error):
+                    actionMessage = "Estimate email failed: \(error.localizedDescription)"
+                    isLoading = false
+                }
+                activeEmailEstimateID = nil
+            }
+        }
+    }
+
     private func quickBooksCustomer(for invoice: QuickBooksInvoice) -> QuickBooksCustomer? {
         customers.first { $0.Id == invoice.CustomerRef.value }
     }
@@ -2045,6 +2122,101 @@ private struct QuickBooksDocumentComposeView: View {
             }
             .onAppear {
                 selectedCustomerID = selectedCustomerID ?? customerRefs.first?.value
+            }
+        }
+    }
+}
+
+private struct QuickBooksEstimateComposeView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let customers: [QuickBooksCustomer]
+    let onCreate: (QuickBooksCustomer, Double, String?, String?, Bool) -> Void
+
+    @State private var selectedCustomerID: String?
+    @State private var amountText = ""
+    @State private var note = ""
+    @State private var emailAddress = ""
+    @State private var sendAfterCreate = true
+
+    private var selectedCustomer: QuickBooksCustomer? {
+        if let selectedCustomerID, let match = customers.first(where: { $0.Id == selectedCustomerID }) {
+            return match
+        }
+        return customers.first
+    }
+
+    private var customerOptions: [SearchableDropdownOption] {
+        customers.map { customer in
+            SearchableDropdownOption(
+                id: customer.Id,
+                title: customer.DisplayName,
+                subtitle: customer.PrimaryEmailAddr?.Address ?? customer.PrimaryPhone?.FreeFormNumber
+            )
+        }
+    }
+
+    private var canCreate: Bool {
+        guard let amount = Double(amountText), amount > 0 else { return false }
+        return selectedCustomer != nil &&
+        (sendAfterCreate == false || !emailAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Create Estimate") {
+                    if customers.isEmpty {
+                        Text("Sync QuickBooks customers first.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        SearchableDropdownPicker(
+                            title: "Customer",
+                            options: customerOptions,
+                            selectedID: $selectedCustomerID,
+                            placeholder: "Choose customer"
+                        )
+                    }
+
+                    TextField("Amount", text: $amountText)
+                        .keyboardType(.decimalPad)
+                    TextField("Notes", text: $note)
+                }
+
+                Section("Delivery") {
+                    Toggle("Email estimate after creating", isOn: $sendAfterCreate)
+                    TextField("Customer email", text: $emailAddress)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+            }
+            .navigationTitle("Create Estimate")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(sendAfterCreate ? "Create & Send" : "Create") {
+                        guard let selectedCustomer, let amount = Double(amountText), amount > 0 else { return }
+                        onCreate(
+                            selectedCustomer,
+                            amount,
+                            note.isEmpty ? nil : note,
+                            emailAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : emailAddress,
+                            sendAfterCreate
+                        )
+                        dismiss()
+                    }
+                    .disabled(!canCreate)
+                }
+            }
+            .onAppear {
+                selectedCustomerID = selectedCustomerID ?? customers.first?.Id
+                emailAddress = selectedCustomer?.PrimaryEmailAddr?.Address ?? emailAddress
+            }
+            .onChange(of: selectedCustomerID) { _, _ in
+                emailAddress = selectedCustomer?.PrimaryEmailAddr?.Address ?? ""
             }
         }
     }
