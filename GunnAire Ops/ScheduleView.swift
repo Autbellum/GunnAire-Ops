@@ -1192,6 +1192,7 @@ GunnAire
         )
         modelContext.insert(call)
         contract.advanceNextDate()
+        publishToGoogleCalendar(call)
         selectedDate = Calendar.current.startOfDay(for: call.scheduledDate)
         navigationPath.append(call)
     }
@@ -1227,6 +1228,7 @@ GunnAire
         sourceCall.followUpRequired = false
         sourceCall.followUpAction = nil
         sourceCall.followUpDueDate = nil
+        publishToGoogleCalendar(followUpCall)
         selectedDate = Calendar.current.startOfDay(for: followUpCall.scheduledDate)
         navigationPath.append(followUpCall)
     }
@@ -1261,14 +1263,29 @@ GunnAire
         sourceCall.followUpRequired = false
         sourceCall.followUpAction = nil
         sourceCall.followUpDueDate = nil
+        publishToGoogleCalendar(approvedWorkCall)
         selectedDate = Calendar.current.startOfDay(for: approvedWorkCall.scheduledDate)
         navigationPath.append(approvedWorkCall)
+    }
+
+    private func publishToGoogleCalendar(_ call: ServiceCall) {
+        guard googleAuth.isAuthenticated else { return }
+        try? modelContext.save()
+        let signedInEmail = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        GoogleCalendarScheduleSync.exportImmediately(
+            call: call,
+            auth: googleAuth,
+            modelContext: modelContext,
+            signedInEmail: signedInEmail,
+            isAdminUser: isAdminUser
+        )
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician) {
         call.assignedTechnician = technician
         call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
         call.googleEventID = nil
+        publishToGoogleCalendar(call)
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician, reschedulingTo newStart: Date) {
@@ -1276,6 +1293,7 @@ GunnAire
         call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
         call.googleEventID = nil
         call.scheduledDate = newStart
+        publishToGoogleCalendar(call)
     }
 
     private func nextAvailableStart(for technician: Technician, proposedStart: Date, duration: TimeInterval) -> Date? {

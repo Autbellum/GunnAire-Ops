@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 
 struct OperationsDashboardView: View {
+    @Environment(\.modelContext) private var modelContext
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \ServiceCall.scheduledDate, order: .forward) private var serviceCalls: [ServiceCall]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
@@ -31,6 +32,10 @@ struct OperationsDashboardView: View {
     }
 
     private var canViewFinancials: Bool {
+        AppAccess.isAdmin(email: currentUserEmail, users: users)
+    }
+
+    private var isAdminUser: Bool {
         AppAccess.isAdmin(email: currentUserEmail, users: users)
     }
 
@@ -1446,9 +1451,31 @@ struct OperationsDashboardView: View {
 
         if let nextStart, nextStart > originalStart {
             call.scheduledDate = nextStart
-            dispatchMessage = "\(call.customer.name) assigned to \(technician.name) and moved to \(nextStart.formatted(date: .abbreviated, time: .shortened)). Calendar route reset for the new technician; sync Google Calendar from Schedule to publish the change."
+            dispatchMessage = "\(call.customer.name) assigned to \(technician.name) and moved to \(nextStart.formatted(date: .abbreviated, time: .shortened)). Publishing calendar update..."
         } else {
-            dispatchMessage = "\(call.customer.name) assigned to \(technician.name). Calendar route reset for the new technician; sync Google Calendar from Schedule to publish the assignment."
+            dispatchMessage = "\(call.customer.name) assigned to \(technician.name). Publishing calendar update..."
+        }
+        publishToGoogleCalendar(call)
+    }
+
+    private func publishToGoogleCalendar(_ call: ServiceCall) {
+        guard googleAuth.isAuthenticated else { return }
+        try? modelContext.save()
+        GoogleCalendarScheduleSync.exportImmediately(
+            call: call,
+            auth: googleAuth,
+            modelContext: modelContext,
+            signedInEmail: currentUserEmail,
+            isAdminUser: isAdminUser
+        ) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    dispatchMessage = "\(call.customer.name) calendar update published."
+                case .failure(let error):
+                    dispatchMessage = "Calendar update failed: \(error.localizedDescription)"
+                }
+            }
         }
     }
 

@@ -114,6 +114,58 @@ enum GoogleCalendarScheduleSync {
                             }
                         }
                     }
+            }
+        }
+    }
+    }
+
+    static func exportImmediately(
+        call: ServiceCall,
+        auth: GoogleAuthManager,
+        modelContext: ModelContext,
+        signedInEmail: String?,
+        isAdminUser: Bool,
+        completion: ((Result<String, Error>) -> Void)? = nil
+    ) {
+        let calendar = Calendar.current
+        let start = calendar.date(byAdding: .day, value: -1, to: call.scheduledDate) ?? call.scheduledDate
+        let end = calendar.date(byAdding: .day, value: 1, to: call.scheduledDate) ?? call.scheduledDate
+        auth.fetchCalendars { calendarsResult in
+            switch calendarsResult {
+            case .failure(let error):
+                completion?(.failure(error))
+            case .success(let calendars):
+                let filteredCalendars = calendars.filter { !isExcludedCalendarID($0.id) }
+                let availableCalendarIDs = Set(["primary"] + filteredCalendars.map(\.id))
+                let writableCalendarIDs = Set(["primary"] + filteredCalendars.filter(\.isWritable).map(\.id))
+                fetchEvents(
+                    auth: auth,
+                    calendarIDs: Array(availableCalendarIDs),
+                    timeMin: start,
+                    timeMax: end
+                ) { fetchResult in
+                    switch fetchResult {
+                    case .failure(let error):
+                        completion?(.failure(error))
+                    case .success(let calendarEvents):
+                        Task { @MainActor in
+                            exportNext(
+                                index: 0,
+                                exportedCount: 0,
+                                skippedCount: 0,
+                                calls: [call],
+                                auth: auth,
+                                modelContext: modelContext,
+                                remoteEventsByKey: remoteEventsByKey(from: calendarEvents),
+                                remoteEventsByFingerprint: remoteEventsByFingerprint(from: calendarEvents, writableCalendarIDs: writableCalendarIDs),
+                                availableCalendarIDs: availableCalendarIDs,
+                                writableCalendarIDs: writableCalendarIDs,
+                                completion: { result in
+                                    completion?(result)
+                                }
+                            )
+                        }
+                    }
                 }
             }
         }

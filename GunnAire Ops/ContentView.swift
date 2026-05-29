@@ -1361,6 +1361,11 @@ struct AddServiceCallView: View {
         AppAccess.schedulableTechnicians(technicians, users: users)
     }
 
+    private var isAdminUser: Bool {
+        let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        return AppAccess.isAdmin(email: email, users: users)
+    }
+
     private var conflictingCalls: [ServiceCall] {
         guard let technician else { return [] }
         let proposedEnd = scheduledTime.addingTimeInterval(duration)
@@ -1645,6 +1650,7 @@ struct AddServiceCallView: View {
             followUpDueDate: followUpRequired ? followUpDueDate : nil
         )
         modelContext.insert(call)
+        publishToGoogleCalendar(call)
         dismiss()
         if openDocumentationAfterSave {
             DispatchQueue.main.async {
@@ -1667,6 +1673,19 @@ struct AddServiceCallView: View {
         )
         modelContext.insert(placeholder)
         return placeholder
+    }
+
+    private func publishToGoogleCalendar(_ call: ServiceCall) {
+        guard googleAuth.isAuthenticated else { return }
+        try? modelContext.save()
+        let signedInEmail = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        GoogleCalendarScheduleSync.exportImmediately(
+            call: call,
+            auth: googleAuth,
+            modelContext: modelContext,
+            signedInEmail: signedInEmail,
+            isAdminUser: isAdminUser
+        )
     }
 
     private func resetNewCustomerFields() {
@@ -1796,6 +1815,11 @@ struct EditServiceCallView: View {
         }
         return ([technician] + activeTechnicians)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var isAdminUser: Bool {
+        let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        return AppAccess.isAdmin(email: email, users: users)
     }
 
     private var visibleCustomers: [Customer] {
@@ -1952,7 +1976,20 @@ struct EditServiceCallView: View {
         }
         GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
         try? modelContext.save()
+        publishToGoogleCalendar(call)
         dismiss()
+    }
+
+    private func publishToGoogleCalendar(_ call: ServiceCall) {
+        guard googleAuth.isAuthenticated else { return }
+        let signedInEmail = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        GoogleCalendarScheduleSync.exportImmediately(
+            call: call,
+            auth: googleAuth,
+            modelContext: modelContext,
+            signedInEmail: signedInEmail,
+            isAdminUser: isAdminUser
+        )
     }
 
     private func loadAccessibleCalendarsIfNeeded() {
