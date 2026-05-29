@@ -83,6 +83,7 @@ struct QuickBooksManagementView: View {
     @State private var lastSuccessfulSyncAt: Date? = UserDefaults.standard.object(forKey: "QuickBooksLastSuccessfulSyncAt") as? Date
     @State private var lastSyncStartedAt: Date?
     @State private var activePaymentInvoiceID: String?
+    @State private var activeEmailInvoiceID: String?
     @State private var paymentToRefund: Payment?
     @State private var quickBooksReconnectRequired = false
 
@@ -460,6 +461,12 @@ struct QuickBooksManagementView: View {
                                         .font(.caption)
                                         .foregroundColor(.secondary)
 
+                                    if let emailStatus = invoice.EmailStatus, !emailStatus.isEmpty {
+                                        Text("Email: \(emailStatus)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+
                                     HStack {
                                         Button(activePaymentInvoiceID == invoice.Id ? "Processing..." : "Record QB Payment") {
                                             takeLiveCustomerPayment(for: invoice)
@@ -473,6 +480,12 @@ struct QuickBooksManagementView: View {
                                             Link("Open in QuickBooks", destination: invoiceURL)
                                                 .font(.caption)
                                         }
+
+                                        Button(activeEmailInvoiceID == invoice.Id ? "Sending..." : "Email Invoice") {
+                                            sendInvoiceEmail(invoice)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(activeEmailInvoiceID != nil || invoiceEmailAddress(for: invoice) == nil)
 
                                         if let localInvoice = localInvoice(for: invoice) {
                                             Button("Open Local Collections") {
@@ -886,11 +899,14 @@ struct QuickBooksManagementView: View {
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingNewInvoiceSheet) {
-                    QuickBooksDocumentComposeView(
-                        title: "Create Invoice",
-                        customerRefs: customers.map(\.reference)
-                    ) { customerRef, amount, note in
-                        createInvoice(customerRef: customerRef, amount: amount, note: note)
+                    QuickBooksInvoiceComposeView(customers: customers) { customer, amount, note, email, sendAfterCreate in
+                        createInvoice(
+                            customer: customer,
+                            amount: amount,
+                            note: note,
+                            emailAddress: email,
+                            sendAfterCreate: sendAfterCreate
+                        )
                     }
                     .tint(Color.brandGold)
                 }
@@ -1187,16 +1203,29 @@ struct QuickBooksManagementView: View {
         }
     }
 
-    private func createInvoice(customerRef: QuickBooksReference, amount: Double, note: String?) {
+    private func createInvoice(
+        customer: QuickBooksCustomer,
+        amount: Double,
+        note: String?,
+        emailAddress: String?,
+        sendAfterCreate: Bool
+    ) {
         guard salesItemConfigReady else {
             actionMessage = "Set QB_DEFAULT_ITEM_REF to a valid QuickBooks sales item before creating invoices."
             return
         }
+        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let invoiceEmail = trimmedEmail?.isEmpty == false ? trimmedEmail : nil
+        if sendAfterCreate, invoiceEmail == nil {
+            actionMessage = "Add an email address before sending this invoice."
+            return
+        }
 
         let payload = QuickBooksInvoiceCreate(
-            CustomerRef: customerRef,
+            CustomerRef: customer.reference,
             Line: [salesLineItem(amount: amount, note: note)],
-            PrivateNote: note
+            PrivateNote: note,
+            BillEmail: invoiceEmail.map { QuickBooksEmailAddress(Address: $0) }
         )
 
         performAction(message: "Creating invoice in QuickBooks...") {
@@ -1204,8 +1233,13 @@ struct QuickBooksManagementView: View {
                 DispatchQueue.main.async {
                     switch result {
                     case .success(let invoice):
-                        actionMessage = "Invoice created: \(invoice.DocNumber ?? invoice.Id)"
-                        syncAllQuickBooksData()
+                        if sendAfterCreate {
+                            actionMessage = "Invoice created. Sending email..."
+                            sendCreatedInvoiceEmail(invoice, to: invoiceEmail)
+                        } else {
+                            actionMessage = "Invoice created: \(invoice.DocNumber ?? invoice.Id)"
+                            syncAllQuickBooksData()
+                        }
                     case .failure(let error):
                         actionMessage = "Invoice creation failed: \(error.localizedDescription)"
                         isLoading = false
@@ -1697,6 +1731,47 @@ struct QuickBooksManagementView: View {
         }
     }
 
+    private func quickBooksCustomer(for invoice: QuickBooksInvoice) -> QuickBooksCustomer? {
+        customers.first { $0.Id == invoice.CustomerRef.value }
+    }
+
+    private func invoiceEmailAddress(for invoice: QuickBooksInvoice) -> String? {
+        let candidates = [
+            invoice.BillEmail?.Address,
+            quickBooksCustomer(for: invoice)?.PrimaryEmailAddr?.Address
+        ]
+        return candidates
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    private func sendInvoiceEmail(_ invoice: QuickBooksInvoice) {
+        guard let emailAddress = invoiceEmailAddress(for: invoice) else {
+            actionMessage = "Add an email address to this QuickBooks customer before sending the invoice."
+            return
+        }
+        activeEmailInvoiceID = invoice.Id
+        actionMessage = "Sending invoice \(invoice.DocNumber ?? invoice.Id) to \(emailAddress)..."
+        sendCreatedInvoiceEmail(invoice, to: emailAddress)
+    }
+
+    private func sendCreatedInvoiceEmail(_ invoice: QuickBooksInvoice, to emailAddress: String?) {
+        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
+        liveAPI.sendInvoice(id: invoice.Id, to: trimmedEmail) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let sentInvoice):
+                    actionMessage = "Invoice \(sentInvoice.DocNumber ?? sentInvoice.Id) emailed to \(trimmedEmail ?? "the customer")."
+                    syncAllQuickBooksData()
+                case .failure(let error):
+                    actionMessage = "Invoice email failed: \(error.localizedDescription)"
+                    isLoading = false
+                }
+                activeEmailInvoiceID = nil
+            }
+        }
+    }
+
     private func localServiceCall(for invoice: Invoice) -> ServiceCall? {
         guard let serviceCallID = invoice.serviceCallID else { return nil }
         return serviceCalls.first(where: { $0.id == serviceCallID })
@@ -1970,6 +2045,101 @@ private struct QuickBooksDocumentComposeView: View {
             }
             .onAppear {
                 selectedCustomerID = selectedCustomerID ?? customerRefs.first?.value
+            }
+        }
+    }
+}
+
+private struct QuickBooksInvoiceComposeView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let customers: [QuickBooksCustomer]
+    let onCreate: (QuickBooksCustomer, Double, String?, String?, Bool) -> Void
+
+    @State private var selectedCustomerID: String?
+    @State private var amountText = ""
+    @State private var note = ""
+    @State private var emailAddress = ""
+    @State private var sendAfterCreate = true
+
+    private var selectedCustomer: QuickBooksCustomer? {
+        if let selectedCustomerID, let match = customers.first(where: { $0.Id == selectedCustomerID }) {
+            return match
+        }
+        return customers.first
+    }
+
+    private var customerOptions: [SearchableDropdownOption] {
+        customers.map { customer in
+            SearchableDropdownOption(
+                id: customer.Id,
+                title: customer.DisplayName,
+                subtitle: customer.PrimaryEmailAddr?.Address ?? customer.PrimaryPhone?.FreeFormNumber
+            )
+        }
+    }
+
+    private var canCreate: Bool {
+        guard let amount = Double(amountText), amount > 0 else { return false }
+        return selectedCustomer != nil &&
+        (sendAfterCreate == false || !emailAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Create Invoice") {
+                    if customers.isEmpty {
+                        Text("Sync QuickBooks customers first.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        SearchableDropdownPicker(
+                            title: "Customer",
+                            options: customerOptions,
+                            selectedID: $selectedCustomerID,
+                            placeholder: "Choose customer"
+                        )
+                    }
+
+                    TextField("Amount", text: $amountText)
+                        .keyboardType(.decimalPad)
+                    TextField("Notes", text: $note)
+                }
+
+                Section("Delivery") {
+                    Toggle("Email invoice after creating", isOn: $sendAfterCreate)
+                    TextField("Customer email", text: $emailAddress)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+            }
+            .navigationTitle("Create Invoice")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(sendAfterCreate ? "Create & Send" : "Create") {
+                        guard let selectedCustomer, let amount = Double(amountText), amount > 0 else { return }
+                        onCreate(
+                            selectedCustomer,
+                            amount,
+                            note.isEmpty ? nil : note,
+                            emailAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : emailAddress,
+                            sendAfterCreate
+                        )
+                        dismiss()
+                    }
+                    .disabled(!canCreate)
+                }
+            }
+            .onAppear {
+                selectedCustomerID = selectedCustomerID ?? customers.first?.Id
+                emailAddress = selectedCustomer?.PrimaryEmailAddr?.Address ?? emailAddress
+            }
+            .onChange(of: selectedCustomerID) { _, _ in
+                emailAddress = selectedCustomer?.PrimaryEmailAddr?.Address ?? ""
             }
         }
     }

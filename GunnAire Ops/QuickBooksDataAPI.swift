@@ -845,6 +845,25 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
+    func sendInvoice(id: String, to emailAddress: String? = nil, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
+        let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty,
+              let encodedID = trimmedID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            completion(.failure(QBError.noData))
+            return
+        }
+        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let queryItems = trimmedEmail?.isEmpty == false
+            ? [URLQueryItem(name: "sendTo", value: trimmedEmail)]
+            : []
+        performAuthorizedDecodingRequest(
+            { self.authorizedRequest(path: "invoice/\(encodedID)/send", queryItems: queryItems, method: "POST") },
+            decode: QuickBooksInvoiceResponse.self
+        ) { result in
+            completion(result.map(\.Invoice))
+        }
+    }
+
     func fetchBills(completion: @escaping (Result<[QuickBooksBill], Error>) -> Void) {
         performAuthorizedDecodingRequest(
             { self.makeQueryRequest("SELECT * FROM Bill") },
@@ -1911,11 +1930,13 @@ struct QuickBooksInvoice: Codable, Identifiable {
     let Balance: Double?
     let TxnDate: String?
     let PrivateNote: String?
+    let BillEmail: QuickBooksEmailAddress?
+    let EmailStatus: String?
 
     var id: String { Id }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, PrivateNote
+        case Id, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, PrivateNote, BillEmail, EmailStatus
     }
 
     init(from decoder: Decoder) throws {
@@ -1928,6 +1949,8 @@ struct QuickBooksInvoice: Codable, Identifiable {
         Balance = Self.decodeFlexibleDouble(container, key: .Balance)
         TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
         PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
+        BillEmail = try container.decodeIfPresent(QuickBooksEmailAddress.self, forKey: .BillEmail)
+        EmailStatus = try container.decodeIfPresent(String.self, forKey: .EmailStatus)
     }
 
     private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
@@ -1948,6 +1971,19 @@ struct QuickBooksInvoiceCreate: Codable {
     let CustomerRef: QuickBooksReference
     let Line: [QuickBooksLineItem]
     let PrivateNote: String?
+    let BillEmail: QuickBooksEmailAddress?
+
+    init(
+        CustomerRef: QuickBooksReference,
+        Line: [QuickBooksLineItem],
+        PrivateNote: String?,
+        BillEmail: QuickBooksEmailAddress? = nil
+    ) {
+        self.CustomerRef = CustomerRef
+        self.Line = Line
+        self.PrivateNote = PrivateNote
+        self.BillEmail = BillEmail
+    }
 }
 
 struct QuickBooksInvoiceResponse: Codable {
