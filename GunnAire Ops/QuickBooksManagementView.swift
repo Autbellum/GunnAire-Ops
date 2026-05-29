@@ -116,9 +116,6 @@ struct QuickBooksManagementView: View {
                   !quickBooksDataAPI.savedSessionIncludesPaymentsScope {
             warnings.append("QuickBooks Payments features are enabled. Reconnect QuickBooks so Intuit can authorize the \(Config.QuickBooks.paymentsScope) scope for this company.")
         }
-        if !catalogItemCreationReady {
-            warnings.append("Set QB_DEFAULT_INCOME_ACCOUNT_REF to a valid QBO income Account.Id, or sync catalog items so the app can reuse the income account from your default QBO item. Do not use Accounts Receivable here.")
-        }
         return warnings
     }
 
@@ -418,17 +415,11 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
-                        if !catalogItemCreationReady {
-                            Text("Sync the catalog or set `QB_DEFAULT_INCOME_ACCOUNT_REF` before creating live catalog items.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
                         Button("Add Catalog Item") { showingNewCatalogItemSheet = true }
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || !catalogItemCreationReady)
+                            .disabled(!isAuthenticated)
                     }
 
                     Section(header: Text("Estimates").foregroundColor(Color.brandGold)) {
@@ -445,17 +436,11 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
-                        if !salesItemConfigReady {
-                            Text("Set `QB_DEFAULT_ITEM_REF` to a valid QuickBooks sales item before creating live estimates.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
                         Button("Create Estimate") { showingNewEstimateSheet = true }
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || customers.isEmpty || !salesItemConfigReady)
+                            .disabled(!isAuthenticated || customers.isEmpty)
                     }
 
                     Section(header: Text("Invoices").foregroundColor(Color.brandGold)) {
@@ -500,17 +485,11 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
-                        if !salesItemConfigReady {
-                            Text("Set `QB_DEFAULT_ITEM_REF` to a valid QuickBooks sales item before creating live invoices.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
                         Button("Create Invoice") { showingNewInvoiceSheet = true }
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || customers.isEmpty || !salesItemConfigReady)
+                            .disabled(!isAuthenticated || customers.isEmpty)
                     }
 
                     Section(header: Text("Sales Receipts").foregroundColor(Color.brandGold)) {
@@ -536,12 +515,6 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
-                        if !salesItemConfigReady {
-                            Text("Set `QB_DEFAULT_ITEM_REF` to a valid QuickBooks sales item before creating live sales receipts.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
                         Text("Use Sales Receipts only for walk-in or no-invoice sales. Invoice collections must use a QuickBooks Payment linked to the invoice.")
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -550,7 +523,7 @@ struct QuickBooksManagementView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || customers.isEmpty || !salesItemConfigReady)
+                            .disabled(!isAuthenticated || customers.isEmpty)
                     }
 
                     Section(header: Text("Bills").foregroundColor(Color.brandGold)) {
@@ -567,17 +540,11 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
-                        if !expenseAccountConfigReady {
-                            Text("Set `QB_DEFAULT_EXPENSE_ACCOUNT_REF` before creating live bills.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
                         Button("Create Bill") { showingNewBillSheet = true }
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || vendors.isEmpty || !expenseAccountConfigReady)
+                            .disabled(!isAuthenticated || vendors.isEmpty)
                     }
 
                     Section(header: Text("Purchases").foregroundColor(Color.brandGold)) {
@@ -601,17 +568,11 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
-                        if !expenseAccountConfigReady || !paymentAccountConfigReady {
-                            Text("Set `QB_DEFAULT_EXPENSE_ACCOUNT_REF` for the expense category and `QB_DEFAULT_PAYMENT_ACCOUNT_REF` for the bank or credit-card account before creating live purchases.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
                         Button("Create Purchase") { showingNewPurchaseSheet = true }
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || vendors.isEmpty || !expenseAccountConfigReady || !paymentAccountConfigReady)
+                            .disabled(!isAuthenticated || vendors.isEmpty)
                     }
 
                     Section(header: Text("Vendors").foregroundColor(Color.brandGold)) {
@@ -1199,6 +1160,11 @@ struct QuickBooksManagementView: View {
     }
 
     private func createEstimate(customerRef: QuickBooksReference, amount: Double, note: String?) {
+        guard salesItemConfigReady else {
+            actionMessage = "Set QB_DEFAULT_ITEM_REF to a valid QuickBooks sales item before creating estimates."
+            return
+        }
+
         let payload = QuickBooksEstimateCreate(
             CustomerRef: customerRef,
             Line: [salesLineItem(amount: amount, note: note)],
@@ -1222,6 +1188,11 @@ struct QuickBooksManagementView: View {
     }
 
     private func createInvoice(customerRef: QuickBooksReference, amount: Double, note: String?) {
+        guard salesItemConfigReady else {
+            actionMessage = "Set QB_DEFAULT_ITEM_REF to a valid QuickBooks sales item before creating invoices."
+            return
+        }
+
         let payload = QuickBooksInvoiceCreate(
             CustomerRef: customerRef,
             Line: [salesLineItem(amount: amount, note: note)],
@@ -1245,6 +1216,11 @@ struct QuickBooksManagementView: View {
     }
 
     private func createSalesReceipt(customerRef: QuickBooksReference, amount: Double, note: String?) {
+        guard salesItemConfigReady else {
+            actionMessage = "Set QB_DEFAULT_ITEM_REF to a valid QuickBooks sales item before creating sales receipts."
+            return
+        }
+
         let payload = QuickBooksSalesReceiptCreate(
             CustomerRef: customerRef,
             Line: [salesLineItem(amount: amount, note: note)],

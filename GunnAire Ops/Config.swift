@@ -138,15 +138,6 @@ struct Config {
             if configuredEnvironment != "production" && configuredEnvironment != "sandbox" {
                 warnings.append("QB_ENVIRONMENT was '\(configuredEnvironment)'. The app is using production; set it to production or sandbox explicitly.")
             }
-            if !hasExplicitDefaultSalesItemRef {
-                warnings.append("Set QB_DEFAULT_ITEM_REF to a valid QBO Service/NonInventory Item.Id for generic fallback items and refund receipts.")
-            }
-            if !hasExplicitDefaultExpenseAccountRef {
-                warnings.append("Set QB_DEFAULT_EXPENSE_ACCOUNT_REF to a valid QBO expense/category Account.Id before creating bills or expense purchase lines.")
-            }
-            if !hasExplicitDefaultPaymentAccountRef {
-                warnings.append("Set QB_DEFAULT_PAYMENT_ACCOUNT_REF to a valid QBO bank or credit-card Account.Id before creating paid purchases.")
-            }
             return warnings
         }
     }
