@@ -18,31 +18,67 @@ enum QuickBooksLocalSync {
         let existingInvoices = try modelContext.fetch(FetchDescriptor<Invoice>())
         let existingPayments = try modelContext.fetch(FetchDescriptor<Payment>())
         let existingVendors = try modelContext.fetch(FetchDescriptor<Vendor>())
+        let existingServiceCalls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
 
-        var customersByQBID = Dictionary(uniqueKeysWithValues: existingCustomers.compactMap { customer in
-            customer.quickBooksID.map { ($0, customer) }
-        })
-        var customersByName = Dictionary(uniqueKeysWithValues: existingCustomers.map { (normalized($0.name), $0) })
+        var customersByQBID: [String: Customer] = [:]
+        var customersByName: [String: Customer] = [:]
+        for customer in existingCustomers {
+            if let quickBooksID = customer.quickBooksID?.nilIfEmpty {
+                customersByQBID[quickBooksID] = customersByQBID[quickBooksID] ?? customer
+            }
+            let nameKey = normalized(customer.name)
+            if !nameKey.isEmpty {
+                customersByName[nameKey] = customersByName[nameKey] ?? customer
+            }
+        }
 
-        var itemsByQBID = Dictionary(uniqueKeysWithValues: existingItems.compactMap { item in
-            item.quickBooksID.map { ($0, item) }
-        })
-        var itemsByName = Dictionary(uniqueKeysWithValues: existingItems.map { (normalized($0.name), $0) })
+        var itemsByQBID: [String: Item] = [:]
+        var itemsByName: [String: Item] = [:]
+        for item in existingItems {
+            if let quickBooksID = item.quickBooksID?.nilIfEmpty {
+                itemsByQBID[quickBooksID] = itemsByQBID[quickBooksID] ?? item
+            }
+            let nameKey = normalized(item.name)
+            if !nameKey.isEmpty {
+                itemsByName[nameKey] = itemsByName[nameKey] ?? item
+            }
+        }
 
-        var vendorsByQBID = Dictionary(uniqueKeysWithValues: existingVendors.compactMap { vendor in
-            vendor.quickBooksID.map { ($0, vendor) }
-        })
-        var vendorsByName = Dictionary(uniqueKeysWithValues: existingVendors.map { (normalized($0.name), $0) })
+        var vendorsByQBID: [String: Vendor] = [:]
+        var vendorsByName: [String: Vendor] = [:]
+        for vendor in existingVendors {
+            if let quickBooksID = vendor.quickBooksID?.nilIfEmpty {
+                vendorsByQBID[quickBooksID] = vendorsByQBID[quickBooksID] ?? vendor
+            }
+            let nameKey = normalized(vendor.name)
+            if !nameKey.isEmpty {
+                vendorsByName[nameKey] = vendorsByName[nameKey] ?? vendor
+            }
+        }
 
-        var invoicesByQBID = Dictionary(uniqueKeysWithValues: existingInvoices.compactMap { invoice in
-            invoice.quickBooksID.map { ($0, invoice) }
-        })
-        var estimatesByQBID = Dictionary(uniqueKeysWithValues: existingEstimates.compactMap { estimate in
-            estimate.quickBooksID.map { ($0, estimate) }
-        })
-        var paymentsByQBID = Dictionary(uniqueKeysWithValues: existingPayments.compactMap { payment in
-            payment.quickBooksID.map { ($0, payment) }
-        })
+        var invoicesByQBID: [String: Invoice] = [:]
+        for invoice in existingInvoices {
+            guard let quickBooksID = invoice.quickBooksID?.nilIfEmpty else { continue }
+            if let existing = invoicesByQBID[quickBooksID], existing !== invoice {
+                mergeInvoice(existing, withDuplicate: invoice, payments: existingPayments, serviceCalls: existingServiceCalls, modelContext: modelContext)
+            } else {
+                invoicesByQBID[quickBooksID] = invoice
+            }
+        }
+        var estimatesByQBID: [String: Estimate] = [:]
+        for estimate in existingEstimates {
+            guard let quickBooksID = estimate.quickBooksID?.nilIfEmpty else { continue }
+            if let existing = estimatesByQBID[quickBooksID], existing !== estimate {
+                mergeEstimate(existing, withDuplicate: estimate, serviceCalls: existingServiceCalls, modelContext: modelContext)
+            } else {
+                estimatesByQBID[quickBooksID] = estimate
+            }
+        }
+        var paymentsByQBID: [String: Payment] = [:]
+        for payment in existingPayments {
+            guard let quickBooksID = payment.quickBooksID?.nilIfEmpty else { continue }
+            paymentsByQBID[quickBooksID] = paymentsByQBID[quickBooksID] ?? payment
+        }
         let importedPaymentTotalsByInvoiceID = paymentTotalsByInvoiceID(from: payments)
 
         for quickBooksCustomer in customers {
@@ -104,6 +140,7 @@ enum QuickBooksLocalSync {
         for quickBooksEstimate in estimates {
             let customer = resolveCustomer(ref: quickBooksEstimate.CustomerRef, cacheByQBID: &customersByQBID, cacheByName: &customersByName, modelContext: modelContext)
             let estimate = estimatesByQBID[quickBooksEstimate.Id]
+                ?? matchingUnlinkedEstimate(for: quickBooksEstimate, customer: customer, in: existingEstimates)
                 ?? Estimate(customer: customer)
             if estimate.modelContext == nil {
                 modelContext.insert(estimate)
@@ -116,11 +153,15 @@ enum QuickBooksLocalSync {
             estimate.status = "pending"
             estimate.createdAt = parseQuickBooksDate(quickBooksEstimate.TxnDate) ?? estimate.createdAt
             estimatesByQBID[quickBooksEstimate.Id] = estimate
+            for duplicate in existingEstimates where duplicate !== estimate && isDuplicateEstimate(duplicate, of: quickBooksEstimate, customer: customer) {
+                mergeEstimate(estimate, withDuplicate: duplicate, serviceCalls: existingServiceCalls, modelContext: modelContext)
+            }
         }
 
         for quickBooksInvoice in invoices {
             let customer = resolveCustomer(ref: quickBooksInvoice.CustomerRef, cacheByQBID: &customersByQBID, cacheByName: &customersByName, modelContext: modelContext)
             let invoice = invoicesByQBID[quickBooksInvoice.Id]
+                ?? matchingUnlinkedInvoice(for: quickBooksInvoice, customer: customer, in: existingInvoices)
                 ?? Invoice(customer: customer)
             if invoice.modelContext == nil {
                 modelContext.insert(invoice)
@@ -141,6 +182,9 @@ enum QuickBooksLocalSync {
                 invoice.status = "unpaid"
             }
             invoicesByQBID[quickBooksInvoice.Id] = invoice
+            for duplicate in existingInvoices where duplicate !== invoice && isDuplicateInvoice(duplicate, of: quickBooksInvoice, customer: customer) {
+                mergeInvoice(invoice, withDuplicate: duplicate, payments: existingPayments, serviceCalls: existingServiceCalls, modelContext: modelContext)
+            }
         }
 
         for quickBooksPayment in payments {
@@ -207,6 +251,118 @@ enum QuickBooksLocalSync {
         }
         cacheByName[normalized(customer.name)] = customer
         return customer
+    }
+
+    private static func matchingUnlinkedEstimate(
+        for quickBooksEstimate: QuickBooksEstimate,
+        customer: Customer,
+        in estimates: [Estimate]
+    ) -> Estimate? {
+        estimates.first { estimate in
+            estimate.quickBooksID?.nilIfEmpty == nil &&
+            isDuplicateEstimate(estimate, of: quickBooksEstimate, customer: customer)
+        }
+    }
+
+    private static func matchingUnlinkedInvoice(
+        for quickBooksInvoice: QuickBooksInvoice,
+        customer: Customer,
+        in invoices: [Invoice]
+    ) -> Invoice? {
+        invoices.first { invoice in
+            invoice.quickBooksID?.nilIfEmpty == nil &&
+            isDuplicateInvoice(invoice, of: quickBooksInvoice, customer: customer)
+        }
+    }
+
+    private static func isDuplicateEstimate(_ estimate: Estimate, of quickBooksEstimate: QuickBooksEstimate, customer: Customer) -> Bool {
+        guard estimate.quickBooksID?.nilIfEmpty == nil || estimate.quickBooksID == quickBooksEstimate.Id || estimate.quickBooksID == quickBooksEstimate.DocNumber else {
+            return false
+        }
+        return sameCustomer(estimate.customer, customer) &&
+            amountsMatch(estimate.amount, quickBooksEstimate.TotalAmt) &&
+            documentReferenceMatches(localSummary: estimate.lineItemSummary, localNotes: estimate.notes, quickBooksDocumentNumber: quickBooksEstimate.DocNumber, localDate: estimate.createdAt, quickBooksDate: quickBooksEstimate.TxnDate)
+    }
+
+    private static func isDuplicateInvoice(_ invoice: Invoice, of quickBooksInvoice: QuickBooksInvoice, customer: Customer) -> Bool {
+        guard invoice.quickBooksID?.nilIfEmpty == nil || invoice.quickBooksID == quickBooksInvoice.Id || invoice.quickBooksID == quickBooksInvoice.DocNumber else {
+            return false
+        }
+        return sameCustomer(invoice.customer, customer) &&
+            amountsMatch(invoice.amount, quickBooksInvoice.TotalAmt) &&
+            documentReferenceMatches(localSummary: invoice.lineItemSummary, localNotes: invoice.notes, quickBooksDocumentNumber: quickBooksInvoice.DocNumber, localDate: invoice.createdAt, quickBooksDate: quickBooksInvoice.TxnDate)
+    }
+
+    private static func mergeEstimate(_ estimate: Estimate, withDuplicate duplicate: Estimate, serviceCalls: [ServiceCall], modelContext: ModelContext) {
+        if estimate.serviceCallID == nil {
+            estimate.serviceCallID = duplicate.serviceCallID
+        }
+        if estimate.notes?.nilIfEmpty == nil {
+            estimate.notes = duplicate.notes
+        }
+        if estimate.lineItemSummary.nilIfEmpty == nil {
+            estimate.lineItemSummary = duplicate.lineItemSummary
+        }
+        for call in serviceCalls where call.linkedEstimateID == duplicate.id {
+            call.linkedEstimateID = estimate.id
+        }
+        modelContext.delete(duplicate)
+    }
+
+    private static func mergeInvoice(_ invoice: Invoice, withDuplicate duplicate: Invoice, payments: [Payment], serviceCalls: [ServiceCall], modelContext: ModelContext) {
+        if invoice.serviceCallID == nil {
+            invoice.serviceCallID = duplicate.serviceCallID
+        }
+        if invoice.notes?.nilIfEmpty == nil {
+            invoice.notes = duplicate.notes
+        }
+        if invoice.lineItemSummary.nilIfEmpty == nil {
+            invoice.lineItemSummary = duplicate.lineItemSummary
+        }
+        invoice.customerSignatureName = invoice.customerSignatureName ?? duplicate.customerSignatureName
+        invoice.customerSignatureImageBase64 = invoice.customerSignatureImageBase64 ?? duplicate.customerSignatureImageBase64
+        invoice.customerSignedAt = invoice.customerSignedAt ?? duplicate.customerSignedAt
+        invoice.completionNotes = invoice.completionNotes ?? duplicate.completionNotes
+        invoice.finalizedAt = invoice.finalizedAt ?? duplicate.finalizedAt
+        for payment in payments where payment.invoice.id == duplicate.id {
+            payment.invoice = invoice
+        }
+        for call in serviceCalls where call.linkedInvoiceID == duplicate.id {
+            call.linkedInvoiceID = invoice.id
+        }
+        modelContext.delete(duplicate)
+    }
+
+    private static func sameCustomer(_ lhs: Customer, _ rhs: Customer) -> Bool {
+        if let lhsID = lhs.quickBooksID?.nilIfEmpty,
+           let rhsID = rhs.quickBooksID?.nilIfEmpty {
+            return lhsID == rhsID
+        }
+        return normalized(lhs.name) == normalized(rhs.name)
+    }
+
+    private static func amountsMatch(_ lhs: Double, _ rhs: Double) -> Bool {
+        abs(lhs - rhs) <= 0.01
+    }
+
+    private static func documentReferenceMatches(
+        localSummary: String,
+        localNotes: String?,
+        quickBooksDocumentNumber: String?,
+        localDate: Date,
+        quickBooksDate: String?
+    ) -> Bool {
+        if let quickBooksDocumentNumber = quickBooksDocumentNumber?.nilIfEmpty {
+            let normalizedDocumentNumber = normalized(quickBooksDocumentNumber)
+            if normalized(localSummary).contains(normalizedDocumentNumber) ||
+                normalized(localNotes ?? "").contains(normalizedDocumentNumber) {
+                return true
+            }
+        }
+        guard let quickBooksDate = parseQuickBooksDate(quickBooksDate) else {
+            return true
+        }
+        return abs(localDate.timeIntervalSince(quickBooksDate)) <= 7 * 24 * 60 * 60
     }
 
     private static func normalized(_ value: String) -> String {

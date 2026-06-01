@@ -87,6 +87,14 @@ struct QuickBooksManagementView: View {
     @State private var activeEmailInvoiceID: String?
     @State private var paymentToRefund: Payment?
     @State private var quickBooksReconnectRequired = false
+    @State private var showCustomersList = false
+    @State private var showCatalogList = false
+    @State private var showEstimatesList = false
+    @State private var showInvoicesList = false
+    @State private var customerSearchText = ""
+    @State private var catalogSearchText = ""
+    @State private var estimateSearchText = ""
+    @State private var invoiceSearchText = ""
 
     private var isAuthenticated: Bool {
         quickBooksDataAPI.isAuthenticated
@@ -183,6 +191,50 @@ struct QuickBooksManagementView: View {
 
     private var collectibleLocalInvoices: [Invoice] {
         localInvoices.filter { localOutstandingBalance(for: $0) > 0 }
+    }
+
+    private var filteredCustomers: [QuickBooksCustomer] {
+        filtered(customers, query: customerSearchText) { customer in
+            [
+                customer.DisplayName,
+                customer.PrimaryEmailAddr?.Address,
+                customer.PrimaryPhone?.FreeFormNumber
+            ]
+        }
+    }
+
+    private var filteredItems: [QuickBooksItem] {
+        filtered(items, query: catalogSearchText) { item in
+            [
+                item.Name,
+                item.Description,
+                item.Sku,
+                item.PrefVendorRef?.displayName,
+                item.ItemType
+            ]
+        }
+    }
+
+    private var filteredEstimates: [QuickBooksEstimate] {
+        filtered(estimates, query: estimateSearchText) { estimate in
+            [
+                estimate.DocNumber,
+                estimate.Id,
+                estimate.CustomerRef.displayName,
+                estimate.EmailStatus
+            ]
+        }
+    }
+
+    private var filteredInvoices: [QuickBooksInvoice] {
+        filtered(invoices, query: invoiceSearchText) { invoice in
+            [
+                invoice.DocNumber,
+                invoice.Id,
+                invoice.CustomerRef.displayName,
+                invoice.EmailStatus
+            ]
+        }
     }
 
     private var quickBooksCompanyURL: URL? {
@@ -329,43 +381,48 @@ struct QuickBooksManagementView: View {
                     }
 
                     Section(header: Text("Customers").foregroundColor(Color.brandGold)) {
-                        if customers.isEmpty {
-                            emptyState("No QuickBooks customers loaded.")
-                        } else {
-                            ForEach(customers) { customer in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(customer.DisplayName)
-                                        .font(.headline)
-                                    if let email = customer.PrimaryEmailAddr?.Address, !email.isEmpty {
-                                        Text(email)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    if let phone = customer.PrimaryPhone?.FreeFormNumber, !phone.isEmpty {
-                                        Text(phone)
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    if let linkedCustomer = localCustomer(for: customer) {
-                                        HStack {
-                                            Button("Open Customer") {
-                                                GunnAireAppIntentRouter.storeCustomerRoute(linkedCustomer.id)
-                                            }
-                                            .buttonStyle(.bordered)
-
-                                            if let nextCall = serviceCalls
-                                                .filter({ $0.customer.id == linkedCustomer.id && $0.status != .completed && $0.status != .cancelled })
-                                                .sorted(by: { $0.scheduledDate < $1.scheduledDate })
-                                                .first {
-                                                Button("Open Job") {
-                                                    GunnAireAppIntentRouter.storeDocumentationRoute(nextCall.id)
+                        DisclosureGroup("Customers (\(customers.count))", isExpanded: $showCustomersList) {
+                            if customers.isEmpty {
+                                emptyState("No QuickBooks customers loaded.")
+                            } else {
+                                TextField("Search customers", text: $customerSearchText)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                ForEach(filteredCustomers) { customer in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(customer.DisplayName)
+                                            .font(.headline)
+                                        if let email = customer.PrimaryEmailAddr?.Address, !email.isEmpty {
+                                            Text(email)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        if let phone = customer.PrimaryPhone?.FreeFormNumber, !phone.isEmpty {
+                                            Text(phone)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        if let linkedCustomer = localCustomer(for: customer) {
+                                            HStack {
+                                                Button("Open Customer") {
+                                                    GunnAireAppIntentRouter.storeCustomerRoute(linkedCustomer.id)
                                                 }
                                                 .buttonStyle(.bordered)
+
+                                                if let nextCall = serviceCalls
+                                                    .filter({ $0.customer.id == linkedCustomer.id && $0.status != .completed && $0.status != .cancelled })
+                                                    .sorted(by: { $0.scheduledDate < $1.scheduledDate })
+                                                    .first {
+                                                    Button("Open Job") {
+                                                        GunnAireAppIntentRouter.storeDocumentationRoute(nextCall.id)
+                                                    }
+                                                    .buttonStyle(.bordered)
+                                                }
                                             }
                                         }
                                     }
+                                    .padding(.vertical, 2)
                                 }
-                                .padding(.vertical, 2)
                             }
                         }
 
@@ -377,41 +434,46 @@ struct QuickBooksManagementView: View {
                     }
 
                     Section(header: Text("Product Catalog").foregroundColor(Color.brandGold)) {
-                        if items.isEmpty {
-                            emptyState("No QuickBooks products or services loaded.")
-                        } else {
-                            ForEach(items) { item in
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(item.Name)
-                                            .font(.headline)
-                                        if let description = item.Description, !description.isEmpty {
-                                            Text(description)
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-                                        let meta = [
-                                            item.Sku.map { "SKU \($0)" },
-                                            item.PrefVendorRef?.displayName,
-                                            item.PurchaseCost.map { "Cost \($0.formatted(.currency(code: "USD")))" }
-                                        ]
-                                        .compactMap { value in
-                                            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-                                            return trimmed?.isEmpty == false ? trimmed : nil
-                                        }
-                                        if !meta.isEmpty {
-                                            Text(meta.joined(separator: " • "))
+                        DisclosureGroup("Product Catalog (\(items.count))", isExpanded: $showCatalogList) {
+                            if items.isEmpty {
+                                emptyState("No QuickBooks products or services loaded.")
+                            } else {
+                                TextField("Search catalog", text: $catalogSearchText)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                ForEach(filteredItems) { item in
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(item.Name)
+                                                .font(.headline)
+                                            if let description = item.Description, !description.isEmpty {
+                                                Text(description)
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                            let meta = [
+                                                item.Sku.map { "SKU \($0)" },
+                                                item.PrefVendorRef?.displayName,
+                                                item.PurchaseCost.map { "Cost \($0.formatted(.currency(code: "USD")))" }
+                                            ]
+                                            .compactMap { value in
+                                                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+                                                return trimmed?.isEmpty == false ? trimmed : nil
+                                            }
+                                            if !meta.isEmpty {
+                                                Text(meta.joined(separator: " • "))
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                            Text(item.ItemType ?? "Unknown")
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
                                         }
-                                        Text(item.ItemType ?? "Unknown")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                    if let price = item.UnitPrice {
-                                        Text(price, format: .currency(code: "USD"))
-                                            .font(.subheadline)
+                                        Spacer()
+                                        if let price = item.UnitPrice {
+                                            Text(price, format: .currency(code: "USD"))
+                                                .font(.subheadline)
+                                        }
                                     }
                                 }
                             }
@@ -425,29 +487,34 @@ struct QuickBooksManagementView: View {
                     }
 
                     Section(header: Text("Estimates").foregroundColor(Color.brandGold)) {
-                        if estimates.isEmpty {
-                            emptyState("No QuickBooks estimates loaded.")
-                        } else {
-                            ForEach(estimates) { estimate in
-                                VStack(alignment: .leading, spacing: 6) {
-                                    transactionBlock(
-                                        title: estimate.DocNumber ?? estimate.Id,
-                                        name: estimate.CustomerRef.displayName,
-                                        amount: estimate.TotalAmt,
-                                        dateText: estimate.TxnDate
-                                    )
+                        DisclosureGroup("Estimates (\(estimates.count))", isExpanded: $showEstimatesList) {
+                            if estimates.isEmpty {
+                                emptyState("No QuickBooks estimates loaded.")
+                            } else {
+                                TextField("Search estimates", text: $estimateSearchText)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                ForEach(filteredEstimates) { estimate in
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        transactionBlock(
+                                            title: estimate.DocNumber ?? estimate.Id,
+                                            name: estimate.CustomerRef.displayName,
+                                            amount: estimate.TotalAmt,
+                                            dateText: estimate.TxnDate
+                                        )
 
-                                    if let emailStatus = estimate.EmailStatus, !emailStatus.isEmpty {
-                                        Text("Email: \(emailStatus)")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
+                                        if let emailStatus = estimate.EmailStatus, !emailStatus.isEmpty {
+                                            Text("Email: \(emailStatus)")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
 
-                                    Button(activeEmailEstimateID == estimate.Id ? "Sending..." : "Email Estimate") {
-                                        sendEstimateEmail(estimate)
+                                        Button(activeEmailEstimateID == estimate.Id ? "Sending..." : "Email Estimate") {
+                                            sendEstimateEmail(estimate)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(activeEmailEstimateID != nil || estimateEmailAddress(for: estimate) == nil)
                                     }
-                                    .buttonStyle(.bordered)
-                                    .disabled(activeEmailEstimateID != nil || estimateEmailAddress(for: estimate) == nil)
                                 }
                             }
                         }
@@ -460,53 +527,58 @@ struct QuickBooksManagementView: View {
                     }
 
                     Section(header: Text("Invoices").foregroundColor(Color.brandGold)) {
-                        if invoices.isEmpty {
-                            emptyState("No QuickBooks invoices loaded.")
-                        } else {
-                            ForEach(invoices) { invoice in
-                                VStack(alignment: .leading, spacing: 6) {
-                                    transactionBlock(
-                                        title: invoice.DocNumber ?? invoice.Id,
-                                        name: invoice.CustomerRef.displayName,
-                                        amount: invoice.TotalAmt,
-                                        dateText: invoice.TxnDate
-                                    )
+                        DisclosureGroup("Invoices (\(invoices.count))", isExpanded: $showInvoicesList) {
+                            if invoices.isEmpty {
+                                emptyState("No QuickBooks invoices loaded.")
+                            } else {
+                                TextField("Search invoices", text: $invoiceSearchText)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                ForEach(filteredInvoices) { invoice in
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        transactionBlock(
+                                            title: invoice.DocNumber ?? invoice.Id,
+                                            name: invoice.CustomerRef.displayName,
+                                            amount: invoice.TotalAmt,
+                                            dateText: invoice.TxnDate
+                                        )
 
-                                    Text("Balance due: \(outstandingQuickBooksBalance(for: invoice), format: .currency(code: "USD"))")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-
-                                    if let emailStatus = invoice.EmailStatus, !emailStatus.isEmpty {
-                                        Text("Email: \(emailStatus)")
+                                        Text("Balance due: \(outstandingQuickBooksBalance(for: invoice), format: .currency(code: "USD"))")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
-                                    }
 
-                                    HStack {
-                                        Button(activePaymentInvoiceID == invoice.Id ? "Processing..." : "Record QB Payment") {
-                                            takeLiveCustomerPayment(for: invoice)
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(Color.brandGold)
-                                        .foregroundStyle(Color.primaryBlack)
-                                        .disabled(activePaymentInvoiceID != nil || outstandingQuickBooksBalance(for: invoice) <= 0)
-
-                                        if let invoiceURL = liveInvoiceURL(for: invoice) {
-                                            Link("Open in QuickBooks", destination: invoiceURL)
+                                        if let emailStatus = invoice.EmailStatus, !emailStatus.isEmpty {
+                                            Text("Email: \(emailStatus)")
                                                 .font(.caption)
+                                                .foregroundColor(.secondary)
                                         }
 
-                                        Button(activeEmailInvoiceID == invoice.Id ? "Sending..." : "Email Invoice") {
-                                            sendInvoiceEmail(invoice)
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .disabled(activeEmailInvoiceID != nil || invoiceEmailAddress(for: invoice) == nil)
+                                        HStack {
+                                            Button(activePaymentInvoiceID == invoice.Id ? "Processing..." : "Record QB Payment") {
+                                                takeLiveCustomerPayment(for: invoice)
+                                            }
+                                            .buttonStyle(.borderedProminent)
+                                            .tint(Color.brandGold)
+                                            .foregroundStyle(Color.primaryBlack)
+                                            .disabled(activePaymentInvoiceID != nil || outstandingQuickBooksBalance(for: invoice) <= 0)
 
-                                        if let localInvoice = localInvoice(for: invoice) {
-                                            Button("Open Local Collections") {
-                                                GunnAireAppIntentRouter.storePaymentCollectionRoute(localInvoice.id)
+                                            if let invoiceURL = liveInvoiceURL(for: invoice) {
+                                                Link("Open in QuickBooks", destination: invoiceURL)
+                                                    .font(.caption)
+                                            }
+
+                                            Button(activeEmailInvoiceID == invoice.Id ? "Sending..." : "Email Invoice") {
+                                                sendInvoiceEmail(invoice)
                                             }
                                             .buttonStyle(.bordered)
+                                            .disabled(activeEmailInvoiceID != nil || invoiceEmailAddress(for: invoice) == nil)
+
+                                            if let localInvoice = localInvoice(for: invoice) {
+                                                Button("Open Local Collections") {
+                                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(localInvoice.id)
+                                                }
+                                                .buttonStyle(.bordered)
+                                            }
                                         }
                                     }
                                 }
@@ -1885,6 +1957,16 @@ struct QuickBooksManagementView: View {
         Text(text)
             .foregroundColor(.secondary)
             .italic()
+    }
+
+    private func filtered<T>(_ values: [T], query: String, text: (T) -> [String?]) -> [T] {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmedQuery.isEmpty else { return values }
+        return values.filter { value in
+            text(value)
+                .compactMap { $0?.lowercased() }
+                .contains { $0.contains(trimmedQuery) }
+        }
     }
 
     private static var defaultSyncResourceStatuses: [QuickBooksSyncResourceStatus] {
