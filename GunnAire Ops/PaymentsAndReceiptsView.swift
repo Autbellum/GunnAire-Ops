@@ -34,6 +34,7 @@ struct PaymentsAndReceiptsView: View {
     @State private var refundNotes = ""
     @State private var tapToPayMessage = ""
     @State private var actionMessage = ""
+    @State private var backendUploadMessage = ""
     @State private var syncingPaymentID: UUID?
     @State private var isProcessingQuickBooksPayment = false
     @State private var isProcessingQuickBooksRefund = false
@@ -92,6 +93,10 @@ struct PaymentsAndReceiptsView: View {
             : "Enable the QuickBooks Payments scope before using live payment endpoints."
     }
 
+    private var signedInEmail: String? {
+        googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+    }
+
     private var outstandingInvoices: [(invoice: Invoice, balanceDue: Double)] {
         invoices
             .compactMap { invoice in
@@ -133,8 +138,13 @@ struct PaymentsAndReceiptsView: View {
                     }
 
                     Section("Payment Status") {
-                        Text("QuickBooks: \(isQuickBooksConnected ? "Connected" : "Not Connected")")
-                            .foregroundColor(isQuickBooksConnected ? .green : .secondary)
+                        if isAdminUser {
+                            Text("QuickBooks: \(isQuickBooksConnected ? "Connected" : "Not Connected")")
+                                .foregroundColor(isQuickBooksConnected ? .green : .secondary)
+                        } else {
+                            Text("Company payment queue: \(GunnAireBackendService.isConfigured ? "Enabled" : "Offline")")
+                                .foregroundColor(GunnAireBackendService.isConfigured ? .green : .secondary)
+                        }
                         if OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild {
                             Text("Tap to Pay: \(processorIsReady ? selectedProcessor.displayName : "Not Ready")")
                                 .foregroundColor(processorIsReady ? .green : .secondary)
@@ -253,6 +263,11 @@ struct PaymentsAndReceiptsView: View {
                             Text(actionMessage)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                        }
+                        if !backendUploadMessage.isEmpty {
+                            Text(backendUploadMessage)
+                                .font(.caption)
+                                .foregroundColor(backendUploadMessage.localizedCaseInsensitiveContains("failed") ? .orange : .secondary)
                         }
                     }
 
@@ -678,6 +693,7 @@ struct PaymentsAndReceiptsView: View {
         refundNotes = payment.notes ?? ""
     }
 
+    @discardableResult
     private func saveLocalPayment(
         invoice: Invoice,
         amount: Double,
@@ -693,9 +709,8 @@ struct PaymentsAndReceiptsView: View {
         settlementBatchID: String? = nil,
         storedCardID: String? = nil,
         processorOverride: String? = nil
-    ) {
-        modelContext.insert(
-            Payment(
+    ) -> Payment {
+        let payment = Payment(
                 invoice: invoice,
                 quickBooksID: quickBooksPaymentID,
                 quickBooksChargeID: quickBooksChargeID,
@@ -714,8 +729,29 @@ struct PaymentsAndReceiptsView: View {
                 authorizationReference: authorizationReference.nilIfBlank,
                 notes: paymentNotes.nilIfBlank,
                 processor: processorOverride ?? (selectedMethod == .card ? (authorizationReference.nilIfBlank == nil ? "manual-entry" : selectedProcessor.rawValue) : nil)
-            )
         )
+        modelContext.insert(payment)
+        return payment
+    }
+
+    private func queueFieldPaymentWithBackend(_ payment: Payment) async {
+        guard GunnAireBackendService.isConfigured else {
+            payment.processorSyncStatus = payment.processorSyncStatus ?? "local_only"
+            payment.processorSyncDetail = "Shared company payment queue is not configured on this build."
+            backendUploadMessage = "Payment saved locally. Shared company queue is not configured."
+            return
+        }
+
+        do {
+            _ = try await GunnAireBackendService.uploadPaymentCollection(payment, collectedBy: signedInEmail)
+            payment.processorSyncStatus = "company_queued"
+            payment.processorSyncDetail = "Payment record uploaded to shared company storage for admin QuickBooks reconciliation."
+            backendUploadMessage = "Payment queued to shared company storage."
+        } catch {
+            payment.processorSyncStatus = "needs_attention"
+            payment.processorSyncDetail = "Shared company payment queue upload failed: \(error.localizedDescription)"
+            backendUploadMessage = "Payment saved locally, but company queue upload failed: \(error.localizedDescription)"
+        }
     }
 
     private func updateInvoiceStatusAfterPayment(_ invoice: Invoice) {
@@ -759,7 +795,7 @@ struct PaymentsAndReceiptsView: View {
                     cardLast4 = String(masked)
                 }
                 authorizationReference = result.charge.authCode ?? authorizationReference
-                saveLocalPayment(
+                let payment = saveLocalPayment(
                     invoice: invoice,
                     amount: amount,
                     quickBooksPaymentID: result.accountingPayment?.Id,
@@ -772,6 +808,7 @@ struct PaymentsAndReceiptsView: View {
                     processorOverride: OnsitePaymentProcessor.quickBooksPayments.rawValue
                 )
                 updateInvoiceStatusAfterPayment(invoice)
+                await queueFieldPaymentWithBackend(payment)
                 if let accountingError = result.accountingError {
                     actionMessage = "Charge captured in QuickBooks Payments, but accounting sync still needs attention: \(accountingError)"
                 } else {
@@ -804,7 +841,7 @@ struct PaymentsAndReceiptsView: View {
                     note: paymentNotes.nilIfBlank
                 )
                 authorizationReference = result.charge.authCode ?? authorizationReference
-                saveLocalPayment(
+                let payment = saveLocalPayment(
                     invoice: invoice,
                     amount: amount,
                     quickBooksPaymentID: result.accountingPayment?.Id,
@@ -817,6 +854,7 @@ struct PaymentsAndReceiptsView: View {
                     processorOverride: OnsitePaymentProcessor.quickBooksPayments.rawValue
                 )
                 updateInvoiceStatusAfterPayment(invoice)
+                await queueFieldPaymentWithBackend(payment)
                 if let accountingError = result.accountingError {
                     actionMessage = "ACH payment submitted, but accounting sync still needs attention: \(accountingError)"
                 } else {
@@ -830,13 +868,14 @@ struct PaymentsAndReceiptsView: View {
             return
         }
 
-        saveLocalPayment(
+        let payment = saveLocalPayment(
             invoice: invoice,
             amount: amount,
             quickBooksAccountingSyncStatus: isQuickBooksConnected ? "pending" : nil,
             processorSyncStatus: "recorded"
         )
         updateInvoiceStatusAfterPayment(invoice)
+        await queueFieldPaymentWithBackend(payment)
         actionMessage = "Payment recorded for \(invoice.customer.name)."
         resetPaymentForm()
         showingRecordPaymentSheet = false

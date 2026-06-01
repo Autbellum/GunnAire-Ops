@@ -170,6 +170,10 @@ struct ScheduleView: View {
         let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
         return AppAccess.isAdmin(email: email, users: users)
     }
+
+    private var canCollectFieldPayments: Bool {
+        true
+    }
     
     var body: some View {
         ZStack {
@@ -208,7 +212,7 @@ struct ScheduleView: View {
                                     ForEach(selectedDayCalls) { call in
                                         serviceCallCard(for: call)
                                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                            if isAdminUser, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
+                                            if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
                                                 Button {
                                                     openDocumentationInCloseout = true
                                                     openDocumentationInTapToPay = tapToPayReady
@@ -767,7 +771,7 @@ struct ScheduleView: View {
                         documentationCall = call
                     }
                     .buttonStyle(.bordered)
-                } else if isAdminUser, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
+                } else if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
                     Button(tapToPayReady ? "Pay" : "Collect") {
                         openDocumentationInCloseout = true
                         openDocumentationInTapToPay = tapToPayReady
@@ -834,15 +838,15 @@ struct ScheduleView: View {
                 if isAdminUser, let estimate = estimate(for: call) {
                     Label(estimate.status.capitalized, systemImage: "list.clipboard.fill")
                 }
-                if isAdminUser, let invoice = invoice(for: call) {
+                if (isAdminUser || canCollectFieldPayments), let invoice = invoice(for: call) {
                     Label(invoice.status.capitalized, systemImage: isInvoicePaid(invoice) ? "checkmark.circle.fill" : "creditcard.fill")
                 }
-                if isAdminUser && isCollectionOverdue(for: call) {
+                if (isAdminUser || canCollectFieldPayments) && isCollectionOverdue(for: call) {
                     Label("Overdue", systemImage: "exclamationmark.triangle.fill")
                 }
-                if isAdminUser, let balanceDue = balanceDue(for: call), balanceDue > 0 {
+                if (isAdminUser || canCollectFieldPayments), let balanceDue = balanceDue(for: call), balanceDue > 0 {
                     Text("Due \(balanceDue, format: .currency(code: "USD"))")
-                } else if isAdminUser && call.linkedInvoiceID != nil {
+                } else if (isAdminUser || canCollectFieldPayments) && call.linkedInvoiceID != nil {
                     Text("Paid")
                 }
             }

@@ -17,6 +17,12 @@ struct BackendDocumentUploadResponse: Codable {
     let createdAt: String?
 }
 
+struct BackendPaymentUploadResponse: Codable {
+    let id: String
+    let paymentID: String
+    let createdAt: String?
+}
+
 enum GunnAireBackendError: LocalizedError {
     case notConfigured
     case invalidURL(String)
@@ -55,6 +61,22 @@ enum GunnAireBackendService {
         let serviceCallID: String?
         let customerName: String?
         let dataBase64: String
+    }
+
+    private struct PaymentCollectionPayload: Codable {
+        let paymentID: String
+        let invoiceID: String
+        let invoiceQuickBooksID: String?
+        let customerName: String
+        let customerEmail: String?
+        let amount: Double
+        let method: String
+        let cardLast4: String?
+        let authorizationReference: String?
+        let processor: String?
+        let notes: String?
+        let collectedBy: String?
+        let collectedAt: String
     }
 
     static var isConfigured: Bool {
@@ -164,6 +186,28 @@ enum GunnAireBackendService {
         return try JSONDecoder().decode(BackendDocumentUploadResponse.self, from: responseData)
     }
 
+    @discardableResult
+    static func uploadPaymentCollection(_ payment: Payment, collectedBy: String?) async throws -> BackendPaymentUploadResponse {
+        let payload = PaymentCollectionPayload(
+            paymentID: payment.id.uuidString,
+            invoiceID: payment.invoice.id.uuidString,
+            invoiceQuickBooksID: payment.invoice.quickBooksID,
+            customerName: payment.invoice.customer.name,
+            customerEmail: payment.invoice.customer.email,
+            amount: payment.amount,
+            method: payment.method,
+            cardLast4: payment.cardLast4,
+            authorizationReference: payment.authorizationReference,
+            processor: payment.processor,
+            notes: payment.notes,
+            collectedBy: AppAccess.normalizedEmail(collectedBy).nilIfBlank,
+            collectedAt: ISO8601DateFormatter().string(from: payment.date)
+        )
+        let body = try JSONEncoder().encode(payload)
+        let responseData = try await send(path: "/api/payments", method: "POST", body: body)
+        return try JSONDecoder().decode(BackendPaymentUploadResponse.self, from: responseData)
+    }
+
     private static func send(path: String, method: String, body: Data? = nil) async throws -> Data {
         let request = try makeRequest(path: path, method: method, body: body)
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -195,5 +239,12 @@ enum GunnAireBackendService {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         return request
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

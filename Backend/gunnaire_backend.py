@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small GunnAire Ops backend for shared users, roles, and document storage."""
+"""Small GunnAire Ops backend for shared users, roles, documents, and field payment records."""
 
 from __future__ import annotations
 
@@ -71,6 +71,27 @@ def initialize_database() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS payment_collections (
+                id TEXT PRIMARY KEY,
+                payment_id TEXT NOT NULL UNIQUE,
+                invoice_id TEXT,
+                invoice_quickbooks_id TEXT,
+                customer_name TEXT NOT NULL,
+                customer_email TEXT,
+                amount REAL NOT NULL,
+                method TEXT NOT NULL,
+                card_last4 TEXT,
+                authorization_reference TEXT,
+                processor TEXT,
+                notes TEXT,
+                collected_by TEXT,
+                collected_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
         now = utc_now()
         connection.execute(
             """
@@ -124,6 +145,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/documents":
             self.store_document()
+            return
+        if parsed.path == "/api/payments":
+            self.store_payment_collection()
             return
         self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -257,6 +281,93 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 "filename": filename,
                 "storedPath": str(destination),
                 "createdAt": created_at,
+            },
+            status=HTTPStatus.CREATED,
+        )
+
+    def store_payment_collection(self) -> None:
+        try:
+            payload = self.read_json()
+        except json.JSONDecodeError:
+            self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        payment_id = str(payload.get("paymentID") or "").strip()
+        customer_name = str(payload.get("customerName") or "").strip()
+        method = str(payload.get("method") or "").strip().lower()
+        collected_at = str(payload.get("collectedAt") or "").strip() or utc_now()
+        try:
+            amount = float(payload.get("amount"))
+        except (TypeError, ValueError):
+            self.write_json({"error": "Payment amount must be numeric"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        if not payment_id:
+            self.write_json({"error": "Missing paymentID"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not customer_name:
+            self.write_json({"error": "Missing customerName"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if amount <= 0:
+            self.write_json({"error": "Payment amount must be greater than zero"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if method not in {"card", "ach", "cash", "check"}:
+            self.write_json({"error": "Payment method must be card, ach, cash, or check"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        record_id = str(uuid.uuid4())
+        created_at = utc_now()
+        with db() as connection:
+            connection.execute(
+                """
+                INSERT INTO payment_collections(
+                    id, payment_id, invoice_id, invoice_quickbooks_id, customer_name,
+                    customer_email, amount, method, card_last4, authorization_reference,
+                    processor, notes, collected_by, collected_at, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(payment_id) DO UPDATE SET
+                    invoice_id = excluded.invoice_id,
+                    invoice_quickbooks_id = excluded.invoice_quickbooks_id,
+                    customer_name = excluded.customer_name,
+                    customer_email = excluded.customer_email,
+                    amount = excluded.amount,
+                    method = excluded.method,
+                    card_last4 = excluded.card_last4,
+                    authorization_reference = excluded.authorization_reference,
+                    processor = excluded.processor,
+                    notes = excluded.notes,
+                    collected_by = excluded.collected_by,
+                    collected_at = excluded.collected_at
+                """,
+                (
+                    record_id,
+                    payment_id,
+                    payload.get("invoiceID") if isinstance(payload.get("invoiceID"), str) else None,
+                    payload.get("invoiceQuickBooksID") if isinstance(payload.get("invoiceQuickBooksID"), str) else None,
+                    customer_name,
+                    payload.get("customerEmail") if isinstance(payload.get("customerEmail"), str) else None,
+                    amount,
+                    method,
+                    payload.get("cardLast4") if isinstance(payload.get("cardLast4"), str) else None,
+                    payload.get("authorizationReference") if isinstance(payload.get("authorizationReference"), str) else None,
+                    payload.get("processor") if isinstance(payload.get("processor"), str) else None,
+                    payload.get("notes") if isinstance(payload.get("notes"), str) else None,
+                    payload.get("collectedBy") if isinstance(payload.get("collectedBy"), str) else None,
+                    collected_at,
+                    created_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT id, payment_id, created_at FROM payment_collections WHERE payment_id = ?",
+                (payment_id,),
+            ).fetchone()
+
+        self.write_json(
+            {
+                "id": row["id"],
+                "paymentID": row["payment_id"],
+                "createdAt": row["created_at"],
             },
             status=HTTPStatus.CREATED,
         )
