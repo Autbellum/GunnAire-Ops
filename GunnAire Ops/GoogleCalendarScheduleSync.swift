@@ -494,8 +494,28 @@ enum GoogleCalendarScheduleSync {
         if let eventID = call.googleEventID,
            !eventID.isEmpty,
            canUpdateExistingEvent {
+            guard isCalendarCallLocallyEdited(call) else {
+                exportNext(
+                    index: index + 1,
+                    exportedCount: exportedCount,
+                    skippedCount: skippedCount,
+                    calls: calls,
+                    auth: auth,
+                    modelContext: modelContext,
+                    remoteEventsByKey: remoteEventsByKey,
+                    remoteEventsByFingerprint: remoteEventsByFingerprint,
+                    availableCalendarIDs: availableCalendarIDs,
+                    writableCalendarIDs: writableCalendarIDs,
+                    completion: completion
+                )
+                return
+            }
             let eventKey = calendarEventStorageKey(calendarID: currentCalendarID, eventID: eventID)
-            let event = makeGoogleEvent(for: call, existingSummary: remoteEventsByKey[eventKey]?.event.summary)
+            let event = makeGoogleEvent(
+                for: call,
+                existingSummary: remoteEventsByKey[eventKey]?.event.summary,
+                preserveExternalDetails: true
+            )
             auth.updateCalendarEvent(calendarID: currentCalendarID, eventID: eventID, event: event) { result in
                 finish(currentCalendarID, result)
             }
@@ -503,7 +523,27 @@ enum GoogleCalendarScheduleSync {
                   contains(remote.calendarID, in: writableCalendarIDs) {
             call.googleCalendarID = remote.calendarID
             call.googleEventID = remote.event.id
-            let event = makeGoogleEvent(for: call, existingSummary: remote.event.summary)
+            guard isCalendarCallLocallyEdited(call) else {
+                exportNext(
+                    index: index + 1,
+                    exportedCount: exportedCount,
+                    skippedCount: skippedCount,
+                    calls: calls,
+                    auth: auth,
+                    modelContext: modelContext,
+                    remoteEventsByKey: remoteEventsByKey,
+                    remoteEventsByFingerprint: remoteEventsByFingerprint,
+                    availableCalendarIDs: availableCalendarIDs,
+                    writableCalendarIDs: writableCalendarIDs,
+                    completion: completion
+                )
+                return
+            }
+            let event = makeGoogleEvent(
+                for: call,
+                existingSummary: remote.event.summary,
+                preserveExternalDetails: true
+            )
             auth.updateCalendarEvent(calendarID: remote.calendarID, eventID: remote.event.id, event: event) { result in
                 finish(remote.calendarID, result)
             }
@@ -511,25 +551,29 @@ enum GoogleCalendarScheduleSync {
             if call.googleCalendarID != nil, normalized(call.googleCalendarID ?? "") != normalized(targetCalendarID) {
                 call.googleEventID = nil
             }
-            let event = makeGoogleEvent(for: call, existingSummary: nil)
+            let event = makeGoogleEvent(for: call, existingSummary: nil, preserveExternalDetails: false)
             auth.createCalendarEvent(calendarID: targetCalendarID, event: event) { result in
                 finish(targetCalendarID, result)
             }
         }
     }
 
-    private static func makeGoogleEvent(for call: ServiceCall, existingSummary: String?) -> GoogleWritableCalendarEvent {
+    private static func makeGoogleEvent(
+        for call: ServiceCall,
+        existingSummary: String?,
+        preserveExternalDetails: Bool
+    ) -> GoogleWritableCalendarEvent {
         let timeZone = TimeZone.current.identifier
         let endDate = call.scheduledDate.addingTimeInterval(call.duration)
         let summary = calendarEventTitle(for: call, existingSummary: existingSummary)
         let customerEmail = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let attendees = customerEmail?.isEmpty == false
+        let attendees = !preserveExternalDetails && customerEmail?.isEmpty == false
             ? [GoogleWritableCalendarAttendee(email: customerEmail!, displayName: call.customer.name)]
             : nil
         return GoogleWritableCalendarEvent(
             summary: summary,
-            description: call.notes,
-            location: call.siteAddress ?? call.customer.address,
+            description: preserveExternalDetails ? nil : call.notes,
+            location: preserveExternalDetails ? nil : call.siteAddress ?? call.customer.address,
             start: GoogleWritableCalendarEventDate(
                 dateTime: ISO8601DateFormatter().string(from: call.scheduledDate),
                 timeZone: timeZone

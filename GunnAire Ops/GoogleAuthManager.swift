@@ -538,7 +538,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return
         }
-        authorizedJSONRequest(url: url, method: "PUT", body: event, completion: completion)
+        authorizedJSONRequest(url: url, method: "PATCH", body: event, completion: completion)
     }
 
     func deleteCalendarEvent(calendarID: String = "primary", eventID: String, completion: @escaping (Result<Void, Error>) -> Void) {
