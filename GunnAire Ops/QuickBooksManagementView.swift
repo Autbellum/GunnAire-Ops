@@ -1623,6 +1623,7 @@ struct QuickBooksManagementView: View {
                                 processor: OnsitePaymentProcessor.quickBooksPayments.rawValue
                             )
                         )
+                        invoice.applyLocalPaymentAmount(amount)
                         let localBalance = localOutstandingBalance(for: invoice)
                         invoice.status = localBalance == 0 ? "paid" : "partial"
                         if let accountingError = result.accountingError {
@@ -1704,10 +1705,8 @@ struct QuickBooksManagementView: View {
                                 refundedPaymentID: payment.id
                             )
                         )
-                        let localBalance = max(
-                            payment.invoice.amount - localPayments.filter { $0.invoice.id == payment.invoice.id }.reduce(0) { $0 + $1.amount } + amount,
-                            0
-                        )
+                        payment.invoice.applyLocalPaymentAmount(amount, isRefund: true)
+                        let localBalance = localOutstandingBalance(for: payment.invoice)
                         payment.invoice.status = localBalance == 0 ? "paid" : "partial"
                         if let accountingError = result.accountingError {
                             actionMessage = "Refund issued, but refund receipt sync still needs attention: \(accountingError)"
@@ -1814,15 +1813,7 @@ struct QuickBooksManagementView: View {
     }
 
     private func localOutstandingBalance(for invoice: Invoice) -> Double {
-        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
-            return 0
-        }
-        let netPayments = localPayments
-            .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
-            }
-        return max(invoice.amount - netPayments, 0)
+        Invoice.outstandingBalance(for: invoice, payments: localPayments)
     }
 
     private func localCustomer(for quickBooksCustomer: QuickBooksCustomer) -> Customer? {
@@ -2882,15 +2873,7 @@ private struct QuickBooksCardChargeComposeView: View {
     }
 
     private func outstandingBalance(for invoice: Invoice) -> Double {
-        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
-            return 0
-        }
-        let netPayments = payments
-            .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
-            }
-        return max(invoice.amount - netPayments, 0)
+        Invoice.outstandingBalance(for: invoice, payments: payments)
     }
 }
 

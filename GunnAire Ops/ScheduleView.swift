@@ -1036,19 +1036,11 @@ struct ScheduleView: View {
 
     private func balanceDue(for call: ServiceCall) -> Double? {
         guard let invoice = invoice(for: call) else { return nil }
-        if isInvoicePaid(invoice) {
-            return 0
-        }
-        let paid = payments
-            .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
-            }
-        return max(invoice.amount - paid, 0)
+        return Invoice.outstandingBalance(for: invoice, payments: payments)
     }
 
     private func isInvoicePaid(_ invoice: Invoice) -> Bool {
-        invoice.status.caseInsensitiveCompare("paid") == .orderedSame
+        Invoice.isPaid(invoice, payments: payments)
     }
 
     private func isCollectionOverdue(for call: ServiceCall) -> Bool {

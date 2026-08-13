@@ -1283,15 +1283,10 @@ final class ServiceCall {
             if invoice.customerSignedAt == nil {
                 missing.append("Customer signed")
             }
-            let paidTotal = payments
-                .filter { $0.invoice.id == invoice.id && !$0.isRefund }
-                .reduce(0) { $0 + $1.amount }
-            let refundTotal = payments
-                .filter { $0.invoice.id == invoice.id && $0.isRefund }
-                .reduce(0) { $0 + $1.amount }
-            let balanceDue = max(invoice.amount - paidTotal + refundTotal, 0)
+            let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
+            let balanceDue = Invoice.outstandingBalance(for: invoice, payments: invoicePayments)
             let paymentResolved = paymentCollectedChecklist ||
-                invoice.status.caseInsensitiveCompare("paid") == .orderedSame ||
+                Invoice.isPaid(invoice, payments: invoicePayments) ||
                 balanceDue <= 0.009
             if !paymentResolved {
                 missing.append("Payment resolved")

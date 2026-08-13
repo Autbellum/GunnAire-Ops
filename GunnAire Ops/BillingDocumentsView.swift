@@ -3709,7 +3709,7 @@ GunnAire
             DispatchQueue.main.async {
                 switch result {
                 case .success:
-                    if invoice.status.caseInsensitiveCompare("paid") != .orderedSame &&
+                    if !isInvoicePaid(invoice) &&
                         invoice.status.caseInsensitiveCompare("partial") != .orderedSame {
                         invoice.status = "sent"
                     }
@@ -3791,19 +3791,11 @@ GunnAire
     }
 
     private func invoiceBalanceDue(for invoice: Invoice) -> Double {
-        if isInvoicePaid(invoice) {
-            return 0
-        }
-        let paid = payments
-            .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
-            }
-        return max(invoice.amount - paid, 0)
+        Invoice.outstandingBalance(for: invoice, payments: payments)
     }
 
     private func isInvoicePaid(_ invoice: Invoice) -> Bool {
-        invoice.status.caseInsensitiveCompare("paid") == .orderedSame || invoiceBalanceDueIgnoringStatus(for: invoice) <= 0.009
+        Invoice.isPaid(invoice, payments: payments)
     }
 
     private func isInvoiceOverdue(_ invoice: Invoice) -> Bool {
@@ -3821,12 +3813,7 @@ GunnAire
     }
 
     private func invoiceBalanceDueIgnoringStatus(for invoice: Invoice) -> Double {
-        let paid = payments
-            .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
-            }
-        return max(invoice.amount - paid, 0)
+        Invoice.outstandingBalance(for: invoice, payments: payments)
     }
 
     private func normalizedItemLookupKey(_ value: String) -> String {
@@ -4540,7 +4527,7 @@ private struct RecordInvoicePaymentView: View {
         self.invoice = invoice
         self.autoStartTapToPay = autoStartTapToPay
         _amount = State(initialValue: String(format: "%.2f", invoice.amount))
-        _shouldRecordPayment = State(initialValue: invoice.status.caseInsensitiveCompare("paid") != .orderedSame)
+        _shouldRecordPayment = State(initialValue: !Invoice.isPaid(invoice, payments: []))
         _completionNotes = State(initialValue: invoice.completionNotes ?? "")
         _signatureName = State(initialValue: invoice.customerSignatureName ?? "")
     }
@@ -4554,18 +4541,11 @@ private struct RecordInvoicePaymentView: View {
     }
 
     private var balanceDue: Double {
-        max(invoice.amount - paidAmountRecorded, 0)
+        Invoice.outstandingBalance(for: invoice, payments: payments)
     }
 
     private var paidAmountRecorded: Double {
-        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
-            return invoice.amount
-        }
-        return payments
-            .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
-            }
+        max(invoice.amount - balanceDue, 0)
     }
 
     private var selectedProcessor: OnsitePaymentProcessor {
@@ -4804,6 +4784,7 @@ private struct RecordInvoicePaymentView: View {
     private func savePayment() async {
         let paidAmount = shouldRecordPayment ? (Double(amount) ?? 0) : 0
         guard !shouldRecordPayment || paidAmount > 0 else { return }
+        let previousPaidAmount = paidAmountRecorded
         let trimmedSignatureName = signatureName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCompletionNotes = completionNotes.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCardLast4 = cardLast4.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4940,7 +4921,7 @@ private struct RecordInvoicePaymentView: View {
             }
         }
 
-        let totalPaid = paidAmountRecorded + paidAmount
+        let totalPaid = previousPaidAmount + paidAmount
         if totalPaid >= invoice.amount {
             invoice.status = "paid"
         } else if totalPaid > 0 {
@@ -4948,13 +4929,16 @@ private struct RecordInvoicePaymentView: View {
         } else {
             invoice.status = "unpaid"
         }
+        if shouldRecordPayment {
+            invoice.applyLocalPaymentAmount(paidAmount)
+        }
 
         if let serviceCallID = invoice.serviceCallID,
            let call = serviceCalls.first(where: { $0.id == serviceCallID }) {
             call.markDocumentationCompleteIfReady()
             call.workCompletedChecklist = true
             call.paymentCollectedChecklist = totalPaid > 0
-            call.status = invoice.status.caseInsensitiveCompare("paid") == .orderedSame ? .completed : .invoiced
+            call.status = Invoice.isPaid(invoice, payments: payments.filter { $0.invoice.id == invoice.id }) ? .completed : .invoiced
             if !trimmedCompletionNotes.isEmpty {
                 call.notes = mergedJobNotes(existing: call.notes, completionNotes: trimmedCompletionNotes)
             }

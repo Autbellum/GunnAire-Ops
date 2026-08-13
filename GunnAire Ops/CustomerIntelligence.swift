@@ -131,7 +131,7 @@ enum CustomerIntelligence {
 
         let openInvoiceBalances = customerInvoices.compactMap { invoice -> (invoice: Invoice, balance: Double)? in
             let balance = outstandingBalance(for: invoice, payments: customerPayments)
-            guard balance > 0 && invoice.status.caseInsensitiveCompare("paid") != .orderedSame else { return nil }
+            guard balance > 0 else { return nil }
             return (invoice, balance)
         }
         let openBalance = openInvoiceBalances.reduce(0) { $0 + $1.balance }
@@ -235,15 +235,7 @@ enum CustomerIntelligence {
     }
 
     static func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
-        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
-            return 0
-        }
-        let paid = payments
-            .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
-            }
-        return max(invoice.amount - paid, 0)
+        Invoice.outstandingBalance(for: invoice, payments: payments)
     }
 
     private static func primaryAction(

@@ -3446,6 +3446,50 @@ struct GunnAire_OpsTests {
         #expect(balance == 725)
     }
 
+    @Test func invoiceBalanceUsesQuickBooksBalanceWhenPaymentRecordsAreMissing() async throws {
+        let customer = Customer(name: "QBO Paid Customer")
+        let paidInvoice = Invoice(
+            customer: customer,
+            quickBooksID: "INV-PAID",
+            quickBooksBalanceDue: 0,
+            amount: 500,
+            status: "unpaid"
+        )
+        let openInvoice = Invoice(
+            customer: customer,
+            quickBooksID: "INV-OPEN",
+            quickBooksBalanceDue: 125,
+            amount: 500,
+            status: "paid"
+        )
+
+        #expect(Invoice.outstandingBalance(for: paidInvoice, payments: []) == 0)
+        #expect(Invoice.isPaid(paidInvoice, payments: []) == true)
+        #expect(Invoice.resolvedStatus(for: paidInvoice, payments: []) == "paid")
+        #expect(Invoice.outstandingBalance(for: openInvoice, payments: []) == 125)
+        #expect(Invoice.isPaid(openInvoice, payments: []) == false)
+        #expect(Invoice.resolvedStatus(for: openInvoice, payments: []) == "partial")
+    }
+
+    @Test func invoiceLocalPaymentAdjustsStoredQuickBooksBalance() async throws {
+        let customer = Customer(name: "QBO Balance Customer")
+        let invoice = Invoice(
+            customer: customer,
+            quickBooksID: "INV-BAL",
+            quickBooksBalanceDue: 300,
+            amount: 500,
+            status: "partial"
+        )
+
+        invoice.applyLocalPaymentAmount(125)
+        #expect(invoice.quickBooksBalanceDue == 175)
+        #expect(Invoice.outstandingBalance(for: invoice, payments: []) == 175)
+
+        invoice.applyLocalPaymentAmount(25, isRefund: true)
+        #expect(invoice.quickBooksBalanceDue == 200)
+        #expect(Invoice.outstandingBalance(for: invoice, payments: []) == 200)
+    }
+
     @Test func invoiceStatusRankingPreservesPaidStateDuringDuplicateMerge() async throws {
         let paidInvoice = Invoice(customer: Customer(name: "Paid Customer"), amount: 500, status: " Paid ")
 

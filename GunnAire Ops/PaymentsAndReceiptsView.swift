@@ -132,7 +132,7 @@ struct PaymentsAndReceiptsView: View {
         visibleInvoices
             .compactMap { invoice in
                 let balance = outstandingBalance(for: invoice)
-                return balance > 0 && invoice.status.caseInsensitiveCompare("paid") != .orderedSame ? (invoice, balance) : nil
+                return balance > 0 ? (invoice, balance) : nil
             }
             .sorted { lhs, rhs in
                 if lhs.balanceDue == rhs.balanceDue {
@@ -863,6 +863,7 @@ struct PaymentsAndReceiptsView: View {
                 processor: processorOverride ?? (selectedMethod == .card ? (authorizationReference.nilIfBlank == nil ? "manual-entry" : selectedProcessor.rawValue) : nil)
         )
         modelContext.insert(payment)
+        invoice.applyLocalPaymentAmount(amount)
         return payment
     }
 
@@ -1097,15 +1098,7 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private func outstandingBalance(for invoice: Invoice) -> Double {
-        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
-            return 0
-        }
-        let paid = payments
-            .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
-            }
-        return max(invoice.amount - paid, 0)
+        Invoice.outstandingBalance(for: invoice, payments: payments)
     }
 
     private func isOverdue(_ invoice: Invoice) -> Bool {
@@ -1115,7 +1108,7 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private func balanceStatusLabel(for invoice: Invoice, balanceDue: Double) -> String {
-        if balanceDue <= 0 || invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
+        if balanceDue <= 0 || Invoice.isPaid(invoice, payments: payments) {
             return "Paid"
         }
         if balanceDue < invoice.amount {
@@ -1398,6 +1391,7 @@ GunnAire
                     refundedPaymentID: payment.id
                 )
             )
+            payment.invoice.applyLocalPaymentAmount(refundAmountValue, isRefund: true)
             payment.invoice.status = outstandingBalance(for: payment.invoice) > 0 ? "partial" : "paid"
             if let accountingError = result.accountingError {
                 actionMessage = "Refund issued, but refund receipt sync still needs attention: \(accountingError)"

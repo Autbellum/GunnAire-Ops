@@ -329,15 +329,7 @@ private enum GunnAireIntentStore {
     }
 
     nonisolated static func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
-        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
-            return 0
-        }
-        let netPayments = payments
-            .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
-            }
-        return max(invoice.amount - netPayments, 0)
+        Invoice.outstandingBalance(for: invoice, payments: payments)
     }
 }
 

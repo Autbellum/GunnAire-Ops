@@ -175,6 +175,7 @@ enum QuickBooksLocalSync {
             invoice.createdAt = parseQuickBooksDate(quickBooksInvoice.TxnDate) ?? invoice.createdAt
             let balance = quickBooksInvoice.Balance
                 ?? max(quickBooksInvoice.TotalAmt - (importedPaymentTotalsByInvoiceID[quickBooksInvoice.Id] ?? 0), 0)
+            invoice.quickBooksBalanceDue = balance
             if balance <= 0.009 {
                 invoice.status = "paid"
             } else if balance < quickBooksInvoice.TotalAmt - 0.009 {
@@ -335,6 +336,9 @@ enum QuickBooksLocalSync {
         }
         if invoice.lineItemSummary.nilIfEmpty == nil {
             invoice.lineItemSummary = duplicate.lineItemSummary
+        }
+        if invoice.quickBooksBalanceDue == nil {
+            invoice.quickBooksBalanceDue = duplicate.quickBooksBalanceDue
         }
         invoice.status = Invoice.mostResolvedStatus(invoice.status, duplicate.status)
         invoice.customerSignatureName = invoice.customerSignatureName ?? duplicate.customerSignatureName

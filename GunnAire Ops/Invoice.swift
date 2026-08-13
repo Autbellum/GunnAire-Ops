@@ -9,6 +9,7 @@ final class Invoice {
     var serviceCallID: UUID?
     var customer: Customer
     var quickBooksID: String?
+    var quickBooksBalanceDue: Double?
     var lineItemSummary: String
     var amount: Double
     var status: String // unpaid, paid, overdue
@@ -25,6 +26,7 @@ final class Invoice {
         serviceCallID: UUID? = nil,
         customer: Customer,
         quickBooksID: String? = nil,
+        quickBooksBalanceDue: Double? = nil,
         lineItemSummary: String = "",
         amount: Double = 0,
         status: String = "unpaid",
@@ -40,6 +42,7 @@ final class Invoice {
         self.serviceCallID = serviceCallID
         self.customer = customer
         self.quickBooksID = quickBooksID
+        self.quickBooksBalanceDue = quickBooksBalanceDue
         self.lineItemSummary = lineItemSummary
         self.amount = amount
         self.status = status
@@ -60,6 +63,53 @@ final class Invoice {
         default:
             return value.isEmpty ? "unpaid" : value
         }
+    }
+
+    var hasQuickBooksBalance: Bool {
+        quickBooksBalanceDue != nil && quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    static func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
+        if let quickBooksBalanceDue = invoice.quickBooksBalanceDue,
+           invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return max(quickBooksBalanceDue, 0)
+        }
+        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
+            return 0
+        }
+        let netPaid = payments
+            .filter { $0.invoice.id == invoice.id }
+            .reduce(0) { partial, payment in
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
+            }
+        return max(invoice.amount - netPaid, 0)
+    }
+
+    static func isPaid(_ invoice: Invoice, payments: [Payment]) -> Bool {
+        if invoice.hasQuickBooksBalance {
+            return outstandingBalance(for: invoice, payments: payments) <= 0.009
+        }
+        return outstandingBalance(for: invoice, payments: payments) <= 0.009 ||
+            invoice.status.caseInsensitiveCompare("paid") == .orderedSame
+    }
+
+    static func resolvedStatus(for invoice: Invoice, payments: [Payment]) -> String {
+        let balance = outstandingBalance(for: invoice, payments: payments)
+        if balance <= 0.009 {
+            return "paid"
+        }
+        if balance < invoice.amount - 0.009 {
+            return "partial"
+        }
+        return invoice.normalizedStatus == "overdue" ? "overdue" : "unpaid"
+    }
+
+    func applyLocalPaymentAmount(_ amount: Double, isRefund: Bool = false) {
+        guard hasQuickBooksBalance, let quickBooksBalanceDue else { return }
+        let adjustedBalance = isRefund
+            ? quickBooksBalanceDue + amount
+            : quickBooksBalanceDue - amount
+        self.quickBooksBalanceDue = max(adjustedBalance, 0)
     }
 
     static func mostResolvedStatus(_ lhs: String, _ rhs: String) -> String {

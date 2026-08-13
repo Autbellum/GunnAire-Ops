@@ -145,7 +145,7 @@ enum BusinessSuiteIntelligence {
 
         let openInvoiceBalances = invoices.compactMap { invoice -> (invoice: Invoice, balance: Double)? in
             let balance = CustomerIntelligence.outstandingBalance(for: invoice, payments: payments)
-            guard balance > 0 && invoice.status.caseInsensitiveCompare("paid") != .orderedSame else { return nil }
+            guard balance > 0 else { return nil }
             return (invoice, balance)
         }
         let overdueInvoices = openInvoiceBalances.filter { $0.invoice.createdAt <= overdueInvoiceCutoff }

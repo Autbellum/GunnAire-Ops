@@ -513,13 +513,7 @@ enum CustomerDocumentExporter {
     }
 
     private static func isInvoicePaid(_ invoice: Invoice, payments: [Payment]) -> Bool {
-        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
-            return true
-        }
-        let paidTotal = payments.reduce(0) { partial, payment in
-            partial + (payment.isRefund ? -payment.amount : payment.amount)
-        }
-        return max(invoice.amount - paidTotal, 0) <= 0.009
+        Invoice.isPaid(invoice, payments: payments)
     }
 
     private static func billingJobContextRows(for serviceCall: ServiceCall) -> [DocumentRow] {

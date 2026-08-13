@@ -428,10 +428,7 @@ struct CustomersView: View {
 
     private func nextOpenInvoice(for customer: Customer) -> Invoice? {
         invoices
-            .filter {
-                $0.customer.id == customer.id &&
-                $0.status.caseInsensitiveCompare("paid") != .orderedSame
-            }
+            .filter { $0.customer.id == customer.id }
             .compactMap { invoice -> (invoice: Invoice, balance: Double)? in
                 let balance = CustomerIntelligence.outstandingBalance(for: invoice, payments: payments)
                 guard balance > 0 else { return nil }
@@ -1234,12 +1231,7 @@ struct OnsiteDocumentationView: View {
     }
 
     private func invoiceBalanceDue(for invoice: Invoice) -> Double {
-        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
-            return 0
-        }
-        return max(invoice.amount - payments(for: invoice).reduce(0) { partial, payment in
-            partial + (payment.isRefund ? -payment.amount : payment.amount)
-        }, 0)
+        Invoice.outstandingBalance(for: invoice, payments: payments(for: invoice))
     }
 
     private func closeoutReadiness(for call: ServiceCall, invoice: Invoice?) -> JobCloseoutReadiness {
@@ -1339,7 +1331,7 @@ struct OnsiteDocumentationView: View {
                                                 .buttonStyle(.bordered)
                                             }
 
-                                            if invoice.status.caseInsensitiveCompare("paid") != .orderedSame {
+                                            if invoiceBalanceDue(for: invoice) > 0.009 {
                                                 Button("Collect Payment") {
                                                     GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
                                                 }
@@ -1896,7 +1888,7 @@ private struct CustomerEditorView: View {
         }
         .compactMap { invoice in
             let balance = CustomerIntelligence.outstandingBalance(for: invoice, payments: payments)
-            guard balance > 0 && invoice.status.caseInsensitiveCompare("paid") != .orderedSame else { return nil }
+            guard balance > 0 else { return nil }
             return (invoice, balance)
         }
     }

@@ -360,10 +360,7 @@ struct ServiceCallDetailView: View {
 
     private var invoiceBalanceDue: Double {
         guard let invoice = linkedInvoice else { return 0 }
-        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
-            return 0
-        }
-        return max(invoice.amount - totalPaid, 0)
+        return Invoice.outstandingBalance(for: invoice, payments: linkedPayments)
     }
 
     private var balanceLabel: String? {
@@ -992,9 +989,8 @@ GunnAire
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }
-                            } else if let linkedInvoice,
-                                      linkedInvoice.status.caseInsensitiveCompare("paid") != .orderedSame {
-                                Text("Remaining balance: \(linkedInvoice.amount, format: .currency(code: "USD"))")
+                            } else if let linkedInvoice {
+                                Text("Remaining balance: \(Invoice.outstandingBalance(for: linkedInvoice, payments: []), format: .currency(code: "USD"))")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
