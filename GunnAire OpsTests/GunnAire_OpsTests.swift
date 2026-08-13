@@ -109,6 +109,22 @@ struct GunnAire_OpsTests {
         #expect(ServiceDocumentAttachmentKind.serviceReport.isPhoto == false)
     }
 
+    @Test func serviceDocumentAttachmentExposesLocalFileURLForOpening() async throws {
+        let attachment = ServiceDocumentAttachment(
+            customer: nil,
+            serviceCallID: nil,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128
+        )
+
+        #expect(attachment.localFileURL.isFileURL)
+        #expect(attachment.localFileURL.path == "/tmp/diagnostic.jpg")
+        #expect(attachment.isImage == true)
+    }
+
     @Test func quickBooksUploadMetadataCanReferenceInvoiceForSend() async throws {
         let metadata = QuickBooksUploadMetadata(
             FileName: "onsite-report.pdf",

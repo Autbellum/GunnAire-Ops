@@ -2064,6 +2064,11 @@ GunnAire
                         }
                         .font(.caption2)
                         .foregroundColor(.secondary)
+
+                        ShareLink(item: attachment.localFileURL) {
+                            Label("Open Attachment", systemImage: attachment.isImage ? "photo.on.rectangle" : "doc.text.magnifyingglass")
+                        }
+                        .font(.caption)
                     }
                 }
             }

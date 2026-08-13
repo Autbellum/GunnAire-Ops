@@ -1826,6 +1826,10 @@ private struct CustomerEditorView: View {
                                             .font(.caption2)
                                             .foregroundColor(.green)
                                     }
+                                    ShareLink(item: attachment.localFileURL) {
+                                        Label("Open Attachment", systemImage: attachment.isImage ? "photo.on.rectangle" : "doc.text.magnifyingglass")
+                                    }
+                                    .font(.caption)
                                 }
                                 Spacer()
                                 Button(role: .destructive) {
