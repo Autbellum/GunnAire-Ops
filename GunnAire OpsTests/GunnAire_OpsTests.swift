@@ -1003,6 +1003,9 @@ struct GunnAire_OpsTests {
         #expect(airHandlerDefinitions.first { $0.key == "blower_type" }?.options.contains("ECM Variable Speed") == true)
         #expect(packageUnitDefinitions.first { $0.key == "package_heat_type" }?.options.contains("Dual Fuel") == true)
         #expect(packageUnitDefinitions.contains { $0.key == "economizer_operation" })
+        #expect(packageUnitDefinitions.contains { $0.key == "mixed_air_temp" })
+        #expect(packageUnitDefinitions.contains { $0.key == "outdoor_air_damper_position" })
+        #expect(packageUnitDefinitions.first { $0.key == "economizer_sensor_status" }?.options.contains("Needs Repair") == true)
         #expect(packageUnitDefinitions.contains { $0.key == "flue_temp" })
         #expect(packageUnitDefinitions.contains { $0.key == "co_ppm" })
         #expect(miniSplitDefinitions.contains { $0.key == "communication_voltage" })
@@ -1021,6 +1024,20 @@ struct GunnAire_OpsTests {
         #expect(definitionKeys.contains("flue_temp"))
         #expect(requiredKeys.contains("co_ppm"))
         #expect(requiredKeys.isSubset(of: definitionKeys))
+    }
+
+    @Test func packageUnitEconomizerDiagnosticsAreGroupedAndValidated() async throws {
+        let packageDefinitions = HVACEquipmentType.packageUnit.readingDefinitions
+        let mixedAir = try #require(packageDefinitions.first { $0.key == "mixed_air_temp" })
+        let damperPosition = try #require(packageDefinitions.first { $0.key == "outdoor_air_damper_position" })
+        let groupedDefinitions = ServiceCall.groupedTechnicalReadingDefinitions(for: packageDefinitions)
+
+        #expect(groupedDefinitions.first { $0.title == "Air Temperatures" }?.definitions.contains(mixedAir) == true)
+        #expect(groupedDefinitions.first { $0.title == "Airflow & Static" }?.definitions.contains(damperPosition) == true)
+        #expect(mixedAir.validationIssue(for: "72") == nil)
+        #expect(mixedAir.validationIssue(for: "165")?.contains("outside expected range") == true)
+        #expect(damperPosition.validationIssue(for: "35") == nil)
+        #expect(damperPosition.validationIssue(for: "135")?.contains("0-100") == true)
     }
 
     @Test func equipmentSpecificServiceActionsDriveMaintenanceCloseout() async throws {

@@ -194,6 +194,9 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         case .packageUnit:
             return common + coolingCircuitDefinitions + [
                 HVACTechnicalReadingDefinition(key: "economizer_operation", label: "Economizer", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "mixed_air_temp", label: "Mixed Air Temp", unit: "F"),
+                HVACTechnicalReadingDefinition(key: "outdoor_air_damper_position", label: "Outdoor Air Damper Position", unit: "%"),
+                HVACTechnicalReadingDefinition(key: "economizer_sensor_status", label: "Economizer Sensor", unit: nil, options: Self.conditionOptions),
                 HVACTechnicalReadingDefinition(key: "package_heat_type", label: "Package Heat Type", unit: nil, options: Self.packageHeatTypeOptions),
                 HVACTechnicalReadingDefinition(key: "ignition_type", label: "Ignition Type", unit: nil, options: Self.ignitionOptions),
                 HVACTechnicalReadingDefinition(key: "gas_pressure_inlet", label: "Gas Pressure Inlet", unit: "in. w.c."),
@@ -565,7 +568,7 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
 
     var expectedRange: ClosedRange<Double>? {
         switch key {
-        case "return_air_temp", "supply_air_temp", "outdoor_ambient_temp", "indoor_dry_bulb", "indoor_wet_bulb":
+        case "return_air_temp", "supply_air_temp", "outdoor_ambient_temp", "indoor_dry_bulb", "indoor_wet_bulb", "mixed_air_temp":
             return 30...130
         case "temperature_split", "indoor_head_delta_t", "target_superheat", "superheat", "target_subcooling", "subcooling", "temperature_rise":
             return 0...80
@@ -593,6 +596,8 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
             return 0...100
         case "airflow", "outside_air_cfm", "exhaust_air_cfm":
             return 0...10000
+        case "outdoor_air_damper_position":
+            return 0...100
         case "inverter_frequency":
             return 0...250
         default:
@@ -660,6 +665,12 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
             return "Hydronic pressure reading."
         case "airflow", "outside_air_cfm", "exhaust_air_cfm":
             return "Measured or balanced airflow."
+        case "mixed_air_temp":
+            return "Measure downstream of return/outdoor air mixing section."
+        case "outdoor_air_damper_position":
+            return "Record commanded or observed outdoor-air damper position."
+        case "economizer_sensor_status":
+            return "Verify outdoor, return, or enthalpy sensor operation."
         case "inverter_frequency":
             return "Inverter operating frequency when available."
         default:
