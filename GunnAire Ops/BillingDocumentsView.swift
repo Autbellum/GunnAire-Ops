@@ -1114,6 +1114,12 @@ GunnAire
                                     .buttonStyle(.borderedProminent)
                                     .tint(Color.brandGold)
                                     .foregroundStyle(Color.primaryBlack)
+                                    .disabled(!canCreateOrOpenInvoice(from: estimate))
+                                    if let message = invoiceCreationBlockedMessage(for: estimate) {
+                                        Text(message)
+                                            .font(.caption)
+                                            .foregroundColor(.orange)
+                                    }
                                 }
                             }
                             .padding(.vertical, 2)
@@ -1299,6 +1305,12 @@ GunnAire
                                     .buttonStyle(.borderedProminent)
                                     .tint(Color.brandGold)
                                     .foregroundStyle(Color.primaryBlack)
+                                    .disabled(!canCreateOrOpenInvoice(from: estimate))
+                                }
+                                if let message = invoiceCreationBlockedMessage(for: estimate) {
+                                    Text(message)
+                                        .font(.caption2)
+                                        .foregroundColor(.orange)
                                 }
                             }
                             .padding(.vertical, 2)
@@ -1340,6 +1352,12 @@ GunnAire
                                         createInvoiceFromEstimate(estimate)
                                     }
                                     .buttonStyle(.bordered)
+                                    .disabled(!canCreateOrOpenInvoice(from: estimate))
+                                }
+                                if let message = invoiceCreationBlockedMessage(for: estimate) {
+                                    Text(message)
+                                        .font(.caption2)
+                                        .foregroundColor(.orange)
                                 }
                             }
                             .padding(.vertical, 2)
@@ -1796,7 +1814,12 @@ GunnAire
                                         createInvoiceFromEstimate(estimate)
                                     }
                                     .buttonStyle(.bordered)
-                                    .disabled(estimate.status == "invoiced")
+                                    .disabled(estimate.status == "invoiced" || !canCreateOrOpenInvoice(from: estimate))
+                                    if let message = invoiceCreationBlockedMessage(for: estimate) {
+                                        Text(message)
+                                            .font(.caption2)
+                                            .foregroundColor(.orange)
+                                    }
 
                                     Button("Generate Estimate PDF") {
                                         generateEstimateDocument(estimate)
@@ -4017,6 +4040,18 @@ GunnAire
     private func serviceCall(for estimate: Estimate) -> ServiceCall? {
         guard let serviceCallID = estimate.serviceCallID else { return nil }
         return serviceCalls.first(where: { $0.id == serviceCallID })
+    }
+
+    private func canCreateOrOpenInvoice(from estimate: Estimate) -> Bool {
+        if invoice(for: estimate) != nil {
+            return true
+        }
+        return serviceCall(for: estimate)?.canCreateInvoiceDocument ?? true
+    }
+
+    private func invoiceCreationBlockedMessage(for estimate: Estimate) -> String? {
+        guard invoice(for: estimate) == nil else { return nil }
+        return serviceCall(for: estimate)?.invoiceCreationBlockedMessage
     }
 
     private func serviceCall(for invoice: Invoice) -> ServiceCall? {
