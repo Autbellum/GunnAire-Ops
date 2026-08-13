@@ -1145,6 +1145,27 @@ struct GunnAire_OpsTests {
         #expect(readiness.missingItems.contains("Invoice created"))
     }
 
+    @Test func jobCloseoutReadinessSummarizesPrimaryBlockersWithRemainderCount() async throws {
+        let readiness = JobCloseoutReadiness(
+            requiredItems: [
+                "Work completed",
+                "Technical report complete",
+                "Onsite report generated",
+                "Invoice created"
+            ],
+            missingItems: [
+                "Work completed",
+                "Technical report complete",
+                "Onsite report generated",
+                "Invoice created"
+            ]
+        )
+
+        #expect(readiness.primaryMissingItem == "Work completed")
+        #expect(readiness.missingSummary(limit: 2) == "Work completed, Technical report complete +2 more")
+        #expect(readiness.missingSummary(limit: 10) == "Work completed, Technical report complete, Onsite report generated, Invoice created")
+    }
+
     @Test func jobCloseoutReadinessMarksCompletedSyncedJobsReady() async throws {
         let customer = Customer(name: "Closeout Customer")
         let call = ServiceCall(

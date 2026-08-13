@@ -1247,7 +1247,7 @@ struct OnsiteDocumentationView: View {
         if readiness.isReady {
             return readiness.statusLabel
         }
-        return readiness.missingItems.prefix(3).joined(separator: ", ")
+        return readiness.missingSummary(limit: 3)
     }
 
     private func documentationQueueLabel(for call: ServiceCall) -> String {

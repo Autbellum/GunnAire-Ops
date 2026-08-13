@@ -619,6 +619,20 @@ struct JobCloseoutReadiness: Equatable {
         missingItems.isEmpty
     }
 
+    var primaryMissingItem: String? {
+        missingItems.first
+    }
+
+    func missingSummary(limit: Int = 3) -> String {
+        guard !missingItems.isEmpty else {
+            return statusLabel
+        }
+        let visibleItems = missingItems.prefix(max(1, limit))
+        let remainder = missingItems.count - visibleItems.count
+        let summary = visibleItems.joined(separator: ", ")
+        return remainder > 0 ? "\(summary) +\(remainder) more" : summary
+    }
+
     var statusLabel: String {
         isReady ? "Ready for closeout" : "Needs closeout details"
     }

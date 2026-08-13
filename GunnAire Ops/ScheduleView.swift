@@ -853,6 +853,12 @@ struct ScheduleView: View {
             }
             .font(.caption2)
             .foregroundColor(.secondary)
+            if let closeoutAttention = closeoutAttentionText(for: call) {
+                Label(closeoutAttention, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(.orange)
+                    .lineLimit(2)
+            }
         }
     }
 
@@ -1075,7 +1081,21 @@ struct ScheduleView: View {
     private func closeoutReason(for call: ServiceCall) -> String {
         guard let invoice = invoice(for: call) else { return "Invoice needs closeout" }
         let readiness = closeoutReadiness(for: call, invoice: invoice)
-        return readiness.missingItems.first ?? readiness.statusLabel
+        return readiness.missingSummary(limit: 1)
+    }
+
+    private func closeoutAttentionText(for call: ServiceCall) -> String? {
+        guard isAdminUser,
+              call.linkedInvoiceID != nil ||
+                call.workCompletedChecklist ||
+                call.documentationChecklist ||
+                call.status == .completed ||
+                call.status == .invoiced else {
+            return nil
+        }
+        let readiness = closeoutReadiness(for: call, invoice: invoice(for: call))
+        guard !readiness.isReady else { return nil }
+        return "Closeout: \(readiness.missingSummary(limit: 2))"
     }
 
     private func closeoutReadiness(for call: ServiceCall, invoice: Invoice?) -> JobCloseoutReadiness {
