@@ -1,5 +1,7 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
+import UIKit
 
 @MainActor
 enum CustomerDataMaintenance {
@@ -14,6 +16,7 @@ enum CustomerDataMaintenance {
         var payments = 0
         var contracts = 0
         var timeEntries = 0
+        var documentAttachments = 0
     }
 
     private static let genericCalendarCustomerNames: Set<String> = [
@@ -62,6 +65,7 @@ enum CustomerDataMaintenance {
         let payments = (try? modelContext.fetch(FetchDescriptor<Payment>())) ?? []
         let contracts = (try? modelContext.fetch(FetchDescriptor<RecurringMaintenanceContract>())) ?? []
         let timeEntries = (try? modelContext.fetch(FetchDescriptor<TimeEntry>())) ?? []
+        let documentAttachments = (try? modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())) ?? []
 
         var summary = DeletionSummary()
         for customer in genericCustomers {
@@ -73,7 +77,8 @@ enum CustomerDataMaintenance {
                 invoices: invoices,
                 payments: payments,
                 contracts: contracts,
-                timeEntries: timeEntries
+                timeEntries: timeEntries,
+                documentAttachments: documentAttachments
             ))
         }
         try? modelContext.save()
@@ -88,7 +93,8 @@ enum CustomerDataMaintenance {
         invoices: [Invoice],
         payments: [Payment],
         contracts: [RecurringMaintenanceContract],
-        timeEntries: [TimeEntry]
+        timeEntries: [TimeEntry],
+        documentAttachments: [ServiceDocumentAttachment]
     ) -> DeletionSummary {
         var summary = DeletionSummary()
         let customerID = customer.id
@@ -123,6 +129,10 @@ enum CustomerDataMaintenance {
             modelContext.delete(contract)
             summary.contracts += 1
         }
+        for attachment in documentAttachments where attachment.customer?.id == customerID {
+            modelContext.delete(attachment)
+            summary.documentAttachments += 1
+        }
         modelContext.delete(customer)
         summary.customers += 1
         return summary
@@ -138,15 +148,16 @@ private extension CustomerDataMaintenance.DeletionSummary {
         payments += other.payments
         contracts += other.contracts
         timeEntries += other.timeEntries
+        documentAttachments += other.documentAttachments
     }
 
     var deletedAnything: Bool {
-        customers + serviceCalls + estimates + invoices + payments + contracts + timeEntries > 0
+        customers + serviceCalls + estimates + invoices + payments + contracts + timeEntries + documentAttachments > 0
     }
 
     var customerScreenMessage: String {
         deletedAnything
-            ? "Cleaned \(customers) calendar-created customer\(customers == 1 ? "" : "s") and \(serviceCalls) related local job\(serviceCalls == 1 ? "" : "s")."
+            ? "Cleaned \(customers) calendar-created customer\(customers == 1 ? "" : "s"), \(serviceCalls) related local job\(serviceCalls == 1 ? "" : "s"), and \(documentAttachments) attachment\(documentAttachments == 1 ? "" : "s")."
             : "No calendar-created generic customers found."
     }
 }
@@ -160,6 +171,7 @@ struct CustomersView: View {
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
 
     @State private var newCustomerName = ""
     @State private var newCustomerEmail = ""
@@ -1476,6 +1488,7 @@ private struct CustomerEditorView: View {
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
 
     let customer: Customer
 
@@ -1488,6 +1501,11 @@ private struct CustomerEditorView: View {
     @State private var customerActionMessage: String?
     @State private var isSyncingCustomer = false
     @State private var showingDeleteConfirmation = false
+    @State private var showingCustomerFileImporter = false
+    @State private var showingCustomerCamera = false
+    @State private var customerAttachmentKind: ServiceDocumentAttachmentKind = .customerDocument
+    @State private var customerAttachmentCaption = ""
+    @State private var customerAttachmentMessage: String?
 
     private var customerServiceCalls: [ServiceCall] {
         serviceCalls.filter { $0.customer.id == customer.id }
@@ -1495,6 +1513,10 @@ private struct CustomerEditorView: View {
 
     private var recentCustomerServiceCalls: [ServiceCall] {
         Array(customerServiceCalls.prefix(5))
+    }
+
+    private var customerAttachments: [ServiceDocumentAttachment] {
+        documentAttachments.filter { $0.customer?.id == customer.id }
     }
 
     private var openCustomerInvoiceBalances: [(invoice: Invoice, balance: Double)] {
@@ -1646,6 +1668,83 @@ private struct CustomerEditorView: View {
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(customerHealthTint)
+                    }
+                }
+
+                Section("Documents & Photos") {
+                    Picker("Attachment Type", selection: $customerAttachmentKind) {
+                        Text(ServiceDocumentAttachmentKind.customerDocument.label).tag(ServiceDocumentAttachmentKind.customerDocument)
+                        Text(ServiceDocumentAttachmentKind.diagnosticPhoto.label).tag(ServiceDocumentAttachmentKind.diagnosticPhoto)
+                        Text(ServiceDocumentAttachmentKind.receipt.label).tag(ServiceDocumentAttachmentKind.receipt)
+                        Text(ServiceDocumentAttachmentKind.other.label).tag(ServiceDocumentAttachmentKind.other)
+                    }
+
+                    TextField("Caption or notes", text: $customerAttachmentCaption, axis: .vertical)
+                        .lineLimit(2...4)
+
+                    HStack {
+                        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                            Button {
+                                showingCustomerCamera = true
+                            } label: {
+                                Label("Camera", systemImage: "camera")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        Button {
+                            showingCustomerFileImporter = true
+                        } label: {
+                            Label("Files", systemImage: "paperclip")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if let customerAttachmentMessage {
+                        Text(customerAttachmentMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if customerAttachments.isEmpty {
+                        Text("No customer documents or photos saved yet.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(customerAttachments.prefix(12)) { attachment in
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: attachment.isImage ? "photo" : "doc")
+                                    .foregroundColor(Color.brandGold)
+                                    .frame(width: 24)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(attachment.displayName)
+                                        .font(.subheadline.weight(.semibold))
+                                        .lineLimit(1)
+                                    Text(attachment.kind.label)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    if let caption = attachment.caption, !caption.isEmpty {
+                                        Text(caption)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(2)
+                                    }
+                                    if attachment.backendDocumentID != nil {
+                                        Text("Synced to company storage")
+                                            .font(.caption2)
+                                            .foregroundColor(.green)
+                                    }
+                                }
+                                Spacer()
+                                Button(role: .destructive) {
+                                    removeCustomerAttachment(attachment)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Delete attachment")
+                            }
+                            .padding(.vertical, 3)
+                        }
                     }
                 }
 
@@ -1812,6 +1911,18 @@ private struct CustomerEditorView: View {
             } message: {
                 Text("This removes this customer, local jobs, estimates, invoices, payments, and service agreements tied to the customer. QuickBooks records are not deleted.")
             }
+            .sheet(isPresented: $showingCustomerCamera) {
+                CustomerAttachmentCameraPicker(sourceType: .camera) { image in
+                    handleCapturedCustomerImage(image)
+                }
+            }
+            .fileImporter(
+                isPresented: $showingCustomerFileImporter,
+                allowedContentTypes: [.image, .pdf, .plainText, .data],
+                allowsMultipleSelection: true
+            ) { result in
+                handleImportedCustomerFiles(result)
+            }
         }
         .tint(Color.brandGold)
     }
@@ -1831,6 +1942,127 @@ private struct CustomerEditorView: View {
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
+    private func handleCapturedCustomerImage(_ image: UIImage) {
+        guard let data = image.jpegData(compressionQuality: 0.84) else {
+            customerAttachmentMessage = "Could not save the captured photo."
+            return
+        }
+        saveCustomerAttachment(
+            data: data,
+            filename: "customer-photo-\(UUID().uuidString).jpg",
+            contentType: "image/jpeg"
+        )
+    }
+
+    private func handleImportedCustomerFiles(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            customerAttachmentMessage = "File import failed: \(error.localizedDescription)"
+        case .success(let urls):
+            guard !urls.isEmpty else { return }
+            for url in urls {
+                let didStartAccess = url.startAccessingSecurityScopedResource()
+                defer {
+                    if didStartAccess {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+                do {
+                    let data = try Data(contentsOf: url)
+                    saveCustomerAttachment(
+                        data: data,
+                        filename: url.lastPathComponent.isEmpty ? "customer-document-\(UUID().uuidString)" : url.lastPathComponent,
+                        contentType: contentType(for: url)
+                    )
+                } catch {
+                    customerAttachmentMessage = "Could not import \(url.lastPathComponent): \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func saveCustomerAttachment(data: Data, filename: String, contentType: String) {
+        do {
+            let storedURL = try persistCustomerAttachmentData(data, filename: filename)
+            let attachment = ServiceDocumentAttachment(
+                customer: customer,
+                serviceCallID: nil,
+                invoiceID: nil,
+                estimateID: nil,
+                kind: customerAttachmentKind,
+                displayName: filename,
+                caption: customerAttachmentCaption.nilIfBlank,
+                localFilePath: storedURL.path,
+                contentType: contentType,
+                fileSizeBytes: data.count
+            )
+            modelContext.insert(attachment)
+            try modelContext.save()
+            customerAttachmentCaption = ""
+            customerAttachmentMessage = "Saved \(filename) to \(customer.name)."
+            syncCustomerAttachmentIfPossible(attachment, data: data)
+        } catch {
+            customerAttachmentMessage = "Attachment save failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistCustomerAttachmentData(_ data: Data, filename: String) throws -> URL {
+        let documentsURL = try FileManager.default.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let folderURL = documentsURL.appendingPathComponent("GunnAire Attachments", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        let fileURL = folderURL.appendingPathComponent("\(UUID().uuidString)-\(sanitizeAttachmentFilename(filename))")
+        try data.write(to: fileURL, options: .atomic)
+        return fileURL
+    }
+
+    private func sanitizeAttachmentFilename(_ filename: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._- "))
+        let sanitized = filename.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
+        let value = String(sanitized).trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? "customer-attachment" : value
+    }
+
+    private func syncCustomerAttachmentIfPossible(_ attachment: ServiceDocumentAttachment, data: Data) {
+        guard GunnAireBackendService.isConfigured else { return }
+        Task {
+            do {
+                let response = try await GunnAireBackendService.uploadDocument(
+                    data: data,
+                    filename: attachment.displayName,
+                    contentType: attachment.contentType,
+                    kind: attachment.kindRaw,
+                    serviceCallID: nil,
+                    customerName: customer.name
+                )
+                attachment.backendDocumentID = response.id
+                try? modelContext.save()
+            } catch {
+                customerAttachmentMessage = "Attachment saved locally. Company storage upload failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func removeCustomerAttachment(_ attachment: ServiceDocumentAttachment) {
+        let fileURL = attachment.localFileURL
+        modelContext.delete(attachment)
+        try? modelContext.save()
+        try? FileManager.default.removeItem(at: fileURL)
+        customerAttachmentMessage = "Removed attachment from \(customer.name)."
+    }
+
+    private func contentType(for url: URL) -> String {
+        if let type = UTType(filenameExtension: url.pathExtension),
+           let mimeType = type.preferredMIMEType {
+            return mimeType
+        }
+        return "application/octet-stream"
+    }
+
     private func deleteCustomer() {
         _ = CustomerDataMaintenance.deleteCustomer(
             customer,
@@ -1840,7 +2072,8 @@ private struct CustomerEditorView: View {
             invoices: invoices,
             payments: payments,
             contracts: recurringContracts,
-            timeEntries: timeEntries
+            timeEntries: timeEntries,
+            documentAttachments: documentAttachments
         )
         try? modelContext.save()
         dismiss()
@@ -1901,6 +2134,44 @@ private struct CustomerEditorView: View {
             dismiss()
         case .completeProfile, .openCustomer:
             break
+        }
+    }
+}
+
+private struct CustomerAttachmentCameraPicker: UIViewControllerRepresentable {
+    let sourceType: UIImagePickerController.SourceType
+    let onImagePicked: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = sourceType
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        private let parent: CustomerAttachmentCameraPicker
+
+        init(_ parent: CustomerAttachmentCameraPicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage {
+                parent.onImagePicked(image)
+            }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
         }
     }
 }

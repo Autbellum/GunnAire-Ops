@@ -148,7 +148,7 @@ final class ServiceCall {
     @Attribute(.unique) var id: UUID
     var googleCalendarID: String?
     var googleEventID: String?
-    var googleEventManagedByApp: Bool
+    var googleEventManagedByApp: Bool = false
     var eventTitle: String?
     var siteAddress: String?
     var equipmentName: String?
