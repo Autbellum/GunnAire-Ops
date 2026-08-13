@@ -1250,6 +1250,14 @@ struct OnsiteDocumentationView: View {
         return readiness.missingSummary(limit: 3)
     }
 
+    private func billingDocumentationSummary(for call: ServiceCall) -> String? {
+        call.billingDocumentationPackageSummary(
+            invoice: invoice(for: call),
+            estimate: estimate(for: call),
+            attachments: attachments(for: call)
+        )
+    }
+
     private func documentationQueueLabel(for call: ServiceCall) -> String {
         let hasDocumentation = call.linkedInvoiceID != nil || call.linkedEstimateID != nil || call.documentationStartedAt != nil
         switch call.type {
@@ -1313,6 +1321,11 @@ struct OnsiteDocumentationView: View {
                                             Text(closeoutSummary(for: linkedCall, invoice: invoice))
                                                 .font(.caption2)
                                                 .foregroundColor(readiness.isReady ? .green : .orange)
+                                            if let packageSummary = billingDocumentationSummary(for: linkedCall) {
+                                                Text(packageSummary)
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                            }
                                         } else if invoice.finalizedAt == nil {
                                             Text("Invoice finalization missing.")
                                                 .font(.caption2)
@@ -1409,6 +1422,12 @@ struct OnsiteDocumentationView: View {
                                     Text("Checklist \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                    if let packageSummary = billingDocumentationSummary(for: call) {
+                                        Text(packageSummary)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(2)
+                                    }
                                     if call.linkedInvoiceID != nil {
                                         Text(closeoutSummary(for: call, invoice: invoice(for: call)))
                                             .font(.caption2)

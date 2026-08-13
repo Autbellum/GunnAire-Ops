@@ -1976,6 +1976,22 @@ final class ServiceCall {
         )
     }
 
+    func billingDocumentationPackageSummary(
+        invoice: Invoice?,
+        estimate: Estimate?,
+        attachments: [ServiceDocumentAttachment]
+    ) -> String? {
+        if let invoice {
+            let status = invoiceDocumentationStatus(invoice: invoice, attachments: attachments)
+            return "\(status.statusLabel) - \(status.summary)"
+        }
+        if let estimate {
+            let status = estimateDocumentationStatus(estimate: estimate, attachments: attachments)
+            return "\(status.statusLabel) - \(status.summary)"
+        }
+        return nil
+    }
+
     private var requiresFieldPhotoEvidence: Bool {
         switch type {
         case .service, .install, .maintenance:

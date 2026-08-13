@@ -1717,6 +1717,74 @@ struct GunnAire_OpsTests {
         #expect(synced.syncedQuickBooksAttachmentCount == 3)
     }
 
+    @Test func billingDocumentationPackageSummaryPrioritizesInvoicePackage() async throws {
+        let customer = Customer(name: "Package Summary Customer")
+        let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer)
+        let estimate = Estimate(serviceCallID: call.id, customer: customer, quickBooksID: "QB-EST", amount: 400)
+        let invoice = Invoice(serviceCallID: call.id, customer: customer, quickBooksID: "QB-INV", amount: 400)
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            estimateID: estimate.id,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "ATTACH-1"
+        )
+        let photo = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            estimateID: estimate.id,
+            kind: .afterPhoto,
+            displayName: "after.jpg",
+            localFilePath: "/tmp/after.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "ATTACH-2"
+        )
+
+        let summary = try #require(call.billingDocumentationPackageSummary(
+            invoice: invoice,
+            estimate: estimate,
+            attachments: [report, photo]
+        ))
+
+        #expect(summary.contains("Invoice documentation ready"))
+        #expect(summary.contains("1 onsite report"))
+        #expect(summary.contains("1 photo"))
+        #expect(summary.contains("2 synced"))
+    }
+
+    @Test func billingDocumentationPackageSummaryFallsBackToEstimatePackage() async throws {
+        let customer = Customer(name: "Estimate Package Summary Customer")
+        let call = ServiceCall(type: .estimate, scheduledDate: Date(), customer: customer)
+        let estimate = Estimate(serviceCallID: call.id, customer: customer, quickBooksID: "QB-EST", amount: 400)
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            estimateID: estimate.id,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let summary = try #require(call.billingDocumentationPackageSummary(
+            invoice: nil,
+            estimate: estimate,
+            attachments: [report]
+        ))
+
+        #expect(summary.contains("QuickBooks attachments pending"))
+        #expect(summary.contains("1 onsite report"))
+        #expect(summary.contains("1 pending"))
+    }
+
     @Test func jobCloseoutReadinessRequiresQuickBooksInvoiceSync() async throws {
         let customer = Customer(name: "Closeout Customer")
         let call = ServiceCall(
