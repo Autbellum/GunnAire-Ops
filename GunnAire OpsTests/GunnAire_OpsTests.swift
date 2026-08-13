@@ -5804,7 +5804,7 @@ struct GunnAire_OpsTests {
         )
 
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: importedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall))
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: newAppCall) == true)
     }
 
@@ -5844,7 +5844,7 @@ struct GunnAire_OpsTests {
         )
 
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: importedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall))
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: newAppCall) == true)
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: importedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: appOwnedCall) == false)
@@ -5920,7 +5920,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func googleCalendarAppOwnedEventsCanPublishScheduleOnlyUpdatesAfterGoogleCreation() async throws {
+    @Test func googleCalendarAppOwnedEventsDoNotPublishUpdatesAfterGoogleCreation() async throws {
         let customer = Customer(name: "Calendar Customer")
         let appOwnedCall = ServiceCall(
             googleCalendarID: "primary",
@@ -5936,8 +5936,8 @@ struct GunnAire_OpsTests {
         )
 
         #expect(GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(appOwnedCall) == true)
-        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall))
-        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall))
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: appOwnedCall) == true)
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: appOwnedCall) == false)
     }
