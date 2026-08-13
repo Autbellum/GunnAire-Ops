@@ -507,12 +507,25 @@ enum GoogleCalendarScheduleSync {
         }
 
         let currentCalendarID = call.googleCalendarID ?? targetCalendarID
-        let canUpdateExistingEvent = contains(currentCalendarID, in: writableCalendarIDs) &&
-            normalized(currentCalendarID) == normalized(targetCalendarID)
 
         if let eventID = call.googleEventID,
-           !eventID.isEmpty,
-           canUpdateExistingEvent {
+           !eventID.isEmpty {
+            guard contains(currentCalendarID, in: writableCalendarIDs) else {
+                exportNext(
+                    index: index + 1,
+                    exportedCount: exportedCount,
+                    skippedCount: skippedCount + 1,
+                    calls: calls,
+                    auth: auth,
+                    modelContext: modelContext,
+                    remoteEventsByKey: remoteEventsByKey,
+                    remoteEventsByFingerprint: remoteEventsByFingerprint,
+                    availableCalendarIDs: availableCalendarIDs,
+                    writableCalendarIDs: writableCalendarIDs,
+                    completion: completion
+                )
+                return
+            }
             guard isCalendarCallLocallyEdited(call) else {
                 exportNext(
                     index: index + 1,
@@ -561,9 +574,6 @@ enum GoogleCalendarScheduleSync {
                 finish(remote.calendarID, result)
             }
         } else {
-            if call.googleCalendarID != nil, normalized(call.googleCalendarID ?? "") != normalized(targetCalendarID) {
-                call.googleEventID = nil
-            }
             let event = makeGoogleEvent(for: call, existingSummary: nil, preserveExternalDetails: false)
             auth.createCalendarEvent(calendarID: targetCalendarID, event: event) { result in
                 if case .success = result {
@@ -579,6 +589,11 @@ enum GoogleCalendarScheduleSync {
             return true
         }
         return call.googleEventManagedByApp
+    }
+
+    static func shouldSelectGoogleCalendarBeforeCreate(for call: ServiceCall) -> Bool {
+        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+            shouldAllowGoogleCalendarWrite(for: call)
     }
 
     static func makeScheduleOnlyPatch(for call: ServiceCall) -> GoogleCalendarEventPatch {

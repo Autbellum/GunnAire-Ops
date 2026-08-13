@@ -1446,9 +1446,8 @@ struct OperationsDashboardView: View {
         let originalStart = call.scheduledDate
         let nextStart = nextAvailableStart(for: technician, proposedStart: call.scheduledDate, duration: call.duration)
         call.assignedTechnician = technician
-        if GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call) {
+        if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
             call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
-            call.googleEventID = nil
         }
 
         if let nextStart, nextStart > originalStart {

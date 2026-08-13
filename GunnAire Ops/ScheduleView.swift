@@ -1299,18 +1299,16 @@ GunnAire
 
     private func assign(_ call: ServiceCall, to technician: Technician) {
         call.assignedTechnician = technician
-        if GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call) {
+        if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
             call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
-            call.googleEventID = nil
         }
         publishToGoogleCalendar(call)
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician, reschedulingTo newStart: Date) {
         call.assignedTechnician = technician
-        if GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call) {
+        if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
             call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
-            call.googleEventID = nil
         }
         call.scheduledDate = newStart
         publishToGoogleCalendar(call)

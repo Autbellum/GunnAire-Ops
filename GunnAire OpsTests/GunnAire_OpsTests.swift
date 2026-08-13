@@ -383,6 +383,36 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: newAppCall) == true)
     }
 
+    @MainActor
+    @Test func googleCalendarRoutingOnlyChangesBeforeEventExists() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let linkedAppCall = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "google-event-123",
+            googleEventManagedByApp: true,
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let linkedExternalCall = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "external-event-123",
+            googleEventManagedByApp: false,
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let newCall = ServiceCall(
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        #expect(GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: linkedAppCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: linkedExternalCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: newCall) == true)
+    }
+
     @Test func splashVideoLocatorPrefersStoredVideoOverBundledVideo() async throws {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -540,6 +540,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         authorizedJSONRequest(url: url, method: "POST", body: event, completion: completion)
     }
 
+    @available(*, unavailable, message: "Use patchCalendarEvent with GoogleCalendarEventPatch so existing Google details are preserved.")
     func updateCalendarEvent(calendarID: String = "primary", eventID: String, event: GoogleWritableCalendarEvent, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
         let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
         let encodedEventID = eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID

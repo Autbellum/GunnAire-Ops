@@ -2075,7 +2075,7 @@ struct EditServiceCallView: View {
         call.customer = customer
         call.assignedTechnician = technician
         call.status = status
-        if GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call) {
+        if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
             call.googleCalendarID = ServiceCalendarRouting.validSelection(
                 selectedCalendarID,
                 technician: technician,
