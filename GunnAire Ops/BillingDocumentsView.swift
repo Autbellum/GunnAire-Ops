@@ -2924,7 +2924,9 @@ GunnAire
     private func linkExistingInvoiceAttachments(to invoice: Invoice, serviceCallID: UUID?) {
         guard let serviceCallID else { return }
         let invoiceAttachments = attachments.filter {
-            $0.serviceCallID == serviceCallID && $0.canLinkToQuickBooksInvoiceAttachment
+            $0.serviceCallID == serviceCallID &&
+                $0.canLinkToQuickBooksInvoiceAttachment &&
+                $0.customerMatches(invoice.customer)
         }
         guard !invoiceAttachments.isEmpty else { return }
 

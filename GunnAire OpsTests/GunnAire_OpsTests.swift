@@ -1465,6 +1465,7 @@ struct GunnAire_OpsTests {
 
     @Test func invoiceAttachmentUploadEligibilityRequiresLinkedQuickBooksInvoice() async throws {
         let customer = Customer(name: "Report Customer")
+        let otherCustomer = Customer(name: "Other Report Customer")
         let invoice = Invoice(customer: customer, quickBooksID: "123", amount: 250)
         let estimate = Estimate(customer: customer, quickBooksID: "789", amount: 250)
         let unSyncedReport = ServiceDocumentAttachment(
@@ -1528,6 +1529,26 @@ struct GunnAire_OpsTests {
             contentType: "image/jpeg",
             fileSizeBytes: 1024
         )
+        let wrongCustomerInvoiceAttachment = ServiceDocumentAttachment(
+            customer: otherCustomer,
+            serviceCallID: UUID(),
+            invoiceID: invoice.id,
+            kind: .customerDocument,
+            displayName: "wrong-customer-invoice.pdf",
+            localFilePath: "/tmp/wrong-customer-invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let wrongCustomerEstimateAttachment = ServiceDocumentAttachment(
+            customer: otherCustomer,
+            serviceCallID: UUID(),
+            estimateID: estimate.id,
+            kind: .customerDocument,
+            displayName: "wrong-customer-estimate.pdf",
+            localFilePath: "/tmp/wrong-customer-estimate.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
         let localOnlyInvoice = Invoice(customer: customer, amount: 250)
         let localOnlyEstimate = Estimate(customer: customer, amount: 250)
 
@@ -1536,8 +1557,10 @@ struct GunnAire_OpsTests {
         #expect(photo.canUploadToQuickBooksInvoice(invoice) == true)
         #expect(invoiceSupport.canUploadToQuickBooksInvoice(invoice) == true)
         #expect(receipt.canUploadToQuickBooksInvoice(invoice) == false)
+        #expect(wrongCustomerInvoiceAttachment.canUploadToQuickBooksInvoice(invoice) == false)
         #expect(unSyncedReport.canUploadToQuickBooksInvoice(localOnlyInvoice) == false)
         #expect(estimateSupport.canUploadToQuickBooksEstimate(estimate) == true)
+        #expect(wrongCustomerEstimateAttachment.canUploadToQuickBooksEstimate(estimate) == false)
         #expect(estimateSupport.canUploadToQuickBooksEstimate(localOnlyEstimate) == false)
         #expect(receipt.canUploadToQuickBooksEstimate(estimate) == false)
     }
