@@ -261,6 +261,8 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
             HVACTechnicalReadingDefinition(key: "indoor_dry_bulb", label: "Indoor Dry Bulb", unit: "F"),
             HVACTechnicalReadingDefinition(key: "suction_pressure", label: "Suction Pressure", unit: "psig"),
             HVACTechnicalReadingDefinition(key: "liquid_pressure", label: "Liquid Pressure", unit: "psig"),
+            HVACTechnicalReadingDefinition(key: "suction_saturation_temp", label: "Suction Saturation Temp", unit: "F"),
+            HVACTechnicalReadingDefinition(key: "liquid_saturation_temp", label: "Liquid Saturation Temp", unit: "F"),
             HVACTechnicalReadingDefinition(key: "suction_line_temp", label: "Suction Line Temp", unit: "F"),
             HVACTechnicalReadingDefinition(key: "liquid_line_temp", label: "Liquid Line Temp", unit: "F"),
             HVACTechnicalReadingDefinition(key: "target_superheat", label: "Target Superheat", unit: "F"),
@@ -643,6 +645,54 @@ final class ServiceCall {
                   let encoded = String(data: data, encoding: .utf8) {
             serviceReportReadingsJSON = encoded
         }
+    }
+
+    func calculateTemperatureSplitReading() -> Double? {
+        guard let returnTemp = numericTechnicalReading(for: "return_air_temp"),
+              let supplyTemp = numericTechnicalReading(for: "supply_air_temp") else {
+            return nil
+        }
+        let split = abs(returnTemp - supplyTemp)
+        setTechnicalReading(Self.formattedTechnicalReading(split), for: "temperature_split")
+        return split
+    }
+
+    func calculateSuperheatReading() -> Double? {
+        guard let suctionLineTemp = numericTechnicalReading(for: "suction_line_temp"),
+              let suctionSaturationTemp = numericTechnicalReading(for: "suction_saturation_temp") else {
+            return nil
+        }
+        let superheat = suctionLineTemp - suctionSaturationTemp
+        setTechnicalReading(Self.formattedTechnicalReading(superheat), for: "superheat")
+        return superheat
+    }
+
+    func calculateSubcoolingReading() -> Double? {
+        guard let liquidLineTemp = numericTechnicalReading(for: "liquid_line_temp"),
+              let liquidSaturationTemp = numericTechnicalReading(for: "liquid_saturation_temp") else {
+            return nil
+        }
+        let subcooling = liquidSaturationTemp - liquidLineTemp
+        setTechnicalReading(Self.formattedTechnicalReading(subcooling), for: "subcooling")
+        return subcooling
+    }
+
+    func calculateTotalExternalStaticReading() -> Double? {
+        guard let returnStatic = numericTechnicalReading(for: "static_pressure_return"),
+              let supplyStatic = numericTechnicalReading(for: "static_pressure_supply") else {
+            return nil
+        }
+        let totalExternalStatic = abs(returnStatic) + abs(supplyStatic)
+        setTechnicalReading(Self.formattedTechnicalReading(totalExternalStatic), for: "total_external_static")
+        return totalExternalStatic
+    }
+
+    private func numericTechnicalReading(for key: String) -> Double? {
+        Double(technicalReading(for: key).replacingOccurrences(of: ",", with: "."))
+    }
+
+    private static func formattedTechnicalReading(_ value: Double) -> String {
+        String(format: "%.1f", value)
     }
 
     var populatedTechnicalReadingRows: [(label: String, value: String)] {

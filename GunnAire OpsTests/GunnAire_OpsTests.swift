@@ -136,11 +136,19 @@ struct GunnAire_OpsTests {
         let superheatDefinition = HVACEquipmentType.splitSystemAC.readingDefinitions.first {
             $0.key == "superheat"
         }
+        let suctionSaturationDefinition = HVACEquipmentType.splitSystemAC.readingDefinitions.first {
+            $0.key == "suction_saturation_temp"
+        }
+        let liquidSaturationDefinition = HVACEquipmentType.splitSystemAC.readingDefinitions.first {
+            $0.key == "liquid_saturation_temp"
+        }
 
         #expect(refrigerantDefinition?.options.contains("R-410A") == true)
         #expect(refrigerantDefinition?.options.contains("R-454B") == true)
         #expect(meteringDeviceDefinition?.options.contains("TXV") == true)
         #expect(superheatDefinition?.options.isEmpty == true)
+        #expect(suctionSaturationDefinition?.displayLabel == "Suction Saturation Temp (F)")
+        #expect(liquidSaturationDefinition?.displayLabel == "Liquid Saturation Temp (F)")
     }
 
     @Test func equipmentSpecificReportDefinitionsIncludeFieldServiceControls() async throws {
@@ -213,6 +221,45 @@ struct GunnAire_OpsTests {
                 section.rows.contains { $0.label == "Return Air Temp (F)" && $0.value == "72" }
         })
         #expect(sections.flatMap(\.rows).contains { $0.label == "Subcooling (F)" } == false)
+    }
+
+    @Test func serviceCallCalculatesTechnicalReadingsFromFieldInputs() async throws {
+        let customer = Customer(name: "Diagnostic Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("75", for: "return_air_temp")
+        call.setTechnicalReading("56", for: "supply_air_temp")
+        call.setTechnicalReading("52", for: "suction_line_temp")
+        call.setTechnicalReading("40", for: "suction_saturation_temp")
+        call.setTechnicalReading("90", for: "liquid_line_temp")
+        call.setTechnicalReading("100", for: "liquid_saturation_temp")
+
+        #expect(call.calculateTemperatureSplitReading() == 19)
+        #expect(call.calculateSuperheatReading() == 12)
+        #expect(call.calculateSubcoolingReading() == 10)
+        #expect(call.technicalReading(for: "temperature_split") == "19.0")
+        #expect(call.technicalReading(for: "superheat") == "12.0")
+        #expect(call.technicalReading(for: "subcooling") == "10.0")
+    }
+
+    @Test func airHandlerCalculatesTotalExternalStaticFromReturnAndSupplyReadings() async throws {
+        let customer = Customer(name: "Static Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.airHandler.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("-0.32", for: "static_pressure_return")
+        call.setTechnicalReading("0.28", for: "static_pressure_supply")
+
+        let totalStatic = try #require(call.calculateTotalExternalStaticReading())
+        #expect(abs(totalStatic - 0.6) < 0.001)
+        #expect(call.technicalReading(for: "total_external_static") == "0.6")
     }
 
     @Test func quickBooksMimeTypeDetection() async throws {

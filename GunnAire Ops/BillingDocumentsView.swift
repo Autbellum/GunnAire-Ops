@@ -1909,6 +1909,60 @@ GunnAire
                 }
             }
 
+            if call.technicalReadingDefinitions.contains(where: { $0.key == "superheat" }) {
+                HStack {
+                    Button("Calculate Superheat") {
+                        calculateSuperheat(for: call)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+
+                    let superheat = call.technicalReading(for: "superheat")
+                    if !superheat.isEmpty {
+                        Text("\(superheat) F")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            if call.technicalReadingDefinitions.contains(where: { $0.key == "subcooling" }) {
+                HStack {
+                    Button("Calculate Subcooling") {
+                        calculateSubcooling(for: call)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+
+                    let subcooling = call.technicalReading(for: "subcooling")
+                    if !subcooling.isEmpty {
+                        Text("\(subcooling) F")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            if call.technicalReadingDefinitions.contains(where: { $0.key == "total_external_static" }) {
+                HStack {
+                    Button("Calculate Total Static") {
+                        calculateTotalExternalStatic(for: call)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+
+                    let totalStatic = call.technicalReading(for: "total_external_static")
+                    if !totalStatic.isEmpty {
+                        Text("\(totalStatic) in. w.c.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
             TextField("Filter Size", text: optionalServiceCallTextBinding(call, \.filterSize))
             serviceReportOptionPicker(
                 "Filter Condition",
@@ -2060,15 +2114,35 @@ GunnAire
     }
 
     private func calculateTemperatureSplit(for call: ServiceCall) {
-        let returnTemp = Double(call.technicalReading(for: "return_air_temp").replacingOccurrences(of: ",", with: "."))
-        let supplyTemp = Double(call.technicalReading(for: "supply_air_temp").replacingOccurrences(of: ",", with: "."))
-        guard let returnTemp, let supplyTemp else {
+        guard call.calculateTemperatureSplitReading() != nil else {
             actionMessage = "Enter return and supply air temperatures before calculating temperature split."
             return
         }
-        let split = abs(returnTemp - supplyTemp)
-        call.setTechnicalReading(String(format: "%.1f", split), for: "temperature_split")
         actionMessage = "Temperature split calculated."
+    }
+
+    private func calculateSuperheat(for call: ServiceCall) {
+        guard call.calculateSuperheatReading() != nil else {
+            actionMessage = "Enter suction line temperature and suction saturation temperature before calculating superheat."
+            return
+        }
+        actionMessage = "Superheat calculated."
+    }
+
+    private func calculateSubcooling(for call: ServiceCall) {
+        guard call.calculateSubcoolingReading() != nil else {
+            actionMessage = "Enter liquid line temperature and liquid saturation temperature before calculating subcooling."
+            return
+        }
+        actionMessage = "Subcooling calculated."
+    }
+
+    private func calculateTotalExternalStatic(for call: ServiceCall) {
+        guard call.calculateTotalExternalStaticReading() != nil else {
+            actionMessage = "Enter return and supply static pressure before calculating total external static."
+            return
+        }
+        actionMessage = "Total external static calculated."
     }
 
     @ViewBuilder
