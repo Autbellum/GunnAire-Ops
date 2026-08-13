@@ -704,23 +704,8 @@ enum GoogleCalendarScheduleSync {
         )
     }
 
-    static func makeManagedEventPatch(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> GoogleCalendarEventPatch {
-        let timeZone = TimeZone.current.identifier
-        let endDate = call.scheduledDate.addingTimeInterval(call.duration)
-        return GoogleCalendarEventPatch(
-            summary: shouldBackfillGoogleCalendarText(remoteEvent?.summary) ? calendarEventTitle(for: call, existingSummary: remoteEvent?.summary) : nil,
-            description: shouldBackfillGoogleCalendarText(remoteEvent?.description) ? calendarEventDescription(for: call) : nil,
-            location: shouldBackfillGoogleCalendarText(remoteEvent?.location) ? calendarEventLocation(for: call) : nil,
-            start: GoogleWritableCalendarEventDate(
-                dateTime: ISO8601DateFormatter().string(from: call.scheduledDate),
-                timeZone: timeZone
-            ),
-            end: GoogleWritableCalendarEventDate(
-                dateTime: ISO8601DateFormatter().string(from: endDate),
-                timeZone: timeZone
-            ),
-            extendedProperties: nil
-        )
+    static func makeManagedEventPatch(for call: ServiceCall, remoteEvent _: GoogleCalendarEvent?) -> GoogleCalendarEventPatch {
+        makeScheduleOnlyPatch(for: call)
     }
 
     static func makeCalendarCreateEvent(for call: ServiceCall) -> GoogleWritableCalendarEvent {
@@ -823,10 +808,6 @@ enum GoogleCalendarScheduleSync {
         }
         let description = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         return description.isEmpty ? nil : description
-    }
-
-    private static func shouldBackfillGoogleCalendarText(_ value: String?) -> Bool {
-        normalizedOptional(value) == nil
     }
 
     static func isGeneratedCalendarTitle(_ title: String) -> Bool {

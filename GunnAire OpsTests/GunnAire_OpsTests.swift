@@ -285,7 +285,7 @@ struct GunnAire_OpsTests {
         #expect(Set(object.keys) == ["start", "end"])
     }
 
-    @Test func googleCalendarManagedPatchDoesNotWriteLocalDetailsOverGoogleFields() async throws {
+    @Test func googleCalendarManagedPatchNeverWritesLocalDetailsOverGoogleFields() async throws {
         let customer = Customer(name: "Calendar Customer", address: "123 Main St")
         let call = ServiceCall(
             googleCalendarID: "primary",
@@ -320,12 +320,12 @@ struct GunnAire_OpsTests {
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         #expect(object["summary"] == nil)
-        #expect(object["description"] as? String == "Customer: Calendar Customer\nService Address: 123 Main St\nCall Type: Service\n\nRepair body")
+        #expect(object["description"] == nil)
         #expect(object["location"] == nil)
         #expect(object["start"] != nil)
         #expect(object["end"] != nil)
         #expect(object["extendedProperties"] == nil)
-        #expect(Set(object.keys) == ["description", "start", "end"])
+        #expect(Set(object.keys) == ["start", "end"])
     }
 
     @Test func googleCalendarCreatePayloadIncludesStructuredVisibleDetails() async throws {
