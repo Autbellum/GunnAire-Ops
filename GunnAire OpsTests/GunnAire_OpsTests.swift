@@ -4774,6 +4774,28 @@ struct GunnAire_OpsTests {
         #expect(actionRows.contains { $0.label == actionDefinitions.last?.label })
     }
 
+    @Test func billingDocumentationSummariesIncludeRTUEconomizerDiagnostics() async throws {
+        let customer = Customer(name: "RTU Economizer Customer")
+        let call = ServiceCall(
+            equipmentName: "Main Roof RTU",
+            equipmentTypeRaw: HVACEquipmentType.packageUnit.rawValue,
+            serviceReportSummary: "Economizer operation verified.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("68", for: "mixed_air_temp")
+        call.setTechnicalReading("35", for: "outdoor_air_damper_position")
+        call.setTechnicalReading("Normal", for: "economizer_sensor_status")
+
+        let technicalRows = try #require(CustomerDocumentExporter.billingDocumentationSummaries(for: call)
+            .first { $0.title == "Technical Snapshot" }?.rows)
+
+        #expect(technicalRows.contains { $0.label == "Mixed Air Temp (F)" && $0.value == "68" })
+        #expect(technicalRows.contains { $0.label == "Outdoor Air Damper Position (%)" && $0.value == "35" })
+        #expect(technicalRows.contains { $0.label == "Economizer Sensor" && $0.value == "Normal" })
+    }
+
     @Test func onsiteReportJobRowsIncludeStructuredCustomerContactContext() async throws {
         let customer = Customer(
             name: "Standalone Report Customer",
