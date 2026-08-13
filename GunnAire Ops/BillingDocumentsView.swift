@@ -1781,6 +1781,7 @@ GunnAire
                     Text(type.displayName).tag(type)
                 }
             }
+            .pickerStyle(.menu)
 
             TextField("Equipment Name", text: optionalServiceCallTextBinding(call, \.equipmentName))
             TextField("Manufacturer", text: optionalServiceCallTextBinding(call, \.equipmentManufacturer))
@@ -1812,8 +1813,7 @@ GunnAire
             .disabled(call.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
 
             ForEach(call.technicalReadingDefinitions) { definition in
-                TextField(definition.displayLabel, text: technicalReadingBinding(for: call, key: definition.key))
-                    .keyboardType(.numbersAndPunctuation)
+                technicalReadingInput(for: call, definition: definition)
             }
 
             HStack {
@@ -1833,11 +1833,31 @@ GunnAire
             }
 
             TextField("Filter Size", text: optionalServiceCallTextBinding(call, \.filterSize))
-            TextField("Filter Condition", text: optionalServiceCallTextBinding(call, \.filterCondition))
-            TextField("Indoor Coil Condition", text: optionalServiceCallTextBinding(call, \.indoorCoilCondition))
-            TextField("Outdoor Coil Condition", text: optionalServiceCallTextBinding(call, \.outdoorCoilCondition))
-            TextField("Drain Line Condition", text: optionalServiceCallTextBinding(call, \.drainLineCondition))
-            TextField("Thermostat Operation", text: optionalServiceCallTextBinding(call, \.thermostatOperation))
+            serviceReportOptionPicker(
+                "Filter Condition",
+                selection: optionalServiceCallTextBinding(call, \.filterCondition),
+                options: ["New", "Clean", "Dirty", "Replaced", "Needs Replacement", "Not Applicable"]
+            )
+            serviceReportOptionPicker(
+                "Indoor Coil Condition",
+                selection: optionalServiceCallTextBinding(call, \.indoorCoilCondition),
+                options: ["Clean", "Light Dust", "Dirty", "Impacted", "Frozen", "Damaged", "Not Accessible", "Not Applicable"]
+            )
+            serviceReportOptionPicker(
+                "Outdoor Coil Condition",
+                selection: optionalServiceCallTextBinding(call, \.outdoorCoilCondition),
+                options: ["Clean", "Light Dust", "Dirty", "Impacted", "Damaged", "Washed", "Not Accessible", "Not Applicable"]
+            )
+            serviceReportOptionPicker(
+                "Drain Line Condition",
+                selection: optionalServiceCallTextBinding(call, \.drainLineCondition),
+                options: ["Clear", "Slow", "Clogged", "Cleared", "Treated", "Needs Repair", "Not Applicable"]
+            )
+            serviceReportOptionPicker(
+                "Thermostat Operation",
+                selection: optionalServiceCallTextBinding(call, \.thermostatOperation),
+                options: ["Normal", "Calibrated", "Battery Replaced", "Faulty", "Needs Replacement", "Not Tested"]
+            )
             TextField("Service Report Summary", text: optionalServiceCallTextBinding(call, \.serviceReportSummary), axis: .vertical)
                 .lineLimit(2...5)
 
@@ -1847,6 +1867,30 @@ GunnAire
                     .foregroundColor(.secondary)
             }
         }
+    }
+
+    @ViewBuilder
+    private func technicalReadingInput(for call: ServiceCall, definition: HVACTechnicalReadingDefinition) -> some View {
+        if definition.options.isEmpty {
+            TextField(definition.displayLabel, text: technicalReadingBinding(for: call, key: definition.key))
+                .keyboardType(.numbersAndPunctuation)
+        } else {
+            serviceReportOptionPicker(
+                definition.displayLabel,
+                selection: technicalReadingBinding(for: call, key: definition.key),
+                options: definition.options
+            )
+        }
+    }
+
+    private func serviceReportOptionPicker(_ title: String, selection: Binding<String>, options: [String]) -> some View {
+        Picker(title, selection: selection) {
+            Text("Not Set").tag("")
+            ForEach(options, id: \.self) { option in
+                Text(option).tag(option)
+            }
+        }
+        .pickerStyle(.menu)
     }
 
     private func optionalServiceCallTextBinding(_ call: ServiceCall, _ keyPath: ReferenceWritableKeyPath<ServiceCall, String?>) -> Binding<String> {

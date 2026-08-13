@@ -68,6 +68,16 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    private static let refrigerantOptions = [
+        "R-410A",
+        "R-22",
+        "R-32",
+        "R-454B",
+        "R-407C",
+        "R-134a",
+        "Other"
+    ]
+
     var readingDefinitions: [HVACTechnicalReadingDefinition] {
         let common = [
             HVACTechnicalReadingDefinition(key: "return_air_temp", label: "Return Air Temp", unit: "F"),
@@ -80,7 +90,7 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .splitSystemAC, .heatPump, .packageUnit, .miniSplit:
             return common + [
-                HVACTechnicalReadingDefinition(key: "refrigerant_type", label: "Refrigerant Type", unit: nil),
+                HVACTechnicalReadingDefinition(key: "refrigerant_type", label: "Refrigerant Type", unit: nil, options: Self.refrigerantOptions),
                 HVACTechnicalReadingDefinition(key: "suction_pressure", label: "Suction Pressure", unit: "psig"),
                 HVACTechnicalReadingDefinition(key: "liquid_pressure", label: "Liquid Pressure", unit: "psig"),
                 HVACTechnicalReadingDefinition(key: "superheat", label: "Superheat", unit: "F"),
@@ -133,6 +143,14 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
     let key: String
     let label: String
     let unit: String?
+    let options: [String]
+
+    init(key: String, label: String, unit: String? = nil, options: [String] = []) {
+        self.key = key
+        self.label = label
+        self.unit = unit
+        self.options = options
+    }
 
     var id: String { key }
     var displayLabel: String {

@@ -62,6 +62,19 @@ struct GunnAire_OpsTests {
         #expect(call.equipmentSummary?.contains("S/N ABC123") == true)
     }
 
+    @Test func coolingEquipmentReadingDefinitionsIncludeStructuredRefrigerantOptions() async throws {
+        let refrigerantDefinition = HVACEquipmentType.splitSystemAC.readingDefinitions.first {
+            $0.key == "refrigerant_type"
+        }
+        let superheatDefinition = HVACEquipmentType.splitSystemAC.readingDefinitions.first {
+            $0.key == "superheat"
+        }
+
+        #expect(refrigerantDefinition?.options.contains("R-410A") == true)
+        #expect(refrigerantDefinition?.options.contains("R-454B") == true)
+        #expect(superheatDefinition?.options.isEmpty == true)
+    }
+
     @Test func quickBooksMimeTypeDetection() async throws {
         #expect(QuickBooksDataAPI.mimeType(for: URL(fileURLWithPath: "/tmp/file.jpg")) == "image/jpeg")
         #expect(QuickBooksDataAPI.mimeType(for: URL(fileURLWithPath: "/tmp/file.pdf")) == "application/pdf")
