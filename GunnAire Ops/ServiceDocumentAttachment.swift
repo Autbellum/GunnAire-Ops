@@ -36,6 +36,15 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
             return false
         }
     }
+
+    var isFinancialCustomerProfileAttachment: Bool {
+        switch self {
+        case .invoiceSupport, .estimateSupport, .receipt:
+            return true
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .other:
+            return false
+        }
+    }
 }
 
 struct EquipmentAttachmentGroup: Identifiable {
@@ -165,6 +174,10 @@ final class ServiceDocumentAttachment {
         case .invoiceSupport, .estimateSupport, .receipt:
             return false
         }
+    }
+
+    var isFinancialCustomerProfileAttachment: Bool {
+        kind.isFinancialCustomerProfileAttachment
     }
 
     var canLinkToInvoiceReport: Bool {
@@ -342,7 +355,8 @@ final class ServiceDocumentAttachment {
                 : ""
             lines.append("Estimate: \(estimate.status.capitalized)\(quickBooksStatus)")
         }
-        if quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+        if canViewFinancials,
+           quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             if estimateID != nil && invoiceID == nil {
                 lines.append("Attached to QuickBooks estimate")
             } else if invoiceID != nil {
@@ -487,6 +501,14 @@ final class ServiceDocumentAttachment {
         attachments.filter {
             !$0.isLinkedToEquipment(equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
         }
+    }
+
+    static func visibleCustomerProfileAttachments(
+        in attachments: [ServiceDocumentAttachment],
+        canViewFinancials: Bool
+    ) -> [ServiceDocumentAttachment] {
+        guard !canViewFinancials else { return attachments }
+        return attachments.filter { !$0.isFinancialCustomerProfileAttachment }
     }
 
     static func primaryCustomerPhoto(

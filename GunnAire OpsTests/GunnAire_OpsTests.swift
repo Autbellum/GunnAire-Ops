@@ -2541,6 +2541,71 @@ struct GunnAire_OpsTests {
         #expect(selected === diagnosticPhoto)
     }
 
+    @Test func customerProfileAttachmentsHideFinancialFilesForStandardUsers() async throws {
+        let customer = Customer(name: "Document Visibility Customer")
+        let serviceReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            kind: .serviceReport,
+            displayName: "service-report.pdf",
+            localFilePath: "/tmp/service-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let diagnosticPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+        let invoiceSupport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .invoiceSupport,
+            displayName: "invoice.pdf",
+            localFilePath: "/tmp/invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let estimateSupport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .estimateSupport,
+            displayName: "estimate.pdf",
+            localFilePath: "/tmp/estimate.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let receipt = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .receipt,
+            displayName: "receipt.jpg",
+            localFilePath: "/tmp/receipt.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+        let attachments: [ServiceDocumentAttachment] = [serviceReport, diagnosticPhoto, invoiceSupport, estimateSupport, receipt]
+
+        let standardVisible = ServiceDocumentAttachment.visibleCustomerProfileAttachments(
+            in: attachments,
+            canViewFinancials: false
+        )
+        let adminVisible = ServiceDocumentAttachment.visibleCustomerProfileAttachments(
+            in: attachments,
+            canViewFinancials: true
+        )
+
+        #expect(standardVisible.map(\.kind) == [.serviceReport, .diagnosticPhoto])
+        #expect(adminVisible.count == attachments.count)
+        #expect(invoiceSupport.isFinancialCustomerProfileAttachment)
+        #expect(estimateSupport.isFinancialCustomerProfileAttachment)
+        #expect(receipt.isFinancialCustomerProfileAttachment)
+    }
+
     @Test func customerProfileAttachmentDetailLinksJobBillingAndStorageContext() async throws {
         let customer = Customer(name: "Report Customer")
         let call = ServiceCall(
@@ -2639,6 +2704,39 @@ struct GunnAire_OpsTests {
         #expect(invoiceLines.contains("Queued for QuickBooks invoice attachment"))
         #expect(estimateLines.contains("Queued for QuickBooks estimate attachment"))
         #expect(standardUserLines.contains("Queued for QuickBooks invoice attachment") == false)
+    }
+
+    @Test func customerProfileAttachmentDetailHidesQuickBooksAttachmentStatusForStandardUsers() async throws {
+        let customer = Customer(name: "Attachment Privacy Customer")
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: UUID(),
+            kind: .serviceReport,
+            displayName: "service-report.pdf",
+            localFilePath: "/tmp/service-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "qbo-attach-1"
+        )
+
+        let adminLines = attachment.customerProfileDetailLines(
+            serviceCalls: [],
+            invoices: [],
+            estimates: [],
+            equipmentProfiles: [],
+            canViewFinancials: true
+        )
+        let standardLines = attachment.customerProfileDetailLines(
+            serviceCalls: [],
+            invoices: [],
+            estimates: [],
+            equipmentProfiles: [],
+            canViewFinancials: false
+        )
+
+        #expect(adminLines.contains("Attached to QuickBooks invoice"))
+        #expect(standardLines.contains { $0.contains("QuickBooks") } == false)
     }
 
     @Test func customerProfileAttachmentDetailUsesQuickBooksInvoiceBalanceStatus() async throws {

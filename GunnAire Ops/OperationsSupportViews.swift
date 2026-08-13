@@ -1786,10 +1786,17 @@ private struct CustomerEditorView: View {
         documentAttachments.filter { $0.customer?.id == customer.id }
     }
 
+    private var visibleCustomerAttachments: [ServiceDocumentAttachment] {
+        ServiceDocumentAttachment.visibleCustomerProfileAttachments(
+            in: customerAttachments,
+            canViewFinancials: canViewFinancials
+        )
+    }
+
     private var filteredCustomerAttachments: [ServiceDocumentAttachment] {
         let query = customerAttachmentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return customerAttachments }
-        return customerAttachments.filter { attachment in
+        guard !query.isEmpty else { return visibleCustomerAttachments }
+        return visibleCustomerAttachments.filter { attachment in
             let detailLines = attachment.customerProfileDetailLines(
                 serviceCalls: serviceCalls,
                 invoices: invoices,
@@ -1853,7 +1860,7 @@ private struct CustomerEditorView: View {
     private func equipmentFileSummary(for equipment: CustomerEquipment) -> String? {
         let attachments = ServiceDocumentAttachment.equipmentAttachments(
             for: equipment,
-            in: customerAttachments,
+            in: visibleCustomerAttachments,
             serviceCalls: customerServiceCalls
         )
         guard !attachments.isEmpty else { return nil }
@@ -2181,7 +2188,9 @@ private struct CustomerEditorView: View {
                     Picker("Attachment Type", selection: $customerAttachmentKind) {
                         Text(ServiceDocumentAttachmentKind.customerDocument.label).tag(ServiceDocumentAttachmentKind.customerDocument)
                         Text(ServiceDocumentAttachmentKind.diagnosticPhoto.label).tag(ServiceDocumentAttachmentKind.diagnosticPhoto)
-                        Text(ServiceDocumentAttachmentKind.receipt.label).tag(ServiceDocumentAttachmentKind.receipt)
+                        if canViewFinancials {
+                            Text(ServiceDocumentAttachmentKind.receipt.label).tag(ServiceDocumentAttachmentKind.receipt)
+                        }
                         Text(ServiceDocumentAttachmentKind.other.label).tag(ServiceDocumentAttachmentKind.other)
                     }
 
@@ -2222,7 +2231,7 @@ private struct CustomerEditorView: View {
                             .foregroundColor(.secondary)
                     }
 
-                    if customerAttachments.isEmpty {
+                    if visibleCustomerAttachments.isEmpty {
                         Text("No customer documents or photos saved yet.")
                             .foregroundColor(.secondary)
                     } else {
@@ -2236,7 +2245,9 @@ private struct CustomerEditorView: View {
                         } else {
                             customerEquipmentAttachmentHistory()
                             customerAttachmentGroup("Service Reports", attachments: generatedServiceReportAttachments)
-                            customerAttachmentGroup("Billing Support", attachments: billingSupportAttachments)
+                            if canViewFinancials {
+                                customerAttachmentGroup("Billing Support", attachments: billingSupportAttachments)
+                            }
                             customerAttachmentGroup("Photos", attachments: customerPhotoAttachments)
                             customerAttachmentGroup("Customer Files", attachments: generalCustomerAttachments)
                         }
@@ -2546,13 +2557,16 @@ private struct CustomerEditorView: View {
     private func saveCustomerAttachment(data: Data, filename: String, contentType: String) {
         do {
             let storedURL = try persistCustomerAttachmentData(data, filename: filename)
+            let attachmentKind = canViewFinancials || !customerAttachmentKind.isFinancialCustomerProfileAttachment
+                ? customerAttachmentKind
+                : .customerDocument
             let attachment = ServiceDocumentAttachment(
                 customer: customer,
                 serviceCallID: nil,
                 customerEquipmentID: selectedCustomerAttachmentEquipmentID,
                 invoiceID: nil,
                 estimateID: nil,
-                kind: customerAttachmentKind,
+                kind: attachmentKind,
                 displayName: filename,
                 caption: customerAttachmentCaption.nilIfBlank,
                 localFilePath: storedURL.path,
