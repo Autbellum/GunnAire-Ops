@@ -218,11 +218,36 @@ final class ServiceDocumentAttachment {
         if invoiceID == nil {
             invoiceID = invoice.id
         }
+        if customer?.id != invoice.customer.id {
+            customer = invoice.customer
+        }
     }
 
     func linkToEstimateIfNeeded(_ estimate: Estimate) {
         if estimateID == nil {
             estimateID = estimate.id
+        }
+        if customer?.id != estimate.customer.id {
+            customer = estimate.customer
+        }
+    }
+
+    func refreshGeneratedDocumentContext(
+        customer: Customer,
+        serviceCallID: UUID?,
+        customerEquipmentID: UUID?,
+        invoiceID: UUID?,
+        estimateID: UUID?
+    ) {
+        let changedQuickBooksTarget = self.invoiceID != invoiceID || self.estimateID != estimateID
+        self.customer = customer
+        self.serviceCallID = serviceCallID
+        self.customerEquipmentID = customerEquipmentID
+        self.invoiceID = invoiceID
+        self.estimateID = estimateID
+        if changedQuickBooksTarget {
+            quickBooksAttachableID = nil
+            quickBooksSyncError = nil
         }
     }
 

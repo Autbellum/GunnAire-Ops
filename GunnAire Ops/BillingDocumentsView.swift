@@ -3075,7 +3075,13 @@ GunnAire
                     fileSizeBytes: data.count,
                     caption: "Generated estimate PDF"
                 )
-                reusable.customerEquipmentID = linkedCall?.customerEquipmentID
+                reusable.refreshGeneratedDocumentContext(
+                    customer: estimate.customer,
+                    serviceCallID: linkedCall?.id,
+                    customerEquipmentID: linkedCall?.customerEquipmentID,
+                    invoiceID: nil,
+                    estimateID: estimate.id
+                )
                 attachment = reusable
             } else {
                 let generated = ServiceDocumentAttachment(
@@ -3148,7 +3154,13 @@ GunnAire
                     fileSizeBytes: data.count,
                     caption: caption
                 )
-                reusable.customerEquipmentID = serviceCall.customerEquipmentID
+                reusable.refreshGeneratedDocumentContext(
+                    customer: serviceCall.customer,
+                    serviceCallID: serviceCall.id,
+                    customerEquipmentID: serviceCall.customerEquipmentID,
+                    invoiceID: invoice.id,
+                    estimateID: linkedEstimate?.id ?? serviceCall.linkedEstimateID
+                )
                 attachment = reusable
             } else {
                 let generated = ServiceDocumentAttachment(
@@ -3528,7 +3540,13 @@ GunnAire
                     fileSizeBytes: data.count,
                     caption: caption
                 )
-                reusable.customerEquipmentID = serviceCall.customerEquipmentID
+                reusable.refreshGeneratedDocumentContext(
+                    customer: serviceCall.customer,
+                    serviceCallID: serviceCall.id,
+                    customerEquipmentID: serviceCall.customerEquipmentID,
+                    invoiceID: invoiceID,
+                    estimateID: estimateID
+                )
                 attachment = reusable
             } else {
                 let generated = ServiceDocumentAttachment(
@@ -3645,7 +3663,14 @@ GunnAire
                     fileSizeBytes: data.count,
                     caption: caption
                 )
-                reusable.customerEquipmentID = serviceCallID.flatMap { id in serviceCalls.first { $0.id == id }?.customerEquipmentID }
+                let equipmentID = serviceCallID.flatMap { id in serviceCalls.first { $0.id == id }?.customerEquipmentID }
+                reusable.refreshGeneratedDocumentContext(
+                    customer: customer,
+                    serviceCallID: serviceCallID,
+                    customerEquipmentID: equipmentID,
+                    invoiceID: invoiceID,
+                    estimateID: estimateID
+                )
                 attachment = reusable
             } else {
                 let generated = ServiceDocumentAttachment(

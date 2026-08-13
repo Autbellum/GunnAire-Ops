@@ -2916,6 +2916,76 @@ struct GunnAire_OpsTests {
         #expect(reusable.invoiceID == invoiceID)
     }
 
+    @Test func reusedGeneratedReportRefreshesBillingAndEquipmentContext() async throws {
+        let oldCustomer = Customer(name: "Old Customer")
+        let currentCustomer = Customer(name: "Current Customer")
+        let serviceCallID = UUID()
+        let equipmentID = UUID()
+        let invoiceID = UUID()
+        let estimateID = UUID()
+        let reusable = ServiceDocumentAttachment(
+            customer: oldCustomer,
+            serviceCallID: serviceCallID,
+            customerEquipmentID: nil,
+            invoiceID: nil,
+            estimateID: estimateID,
+            kind: .serviceReport,
+            displayName: "pre-invoice-report.pdf",
+            localFilePath: "/tmp/pre-invoice-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "old-attachable",
+            quickBooksSyncError: "Old target"
+        )
+
+        reusable.refreshGeneratedDocumentContext(
+            customer: currentCustomer,
+            serviceCallID: serviceCallID,
+            customerEquipmentID: equipmentID,
+            invoiceID: invoiceID,
+            estimateID: estimateID
+        )
+
+        #expect(reusable.customer?.id == currentCustomer.id)
+        #expect(reusable.serviceCallID == serviceCallID)
+        #expect(reusable.customerEquipmentID == equipmentID)
+        #expect(reusable.invoiceID == invoiceID)
+        #expect(reusable.estimateID == estimateID)
+        #expect(reusable.quickBooksAttachableID == nil)
+        #expect(reusable.quickBooksSyncError == nil)
+    }
+
+    @Test func reusedGeneratedReportKeepsQuickBooksAttachmentWhenBillingTargetIsUnchanged() async throws {
+        let customer = Customer(name: "Current Customer")
+        let serviceCallID = UUID()
+        let equipmentID = UUID()
+        let invoiceID = UUID()
+        let reusable = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            customerEquipmentID: equipmentID,
+            invoiceID: invoiceID,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "attachable-123",
+            quickBooksSyncError: nil
+        )
+
+        reusable.refreshGeneratedDocumentContext(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            customerEquipmentID: equipmentID,
+            invoiceID: invoiceID,
+            estimateID: nil
+        )
+
+        #expect(reusable.quickBooksAttachableID == "attachable-123")
+        #expect(reusable.quickBooksSyncError == nil)
+    }
+
     @Test func generatedBillingDocumentAttachmentCanBeReusedForSameBillingLink() async throws {
         let customer = Customer(name: "Billing Customer")
         let serviceCallID = UUID()
