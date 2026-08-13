@@ -497,15 +497,31 @@ enum CustomerDocumentExporter {
         return photoEvidenceAttachments(for: attachments)
             .filter { attachment in
                 attachment.serviceCallID == serviceCallID &&
-                    billingTargetMatches(attachmentID: attachment.invoiceID, targetID: invoiceID) &&
-                    billingTargetMatches(attachmentID: attachment.estimateID, targetID: estimateID)
+                    billingTargetMatches(attachment: attachment, invoiceID: invoiceID, estimateID: estimateID)
             }
     }
 
-    private static func billingTargetMatches(attachmentID: UUID?, targetID: UUID?) -> Bool {
-        guard let attachmentID else { return true }
-        guard let targetID else { return false }
-        return attachmentID == targetID
+    private static func billingTargetMatches(
+        attachment: ServiceDocumentAttachment,
+        invoiceID: UUID?,
+        estimateID: UUID?
+    ) -> Bool {
+        if let invoiceID {
+            if let attachmentInvoiceID = attachment.invoiceID {
+                return attachmentInvoiceID == invoiceID
+            }
+            return attachment.estimateID == nil
+        }
+        if let estimateID {
+            if attachment.invoiceID != nil {
+                return false
+            }
+            if let attachmentEstimateID = attachment.estimateID {
+                return attachmentEstimateID == estimateID
+            }
+            return true
+        }
+        return attachment.invoiceID == nil && attachment.estimateID == nil
     }
 
     static func photoAttachmentCaption(for attachment: ServiceDocumentAttachment) -> String {

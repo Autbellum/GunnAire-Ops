@@ -4232,6 +4232,18 @@ struct GunnAire_OpsTests {
             fileSizeBytes: 2048,
             createdAt: Date(timeIntervalSince1970: 200)
         )
+        let estimateCarriedForwardPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoiceID,
+            estimateID: UUID(),
+            kind: .diagnosticPhoto,
+            displayName: "estimate-carried-forward.jpg",
+            localFilePath: "/tmp/estimate-carried-forward.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 250)
+        )
         let wrongInvoicePhoto = ServiceDocumentAttachment(
             customer: customer,
             serviceCallID: call.id,
@@ -4255,13 +4267,13 @@ struct GunnAire_OpsTests {
         )
 
         let selected = CustomerDocumentExporter.billingPhotoAttachments(
-            for: [unrelatedJobPhoto, wrongInvoicePhoto, invoicePhoto, jobBeforePhoto],
+            for: [unrelatedJobPhoto, wrongInvoicePhoto, invoicePhoto, estimateCarriedForwardPhoto, jobBeforePhoto],
             serviceCall: call,
             invoiceID: invoiceID,
             estimateID: nil
         )
 
-        #expect(selected.map(\.displayName) == ["job-before.jpg", "invoice-after.jpg"])
+        #expect(selected.map(\.displayName) == ["job-before.jpg", "invoice-after.jpg", "estimate-carried-forward.jpg"])
     }
 
     @Test func billingPhotoAttachmentsAreScopedToEstimateJobAndTarget() async throws {
@@ -4301,9 +4313,21 @@ struct GunnAire_OpsTests {
             fileSizeBytes: 2048,
             createdAt: Date(timeIntervalSince1970: 300)
         )
+        let invoiceLinkedPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: UUID(),
+            estimateID: estimateID,
+            kind: .afterPhoto,
+            displayName: "invoice-linked.jpg",
+            localFilePath: "/tmp/invoice-linked.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 400)
+        )
 
         let selected = CustomerDocumentExporter.billingPhotoAttachments(
-            for: [wrongEstimatePhoto, estimatePhoto, jobPhoto],
+            for: [invoiceLinkedPhoto, wrongEstimatePhoto, estimatePhoto, jobPhoto],
             serviceCall: call,
             invoiceID: nil,
             estimateID: estimateID
