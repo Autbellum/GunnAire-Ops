@@ -879,7 +879,12 @@ GunnAire
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(.green)
-                            .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
+                            .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty || activeServiceCall?.canCreateInvoiceDocument == false)
+                            if let message = activeServiceCall?.invoiceCreationBlockedMessage {
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
                         }
 
                         if !actionMessage.isEmpty {
@@ -1694,7 +1699,14 @@ GunnAire
                     .buttonStyle(.borderedProminent)
                     .tint(Color.brandGold)
                     .foregroundStyle(Color.primaryBlack)
-                    .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
+                    .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty || (selectedDocumentKind == .invoice && activeServiceCall?.canCreateInvoiceDocument == false))
+
+                    if selectedDocumentKind == .invoice,
+                       let message = activeServiceCall?.invoiceCreationBlockedMessage {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
 
                     if !actionMessage.isEmpty {
                         Text(actionMessage)
@@ -3662,6 +3674,11 @@ GunnAire
             actionMessage = "Opened the existing invoice for this estimate."
             return
         }
+        if let linkedCall = serviceCall(for: estimate),
+           !linkedCall.canCreateInvoiceDocument {
+            actionMessage = linkedCall.invoiceCreationBlockedMessage ?? "Complete required field documentation before creating an invoice."
+            return
+        }
 
         let invoice = convertEstimate(estimate)
         selectedInvoiceForCloseout = invoice
@@ -4291,6 +4308,12 @@ GunnAire
             }
 
         case .invoice:
+            if let activeServiceCall,
+               !activeServiceCall.canCreateInvoiceDocument {
+                actionMessage = activeServiceCall.invoiceCreationBlockedMessage ?? "Complete required field documentation before creating an invoice."
+                isCreatingDocument = false
+                return
+            }
             let invoice = Invoice(
                 serviceCallID: activeServiceCall?.id,
                 customer: customer,

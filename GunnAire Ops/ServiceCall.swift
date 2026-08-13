@@ -1815,6 +1815,23 @@ final class ServiceCall {
             canCompleteDocumentation
     }
 
+    var canCreateInvoiceDocument: Bool {
+        linkedInvoiceID == nil &&
+            status != .cancelled &&
+            canCompleteDocumentation
+    }
+
+    var invoiceCreationBlockedMessage: String? {
+        guard !canCreateInvoiceDocument else { return nil }
+        if linkedInvoiceID != nil {
+            return "This job already has a linked invoice."
+        }
+        if status == .cancelled {
+            return "Cancelled jobs cannot create invoices."
+        }
+        return documentationCompletionBlockedMessage
+    }
+
     @discardableResult
     func markDocumentationCompleteIfReady(at date: Date = Date()) -> Bool {
         guard canCompleteDocumentation else {

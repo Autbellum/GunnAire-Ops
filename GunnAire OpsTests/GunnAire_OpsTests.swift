@@ -1425,6 +1425,40 @@ struct GunnAire_OpsTests {
         #expect(call.isReadyToCreateBillingDocument == false)
     }
 
+    @Test func incompleteTechnicalReportBlocksInvoiceCreation() async throws {
+        let customer = Customer(name: "Blocked Invoice Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .completed,
+            workCompletedChecklist: true
+        )
+        call.setTechnicalReading("72", for: "return_air_temp")
+
+        #expect(call.canCreateInvoiceDocument == false)
+        #expect(call.invoiceCreationBlockedMessage?.contains("Missing or invalid") == true)
+        #expect(call.invoiceCreationBlockedMessage?.contains("Supply Air Temp") == true)
+    }
+
+    @Test func estimateAppointmentCanCreateInvoiceWithoutTechnicalReport() async throws {
+        let customer = Customer(name: "Accepted Estimate Customer")
+        let call = ServiceCall(
+            type: .estimate,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .completed
+        )
+
+        #expect(call.requiresTechnicalServiceReportCompletion == false)
+        #expect(call.canCreateInvoiceDocument)
+    }
+
     @Test func generalAppointmentCanBeReadyToBillWithoutTechnicalReport() async throws {
         let customer = Customer(name: "General Appointment Customer")
         let call = ServiceCall(
