@@ -1588,6 +1588,32 @@ struct GunnAire_OpsTests {
         #expect(call.canCreateInvoiceDocument)
     }
 
+    @Test func technicalReportDoesNotDefaultReadingsBeforeEquipmentTypeSelection() async throws {
+        let customer = Customer(name: "No Default Equipment Customer")
+        let call = ServiceCall(
+            equipmentName: "Unselected System",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        #expect(call.equipmentType == nil)
+        #expect(call.technicalReadingDefinitions.isEmpty)
+        #expect(call.requiredTechnicalReadingDefinitions.isEmpty)
+        #expect(call.groupedTechnicalReadingDefinitions.isEmpty)
+        #expect(call.serviceActionDefinitions.isEmpty)
+        #expect(call.groupedServiceActionDefinitions.isEmpty)
+        #expect(call.serviceReportMissingRequiredItemLabels.contains("Equipment Type"))
+
+        call.equipmentType = .heatPump
+
+        #expect(call.technicalReadingDefinitions.isEmpty == false)
+        #expect(call.requiredTechnicalReadingDefinitions.isEmpty == false)
+        #expect(call.groupedTechnicalReadingDefinitions.isEmpty == false)
+        #expect(call.technicalReadingDefinitions.contains { $0.key == "reversing_valve_operation" })
+        #expect(call.technicalReadingDefinitions.contains { $0.key == "flame_sensor_microamps" } == false)
+    }
+
     @Test func changingEquipmentTypePrunesIncompatibleTechnicalReadings() async throws {
         let customer = Customer(name: "Equipment Type Customer")
         let call = ServiceCall(

@@ -1288,7 +1288,7 @@ final class ServiceCall {
     }
 
     var technicalReadingDefinitions: [HVACTechnicalReadingDefinition] {
-        (equipmentType ?? .splitSystemAC).readingDefinitions
+        equipmentType?.readingDefinitions ?? []
     }
 
     var groupedTechnicalReadingDefinitions: [HVACTechnicalReadingGroup] {
@@ -1637,12 +1637,13 @@ final class ServiceCall {
     }
 
     var requiredTechnicalReadingDefinitions: [HVACTechnicalReadingDefinition] {
-        let requiredKeys = Set((equipmentType ?? .splitSystemAC).requiredReadingKeysForCompleteServiceReport)
+        guard let equipmentType else { return [] }
+        let requiredKeys = Set(equipmentType.requiredReadingKeysForCompleteServiceReport)
         return technicalReadingDefinitions.filter { requiredKeys.contains($0.key) }
     }
 
     var serviceActionDefinitions: [HVACServiceActionDefinition] {
-        (equipmentType ?? .splitSystemAC).serviceActionDefinitions
+        equipmentType?.serviceActionDefinitions ?? []
     }
 
     var groupedServiceActionDefinitions: [HVACServiceActionGroup] {

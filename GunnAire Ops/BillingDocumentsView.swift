@@ -2315,7 +2315,8 @@ GunnAire
                     SearchableDropdownOption(id: $0.rawValue, title: $0.displayName)
                 },
                 selectedID: equipmentTypeSelection(for: call),
-                placeholder: "Select Equipment Type"
+                placeholder: "Select Equipment Type",
+                showsClearButton: true
             )
 
             reportReadinessView(for: call)
@@ -2347,31 +2348,40 @@ GunnAire
                 saveCurrentEquipmentProfile(for: call)
             }
             .buttonStyle(.bordered)
-            .disabled(call.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
+            .disabled(
+                call.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false ||
+                    call.equipmentType == nil
+            )
 
             technicalReadingAttentionSection(for: call)
 
-            ForEach(call.groupedTechnicalReadingDefinitions) { group in
-                DisclosureGroup {
-                    Button {
-                        call.markBlankTechnicalReadingsUnableToTest(in: group)
-                    } label: {
-                        Label("Mark Blank Fields Unable To Test", systemImage: "checklist.unchecked")
-                    }
-                    .buttonStyle(.bordered)
+            if call.equipmentType == nil {
+                Label("Select an equipment type to load the correct technical readings and service actions.", systemImage: "list.bullet.rectangle")
                     .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(call.groupedTechnicalReadingDefinitions) { group in
+                    DisclosureGroup {
+                        Button {
+                            call.markBlankTechnicalReadingsUnableToTest(in: group)
+                        } label: {
+                            Label("Mark Blank Fields Unable To Test", systemImage: "checklist.unchecked")
+                        }
+                        .buttonStyle(.bordered)
+                        .font(.caption)
 
-                    ForEach(call.prioritizedTechnicalReadingDefinitions(in: group)) { definition in
-                        technicalReadingInput(for: call, definition: definition)
-                    }
-                } label: {
-                    let progress = call.technicalReadingProgress(in: group)
-                    HStack {
-                        Text(group.title)
-                        Spacer()
-                        Text(progress.summary)
-                            .font(.caption)
-                            .foregroundColor(progress.needsAttention ? .orange : .secondary)
+                        ForEach(call.prioritizedTechnicalReadingDefinitions(in: group)) { definition in
+                            technicalReadingInput(for: call, definition: definition)
+                        }
+                    } label: {
+                        let progress = call.technicalReadingProgress(in: group)
+                        HStack {
+                            Text(group.title)
+                            Spacer()
+                            Text(progress.summary)
+                                .font(.caption)
+                                .foregroundColor(progress.needsAttention ? .orange : .secondary)
+                        }
                     }
                 }
             }
@@ -2808,12 +2818,15 @@ GunnAire
 
     private func equipmentTypeSelection(for call: ServiceCall) -> Binding<String?> {
         Binding<String?>(
-            get: { (call.equipmentType ?? .splitSystemAC).rawValue },
+            get: { call.equipmentType?.rawValue },
             set: { selectedID in
-                guard let selectedID,
-                      let equipmentType = HVACEquipmentType(rawValue: selectedID) else { return }
-                call.equipmentType = equipmentType
-                call.diagnosticsCaptured = true
+                if let selectedID,
+                   let equipmentType = HVACEquipmentType(rawValue: selectedID) {
+                    call.equipmentType = equipmentType
+                    call.diagnosticsCaptured = true
+                } else {
+                    call.equipmentType = nil
+                }
             }
         )
     }
@@ -2840,6 +2853,12 @@ GunnAire
             }
             return
         }
+        guard let equipmentType = call.equipmentType else {
+            if announce {
+                actionMessage = "Select equipment type before saving a customer equipment profile."
+            }
+            return
+        }
 
         let equipment: CustomerEquipment
         if let existingID = call.customerEquipmentID,
@@ -2860,7 +2879,7 @@ GunnAire
         }
 
         equipment.updateFrom(
-            equipmentType: call.equipmentType ?? .splitSystemAC,
+            equipmentType: equipmentType,
             name: equipmentName,
             manufacturer: call.equipmentManufacturer,
             modelNumber: call.equipmentModel,
