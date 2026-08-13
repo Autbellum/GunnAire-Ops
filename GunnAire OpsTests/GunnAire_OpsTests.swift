@@ -1110,6 +1110,22 @@ struct GunnAire_OpsTests {
         #expect(miniSplitRequiredKeys.contains("remote_operation"))
     }
 
+    @Test func coolingEquipmentRequiresSourceReadingsForSuperheatAndSubcooling() async throws {
+        let requiredSourceKeys: Set<String> = [
+            "suction_saturation_temp",
+            "liquid_saturation_temp",
+            "suction_line_temp",
+            "liquid_line_temp",
+            "superheat",
+            "subcooling"
+        ]
+
+        for equipmentType in [HVACEquipmentType.splitSystemAC, .heatPump, .packageUnit] {
+            let requiredKeys = Set(equipmentType.requiredReadingKeysForCompleteServiceReport)
+            #expect(requiredSourceKeys.isSubset(of: requiredKeys), "\(equipmentType.displayName) must require calculated refrigerant source readings")
+        }
+    }
+
     @Test func onsiteReportTechnicalSectionsUseGroupedCapturedReadings() async throws {
         let customer = Customer(name: "Report Customer")
         let call = ServiceCall(
@@ -1436,6 +1452,74 @@ struct GunnAire_OpsTests {
         #expect(report.canLinkToInvoiceReport == true)
         #expect(report.invoiceID == invoice.id)
         #expect(alreadyLinkedReport.invoiceID == alreadyLinkedInvoiceID)
+    }
+
+    @Test func customerEmailAttachmentsIncludeLatestLinkedOnsiteReport() async throws {
+        let customer = Customer(name: "Email Report Customer")
+        let serviceCallID = UUID()
+        let invoiceURL = URL(fileURLWithPath: "/tmp/gunnaire-invoice.pdf")
+        let olderReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .serviceReport,
+            displayName: "older-report.pdf",
+            localFilePath: "/tmp/older-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 100)
+        )
+        let latestReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .serviceReport,
+            displayName: "latest-report.pdf",
+            localFilePath: "/tmp/latest-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+        let unrelatedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            kind: .serviceReport,
+            displayName: "unrelated-report.pdf",
+            localFilePath: "/tmp/unrelated-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 300)
+        )
+
+        let urls = CustomerDocumentExporter.customerEmailAttachmentURLs(
+            primaryDocumentURL: invoiceURL,
+            serviceCallID: serviceCallID,
+            attachments: [olderReport, unrelatedReport, latestReport]
+        )
+
+        #expect(urls.map(\.lastPathComponent) == ["gunnaire-invoice.pdf", "latest-report.pdf"])
+    }
+
+    @Test func customerEmailAttachmentsDoNotDuplicatePrimaryOnsiteReport() async throws {
+        let customer = Customer(name: "Email Report Customer")
+        let serviceCallID = UUID()
+        let reportURL = URL(fileURLWithPath: "/tmp/latest-report.pdf")
+        let latestReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .serviceReport,
+            displayName: "latest-report.pdf",
+            localFilePath: reportURL.path,
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let urls = CustomerDocumentExporter.customerEmailAttachmentURLs(
+            primaryDocumentURL: reportURL,
+            serviceCallID: serviceCallID,
+            attachments: [latestReport]
+        )
+
+        #expect(urls.map(\.lastPathComponent) == ["latest-report.pdf"])
     }
 
     @Test func serviceReportAttachmentLinksToEstimateWhenMissing() async throws {
@@ -2045,6 +2129,32 @@ struct GunnAire_OpsTests {
         #expect(lines.contains { $0.contains("Equipment: Downstairs AC") })
         #expect(lines.contains { $0.contains("Carrier") })
         #expect(lines.contains { $0.contains("AC123") })
+    }
+
+    @Test func customerProfileAttachmentDetailShowsOperationalFileMetadata() async throws {
+        let customer = Customer(name: "File Metadata Customer")
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .customerDocument,
+            displayName: "manual.pdf",
+            localFilePath: "/tmp/manual.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+
+        let lines = attachment.customerProfileDetailLines(
+            serviceCalls: [],
+            invoices: [],
+            estimates: [],
+            equipmentProfiles: [],
+            canViewFinancials: false
+        )
+
+        #expect(lines.contains { $0.hasPrefix("Added:") })
+        #expect(lines.contains("Size: 2 KB"))
+        #expect(lines.contains("Local File: Not downloaded on this device"))
     }
 
     @Test func customerProfileServiceReportDetailsIncludeSummaryAndTechnicalSnapshot() async throws {

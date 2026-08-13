@@ -65,6 +65,7 @@ struct BillingDocumentsView: View {
     @State private var selectedInvoiceForCloseout: Invoice?
     @State private var generatedCustomerDocumentURL: URL?
     @State private var generatedCustomerDocumentRecipientID: UUID?
+    @State private var generatedCustomerDocumentServiceCallID: UUID?
     @State private var generatedCustomerDocumentKind = "document"
     @State private var isEmailingGeneratedDocument = false
     @State private var showingDocumentationFileImporter = false
@@ -462,9 +463,49 @@ GunnAire
 
     private func openPaymentReminderEmail(for invoice: Invoice, fallbackURL: URL) {
         if googleAuth.isAuthenticated, let draft = paymentReminderEmailDraft(for: invoice) {
-            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: draft.to,
+                subject: draft.subject,
+                body: draft.body,
+                attachmentPaths: invoiceEmailAttachmentPaths(for: invoice)
+            )
         } else {
             openURL(fallbackURL)
+        }
+    }
+
+    private func invoiceEmailAttachmentPaths(for invoice: Invoice) -> [String] {
+        do {
+            let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
+            let serviceCall = serviceCall(for: invoice)
+            let url = try CustomerDocumentExporter.exportInvoice(
+                invoice,
+                serviceCall: serviceCall,
+                payments: invoicePayments
+            )
+            generatedCustomerDocumentURL = url
+            generatedCustomerDocumentRecipientID = invoice.customer.id
+            generatedCustomerDocumentServiceCallID = serviceCall?.id
+            let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
+            generatedCustomerDocumentKind = documentLabel
+            persistGeneratedBillingDocument(
+                url,
+                customer: invoice.customer,
+                serviceCallID: serviceCall?.id,
+                invoiceID: invoice.id,
+                estimateID: nil,
+                kind: .invoiceSupport,
+                caption: CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments),
+                successMessage: "\(CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)) PDF generated for email."
+            )
+            return CustomerDocumentExporter.customerEmailAttachmentURLs(
+                primaryDocumentURL: url,
+                serviceCallID: serviceCall?.id,
+                attachments: attachments
+            ).map(\.path)
+        } catch {
+            actionMessage = "Could not prepare invoice attachment for email: \(error.localizedDescription)"
+            return []
         }
     }
 
@@ -500,28 +541,41 @@ Please reply with any questions.
 Thank you,
 GunnAire
 """
-        guard let data = try? Data(contentsOf: url) else {
+        let attachmentURLs = CustomerDocumentExporter.customerEmailAttachmentURLs(
+            primaryDocumentURL: url,
+            serviceCallID: generatedCustomerDocumentServiceCallID,
+            attachments: attachments
+        )
+        var gmailAttachments: [GmailAttachment] = []
+        for attachmentURL in attachmentURLs {
+            guard let data = try? Data(contentsOf: attachmentURL) else {
+                actionMessage = "Could not read \(attachmentURL.lastPathComponent) for email."
+                return
+            }
+            gmailAttachments.append(GmailAttachment(
+                fileName: attachmentURL.lastPathComponent,
+                mimeType: QuickBooksDataAPI.mimeType(for: attachmentURL),
+                data: data
+            ))
+        }
+        guard !gmailAttachments.isEmpty else {
             actionMessage = "Could not read the generated PDF attachment."
             return
         }
-        let attachment = GmailAttachment(
-            fileName: url.lastPathComponent,
-            mimeType: QuickBooksDataAPI.mimeType(for: url),
-            data: data
-        )
         isEmailingGeneratedDocument = true
         actionMessage = "Emailing \(generatedCustomerDocumentKind)..."
         googleAuth.sendGmailMessage(
             to: email,
             subject: subject,
             body: body,
-            attachments: [attachment]
+            attachments: gmailAttachments
         ) { result in
             DispatchQueue.main.async {
                 isEmailingGeneratedDocument = false
                 switch result {
                 case .success:
-                    actionMessage = "\(generatedCustomerDocumentKind.capitalized) emailed to \(email)."
+                    let attachmentSummary = gmailAttachments.count == 1 ? "" : " with onsite report"
+                    actionMessage = "\(generatedCustomerDocumentKind.capitalized) emailed to \(email)\(attachmentSummary)."
                 case .failure(let error):
                     actionMessage = "Generated document email failed: \(error.localizedDescription)"
                 }
@@ -2987,6 +3041,7 @@ GunnAire
             let data = try Data(contentsOf: url)
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
+            generatedCustomerDocumentServiceCallID = linkedCall?.id
             generatedCustomerDocumentKind = "estimate"
 
             let attachment: ServiceDocumentAttachment
@@ -3420,6 +3475,7 @@ GunnAire
             )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = serviceCall.customer.id
+            generatedCustomerDocumentServiceCallID = serviceCall.id
             generatedCustomerDocumentKind = "\(serviceCall.type.displayName.lowercased()) report"
             if !serviceCall.markDocumentationCompleteIfReady() {
                 serviceCall.documentationChecklist = false
@@ -3500,6 +3556,7 @@ GunnAire
             let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: serviceCall)
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
+            generatedCustomerDocumentServiceCallID = serviceCall?.id
             generatedCustomerDocumentKind = "estimate"
             persistGeneratedBillingDocument(
                 url,
@@ -3527,6 +3584,7 @@ GunnAire
             )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
+            generatedCustomerDocumentServiceCallID = serviceCall?.id
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
             generatedCustomerDocumentKind = documentLabel
             persistGeneratedBillingDocument(

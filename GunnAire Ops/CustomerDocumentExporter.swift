@@ -13,6 +13,38 @@ enum CustomerDocumentExportError: LocalizedError {
 }
 
 enum CustomerDocumentExporter {
+    static func customerEmailAttachmentURLs(
+        primaryDocumentURL: URL,
+        serviceCallID: UUID?,
+        attachments: [ServiceDocumentAttachment]
+    ) -> [URL] {
+        var urls = [primaryDocumentURL]
+        guard let serviceCallID else { return urls }
+
+        let primaryPath = primaryDocumentURL.standardizedFileURL.path
+        guard let latestOnsiteReport = attachments
+            .filter({
+                $0.serviceCallID == serviceCallID &&
+                    $0.kind == .serviceReport &&
+                    !$0.localFilePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            })
+            .sorted(by: { lhs, rhs in
+                if lhs.createdAt == rhs.createdAt {
+                    return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedDescending
+                }
+                return lhs.createdAt > rhs.createdAt
+            })
+            .first else {
+            return urls
+        }
+
+        let onsiteReportURL = latestOnsiteReport.localFileURL.standardizedFileURL
+        if onsiteReportURL.path != primaryPath {
+            urls.append(onsiteReportURL)
+        }
+        return urls
+    }
+
     static func exportOnsiteReport(
         serviceCall: ServiceCall,
         estimate: Estimate?,

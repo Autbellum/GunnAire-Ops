@@ -305,13 +305,15 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
             return [
                 "return_air_temp", "supply_air_temp", "temperature_split",
                 "refrigerant_type", "metering_device", "suction_pressure", "liquid_pressure", "head_pressure",
-                "suction_line_temp", "liquid_line_temp", "superheat", "subcooling",
+                "suction_saturation_temp", "liquid_saturation_temp", "suction_line_temp", "liquid_line_temp",
+                "superheat", "subcooling",
                 "line_voltage", "compressor_rla", "compressor_amps"
             ]
         case .heatPump:
             return [
                 "return_air_temp", "supply_air_temp", "temperature_split",
                 "refrigerant_type", "mode_tested", "suction_pressure", "liquid_pressure", "head_pressure",
+                "suction_saturation_temp", "liquid_saturation_temp", "suction_line_temp", "liquid_line_temp",
                 "superheat", "subcooling", "reversing_valve_operation", "defrost_control_status",
                 "line_voltage", "compressor_rla", "compressor_amps"
             ]
@@ -319,6 +321,7 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
             return [
                 "return_air_temp", "supply_air_temp", "temperature_split",
                 "refrigerant_type", "suction_pressure", "liquid_pressure", "head_pressure",
+                "suction_saturation_temp", "liquid_saturation_temp", "suction_line_temp", "liquid_line_temp",
                 "superheat", "subcooling", "line_voltage", "compressor_rla", "compressor_amps",
                 "economizer_operation", "package_heat_type", "blower_amps",
                 "condenser_condition", "evaporator_condition", "heat_exchanger_condition"

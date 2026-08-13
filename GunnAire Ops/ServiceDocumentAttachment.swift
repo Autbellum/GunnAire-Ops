@@ -258,7 +258,18 @@ final class ServiceDocumentAttachment {
         equipmentProfiles: [CustomerEquipment],
         canViewFinancials: Bool
     ) -> [String] {
-        var lines: [String] = []
+        var lines: [String] = [
+            "Added: \(createdAt.formatted(date: .abbreviated, time: .shortened))"
+        ]
+        if fileSizeBytes > 0 {
+            lines.append("Size: \(Self.formattedFileSize(fileSizeBytes))")
+        }
+        if !localFilePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let localStatus = FileManager.default.fileExists(atPath: localFilePath)
+                ? "Available on this device"
+                : "Not downloaded on this device"
+            lines.append("Local File: \(localStatus)")
+        }
         if let equipment = linkedEquipment(in: equipmentProfiles) {
             lines.append("Equipment: \(equipment.displayName)")
         }
@@ -309,6 +320,12 @@ final class ServiceDocumentAttachment {
             lines.append("Synced to company storage")
         }
         return lines
+    }
+
+    private static func formattedFileSize(_ bytes: Int) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(bytes))
     }
 
     static func reusableGeneratedServiceReport(
