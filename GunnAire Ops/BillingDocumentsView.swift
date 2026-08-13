@@ -2124,7 +2124,7 @@ GunnAire
             call.beforePhotoCount += 1
         case .afterPhoto:
             call.afterPhotoCount += 1
-        case .diagnosticPhoto, .customerDocument, .invoiceSupport, .estimateSupport, .receipt, .other:
+        case .serviceReport, .diagnosticPhoto, .customerDocument, .invoiceSupport, .estimateSupport, .receipt, .other:
             break
         }
         call.documentationStartedAt = call.documentationStartedAt ?? Date()
@@ -2151,8 +2151,8 @@ GunnAire
             }
         }
 
-        guard let call = activeServiceCall,
-              let invoiceID = call.linkedInvoiceID,
+        let resolvedInvoiceID = attachment.invoiceID ?? activeServiceCall?.linkedInvoiceID
+        guard let invoiceID = resolvedInvoiceID,
               let invoice = invoices.first(where: { $0.id == invoiceID }),
               let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
               !quickBooksID.isEmpty,
@@ -2435,9 +2435,39 @@ GunnAire
             generatedCustomerDocumentURL = url
             serviceCall.documentationChecklist = true
             serviceCall.documentationCompletedAt = serviceCall.documentationCompletedAt ?? Date()
-            actionMessage = "Onsite report generated."
+            persistGeneratedOnsiteReport(url, for: serviceCall)
         } catch {
             actionMessage = "Could not generate onsite report: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistGeneratedOnsiteReport(_ url: URL, for serviceCall: ServiceCall) {
+        do {
+            let data = try Data(contentsOf: url)
+            let invoice = currentJobInvoice
+            let estimate = currentJobEstimate
+            let attachment = ServiceDocumentAttachment(
+                customer: serviceCall.customer,
+                serviceCallID: serviceCall.id,
+                invoiceID: invoice?.id ?? serviceCall.linkedInvoiceID,
+                estimateID: estimate?.id ?? serviceCall.linkedEstimateID,
+                kind: .serviceReport,
+                displayName: url.lastPathComponent,
+                caption: "Generated onsite \(serviceCall.type.displayName.lowercased()) report",
+                localFilePath: url.path,
+                contentType: "application/pdf",
+                fileSizeBytes: data.count
+            )
+            modelContext.insert(attachment)
+            try? modelContext.save()
+            syncAttachmentIfPossible(attachment, data: data)
+            if invoice?.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                actionMessage = "Onsite report generated and queued for QuickBooks invoice attachment."
+            } else {
+                actionMessage = "Onsite report generated and saved to this job."
+            }
+        } catch {
+            actionMessage = "Onsite report generated, but could not save it as a job attachment: \(error.localizedDescription)"
         }
     }
 

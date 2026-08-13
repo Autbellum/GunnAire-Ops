@@ -2,6 +2,7 @@ import Foundation
 import SwiftData
 
 enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable {
+    case serviceReport = "service_report"
     case beforePhoto = "before_photo"
     case afterPhoto = "after_photo"
     case diagnosticPhoto = "diagnostic_photo"
@@ -15,6 +16,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
 
     var label: String {
         switch self {
+        case .serviceReport: return "Service Report"
         case .beforePhoto: return "Before Photo"
         case .afterPhoto: return "After Photo"
         case .diagnosticPhoto: return "Diagnostic Photo"
@@ -30,7 +32,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
         switch self {
         case .beforePhoto, .afterPhoto, .diagnosticPhoto:
             return true
-        case .customerDocument, .invoiceSupport, .estimateSupport, .receipt, .other:
+        case .serviceReport, .customerDocument, .invoiceSupport, .estimateSupport, .receipt, .other:
             return false
         }
     }

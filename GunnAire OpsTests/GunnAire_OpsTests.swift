@@ -91,6 +91,33 @@ struct GunnAire_OpsTests {
         #expect(bodyString.contains("--\(boundary)--"))
     }
 
+    @Test func serviceReportAttachmentKindIsDocument() async throws {
+        #expect(ServiceDocumentAttachmentKind.serviceReport.label == "Service Report")
+        #expect(ServiceDocumentAttachmentKind.serviceReport.isPhoto == false)
+    }
+
+    @Test func quickBooksUploadMetadataCanReferenceInvoiceForSend() async throws {
+        let metadata = QuickBooksUploadMetadata(
+            FileName: "onsite-report.pdf",
+            ContentType: "application/pdf",
+            Note: "Generated onsite service report",
+            AttachableRef: [
+                QuickBooksAttachableReference(
+                    EntityRef: QuickBooksAttachableEntityRef(type: QuickBooksAttachableEntityType.invoice.rawValue, value: "123"),
+                    IncludeOnSend: true
+                )
+            ]
+        )
+
+        let data = try JSONEncoder().encode(metadata)
+        let payload = String(data: data, encoding: .utf8) ?? ""
+
+        #expect(payload.contains("\"FileName\":\"onsite-report.pdf\""))
+        #expect(payload.contains("\"type\":\"Invoice\""))
+        #expect(payload.contains("\"value\":\"123\""))
+        #expect(payload.contains("\"IncludeOnSend\":true"))
+    }
+
     @Test func quickBooksFaultDecoderHandlesLowercaseAuthorizationFaults() async throws {
         let data = Data(
             #"{"fault":{"error":[{"message":"message=ApplicationAuthorizationFailed; errorCode=003100; statusCode=403","detail":null,"code":"3100","element":null}],"type":"SERVICE"}}"#.utf8
