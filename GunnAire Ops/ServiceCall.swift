@@ -1072,29 +1072,42 @@ final class ServiceCall {
         ]
         guard !derivedTargets.contains(changedKey) else { return }
 
-        if changedKey == "return_air_temp" || changedKey == "supply_air_temp",
-           let returnTemp = numericTechnicalReading("return_air_temp", in: readings),
-           let supplyTemp = numericTechnicalReading("supply_air_temp", in: readings) {
-            readings["temperature_split"] = formattedTechnicalReading(abs(returnTemp - supplyTemp))
-            readings["temperature_rise"] = formattedTechnicalReading(supplyTemp - returnTemp)
+        if changedKey == "return_air_temp" || changedKey == "supply_air_temp" {
+            if let returnTemp = numericTechnicalReading("return_air_temp", in: readings),
+               let supplyTemp = numericTechnicalReading("supply_air_temp", in: readings) {
+                readings["temperature_split"] = formattedTechnicalReading(abs(returnTemp - supplyTemp))
+                readings["temperature_rise"] = formattedTechnicalReading(supplyTemp - returnTemp)
+            } else {
+                readings.removeValue(forKey: "temperature_split")
+                readings.removeValue(forKey: "temperature_rise")
+            }
         }
 
-        if changedKey == "suction_line_temp" || changedKey == "suction_saturation_temp",
-           let suctionLineTemp = numericTechnicalReading("suction_line_temp", in: readings),
-           let suctionSaturationTemp = numericTechnicalReading("suction_saturation_temp", in: readings) {
-            readings["superheat"] = formattedTechnicalReading(suctionLineTemp - suctionSaturationTemp)
+        if changedKey == "suction_line_temp" || changedKey == "suction_saturation_temp" {
+            if let suctionLineTemp = numericTechnicalReading("suction_line_temp", in: readings),
+               let suctionSaturationTemp = numericTechnicalReading("suction_saturation_temp", in: readings) {
+                readings["superheat"] = formattedTechnicalReading(suctionLineTemp - suctionSaturationTemp)
+            } else {
+                readings.removeValue(forKey: "superheat")
+            }
         }
 
-        if changedKey == "liquid_line_temp" || changedKey == "liquid_saturation_temp",
-           let liquidLineTemp = numericTechnicalReading("liquid_line_temp", in: readings),
-           let liquidSaturationTemp = numericTechnicalReading("liquid_saturation_temp", in: readings) {
-            readings["subcooling"] = formattedTechnicalReading(liquidSaturationTemp - liquidLineTemp)
+        if changedKey == "liquid_line_temp" || changedKey == "liquid_saturation_temp" {
+            if let liquidLineTemp = numericTechnicalReading("liquid_line_temp", in: readings),
+               let liquidSaturationTemp = numericTechnicalReading("liquid_saturation_temp", in: readings) {
+                readings["subcooling"] = formattedTechnicalReading(liquidSaturationTemp - liquidLineTemp)
+            } else {
+                readings.removeValue(forKey: "subcooling")
+            }
         }
 
-        if changedKey == "static_pressure_return" || changedKey == "static_pressure_supply",
-           let returnStatic = numericTechnicalReading("static_pressure_return", in: readings),
-           let supplyStatic = numericTechnicalReading("static_pressure_supply", in: readings) {
-            readings["total_external_static"] = formattedTechnicalReading(abs(returnStatic) + abs(supplyStatic))
+        if changedKey == "static_pressure_return" || changedKey == "static_pressure_supply" {
+            if let returnStatic = numericTechnicalReading("static_pressure_return", in: readings),
+               let supplyStatic = numericTechnicalReading("static_pressure_supply", in: readings) {
+                readings["total_external_static"] = formattedTechnicalReading(abs(returnStatic) + abs(supplyStatic))
+            } else {
+                readings.removeValue(forKey: "total_external_static")
+            }
         }
     }
 

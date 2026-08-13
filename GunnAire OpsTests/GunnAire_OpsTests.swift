@@ -812,6 +812,56 @@ struct GunnAire_OpsTests {
         #expect(call.technicalReadingValidationIssue(for: subcoolingDefinition)?.contains("more than 3.0 F") == true)
     }
 
+    @Test func clearingDerivedReadingSourceRemovesStaleCalculatedValues() async throws {
+        let customer = Customer(name: "Derived Reading Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        call.setTechnicalReading("75", for: "return_air_temp")
+        call.setTechnicalReading("55", for: "supply_air_temp")
+        call.setTechnicalReading("52", for: "suction_saturation_temp")
+        call.setTechnicalReading("62", for: "suction_line_temp")
+        call.setTechnicalReading("95", for: "liquid_saturation_temp")
+        call.setTechnicalReading("85", for: "liquid_line_temp")
+
+        #expect(call.technicalReading(for: "temperature_split") == "20.0")
+        #expect(call.technicalReading(for: "temperature_rise") == "-20.0")
+        #expect(call.technicalReading(for: "superheat") == "10.0")
+        #expect(call.technicalReading(for: "subcooling") == "10.0")
+
+        call.setTechnicalReading("", for: "supply_air_temp")
+        call.setTechnicalReading("", for: "suction_line_temp")
+        call.setTechnicalReading("", for: "liquid_line_temp")
+
+        #expect(call.technicalReading(for: "temperature_split").isEmpty)
+        #expect(call.technicalReading(for: "temperature_rise").isEmpty)
+        #expect(call.technicalReading(for: "superheat").isEmpty)
+        #expect(call.technicalReading(for: "subcooling").isEmpty)
+    }
+
+    @Test func clearingStaticPressureSourceRemovesStaleTotalExternalStatic() async throws {
+        let customer = Customer(name: "Static Reading Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.airHandler.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        call.setTechnicalReading("-0.35", for: "static_pressure_return")
+        call.setTechnicalReading("0.42", for: "static_pressure_supply")
+
+        #expect(call.technicalReading(for: "total_external_static") == "0.8")
+
+        call.setTechnicalReading("", for: "static_pressure_supply")
+
+        #expect(call.technicalReading(for: "total_external_static").isEmpty)
+    }
+
     @Test func equipmentSpecificReportReadinessTracksMissingRequiredItems() async throws {
         let customer = Customer(name: "Readiness Customer")
         let call = ServiceCall(
