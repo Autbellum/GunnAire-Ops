@@ -441,15 +441,27 @@ final class ServiceDocumentAttachment {
         equipmentProfiles
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
             .compactMap { equipment in
-                let matching = attachments
-                    .filter { attachment in
-                        attachment.customerEquipmentID == equipment.id ||
-                            attachment.linkedServiceCall(in: serviceCalls)?.customerEquipmentID == equipment.id
-                    }
-                    .sorted { $0.createdAt > $1.createdAt }
+                let matching = equipmentAttachments(
+                    for: equipment,
+                    in: attachments,
+                    serviceCalls: serviceCalls
+                )
                 guard !matching.isEmpty else { return nil }
                 return EquipmentAttachmentGroup(equipment: equipment, attachments: matching)
             }
+    }
+
+    static func equipmentAttachments(
+        for equipment: CustomerEquipment,
+        in attachments: [ServiceDocumentAttachment],
+        serviceCalls: [ServiceCall] = []
+    ) -> [ServiceDocumentAttachment] {
+        attachments
+            .filter { attachment in
+                attachment.customerEquipmentID == equipment.id ||
+                    attachment.linkedServiceCall(in: serviceCalls)?.customerEquipmentID == equipment.id
+            }
+            .sorted { $0.createdAt > $1.createdAt }
     }
 
     func isLinkedToEquipment(

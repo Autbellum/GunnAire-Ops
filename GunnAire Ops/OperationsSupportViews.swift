@@ -1850,6 +1850,16 @@ private struct CustomerEditorView: View {
         equipmentProfiles.filter { $0.customer?.id == customer.id }
     }
 
+    private func equipmentFileSummary(for equipment: CustomerEquipment) -> String? {
+        let attachments = ServiceDocumentAttachment.equipmentAttachments(
+            for: equipment,
+            in: customerAttachments,
+            serviceCalls: customerServiceCalls
+        )
+        guard !attachments.isEmpty else { return nil }
+        return EquipmentAttachmentGroup(equipment: equipment, attachments: attachments).summary
+    }
+
     private var matchingSharedCustomerDocuments: [BackendDocumentRecord] {
         let customerName = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !customerName.isEmpty else { return [] }
@@ -2098,6 +2108,12 @@ private struct CustomerEditorView: View {
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                         .lineLimit(3)
+                                }
+                                if let fileSummary = equipmentFileSummary(for: equipment) {
+                                    Text("Files: \(fileSummary)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(2)
                                 }
                                 HStack {
                                     Button("Edit") {

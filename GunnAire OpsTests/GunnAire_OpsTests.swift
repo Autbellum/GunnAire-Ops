@@ -3119,6 +3119,59 @@ struct GunnAire_OpsTests {
         #expect(group.summary == "1 report - 1 photo - 1 billing file - 1 file")
     }
 
+    @Test func equipmentAttachmentsIncludeDirectAndLinkedJobFiles() async throws {
+        let customer = Customer(name: "Equipment File Customer")
+        let equipment = CustomerEquipment(customer: customer, name: "Main System")
+        let otherEquipment = CustomerEquipment(customer: customer, name: "Other System")
+        let linkedCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let directFile = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: equipment.id,
+            kind: .customerDocument,
+            displayName: "manual.pdf",
+            localFilePath: "/tmp/manual.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 10)
+        )
+        let legacyJobFile = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: linkedCall.id,
+            kind: .invoiceSupport,
+            displayName: "invoice.pdf",
+            localFilePath: "/tmp/invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 20)
+        )
+        let unrelatedFile = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: otherEquipment.id,
+            kind: .customerDocument,
+            displayName: "other-manual.pdf",
+            localFilePath: "/tmp/other-manual.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 30)
+        )
+
+        let files = ServiceDocumentAttachment.equipmentAttachments(
+            for: equipment,
+            in: [directFile, unrelatedFile, legacyJobFile],
+            serviceCalls: [linkedCall]
+        )
+
+        #expect(files.map(\.displayName) == ["invoice.pdf", "manual.pdf"])
+        #expect(EquipmentAttachmentGroup(equipment: equipment, attachments: files).summary == "1 billing file - 1 file")
+    }
+
     @Test func onsiteReportLinkedRecordRowsIncludeInvoiceEstimateAndQuickBooksReferences() async throws {
         let customer = Customer(name: "Linked Report Customer")
         let callID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
