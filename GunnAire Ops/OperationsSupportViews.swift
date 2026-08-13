@@ -1786,6 +1786,7 @@ private struct CustomerEditorView: View {
     @State private var showingCustomerFileImporter = false
     @State private var showingCustomerCamera = false
     @State private var customerAttachmentKind: ServiceDocumentAttachmentKind = .customerDocument
+    @State private var forcedCustomerAttachmentKind: ServiceDocumentAttachmentKind?
     @State private var customerAttachmentCaption = ""
     @State private var selectedCustomerAttachmentEquipmentID: UUID?
     @State private var customerAttachmentMessage: String?
@@ -1980,6 +1981,12 @@ private struct CustomerEditorView: View {
         )
     }
 
+    private var customerFileImporterContentTypes: [UTType] {
+        forcedCustomerAttachmentKind == .customerProfilePhoto
+            ? [.image]
+            : [.image, .pdf, .plainText, .data]
+    }
+
     init(customer: Customer) {
         self.customer = customer
         _name = State(initialValue: customer.name)
@@ -2029,9 +2036,26 @@ private struct CustomerEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if let profilePhoto = ServiceDocumentAttachment.primaryCustomerPhoto(for: customer, in: customerAttachments) {
-                    Section("Profile Photo") {
+                Section("Profile Photo") {
+                    if let profilePhoto = ServiceDocumentAttachment.primaryCustomerPhoto(for: customer, in: customerAttachments) {
                         customerAttachmentRow(profilePhoto)
+                    }
+                    HStack {
+                        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                            Button {
+                                beginDirectProfilePhotoCapture()
+                            } label: {
+                                Label("Take Profile Photo", systemImage: "camera")
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        Button {
+                            beginDirectProfilePhotoImport()
+                        } label: {
+                            Label("Import Profile Photo", systemImage: "photo")
+                        }
+                        .buttonStyle(.bordered)
                     }
                 }
 
@@ -2452,7 +2476,7 @@ private struct CustomerEditorView: View {
             }
             .fileImporter(
                 isPresented: $showingCustomerFileImporter,
-                allowedContentTypes: [.image, .pdf, .plainText, .data],
+                allowedContentTypes: customerFileImporterContentTypes,
                 allowsMultipleSelection: true
             ) { result in
                 handleImportedCustomerFiles(result)
@@ -2560,6 +2584,7 @@ private struct CustomerEditorView: View {
     private func handleCapturedCustomerImage(_ image: UIImage) {
         guard let data = image.jpegData(compressionQuality: 0.84) else {
             customerAttachmentMessage = "Could not save the captured photo."
+            forcedCustomerAttachmentKind = nil
             return
         }
         saveCustomerAttachment(
@@ -2567,9 +2592,11 @@ private struct CustomerEditorView: View {
             filename: "customer-photo-\(UUID().uuidString).jpg",
             contentType: "image/jpeg"
         )
+        forcedCustomerAttachmentKind = nil
     }
 
     private func handleImportedCustomerFiles(_ result: Result<[URL], Error>) {
+        defer { forcedCustomerAttachmentKind = nil }
         switch result {
         case .failure(let error):
             customerAttachmentMessage = "File import failed: \(error.localizedDescription)"
@@ -2599,18 +2626,26 @@ private struct CustomerEditorView: View {
     private func saveCustomerAttachment(data: Data, filename: String, contentType: String) {
         do {
             let storedURL = try persistCustomerAttachmentData(data, filename: filename)
-            let attachmentKind = canViewFinancials || !customerAttachmentKind.isFinancialCustomerProfileAttachment
-                ? customerAttachmentKind
+            let requestedKind = forcedCustomerAttachmentKind ?? customerAttachmentKind
+            let safeRequestedKind = canViewFinancials || !requestedKind.isFinancialCustomerProfileAttachment
+                ? requestedKind
                 : .customerDocument
+            let isImage = contentType.lowercased().hasPrefix("image/")
+            let attachmentKind = safeRequestedKind == .customerProfilePhoto && !isImage
+                ? .customerDocument
+                : safeRequestedKind
+            let isProfilePhoto = attachmentKind == .customerProfilePhoto
             let attachment = ServiceDocumentAttachment(
                 customer: customer,
                 serviceCallID: nil,
-                customerEquipmentID: selectedCustomerAttachmentEquipmentID,
+                customerEquipmentID: isProfilePhoto ? nil : selectedCustomerAttachmentEquipmentID,
                 invoiceID: nil,
                 estimateID: nil,
                 kind: attachmentKind,
                 displayName: filename,
-                caption: customerAttachmentCaption.nilIfBlank,
+                caption: isProfilePhoto
+                    ? (customerAttachmentCaption.nilIfBlank ?? "Customer profile photo")
+                    : customerAttachmentCaption.nilIfBlank,
                 localFilePath: storedURL.path,
                 contentType: contentType,
                 fileSizeBytes: data.count
@@ -2618,12 +2653,29 @@ private struct CustomerEditorView: View {
             modelContext.insert(attachment)
             try modelContext.save()
             customerAttachmentCaption = ""
-            selectedCustomerAttachmentEquipmentID = nil
-            customerAttachmentMessage = "Saved \(filename) to \(customer.name)."
+            if isProfilePhoto {
+                selectedCustomerAttachmentEquipmentID = nil
+                customerAttachmentMessage = "Updated profile photo for \(customer.name)."
+            } else {
+                selectedCustomerAttachmentEquipmentID = nil
+                customerAttachmentMessage = "Saved \(filename) to \(customer.name)."
+            }
             syncCustomerAttachmentIfPossible(attachment, data: data)
         } catch {
             customerAttachmentMessage = "Attachment save failed: \(error.localizedDescription)"
         }
+    }
+
+    private func beginDirectProfilePhotoCapture() {
+        forcedCustomerAttachmentKind = .customerProfilePhoto
+        selectedCustomerAttachmentEquipmentID = nil
+        showingCustomerCamera = true
+    }
+
+    private func beginDirectProfilePhotoImport() {
+        forcedCustomerAttachmentKind = .customerProfilePhoto
+        selectedCustomerAttachmentEquipmentID = nil
+        showingCustomerFileImporter = true
     }
 
     private func persistCustomerAttachmentData(_ data: Data, filename: String) throws -> URL {
