@@ -7034,6 +7034,36 @@ struct GunnAire_OpsTests {
         #expect(records[0].filename == "service-report.pdf")
         #expect(records[0].kind == "service_report")
         #expect(records[0].customerName == "Shared Customer")
+        #expect(records[0].customerEquipmentID == nil)
+        #expect(records[0].equipmentName == nil)
+    }
+
+    @Test func backendDocumentsDecodeEquipmentMetadataForSharedFiles() async throws {
+        let equipmentID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let json = Data("""
+        {
+          "documents": [
+            {
+              "id": "document-2",
+              "filename": "rtu-data-plate.jpg",
+              "contentType": "image/jpeg",
+              "kind": "equipment_data_plate_photo",
+              "serviceCallID": "call-1",
+              "customerEquipmentID": "\(equipmentID.uuidString)",
+              "equipmentName": "Roof RTU 1",
+              "customerName": "Shared Customer",
+              "storedPath": "/storage/rtu-data-plate.jpg",
+              "createdAt": "2026-08-13T14:01:00Z"
+            }
+          ]
+        }
+        """.utf8)
+
+        let record = try #require(try GunnAireBackendService.decodeDocuments(from: json).first)
+
+        #expect(record.customerEquipmentID == equipmentID.uuidString)
+        #expect(record.equipmentName == "Roof RTU 1")
+        #expect(record.kind == "equipment_data_plate_photo")
     }
 
     @Test func customerIntelligencePrioritizesOverdueCollection() async throws {

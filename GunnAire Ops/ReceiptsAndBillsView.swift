@@ -647,6 +647,8 @@ private extension ReceiptsAndBillsView {
                 contentType: contentType,
                 kind: "receipt",
                 serviceCallID: selectedServiceCallID,
+                customerEquipmentID: selectedServiceCall?.customerEquipmentID,
+                equipmentName: selectedServiceCall?.equipmentSummary,
                 customerName: selectedServiceCall?.customer.name
             )
             backendUploadMessage = "Receipt uploaded to company storage: \(response.filename)."

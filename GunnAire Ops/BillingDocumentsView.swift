@@ -3061,6 +3061,12 @@ GunnAire
                 }
                 .font(.caption2)
                 .foregroundColor(.secondary)
+                if let equipmentLabel = sharedJobDocumentEquipmentLabel(document) {
+                    Text(equipmentLabel)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
 
                 Button(downloadingSharedJobDocumentID == document.id ? "Downloading..." : "Download & Open") {
                     Task {
@@ -3184,6 +3190,18 @@ GunnAire
     private func sharedJobDocumentKindLabel(_ kind: String) -> String {
         ServiceDocumentAttachmentKind(rawValue: kind)?.label ??
             kind.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private func sharedJobDocumentEquipmentLabel(_ document: BackendDocumentRecord) -> String? {
+        if let equipmentName = document.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !equipmentName.isEmpty {
+            return "Equipment: \(equipmentName)"
+        }
+        if let equipmentID = document.customerEquipmentID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !equipmentID.isEmpty {
+            return "Equipment ID: \(equipmentID.prefix(8))"
+        }
+        return nil
     }
 
     private func sharedJobDocumentDisplayDate(_ value: String) -> String {
@@ -3351,6 +3369,8 @@ GunnAire
                         contentType: attachment.contentType,
                         kind: attachment.kindRaw,
                         serviceCallID: attachment.serviceCallID,
+                        customerEquipmentID: attachment.customerEquipmentID,
+                        equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
                         customerName: attachment.customer?.name
                     )
                     attachment.backendDocumentID = response.id

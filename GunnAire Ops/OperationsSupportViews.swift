@@ -1612,6 +1612,8 @@ struct OnsiteDocumentationView: View {
                     contentType: attachment.contentType,
                     kind: attachment.kindRaw,
                     serviceCallID: attachment.serviceCallID,
+                    customerEquipmentID: attachment.customerEquipmentID,
+                    equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
                     customerName: attachment.customer?.name
                 )
                 attachment.backendDocumentID = response.id
@@ -1747,6 +1749,8 @@ struct OnsiteDocumentationView: View {
                     contentType: attachment.contentType,
                     kind: attachment.kindRaw,
                     serviceCallID: attachment.serviceCallID,
+                    customerEquipmentID: attachment.customerEquipmentID,
+                    equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
                     customerName: attachment.customer?.name
                 )
                 attachment.backendDocumentID = response.id
@@ -2721,6 +2725,8 @@ private struct CustomerEditorView: View {
                     contentType: attachment.contentType,
                     kind: attachment.kindRaw,
                     serviceCallID: nil,
+                    customerEquipmentID: attachment.customerEquipmentID,
+                    equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
                     customerName: customer.name
                 )
                 attachment.backendDocumentID = response.id
@@ -2827,6 +2833,12 @@ private struct CustomerEditorView: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
+                if let equipmentLabel = sharedDocumentEquipmentLabel(document) {
+                    Text(equipmentLabel)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
                 Text("Synced to company storage")
                     .font(.caption2)
                     .foregroundColor(.green)
@@ -2874,6 +2886,18 @@ private struct CustomerEditorView: View {
     private func sharedDocumentKindLabel(_ kind: String) -> String {
         ServiceDocumentAttachmentKind(rawValue: kind)?.label ??
             kind.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private func sharedDocumentEquipmentLabel(_ document: BackendDocumentRecord) -> String? {
+        if let equipmentName = document.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !equipmentName.isEmpty {
+            return "Equipment: \(equipmentName)"
+        }
+        if let equipmentID = document.customerEquipmentID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !equipmentID.isEmpty {
+            return "Equipment ID: \(equipmentID.prefix(8))"
+        }
+        return nil
     }
 
     private func sharedDocumentDisplayDate(_ value: String) -> String {

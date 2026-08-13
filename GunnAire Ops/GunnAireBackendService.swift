@@ -23,6 +23,8 @@ struct BackendDocumentRecord: Codable, Identifiable {
     let contentType: String
     let kind: String
     let serviceCallID: String?
+    let customerEquipmentID: String?
+    let equipmentName: String?
     let customerName: String?
     let storedPath: String?
     let createdAt: String?
@@ -96,6 +98,8 @@ enum GunnAireBackendService {
         let contentType: String
         let kind: String
         let serviceCallID: String?
+        let customerEquipmentID: String?
+        let equipmentName: String?
         let customerName: String?
         let dataBase64: String
     }
@@ -231,6 +235,8 @@ enum GunnAireBackendService {
         contentType: String,
         kind: String,
         serviceCallID: UUID?,
+        customerEquipmentID: UUID? = nil,
+        equipmentName: String? = nil,
         customerName: String?
     ) async throws -> BackendDocumentUploadResponse {
         let payload = DocumentUploadPayload(
@@ -238,6 +244,8 @@ enum GunnAireBackendService {
             contentType: contentType,
             kind: kind,
             serviceCallID: serviceCallID?.uuidString,
+            customerEquipmentID: customerEquipmentID?.uuidString,
+            equipmentName: equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank,
             customerName: customerName,
             dataBase64: data.base64EncodedString()
         )
