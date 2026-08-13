@@ -1396,7 +1396,7 @@ final class ServiceCall {
             } else {
                 let pendingQBAttachments = attachments.contains {
                     $0.serviceCallID == id &&
-                        $0.canUploadToQuickBooksInvoice(invoice)
+                        $0.canBePendingQuickBooksInvoiceAttachment(for: invoice)
                 }
                 if pendingQBAttachments {
                     missing.append("QuickBooks attachments synced")

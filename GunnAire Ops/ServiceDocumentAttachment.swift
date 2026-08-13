@@ -206,6 +206,14 @@ final class ServiceDocumentAttachment {
             customerMatches(invoice.customer)
     }
 
+    func canBePendingQuickBooksInvoiceAttachment(for invoice: Invoice) -> Bool {
+        canLinkToQuickBooksInvoiceDocument &&
+            (invoiceID == nil || invoiceID == invoice.id) &&
+            quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+            invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+            customerMatches(invoice.customer)
+    }
+
     func canUploadToQuickBooksEstimate(_ estimate: Estimate) -> Bool {
         canLinkToQuickBooksEstimateDocument &&
             estimateID == estimate.id &&

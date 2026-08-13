@@ -1465,6 +1465,62 @@ struct GunnAire_OpsTests {
         #expect(rows.contains { $0.label == "Missing Closeout Items" && $0.value.contains("Onsite report generated") })
     }
 
+    @Test func closeoutReadinessFlagsUnlinkedSameJobQuickBooksAttachments() async throws {
+        let customer = Customer(name: "Closeout Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            workCompletedChecklist: true
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        let invoice = Invoice(
+            serviceCallID: call.id,
+            customer: customer,
+            quickBooksID: "INV-123",
+            amount: 400,
+            status: "paid",
+            customerSignedAt: Date(),
+            finalizedAt: Date()
+        )
+        let generatedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 2048,
+            quickBooksAttachableID: "attach-report"
+        )
+        let unlinkedJobPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: nil,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+
+        let readiness = call.closeoutReadiness(
+            invoice: invoice,
+            payments: [],
+            attachments: [generatedReport, unlinkedJobPhoto]
+        )
+
+        #expect(readiness.missingItems.contains("QuickBooks attachments synced"))
+    }
+
     @Test func onsiteReportReadinessRowsMarkCompleteReportsReady() async throws {
         let customer = Customer(name: "Ready Customer")
         let call = ServiceCall(
@@ -1862,6 +1918,10 @@ struct GunnAire_OpsTests {
         #expect(receipt.canUploadToQuickBooksInvoice(invoice) == false)
         #expect(wrongCustomerInvoiceAttachment.canUploadToQuickBooksInvoice(invoice) == false)
         #expect(unSyncedReport.canUploadToQuickBooksInvoice(localOnlyInvoice) == false)
+        #expect(unSyncedReport.canBePendingQuickBooksInvoiceAttachment(for: invoice) == true)
+        #expect(uploadedReport.canBePendingQuickBooksInvoiceAttachment(for: invoice) == false)
+        #expect(receipt.canBePendingQuickBooksInvoiceAttachment(for: invoice) == false)
+        #expect(wrongCustomerInvoiceAttachment.canBePendingQuickBooksInvoiceAttachment(for: invoice) == false)
         #expect(estimateSupport.canUploadToQuickBooksEstimate(estimate) == true)
         #expect(wrongCustomerEstimateAttachment.canUploadToQuickBooksEstimate(estimate) == false)
         #expect(estimateSupport.canUploadToQuickBooksEstimate(localOnlyEstimate) == false)
