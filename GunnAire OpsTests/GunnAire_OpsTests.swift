@@ -2042,6 +2042,32 @@ struct GunnAire_OpsTests {
         #expect(alreadyLinkedReport.invoiceID == alreadyLinkedInvoiceID)
     }
 
+    @Test func linkingAttachmentToNewBillingTargetClearsStaleQuickBooksAttachmentState() async throws {
+        let customer = Customer(name: "Report Customer")
+        let estimate = Estimate(customer: customer, quickBooksID: "QB-EST-1", amount: 250)
+        let invoice = Invoice(customer: customer, quickBooksID: "QB-INV-1", amount: 250)
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            estimateID: estimate.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "estimate-attachable",
+            quickBooksSyncError: "old estimate target"
+        )
+
+        report.linkToInvoiceIfNeeded(invoice)
+
+        #expect(report.invoiceID == invoice.id)
+        #expect(report.estimateID == estimate.id)
+        #expect(report.quickBooksAttachableID == nil)
+        #expect(report.quickBooksSyncError == nil)
+        #expect(report.canBePendingQuickBooksInvoiceAttachment(for: invoice))
+    }
+
     @Test func customerEmailAttachmentsIncludeLatestLinkedOnsiteReport() async throws {
         let customer = Customer(name: "Email Report Customer")
         let serviceCallID = UUID()

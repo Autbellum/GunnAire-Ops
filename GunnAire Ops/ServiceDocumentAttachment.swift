@@ -238,6 +238,7 @@ final class ServiceDocumentAttachment {
     func linkToInvoiceIfNeeded(_ invoice: Invoice) {
         if invoiceID == nil {
             invoiceID = invoice.id
+            clearQuickBooksAttachmentSyncState()
         }
         if customer?.id != invoice.customer.id {
             customer = invoice.customer
@@ -247,10 +248,16 @@ final class ServiceDocumentAttachment {
     func linkToEstimateIfNeeded(_ estimate: Estimate) {
         if estimateID == nil {
             estimateID = estimate.id
+            clearQuickBooksAttachmentSyncState()
         }
         if customer?.id != estimate.customer.id {
             customer = estimate.customer
         }
+    }
+
+    private func clearQuickBooksAttachmentSyncState() {
+        quickBooksAttachableID = nil
+        quickBooksSyncError = nil
     }
 
     func refreshGeneratedDocumentContext(
