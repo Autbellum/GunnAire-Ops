@@ -2314,6 +2314,19 @@ struct GunnAire_OpsTests {
         }
     }
 
+    @Test func equipmentSpecificTechnicalDropdownsIncludeOtherOption() async throws {
+        let coolingDefinitions = HVACEquipmentType.splitSystemAC.readingDefinitions
+        let heatPumpDefinitions = HVACEquipmentType.heatPump.readingDefinitions
+        let furnaceDefinitions = HVACEquipmentType.gasFurnace.readingDefinitions
+
+        #expect(coolingDefinitions.first { $0.key == "refrigerant_type" }?.options.contains("Other") == true)
+        #expect(coolingDefinitions.first { $0.key == "metering_device" }?.options.contains("Other") == true)
+        #expect(coolingDefinitions.first { $0.key == "condenser_condition" }?.options.contains("Other") == true)
+        #expect(heatPumpDefinitions.first { $0.key == "mode_tested" }?.options.contains("Other") == true)
+        #expect(HVACEquipmentType.airHandler.readingDefinitions.first { $0.key == "blower_type" }?.options.contains("Other") == true)
+        #expect(furnaceDefinitions.first { $0.key == "venting_type" }?.options.contains("Other") == true)
+    }
+
     @Test func onsiteReportTechnicalSectionsUseGroupedCapturedReadings() async throws {
         let customer = Customer(name: "Report Customer")
         let call = ServiceCall(

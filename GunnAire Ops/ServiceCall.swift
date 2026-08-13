@@ -77,6 +77,7 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         "R-454B",
         "R-407C",
         "R-134a",
+        "Unknown",
         "Other"
     ]
 
@@ -86,7 +87,8 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         "EEV",
         "Capillary Tube",
         "Fixed Orifice",
-        "Unknown"
+        "Unknown",
+        "Other"
     ]
 
     private static let conditionOptions = [
@@ -96,7 +98,8 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         "Needs Repair",
         "Failed",
         "Not Tested",
-        "Not Applicable"
+        "Not Applicable",
+        "Other"
     ]
 
     private static let blowerTypeOptions = [
@@ -105,7 +108,8 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         "ECM Variable Speed",
         "Belt Drive",
         "Direct Drive",
-        "Unknown"
+        "Unknown",
+        "Other"
     ]
 
     private static let gasFuelOptions = [
@@ -130,7 +134,8 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         "Direct Vent",
         "Power Vent",
         "Condensing",
-        "Not Applicable"
+        "Not Applicable",
+        "Other"
     ]
 
     private static let packageHeatTypeOptions = [
@@ -181,7 +186,7 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
             ]
         case .heatPump:
             return common + coolingCircuitDefinitions + [
-                HVACTechnicalReadingDefinition(key: "mode_tested", label: "Mode Tested", unit: nil, options: ["Cooling", "Heating", "Both"]),
+                HVACTechnicalReadingDefinition(key: "mode_tested", label: "Mode Tested", unit: nil, options: ["Cooling", "Heating", "Both", "Emergency Heat", "Defrost", "Other"]),
                 HVACTechnicalReadingDefinition(key: "reversing_valve_operation", label: "Reversing Valve", unit: nil, options: Self.conditionOptions),
                 HVACTechnicalReadingDefinition(key: "defrost_control_status", label: "Defrost Control", unit: nil, options: Self.conditionOptions),
                 HVACTechnicalReadingDefinition(key: "aux_heat_amps", label: "Aux Heat Amps", unit: "A")
