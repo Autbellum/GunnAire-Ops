@@ -1607,6 +1607,24 @@ final class ServiceCall {
         }
     }
 
+    var attentionTechnicalReadingDefinitions: [HVACTechnicalReadingDefinition] {
+        let requiredKeys = Set(requiredTechnicalReadingDefinitions.map(\.key))
+        return technicalReadingDefinitions
+            .filter { definition in
+                let value = technicalReading(for: definition.key).trimmingCharacters(in: .whitespacesAndNewlines)
+                return (requiredKeys.contains(definition.key) && value.isEmpty) ||
+                    technicalReadingValidationIssue(for: definition) != nil
+            }
+            .sorted { lhs, rhs in
+                let lhsRank = technicalReadingPriorityRank(lhs, requiredKeys: requiredKeys)
+                let rhsRank = technicalReadingPriorityRank(rhs, requiredKeys: requiredKeys)
+                if lhsRank == rhsRank {
+                    return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
+                }
+                return lhsRank < rhsRank
+            }
+    }
+
     func technicalReadingProgress(in group: HVACTechnicalReadingGroup) -> HVACTechnicalReadingGroupProgress {
         let requiredKeys = Set(requiredTechnicalReadingDefinitions.map(\.key))
         let capturedDefinitions = group.definitions.filter {

@@ -1098,6 +1098,31 @@ struct GunnAire_OpsTests {
         #expect(prioritizedKeys.firstIndex(of: "compressor_rla")! < prioritizedKeys.firstIndex(of: "control_voltage")!)
     }
 
+    @Test func technicalReadingAttentionListIncludesMissingRequiredAndInvalidFields() async throws {
+        let customer = Customer(name: "Attention Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("12", for: "line_voltage")
+        call.setTechnicalReading("18", for: "compressor_rla")
+
+        let attentionKeys = call.attentionTechnicalReadingDefinitions.map(\.key)
+
+        #expect(attentionKeys.first == "compressor_amps")
+        #expect(attentionKeys.contains("compressor_amps"))
+        #expect(attentionKeys.contains("line_voltage"))
+        #expect(attentionKeys.filter { $0 == "line_voltage" }.count == 1)
+        #expect(attentionKeys.firstIndex(of: "compressor_amps")! < attentionKeys.firstIndex(of: "line_voltage")!)
+        #expect(attentionKeys.contains("control_voltage") == false)
+    }
+
     @Test func targetSuperheatAndSubcoolingDeviationBlocksReportCompletion() async throws {
         let customer = Customer(name: "Target Deviation Customer")
         let call = ServiceCall(

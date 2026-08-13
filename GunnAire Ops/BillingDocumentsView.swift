@@ -2223,6 +2223,8 @@ GunnAire
             .buttonStyle(.bordered)
             .disabled(call.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
 
+            technicalReadingAttentionSection(for: call)
+
             ForEach(call.groupedTechnicalReadingDefinitions) { group in
                 DisclosureGroup {
                     ForEach(call.prioritizedTechnicalReadingDefinitions(in: group)) { definition in
@@ -2366,6 +2368,27 @@ GunnAire
                 Text("\(call.populatedTechnicalReadingRows.count) technical reading\(call.populatedTechnicalReadingRows.count == 1 ? "" : "s") captured")
                     .font(.caption)
                     .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func technicalReadingAttentionSection(for call: ServiceCall) -> some View {
+        let definitions = call.attentionTechnicalReadingDefinitions
+        if !definitions.isEmpty {
+            DisclosureGroup {
+                ForEach(definitions) { definition in
+                    technicalReadingInput(for: call, definition: definition)
+                }
+            } label: {
+                HStack {
+                    Label("Attention Required", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Spacer()
+                    Text("\(definitions.count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.orange)
+                }
             }
         }
     }
