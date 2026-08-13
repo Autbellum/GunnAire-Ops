@@ -28,6 +28,30 @@ struct BackendDocumentRecord: Codable, Identifiable {
     let customerName: String?
     let storedPath: String?
     let createdAt: String?
+
+    func matchesCustomerName(_ customerName: String) -> Bool {
+        let expected = customerName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !expected.isEmpty else { return false }
+        return self.customerName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == expected
+    }
+
+    func matchesCustomerDocumentSearch(_ query: String) -> Bool {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedQuery.isEmpty else { return true }
+        return [
+            filename,
+            contentType,
+            kind,
+            serviceCallID,
+            customerEquipmentID,
+            equipmentName,
+            storedPath,
+            createdAt
+        ]
+        .compactMap { $0?.lowercased() }
+        .joined(separator: " ")
+        .contains(normalizedQuery)
+    }
 }
 
 struct BackendPaymentUploadResponse: Codable {

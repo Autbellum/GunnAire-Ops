@@ -1915,20 +1915,8 @@ private struct CustomerEditorView: View {
         guard !customerName.isEmpty else { return [] }
         let query = customerAttachmentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return sharedCustomerDocuments.filter { document in
-            guard document.customerName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == customerName else {
-                return false
-            }
-            guard !query.isEmpty else { return true }
-            return [
-                document.filename,
-                document.kind,
-                document.contentType,
-                document.serviceCallID,
-                document.createdAt
-            ]
-            .compactMap { $0?.lowercased() }
-            .joined(separator: " ")
-            .contains(query)
+            document.matchesCustomerName(customerName) &&
+                document.matchesCustomerDocumentSearch(query)
         }
     }
 

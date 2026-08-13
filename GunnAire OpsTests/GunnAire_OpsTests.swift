@@ -7219,6 +7219,28 @@ struct GunnAire_OpsTests {
         #expect(record.kind == "equipment_data_plate_photo")
     }
 
+    @Test func backendDocumentRecordsSearchSharedEquipmentMetadata() async throws {
+        let document = BackendDocumentRecord(
+            id: "document-3",
+            filename: "rtu-data-plate.jpg",
+            contentType: "image/jpeg",
+            kind: "equipment_data_plate_photo",
+            serviceCallID: "call-1",
+            customerEquipmentID: "11111111-2222-3333-4444-555555555555",
+            equipmentName: "Roof RTU 1",
+            customerName: "Shared Customer",
+            storedPath: "/storage/rtu-data-plate.jpg",
+            createdAt: "2026-08-13T14:01:00Z"
+        )
+
+        #expect(document.matchesCustomerName(" shared customer "))
+        #expect(document.matchesCustomerName("Other Customer") == false)
+        #expect(document.matchesCustomerDocumentSearch("roof rtu"))
+        #expect(document.matchesCustomerDocumentSearch("55555555"))
+        #expect(document.matchesCustomerDocumentSearch("data plate"))
+        #expect(document.matchesCustomerDocumentSearch("compressor") == false)
+    }
+
     @Test func customerIntelligencePrioritizesOverdueCollection() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let customer = Customer(
