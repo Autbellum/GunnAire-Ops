@@ -769,6 +769,64 @@ struct GunnAire_OpsTests {
         #expect(miniSplitDefinitions.contains { $0.key == "indoor_filter_condition" })
     }
 
+    @Test func equipmentSpecificServiceActionsDriveMaintenanceCloseout() async throws {
+        let splitActions = HVACEquipmentType.splitSystemAC.serviceActionDefinitions
+        let furnaceActions = HVACEquipmentType.gasFurnace.serviceActionDefinitions
+
+        #expect(splitActions.contains { $0.key == "condenser_coil_serviced" && $0.required })
+        #expect(splitActions.contains { $0.key == "condensate_drain_checked" && $0.group == "Drainage" })
+        #expect(furnaceActions.contains { $0.key == "heat_exchanger_checked" && $0.group == "Safety" && $0.required })
+        #expect(furnaceActions.contains { $0.key == "flame_sensor_serviced" })
+    }
+
+    @Test func serviceCallStoresEquipmentServiceActionStatuses() async throws {
+        let customer = Customer(name: "Action Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        call.setServiceActionStatus(.completed, for: "condenser_coil_serviced")
+        call.setServiceActionStatus(.needsService, for: "condensate_drain_checked")
+
+        #expect(call.serviceActionStatus(for: "condenser_coil_serviced") == .completed)
+        #expect(call.serviceActionStatus(for: "condensate_drain_checked") == .needsService)
+        #expect(call.populatedServiceActionRows.contains { $0.label == "Condenser coil inspected/washed" && $0.value == "Completed" })
+        #expect(call.populatedServiceActionRows.contains { $0.label == "Condensate drain checked/treated" && $0.value == "Needs Service" })
+
+        call.setServiceActionStatus(.notChecked, for: "condenser_coil_serviced")
+
+        #expect(call.serviceActionStatus(for: "condenser_coil_serviced") == .notChecked)
+        #expect(call.serviceActionStatus(for: "condensate_drain_checked") == .needsService)
+    }
+
+    @Test func maintenanceReportRequiresEquipmentServiceActions() async throws {
+        let customer = Customer(name: "Maintenance Action Customer")
+        let call = ServiceCall(
+            equipmentName: "Main AC",
+            equipmentModel: "24ABC",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Cooling maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+
+        #expect(call.serviceReportMissingRequiredItemLabels.contains("Condenser coil inspected/washed"))
+
+        for definition in call.requiredServiceActionDefinitions {
+            call.setServiceActionStatus(.completed, for: definition.key)
+        }
+
+        #expect(call.serviceReportMissingRequiredItemLabels.contains("Condenser coil inspected/washed") == false)
+    }
+
     @Test func hvacEquipmentReadingDefinitionKeysAreUniquePerEquipmentType() async throws {
         for equipmentType in HVACEquipmentType.allCases {
             let keys = equipmentType.readingDefinitions.map(\.key)

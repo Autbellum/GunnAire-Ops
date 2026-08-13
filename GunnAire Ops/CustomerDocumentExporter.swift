@@ -336,6 +336,18 @@ enum CustomerDocumentExporter {
         if conditionRows.contains(where: { !$0.value.isEmpty }) {
             sections.append(DocumentSection(title: "Maintenance Observations", rows: conditionRows))
         }
+        let actionRows = serviceCall.groupedServiceActionDefinitions.flatMap { group in
+            group.definitions.compactMap { definition -> DocumentRow? in
+                let status = serviceCall.serviceActionStatus(for: definition.key)
+                if status == .notChecked {
+                    return definition.required ? row("\(definition.label) Requirement", "Missing Required Action") : nil
+                }
+                return row("\(group.title) - \(definition.label)", status.label)
+            }
+        }
+        if !actionRows.isEmpty {
+            sections.append(DocumentSection(title: "Equipment Service Actions", rows: actionRows))
+        }
         let safetyRows = serviceCall.serviceReportSafetyAlertLabels.map { row("Alert", $0) }
         if !safetyRows.isEmpty {
             sections.append(DocumentSection(title: "Safety Alerts", rows: safetyRows))

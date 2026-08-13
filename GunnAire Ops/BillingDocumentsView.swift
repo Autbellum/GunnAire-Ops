@@ -2306,6 +2306,9 @@ GunnAire
                 selection: optionalServiceCallTextBinding(call, \.thermostatOperation),
                 options: ["Normal", "Calibrated", "Battery Replaced", "Faulty", "Needs Replacement", "Not Tested"]
             )
+
+            serviceActionChecklistView(for: call)
+
             TextField("Service Report Summary", text: optionalServiceCallTextBinding(call, \.serviceReportSummary), axis: .vertical)
                 .lineLimit(2...5)
 
@@ -2315,6 +2318,36 @@ GunnAire
                     .foregroundColor(.secondary)
             }
         }
+    }
+
+    @ViewBuilder
+    private func serviceActionChecklistView(for call: ServiceCall) -> some View {
+        if !call.groupedServiceActionDefinitions.isEmpty {
+            DisclosureGroup("Equipment Service Actions") {
+                ForEach(call.groupedServiceActionDefinitions) { group in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(group.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+                        ForEach(group.definitions) { definition in
+                            serviceActionStatusPicker(definition, call: call)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+    }
+
+    private func serviceActionStatusPicker(_ definition: HVACServiceActionDefinition, call: ServiceCall) -> some View {
+        let title = definition.required ? "\(definition.label) *" : definition.label
+        return SearchableDropdownPicker(
+            title: title,
+            options: HVACServiceActionStatus.allCases.map { SearchableDropdownOption(id: $0.rawValue, title: $0.label) },
+            selectedID: serviceActionStatusSelection(for: call, key: definition.key),
+            placeholder: "Not Checked",
+            showsClearButton: true
+        )
     }
 
     @ViewBuilder
@@ -2497,6 +2530,19 @@ GunnAire
         Binding(
             get: { call.technicalReading(for: key) },
             set: { call.setTechnicalReading($0, for: key) }
+        )
+    }
+
+    private func serviceActionStatusSelection(for call: ServiceCall, key: String) -> Binding<String?> {
+        Binding<String?>(
+            get: {
+                let status = call.serviceActionStatus(for: key)
+                return status == .notChecked ? nil : status.rawValue
+            },
+            set: { newValue in
+                let status = newValue.flatMap(HVACServiceActionStatus.init(rawValue:)) ?? .notChecked
+                call.setServiceActionStatus(status, for: key)
+            }
         )
     }
 

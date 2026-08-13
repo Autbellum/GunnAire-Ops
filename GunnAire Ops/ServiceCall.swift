@@ -375,6 +375,83 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
             return ["return_air_temp", "supply_air_temp", "line_voltage"]
         }
     }
+
+    var serviceActionDefinitions: [HVACServiceActionDefinition] {
+        let airflow = [
+            HVACServiceActionDefinition(key: "filter_checked", label: "Filter checked/replaced", group: "Airflow", required: true),
+            HVACServiceActionDefinition(key: "blower_compartment_checked", label: "Blower compartment inspected", group: "Airflow", required: true),
+            HVACServiceActionDefinition(key: "thermostat_verified", label: "Thermostat operation verified", group: "Controls", required: true)
+        ]
+        let cooling = [
+            HVACServiceActionDefinition(key: "condenser_coil_serviced", label: "Condenser coil inspected/washed", group: "Cooling", required: true),
+            HVACServiceActionDefinition(key: "evaporator_coil_checked", label: "Evaporator coil inspected", group: "Cooling", required: true),
+            HVACServiceActionDefinition(key: "condensate_drain_checked", label: "Condensate drain checked/treated", group: "Drainage", required: true),
+            HVACServiceActionDefinition(key: "electrical_connections_checked", label: "Electrical connections inspected", group: "Electrical", required: true)
+        ]
+        let heating = [
+            HVACServiceActionDefinition(key: "burner_assembly_checked", label: "Burner assembly inspected", group: "Heating", required: true),
+            HVACServiceActionDefinition(key: "heat_exchanger_checked", label: "Heat exchanger inspected", group: "Safety", required: true),
+            HVACServiceActionDefinition(key: "flame_sensor_serviced", label: "Flame sensor checked/cleaned", group: "Heating", required: true),
+            HVACServiceActionDefinition(key: "venting_checked", label: "Venting inspected", group: "Safety", required: true)
+        ]
+        switch self {
+        case .splitSystemAC:
+            return airflow + cooling
+        case .heatPump:
+            return airflow + cooling + [
+                HVACServiceActionDefinition(key: "reversing_valve_tested", label: "Reversing valve tested", group: "Heat Pump", required: true),
+                HVACServiceActionDefinition(key: "defrost_control_checked", label: "Defrost control checked", group: "Heat Pump", required: true),
+                HVACServiceActionDefinition(key: "aux_heat_checked", label: "Aux heat checked", group: "Heat Pump", required: false)
+            ]
+        case .packageUnit:
+            return airflow + cooling + heating + [
+                HVACServiceActionDefinition(key: "economizer_checked", label: "Economizer checked", group: "Controls", required: false)
+            ]
+        case .miniSplit:
+            return [
+                HVACServiceActionDefinition(key: "filters_cleaned", label: "Indoor filters cleaned", group: "Indoor Unit", required: true),
+                HVACServiceActionDefinition(key: "indoor_coil_checked", label: "Indoor coil inspected/cleaned", group: "Indoor Unit", required: true),
+                HVACServiceActionDefinition(key: "outdoor_coil_checked", label: "Outdoor coil inspected/washed", group: "Outdoor Unit", required: true),
+                HVACServiceActionDefinition(key: "condensate_pump_checked", label: "Condensate pump/drain checked", group: "Drainage", required: true),
+                HVACServiceActionDefinition(key: "remote_control_checked", label: "Remote/controller operation checked", group: "Controls", required: true)
+            ]
+        case .gasFurnace:
+            return airflow + heating + [
+                HVACServiceActionDefinition(key: "safety_controls_checked", label: "Safety controls checked", group: "Safety", required: true)
+            ]
+        case .airHandler:
+            return airflow + [
+                HVACServiceActionDefinition(key: "evaporator_coil_checked", label: "Evaporator coil inspected", group: "Airflow", required: true),
+                HVACServiceActionDefinition(key: "drain_pan_checked", label: "Drain pan and float safety checked", group: "Drainage", required: true),
+                HVACServiceActionDefinition(key: "heat_strip_checked", label: "Heat strip checked", group: "Electrical", required: false)
+            ]
+        case .boiler:
+            return [
+                HVACServiceActionDefinition(key: "relief_valve_checked", label: "Relief valve checked", group: "Safety", required: true),
+                HVACServiceActionDefinition(key: "expansion_tank_checked", label: "Expansion tank checked", group: "Hydronics", required: true),
+                HVACServiceActionDefinition(key: "circulator_checked", label: "Circulator operation checked", group: "Hydronics", required: true),
+                HVACServiceActionDefinition(key: "backflow_preventer_checked", label: "Backflow preventer checked", group: "Safety", required: true),
+                HVACServiceActionDefinition(key: "combustion_venting_checked", label: "Combustion and venting checked", group: "Safety", required: true)
+            ]
+        case .waterHeater:
+            return [
+                HVACServiceActionDefinition(key: "burner_checked", label: "Burner operation checked", group: "Heating", required: true),
+                HVACServiceActionDefinition(key: "venting_checked", label: "Venting inspected", group: "Safety", required: true),
+                HVACServiceActionDefinition(key: "relief_valve_checked", label: "T&P relief valve checked", group: "Safety", required: true),
+                HVACServiceActionDefinition(key: "tank_condition_checked", label: "Tank condition checked", group: "Tank", required: true),
+                HVACServiceActionDefinition(key: "anode_checked", label: "Anode rod checked", group: "Tank", required: false)
+            ]
+        case .ventilation:
+            return [
+                HVACServiceActionDefinition(key: "belt_checked", label: "Belt checked/adjusted", group: "Drive", required: true),
+                HVACServiceActionDefinition(key: "motor_checked", label: "Motor operation checked", group: "Electrical", required: true),
+                HVACServiceActionDefinition(key: "dampers_checked", label: "Dampers verified", group: "Airflow", required: true),
+                HVACServiceActionDefinition(key: "airflow_verified", label: "Airflow verified", group: "Airflow", required: true)
+            ]
+        case .other:
+            return airflow
+        }
+    }
 }
 
 struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
@@ -599,6 +676,56 @@ struct HVACTechnicalReadingGroupProgress: Equatable {
     }
 }
 
+enum HVACServiceActionStatus: String, Codable, CaseIterable, Identifiable {
+    case notChecked = "not_checked"
+    case completed
+    case monitor
+    case needsService = "needs_service"
+    case notApplicable = "not_applicable"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .notChecked:
+            return "Not Checked"
+        case .completed:
+            return "Completed"
+        case .monitor:
+            return "Monitor"
+        case .needsService:
+            return "Needs Service"
+        case .notApplicable:
+            return "N/A"
+        }
+    }
+
+    var countsAsComplete: Bool {
+        switch self {
+        case .completed, .monitor, .needsService, .notApplicable:
+            return true
+        case .notChecked:
+            return false
+        }
+    }
+}
+
+struct HVACServiceActionDefinition: Identifiable, Hashable {
+    let key: String
+    let label: String
+    let group: String
+    let required: Bool
+
+    var id: String { key }
+}
+
+struct HVACServiceActionGroup: Identifiable, Hashable {
+    let title: String
+    let definitions: [HVACServiceActionDefinition]
+
+    var id: String { title }
+}
+
 struct JobCloseoutReadiness: Equatable {
     let requiredItems: [String]
     let missingItems: [String]
@@ -661,6 +788,7 @@ final class ServiceCall {
     var equipmentTypeRaw: String?
     var equipmentNotes: String?
     var serviceReportReadingsJSON: String?
+    var serviceActionChecklistJSON: String?
     var filterSize: String?
     var filterCondition: String?
     var indoorCoilCondition: String?
@@ -716,6 +844,7 @@ final class ServiceCall {
         equipmentTypeRaw: String? = nil,
         equipmentNotes: String? = nil,
         serviceReportReadingsJSON: String? = nil,
+        serviceActionChecklistJSON: String? = nil,
         filterSize: String? = nil,
         filterCondition: String? = nil,
         indoorCoilCondition: String? = nil,
@@ -770,6 +899,7 @@ final class ServiceCall {
         self.equipmentTypeRaw = equipmentTypeRaw
         self.equipmentNotes = equipmentNotes
         self.serviceReportReadingsJSON = serviceReportReadingsJSON
+        self.serviceActionChecklistJSON = serviceActionChecklistJSON
         self.filterSize = filterSize
         self.filterCondition = filterCondition
         self.indoorCoilCondition = indoorCoilCondition
@@ -1251,6 +1381,80 @@ final class ServiceCall {
         return technicalReadingDefinitions.filter { requiredKeys.contains($0.key) }
     }
 
+    var serviceActionDefinitions: [HVACServiceActionDefinition] {
+        (equipmentType ?? .splitSystemAC).serviceActionDefinitions
+    }
+
+    var groupedServiceActionDefinitions: [HVACServiceActionGroup] {
+        let preferredOrder = [
+            "Airflow", "Cooling", "Drainage", "Electrical", "Heating", "Safety",
+            "Controls", "Heat Pump", "Indoor Unit", "Outdoor Unit", "Hydronics",
+            "Tank", "Drive"
+        ]
+        let grouped = Dictionary(grouping: serviceActionDefinitions, by: \.group)
+        return grouped.keys.sorted { lhs, rhs in
+            let lhsIndex = preferredOrder.firstIndex(of: lhs) ?? preferredOrder.count
+            let rhsIndex = preferredOrder.firstIndex(of: rhs) ?? preferredOrder.count
+            if lhsIndex == rhsIndex { return lhs < rhs }
+            return lhsIndex < rhsIndex
+        }.map { title in
+            HVACServiceActionGroup(title: title, definitions: grouped[title] ?? [])
+        }
+    }
+
+    var serviceActionStatuses: [String: HVACServiceActionStatus] {
+        guard let serviceActionChecklistJSON,
+              let data = serviceActionChecklistJSON.data(using: .utf8),
+              let rawStatuses = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        return rawStatuses.reduce(into: [:]) { result, entry in
+            if let status = HVACServiceActionStatus(rawValue: entry.value) {
+                result[entry.key] = status
+            }
+        }
+    }
+
+    func serviceActionStatus(for key: String) -> HVACServiceActionStatus {
+        serviceActionStatuses[key] ?? .notChecked
+    }
+
+    func setServiceActionStatus(_ status: HVACServiceActionStatus, for key: String) {
+        var statuses = serviceActionStatuses
+        if status == .notChecked {
+            statuses.removeValue(forKey: key)
+        } else {
+            statuses[key] = status
+        }
+        let rawStatuses = statuses.mapValues(\.rawValue)
+        guard !rawStatuses.isEmpty,
+              let data = try? JSONEncoder().encode(rawStatuses),
+              let json = String(data: data, encoding: .utf8) else {
+            serviceActionChecklistJSON = nil
+            return
+        }
+        serviceActionChecklistJSON = json
+        diagnosticsCaptured = true
+    }
+
+    var requiredServiceActionDefinitions: [HVACServiceActionDefinition] {
+        serviceActionDefinitions.filter(\.required)
+    }
+
+    var missingRequiredServiceActionDefinitions: [HVACServiceActionDefinition] {
+        requiredServiceActionDefinitions.filter {
+            !serviceActionStatus(for: $0.key).countsAsComplete
+        }
+    }
+
+    var populatedServiceActionRows: [(label: String, value: String)] {
+        serviceActionDefinitions.compactMap { definition in
+            let status = serviceActionStatus(for: definition.key)
+            guard status != .notChecked else { return nil }
+            return (definition.label, status.label)
+        }
+    }
+
     var missingRequiredTechnicalReadingDefinitions: [HVACTechnicalReadingDefinition] {
         requiredTechnicalReadingDefinitions.filter {
             technicalReading(for: $0.key).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1425,6 +1629,9 @@ final class ServiceCall {
             missing.append("Serial Number")
         }
         missing.append(contentsOf: missingRequiredTechnicalReadingDefinitions.map(\.displayLabel))
+        if type == .maintenance {
+            missing.append(contentsOf: missingRequiredServiceActionDefinitions.map(\.label))
+        }
         if serviceReportSummary?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             missing.append("Service Report Summary")
         }
@@ -1432,7 +1639,7 @@ final class ServiceCall {
     }
 
     var serviceReportRequiredItemCount: Int {
-        4 + requiredTechnicalReadingDefinitions.count
+        4 + requiredTechnicalReadingDefinitions.count + (type == .maintenance ? requiredServiceActionDefinitions.count : 0)
     }
 
     var serviceReportCompletedRequiredItemCount: Int {
