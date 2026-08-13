@@ -118,6 +118,15 @@ struct GoogleWritableCalendarEvent: Codable {
     let attendees: [GoogleWritableCalendarAttendee]?
 }
 
+struct GoogleCalendarEventPatch: Codable {
+    let summary: String?
+    let description: String?
+    let location: String?
+    let start: GoogleWritableCalendarEventDate?
+    let end: GoogleWritableCalendarEventDate?
+    let attendees: [GoogleWritableCalendarAttendee]?
+}
+
 struct GoogleWritableCalendarAttendee: Codable {
     let email: String
     let displayName: String?
@@ -539,6 +548,16 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             return
         }
         authorizedJSONRequest(url: url, method: "PATCH", body: event, completion: completion)
+    }
+
+    func patchCalendarEvent(calendarID: String = "primary", eventID: String, patch: GoogleCalendarEventPatch, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
+        let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
+        let encodedEventID = eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID
+        guard let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events/\(encodedEventID)") else {
+            completion(.failure(GoogleAuthError.invalidEndpoint))
+            return
+        }
+        authorizedJSONRequest(url: url, method: "PATCH", body: patch, completion: completion)
     }
 
     func deleteCalendarEvent(calendarID: String = "primary", eventID: String, completion: @escaping (Result<Void, Error>) -> Void) {

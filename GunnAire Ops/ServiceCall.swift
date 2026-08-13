@@ -148,6 +148,7 @@ final class ServiceCall {
     @Attribute(.unique) var id: UUID
     var googleCalendarID: String?
     var googleEventID: String?
+    var googleEventManagedByApp: Bool
     var eventTitle: String?
     var siteAddress: String?
     var equipmentName: String?
@@ -197,6 +198,7 @@ final class ServiceCall {
         id: UUID = UUID(),
         googleCalendarID: String? = nil,
         googleEventID: String? = nil,
+        googleEventManagedByApp: Bool = false,
         eventTitle: String? = nil,
         siteAddress: String? = nil,
         equipmentName: String? = nil,
@@ -245,6 +247,7 @@ final class ServiceCall {
         self.id = id
         self.googleCalendarID = googleCalendarID
         self.googleEventID = googleEventID
+        self.googleEventManagedByApp = googleEventManagedByApp
         self.eventTitle = eventTitle
         self.siteAddress = siteAddress
         self.equipmentName = equipmentName

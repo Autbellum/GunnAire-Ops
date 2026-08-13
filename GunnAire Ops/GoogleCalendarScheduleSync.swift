@@ -275,6 +275,7 @@ enum GoogleCalendarScheduleSync {
             let call = callsByGoogleEventKey[eventKey] ?? callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint] ?? ServiceCall(
                 googleCalendarID: calendarEvent.calendarID,
                 googleEventID: event.id,
+                googleEventManagedByApp: false,
                 eventTitle: normalizedOptional(event.summary),
                 siteAddress: event.location,
                 type: inferCallType(from: event.summary, description: event.description),
@@ -308,6 +309,7 @@ enum GoogleCalendarScheduleSync {
             }
             call.googleCalendarID = calendarEvent.calendarID
             call.googleEventID = event.id
+            call.googleEventManagedByApp = call.googleEventManagedByApp && call.googleEventID == event.id
             call.eventTitle = normalizedOptional(event.summary)
             call.type = inferCallType(from: event.summary, description: event.description)
             call.scheduledDate = startDate
@@ -511,18 +513,26 @@ enum GoogleCalendarScheduleSync {
                 return
             }
             let eventKey = calendarEventStorageKey(calendarID: currentCalendarID, eventID: eventID)
-            let event = makeGoogleEvent(
-                for: call,
-                existingSummary: remoteEventsByKey[eventKey]?.event.summary,
-                preserveExternalDetails: true
-            )
-            auth.updateCalendarEvent(calendarID: currentCalendarID, eventID: eventID, event: event) { result in
-                finish(currentCalendarID, result)
+            if call.googleEventManagedByApp {
+                let event = makeGoogleEvent(
+                    for: call,
+                    existingSummary: remoteEventsByKey[eventKey]?.event.summary,
+                    preserveExternalDetails: false
+                )
+                auth.updateCalendarEvent(calendarID: currentCalendarID, eventID: eventID, event: event) { result in
+                    finish(currentCalendarID, result)
+                }
+            } else {
+                let patch = makeScheduleOnlyPatch(for: call)
+                auth.patchCalendarEvent(calendarID: currentCalendarID, eventID: eventID, patch: patch) { result in
+                    finish(currentCalendarID, result)
+                }
             }
         } else if let remote = remoteEventsByFingerprint[eventFingerprint(for: call)],
                   contains(remote.calendarID, in: writableCalendarIDs) {
             call.googleCalendarID = remote.calendarID
             call.googleEventID = remote.event.id
+            call.googleEventManagedByApp = false
             guard isCalendarCallLocallyEdited(call) else {
                 exportNext(
                     index: index + 1,
@@ -539,13 +549,20 @@ enum GoogleCalendarScheduleSync {
                 )
                 return
             }
-            let event = makeGoogleEvent(
-                for: call,
-                existingSummary: remote.event.summary,
-                preserveExternalDetails: true
-            )
-            auth.updateCalendarEvent(calendarID: remote.calendarID, eventID: remote.event.id, event: event) { result in
-                finish(remote.calendarID, result)
+            if call.googleEventManagedByApp {
+                let event = makeGoogleEvent(
+                    for: call,
+                    existingSummary: remote.event.summary,
+                    preserveExternalDetails: false
+                )
+                auth.updateCalendarEvent(calendarID: remote.calendarID, eventID: remote.event.id, event: event) { result in
+                    finish(remote.calendarID, result)
+                }
+            } else {
+                let patch = makeScheduleOnlyPatch(for: call)
+                auth.patchCalendarEvent(calendarID: remote.calendarID, eventID: remote.event.id, patch: patch) { result in
+                    finish(remote.calendarID, result)
+                }
             }
         } else {
             if call.googleCalendarID != nil, normalized(call.googleCalendarID ?? "") != normalized(targetCalendarID) {
@@ -553,9 +570,31 @@ enum GoogleCalendarScheduleSync {
             }
             let event = makeGoogleEvent(for: call, existingSummary: nil, preserveExternalDetails: false)
             auth.createCalendarEvent(calendarID: targetCalendarID, event: event) { result in
+                if case .success = result {
+                    call.googleEventManagedByApp = true
+                }
                 finish(targetCalendarID, result)
             }
         }
+    }
+
+    private static func makeScheduleOnlyPatch(for call: ServiceCall) -> GoogleCalendarEventPatch {
+        let timeZone = TimeZone.current.identifier
+        let endDate = call.scheduledDate.addingTimeInterval(call.duration)
+        return GoogleCalendarEventPatch(
+            summary: nil,
+            description: nil,
+            location: nil,
+            start: GoogleWritableCalendarEventDate(
+                dateTime: ISO8601DateFormatter().string(from: call.scheduledDate),
+                timeZone: timeZone
+            ),
+            end: GoogleWritableCalendarEventDate(
+                dateTime: ISO8601DateFormatter().string(from: endDate),
+                timeZone: timeZone
+            ),
+            attendees: nil
+        )
     }
 
     private static func makeGoogleEvent(
