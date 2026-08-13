@@ -2131,6 +2131,7 @@ struct GunnAire_OpsTests {
 
         #expect(packageRequiredKeys.contains("package_heat_type"))
         #expect(packageRequiredKeys.contains("blower_amps"))
+        #expect(packageRequiredKeys.contains("co_ppm"))
         #expect(packageRequiredKeys.contains("condenser_condition"))
         #expect(miniSplitRequiredKeys.contains("indoor_head_delta_t"))
         #expect(miniSplitRequiredKeys.contains("indoor_filter_condition"))
@@ -2182,6 +2183,25 @@ struct GunnAire_OpsTests {
         #expect(sections.flatMap(\.rows).contains {
             $0.label == "Subcooling (F)" && $0.value == "Missing Required Reading"
         })
+    }
+
+    @Test func onsiteReportTechnicalSectionsIncludePackageUnitCombustionReadings() async throws {
+        let customer = Customer(name: "Package Report Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.packageUnit.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("325", for: "flue_temp")
+        call.setTechnicalReading("18", for: "co_ppm")
+
+        let rows = CustomerDocumentExporter.technicalReportSectionSummaries(for: call)
+            .flatMap(\.rows)
+
+        #expect(rows.contains { $0.label == "Flue Temp (F)" && $0.value == "325" })
+        #expect(rows.contains { $0.label == "CO Reading (ppm)" && $0.value == "18" })
+        #expect(rows.contains { $0.label == "CO Reading (ppm) Requirement" && $0.value == "Required" })
     }
 
     @Test func onsiteReportTechnicalSectionsMarkRequiredAndInvalidReadings() async throws {
