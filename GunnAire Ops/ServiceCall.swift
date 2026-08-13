@@ -1469,7 +1469,13 @@ final class ServiceCall {
 
     func setTechnicalReading(_ value: String, for key: String) {
         var readings = technicalReadings
+        let allowedKeys = Set(technicalReadingDefinitions.map(\.key))
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard allowedKeys.contains(key) else {
+            readings.removeValue(forKey: key)
+            writeTechnicalReadings(readings)
+            return
+        }
         if trimmed.isEmpty {
             readings.removeValue(forKey: key)
         } else {
@@ -1477,6 +1483,10 @@ final class ServiceCall {
             diagnosticsCaptured = true
         }
         Self.applyDerivedTechnicalReadings(to: &readings, afterChanging: key)
+        writeTechnicalReadings(readings.filter { allowedKeys.contains($0.key) })
+    }
+
+    private func writeTechnicalReadings(_ readings: [String: String]) {
         if readings.isEmpty {
             serviceReportReadingsJSON = nil
         } else if let data = try? JSONEncoder().encode(readings),

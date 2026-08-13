@@ -2386,19 +2386,21 @@ GunnAire
                 }
             }
 
-            HStack {
-                Button("Calculate Temp Split") {
-                    calculateTemperatureSplit(for: call)
-                }
-                .buttonStyle(.bordered)
+            if call.technicalReadingDefinitions.contains(where: { $0.key == "temperature_split" }) {
+                HStack {
+                    Button("Calculate Temp Split") {
+                        calculateTemperatureSplit(for: call)
+                    }
+                    .buttonStyle(.bordered)
 
-                Spacer()
+                    Spacer()
 
-                let split = call.technicalReading(for: "temperature_split")
-                if !split.isEmpty {
-                    Text("\(split) F")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    let split = call.technicalReading(for: "temperature_split")
+                    if !split.isEmpty {
+                        Text("\(split) F")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
 

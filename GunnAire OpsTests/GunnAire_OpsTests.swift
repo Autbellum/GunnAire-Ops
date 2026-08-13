@@ -1634,6 +1634,8 @@ struct GunnAire_OpsTests {
         #expect(call.serviceActionDefinitions.isEmpty)
         #expect(call.groupedServiceActionDefinitions.isEmpty)
         #expect(call.serviceReportMissingRequiredItemLabels.contains("Equipment Type"))
+        call.setTechnicalReading("R-410A", for: "refrigerant_type")
+        #expect(call.technicalReading(for: "refrigerant_type").isEmpty)
 
         call.equipmentType = .heatPump
 
@@ -1642,6 +1644,8 @@ struct GunnAire_OpsTests {
         #expect(call.groupedTechnicalReadingDefinitions.isEmpty == false)
         #expect(call.technicalReadingDefinitions.contains { $0.key == "reversing_valve_operation" })
         #expect(call.technicalReadingDefinitions.contains { $0.key == "flame_sensor_microamps" } == false)
+        call.setTechnicalReading("1.5", for: "flame_sensor_microamps")
+        #expect(call.technicalReading(for: "flame_sensor_microamps").isEmpty)
     }
 
     @Test func changingEquipmentTypePrunesIncompatibleTechnicalReadings() async throws {
