@@ -127,6 +127,7 @@ final class ServiceDocumentAttachment {
     var backendDocumentID: String?
     var quickBooksAttachableID: String?
     var quickBooksSyncError: String?
+    var quickBooksAttachedEntityKeysRaw: String?
     var createdAt: Date
 
     init(
@@ -145,6 +146,7 @@ final class ServiceDocumentAttachment {
         backendDocumentID: String? = nil,
         quickBooksAttachableID: String? = nil,
         quickBooksSyncError: String? = nil,
+        quickBooksAttachedEntityKeysRaw: String? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -162,6 +164,7 @@ final class ServiceDocumentAttachment {
         self.backendDocumentID = backendDocumentID
         self.quickBooksAttachableID = quickBooksAttachableID
         self.quickBooksSyncError = quickBooksSyncError
+        self.quickBooksAttachedEntityKeysRaw = quickBooksAttachedEntityKeysRaw
         self.createdAt = createdAt
     }
 
@@ -233,27 +236,36 @@ final class ServiceDocumentAttachment {
     }
 
     func canUploadToQuickBooksInvoice(_ invoice: Invoice) -> Bool {
-        canLinkToQuickBooksInvoiceDocument &&
+        guard canLinkToQuickBooksInvoiceDocument,
             invoiceID == invoice.id &&
-            quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            customerMatches(invoice.customer)
+            customerMatches(invoice.customer),
+            let reference = quickBooksInvoiceReference(for: invoice) else {
+            return false
+        }
+        return !isQuickBooksAttached(to: [reference])
     }
 
     func canBePendingQuickBooksInvoiceAttachment(for invoice: Invoice) -> Bool {
-        canLinkToQuickBooksInvoiceDocument &&
+        guard canLinkToQuickBooksInvoiceDocument,
             (invoiceID == nil || invoiceID == invoice.id) &&
-            quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            customerMatches(invoice.customer)
+            customerMatches(invoice.customer),
+            let reference = quickBooksInvoiceReference(for: invoice) else {
+            return false
+        }
+        return !isQuickBooksAttached(to: [reference])
     }
 
     func canUploadToQuickBooksEstimate(_ estimate: Estimate) -> Bool {
-        canLinkToQuickBooksEstimateDocument &&
+        guard canLinkToQuickBooksEstimateDocument,
             estimateID == estimate.id &&
-            quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
             estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            customerMatches(estimate.customer)
+            customerMatches(estimate.customer),
+            let reference = quickBooksEstimateReference(for: estimate) else {
+            return false
+        }
+        return !isQuickBooksAttached(to: [reference])
     }
 
     func linkToInvoiceIfNeeded(_ invoice: Invoice) {
@@ -279,6 +291,7 @@ final class ServiceDocumentAttachment {
     private func clearQuickBooksAttachmentSyncState() {
         quickBooksAttachableID = nil
         quickBooksSyncError = nil
+        quickBooksAttachedEntityKeysRaw = nil
     }
 
     func refreshGeneratedDocumentContext(
@@ -297,7 +310,81 @@ final class ServiceDocumentAttachment {
         if changedQuickBooksTarget {
             quickBooksAttachableID = nil
             quickBooksSyncError = nil
+            quickBooksAttachedEntityKeysRaw = nil
         }
+    }
+
+    var quickBooksAttachedEntityKeys: Set<String> {
+        get {
+            guard let quickBooksAttachedEntityKeysRaw else { return [] }
+            return Set(
+                quickBooksAttachedEntityKeysRaw
+                    .components(separatedBy: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+        }
+        set {
+            let sortedKeys = newValue
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .sorted()
+            quickBooksAttachedEntityKeysRaw = sortedKeys.isEmpty ? nil : sortedKeys.joined(separator: "\n")
+        }
+    }
+
+    func markQuickBooksAttached(to references: [QuickBooksAttachableReference]) {
+        var keys = quickBooksAttachedEntityKeys
+        for reference in references {
+            let key = Self.quickBooksAttachedEntityKey(
+                type: reference.EntityRef.type,
+                value: reference.EntityRef.value
+            )
+            if !key.isEmpty {
+                keys.insert(key)
+            }
+        }
+        quickBooksAttachedEntityKeys = keys
+    }
+
+    func isQuickBooksAttached(to references: [QuickBooksAttachableReference]) -> Bool {
+        if quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            return false
+        }
+        let requiredKeys = references
+            .map { Self.quickBooksAttachedEntityKey(type: $0.EntityRef.type, value: $0.EntityRef.value) }
+            .filter { !$0.isEmpty }
+        guard !requiredKeys.isEmpty else { return true }
+        let syncedKeys = quickBooksAttachedEntityKeys
+        guard !syncedKeys.isEmpty else {
+            return true
+        }
+        return requiredKeys.allSatisfy { syncedKeys.contains($0) }
+    }
+
+    func quickBooksInvoiceReference(for invoice: Invoice) -> QuickBooksAttachableReference? {
+        guard let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !quickBooksID.isEmpty else { return nil }
+        return QuickBooksAttachableReference(
+            EntityRef: QuickBooksAttachableEntityRef(type: QuickBooksAttachableEntityType.invoice.rawValue, value: quickBooksID),
+            IncludeOnSend: true
+        )
+    }
+
+    func quickBooksEstimateReference(for estimate: Estimate) -> QuickBooksAttachableReference? {
+        guard let quickBooksID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !quickBooksID.isEmpty else { return nil }
+        return QuickBooksAttachableReference(
+            EntityRef: QuickBooksAttachableEntityRef(type: QuickBooksAttachableEntityType.estimate.rawValue, value: quickBooksID),
+            IncludeOnSend: true
+        )
+    }
+
+    static func quickBooksAttachedEntityKey(type: String, value: String) -> String {
+        let normalizedType = type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedType.isEmpty, !normalizedValue.isEmpty else { return "" }
+        return "\(normalizedType):\(normalizedValue)"
     }
 
     func linkedServiceCall(in serviceCalls: [ServiceCall]) -> ServiceCall? {

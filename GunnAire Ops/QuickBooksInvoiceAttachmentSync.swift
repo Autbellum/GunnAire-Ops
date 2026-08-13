@@ -67,7 +67,7 @@ enum QuickBooksInvoiceAttachmentSync {
         }
 
         for attachment in pendingQuickBooksAttachmentUploads(estimates: estimates, invoices: invoices, attachments: attachments) {
-            let references = quickBooksAttachableReferences(for: attachment, estimates: estimates, invoices: invoices)
+            let references = missingQuickBooksAttachableReferences(for: attachment, estimates: estimates, invoices: invoices)
             guard !references.isEmpty else {
                 continue
             }
@@ -81,6 +81,7 @@ enum QuickBooksInvoiceAttachmentSync {
                     switch result {
                     case .success(let attachableID):
                         attachment.quickBooksAttachableID = attachableID
+                        attachment.markQuickBooksAttached(to: references)
                         attachment.quickBooksSyncError = nil
                     case .failure(let error):
                         attachment.quickBooksSyncError = error.localizedDescription
@@ -98,8 +99,7 @@ enum QuickBooksInvoiceAttachmentSync {
     ) -> [ServiceDocumentAttachment] {
         var seenAttachmentIDs: Set<UUID> = []
         return attachments.filter { attachment in
-            guard attachment.quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-                  !quickBooksAttachableReferences(for: attachment, estimates: estimates, invoices: invoices).isEmpty,
+            guard !missingQuickBooksAttachableReferences(for: attachment, estimates: estimates, invoices: invoices).isEmpty,
                   seenAttachmentIDs.insert(attachment.id).inserted else {
                 return false
             }
@@ -114,22 +114,23 @@ enum QuickBooksInvoiceAttachmentSync {
     ) -> [QuickBooksAttachableReference] {
         var references: [QuickBooksAttachableReference] = []
         if let invoice = invoices.first(where: { attachment.canUploadToQuickBooksInvoice($0) }),
-           let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !quickBooksID.isEmpty {
-            references.append(QuickBooksAttachableReference(
-                EntityRef: QuickBooksAttachableEntityRef(type: QuickBooksAttachableEntityType.invoice.rawValue, value: quickBooksID),
-                IncludeOnSend: true
-            ))
+           let reference = attachment.quickBooksInvoiceReference(for: invoice) {
+            references.append(reference)
         }
         if let estimate = estimates.first(where: { attachment.canUploadToQuickBooksEstimate($0) }),
-           let quickBooksID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !quickBooksID.isEmpty {
-            references.append(QuickBooksAttachableReference(
-                EntityRef: QuickBooksAttachableEntityRef(type: QuickBooksAttachableEntityType.estimate.rawValue, value: quickBooksID),
-                IncludeOnSend: true
-            ))
+           let reference = attachment.quickBooksEstimateReference(for: estimate) {
+            references.append(reference)
         }
         return references
+    }
+
+    static func missingQuickBooksAttachableReferences(
+        for attachment: ServiceDocumentAttachment,
+        estimates: [Estimate],
+        invoices: [Invoice]
+    ) -> [QuickBooksAttachableReference] {
+        quickBooksAttachableReferences(for: attachment, estimates: estimates, invoices: invoices)
+            .filter { !attachment.isQuickBooksAttached(to: [$0]) }
     }
 
     @discardableResult

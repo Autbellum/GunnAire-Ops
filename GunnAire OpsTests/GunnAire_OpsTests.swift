@@ -3290,6 +3290,95 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
+    @Test func quickBooksAttachmentSyncTracksSpecificAttachedBillingTargets() async throws {
+        let customer = Customer(name: "Targeted Attachment Customer")
+        let serviceCallID = UUID()
+        let invoice = Invoice(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "INV-456",
+            amount: 750
+        )
+        let estimate = Estimate(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "EST-456",
+            amount: 750
+        )
+        let serviceReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            invoiceID: invoice.id,
+            estimateID: estimate.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "ATTACH-EST"
+        )
+        let estimateReference = try #require(serviceReport.quickBooksEstimateReference(for: estimate))
+        serviceReport.markQuickBooksAttached(to: [estimateReference])
+
+        let invoiceReference = try #require(serviceReport.quickBooksInvoiceReference(for: invoice))
+        let allReferences = QuickBooksInvoiceAttachmentSync.quickBooksAttachableReferences(
+            for: serviceReport,
+            estimates: [estimate],
+            invoices: [invoice]
+        )
+        let missingReferences = QuickBooksInvoiceAttachmentSync.missingQuickBooksAttachableReferences(
+            for: serviceReport,
+            estimates: [estimate],
+            invoices: [invoice]
+        )
+
+        #expect(serviceReport.isQuickBooksAttached(to: [estimateReference]))
+        #expect(serviceReport.isQuickBooksAttached(to: [invoiceReference]) == false)
+        #expect(allReferences.map(\.EntityRef.value) == ["INV-456"])
+        #expect(missingReferences.map(\.EntityRef.value) == ["INV-456"])
+        #expect(QuickBooksInvoiceAttachmentSync.pendingInvoiceAttachments(invoices: [invoice], attachments: [serviceReport]).count == 1)
+        #expect(QuickBooksInvoiceAttachmentSync.pendingEstimateAttachments(estimates: [estimate], attachments: [serviceReport]).isEmpty)
+    }
+
+    @MainActor
+    @Test func quickBooksAttachmentSyncClearsTargetTrackingWhenNewBillingDocumentLinks() async throws {
+        let customer = Customer(name: "Retarget Attachment Customer")
+        let serviceCallID = UUID()
+        let invoice = Invoice(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "INV-789",
+            amount: 525
+        )
+        let estimate = Estimate(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "EST-789",
+            amount: 525
+        )
+        let serviceReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            estimateID: estimate.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "ATTACH-EST"
+        )
+        let estimateReference = try #require(serviceReport.quickBooksEstimateReference(for: estimate))
+        serviceReport.markQuickBooksAttached(to: [estimateReference])
+
+        serviceReport.linkToInvoiceIfNeeded(invoice)
+
+        #expect(serviceReport.invoiceID == invoice.id)
+        #expect(serviceReport.quickBooksAttachableID == nil)
+        #expect(serviceReport.quickBooksAttachedEntityKeys.isEmpty)
+        #expect(serviceReport.quickBooksSyncError == nil)
+    }
+
+    @MainActor
     @Test func quickBooksAttachmentSyncFindsPendingEstimateAttachments() async throws {
         let customer = Customer(name: "Estimate Attachment Customer")
         let estimate = Estimate(customer: customer, quickBooksID: "EST-123", amount: 250)

@@ -2080,8 +2080,11 @@ final class ServiceCall {
             ? jobAttachments.filter { $0.canBePendingQuickBooksInvoiceAttachment(for: invoice) }
             : []
         let syncedQuickBooksAttachments = jobAttachments.filter {
-            $0.invoiceID == invoice.id &&
-                $0.quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            guard $0.invoiceID == invoice.id,
+                  let reference = $0.quickBooksInvoiceReference(for: invoice) else {
+                return false
+            }
+            return $0.isQuickBooksAttached(to: [reference])
         }
 
         return InvoiceDocumentationStatus(
@@ -2113,8 +2116,11 @@ final class ServiceCall {
             ? jobAttachments.filter { $0.canUploadToQuickBooksEstimate(estimate) }
             : []
         let syncedQuickBooksAttachments = jobAttachments.filter {
-            $0.estimateID == estimate.id &&
-                $0.quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            guard $0.estimateID == estimate.id,
+                  let reference = $0.quickBooksEstimateReference(for: estimate) else {
+                return false
+            }
+            return $0.isQuickBooksAttached(to: [reference])
         }
 
         return EstimateDocumentationStatus(
