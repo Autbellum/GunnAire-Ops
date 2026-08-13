@@ -87,7 +87,15 @@ enum CustomerDocumentExporter {
             equipmentProfiles: equipmentProfiles,
             serviceCalls: serviceCalls
         )
-        return try renderPDF(title: title, customer: serviceCall.customer, sections: sections, imageAttachments: scopedAttachments, fileName: fileName)
+        return try renderPDF(
+            title: title,
+            customer: serviceCall.customer,
+            sections: sections,
+            imageAttachments: scopedAttachments,
+            imageServiceCall: serviceCall,
+            imageEquipmentProfiles: equipmentProfiles,
+            fileName: fileName
+        )
     }
 
     static func exportEstimate(
@@ -205,13 +213,15 @@ enum CustomerDocumentExporter {
             for: attachments,
             serviceCall: serviceCall,
             estimate: estimate,
-            invoice: invoice
+            invoice: invoice,
+            equipmentProfiles: equipmentProfiles
         ))
         sections.append(contentsOf: attachmentSections(
             for: attachments,
             serviceCall: serviceCall,
             estimate: estimate,
-            invoice: invoice
+            invoice: invoice,
+            equipmentProfiles: equipmentProfiles
         ))
 
         if let estimate {
@@ -496,13 +506,15 @@ enum CustomerDocumentExporter {
         for attachments: [ServiceDocumentAttachment],
         serviceCall: ServiceCall?,
         estimate: Estimate?,
-        invoice: Invoice?
+        invoice: Invoice?,
+        equipmentProfiles: [CustomerEquipment] = []
     ) -> [DocumentSection] {
         let rows = attachmentManifestSummaries(
             for: attachments,
             serviceCall: serviceCall,
             estimate: estimate,
-            invoice: invoice
+            invoice: invoice,
+            equipmentProfiles: equipmentProfiles
         ).map { summary in
             row(summary.label, summary.detail)
         }
@@ -514,13 +526,15 @@ enum CustomerDocumentExporter {
         for attachments: [ServiceDocumentAttachment],
         serviceCall: ServiceCall?,
         estimate: Estimate?,
-        invoice: Invoice?
+        invoice: Invoice?,
+        equipmentProfiles: [CustomerEquipment] = []
     ) -> [DocumentSection] {
         let rows = photoEvidenceSummaries(
             for: attachments,
             serviceCall: serviceCall,
             estimate: estimate,
-            invoice: invoice
+            invoice: invoice,
+            equipmentProfiles: equipmentProfiles
         ).map { summary in
             row(summary.label, summary.detail)
         }
@@ -532,7 +546,8 @@ enum CustomerDocumentExporter {
         for attachments: [ServiceDocumentAttachment],
         serviceCall: ServiceCall? = nil,
         estimate: Estimate? = nil,
-        invoice: Invoice? = nil
+        invoice: Invoice? = nil,
+        equipmentProfiles: [CustomerEquipment] = []
     ) -> [(label: String, detail: String)] {
         photoEvidenceAttachments(for: attachments)
             .map { attachment in
@@ -540,6 +555,7 @@ enum CustomerDocumentExporter {
                     attachment.caption,
                     attachment.displayName,
                     formattedDateTime(attachment.createdAt),
+                    attachmentEquipmentTrace(attachment, serviceCall: serviceCall, equipmentProfiles: equipmentProfiles),
                     attachmentRecordTrace(attachment, serviceCall: serviceCall, estimate: estimate, invoice: invoice)
                 ]
                     .compactMap { value -> String? in
@@ -632,11 +648,16 @@ enum CustomerDocumentExporter {
         return attachment.invoiceID == nil && attachment.estimateID == nil
     }
 
-    static func photoAttachmentCaption(for attachment: ServiceDocumentAttachment) -> String {
+    static func photoAttachmentCaption(
+        for attachment: ServiceDocumentAttachment,
+        serviceCall: ServiceCall? = nil,
+        equipmentProfiles: [CustomerEquipment] = []
+    ) -> String {
         [
             attachment.kind.label,
             attachment.caption,
             attachment.displayName,
+            attachmentEquipmentTrace(attachment, serviceCall: serviceCall, equipmentProfiles: equipmentProfiles),
             formattedDateTime(attachment.createdAt)
         ]
             .compactMap { value -> String? in
@@ -650,7 +671,8 @@ enum CustomerDocumentExporter {
         for attachments: [ServiceDocumentAttachment],
         serviceCall: ServiceCall? = nil,
         estimate: Estimate? = nil,
-        invoice: Invoice? = nil
+        invoice: Invoice? = nil,
+        equipmentProfiles: [CustomerEquipment] = []
     ) -> [(label: String, detail: String)] {
         attachments
             .filter { $0.kind != .serviceReport }
@@ -665,6 +687,7 @@ enum CustomerDocumentExporter {
                     attachment.displayName,
                     attachment.caption,
                     attachment.fileSizeBytes > 0 ? formattedFileSize(attachment.fileSizeBytes) : nil,
+                    attachmentEquipmentTrace(attachment, serviceCall: serviceCall, equipmentProfiles: equipmentProfiles),
                     attachmentRecordTrace(attachment, serviceCall: serviceCall, estimate: estimate, invoice: invoice),
                     attachmentQuickBooksTrace(attachment)
                 ]
@@ -699,6 +722,25 @@ enum CustomerDocumentExporter {
             details.append("Invoice ID: \(shortID(invoiceID))")
         }
         return details.isEmpty ? nil : details.joined(separator: " | ")
+    }
+
+    private static func attachmentEquipmentTrace(
+        _ attachment: ServiceDocumentAttachment,
+        serviceCall: ServiceCall?,
+        equipmentProfiles: [CustomerEquipment]
+    ) -> String? {
+        if let equipmentID = attachment.customerEquipmentID,
+           let equipment = equipmentProfiles.first(where: { $0.id == equipmentID }) {
+            return "Equipment: \(equipment.displayName)"
+        }
+        guard let serviceCall,
+              attachment.serviceCallID == nil || attachment.serviceCallID == serviceCall.id else {
+            return nil
+        }
+        if let equipment = matchingEquipmentProfile(for: serviceCall, equipmentProfiles: equipmentProfiles) {
+            return "Equipment: \(equipment.displayName)"
+        }
+        return normalizedValue(serviceCall.equipmentSummary).map { "Equipment: \($0)" }
     }
 
     private static func attachmentQuickBooksTrace(_ attachment: ServiceDocumentAttachment) -> String? {
@@ -937,6 +979,8 @@ enum CustomerDocumentExporter {
         customer: Customer,
         sections: [DocumentSection],
         imageAttachments: [ServiceDocumentAttachment] = [],
+        imageServiceCall: ServiceCall? = nil,
+        imageEquipmentProfiles: [CustomerEquipment] = [],
         fileName: String
     ) throws -> URL {
         let folder = try exportFolder()
@@ -949,7 +993,16 @@ enum CustomerDocumentExporter {
             for section in sections {
                 y = drawSection(section, at: y, in: pageBounds, context: context, title: title, customer: customer)
             }
-            y = drawImageAttachments(imageAttachments, at: y, in: pageBounds, context: context, title: title, customer: customer)
+            y = drawImageAttachments(
+                imageAttachments,
+                at: y,
+                in: pageBounds,
+                context: context,
+                title: title,
+                customer: customer,
+                serviceCall: imageServiceCall,
+                equipmentProfiles: imageEquipmentProfiles
+            )
             drawFooter(in: pageBounds)
         }
 
@@ -1042,7 +1095,9 @@ enum CustomerDocumentExporter {
         in bounds: CGRect,
         context: UIGraphicsPDFRendererContext,
         title: String,
-        customer: Customer
+        customer: Customer,
+        serviceCall: ServiceCall? = nil,
+        equipmentProfiles: [CustomerEquipment] = []
     ) -> CGFloat {
         let images = embeddedPhotoEvidenceAttachments(for: attachments)
             .compactMap { attachment -> (attachment: ServiceDocumentAttachment, image: UIImage)? in
@@ -1079,7 +1134,11 @@ enum CustomerDocumentExporter {
             item.image.draw(in: imageRect)
             y += drawSize.height + 6
 
-            let caption = photoAttachmentCaption(for: item.attachment)
+            let caption = photoAttachmentCaption(
+                for: item.attachment,
+                serviceCall: serviceCall,
+                equipmentProfiles: equipmentProfiles
+            )
             drawWrapped(caption, in: CGRect(x: margin, y: y, width: contentWidth, height: 42), font: .systemFont(ofSize: 9), color: .darkGray)
             y += measuredHeight(caption, width: contentWidth, font: .systemFont(ofSize: 9)) + 16
         }

@@ -5387,6 +5387,97 @@ struct GunnAire_OpsTests {
         #expect(detail.contains("Invoice ID:"))
     }
 
+    @Test func onsiteReportPhotoEvidenceIncludesLinkedEquipmentTrace() async throws {
+        let customer = Customer(name: "Equipment Photo Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .packageUnit,
+            name: "Roof RTU 1",
+            manufacturer: "Carrier",
+            modelNumber: "48TC",
+            serialNumber: "RTU-123"
+        )
+        let call = ServiceCall(
+            equipmentName: "Roof RTU 1",
+            equipmentSerialNumber: "RTU-123",
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.packageUnit.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer
+        )
+        let dataPlatePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            customerEquipmentID: equipment.id,
+            kind: .equipmentDataPlatePhoto,
+            displayName: "rtu-data-plate.jpg",
+            caption: "RTU data plate",
+            localFilePath: "/tmp/rtu-data-plate.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+
+        let evidence = CustomerDocumentExporter.photoEvidenceSummaries(
+            for: [dataPlatePhoto],
+            serviceCall: call,
+            equipmentProfiles: [equipment]
+        )
+        let detail = try #require(evidence.first?.detail)
+        let caption = CustomerDocumentExporter.photoAttachmentCaption(
+            for: dataPlatePhoto,
+            serviceCall: call,
+            equipmentProfiles: [equipment]
+        )
+
+        #expect(detail.contains("Equipment: Roof RTU 1"))
+        #expect(detail.contains("Serial RTU-123"))
+        #expect(caption.contains("Equipment: Roof RTU 1"))
+        #expect(caption.contains("Serial RTU-123"))
+    }
+
+    @Test func onsiteReportAttachmentManifestIncludesEquipmentTrace() async throws {
+        let customer = Customer(name: "Equipment Manifest Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            serialNumber: "AC-123"
+        )
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentSerialNumber: "AC-123",
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer
+        )
+        let document = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            customerEquipmentID: equipment.id,
+            kind: .customerDocument,
+            displayName: "manufacturer-startup-sheet.pdf",
+            caption: "Startup sheet",
+            localFilePath: "/tmp/manufacturer-startup-sheet.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 4096
+        )
+
+        let summaries = CustomerDocumentExporter.attachmentManifestSummaries(
+            for: [document],
+            serviceCall: call,
+            equipmentProfiles: [equipment]
+        )
+        let detail = try #require(summaries.first?.detail)
+
+        #expect(detail.contains("Equipment: Downstairs AC"))
+        #expect(detail.contains("Serial AC-123"))
+        #expect(detail.contains("Job ID:"))
+    }
+
     @Test func billingPhotoAttachmentsAreScopedToInvoiceJobAndTarget() async throws {
         let customer = Customer(name: "Billing Photo Customer")
         let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer)
