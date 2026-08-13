@@ -612,6 +612,10 @@ enum CustomerDocumentExporter {
 
     private static func billingJobContextRows(for serviceCall: ServiceCall) -> [DocumentRow] {
         [
+            row("Job ID", shortID(serviceCall.id)),
+            row("Customer", serviceCall.customer.name),
+            row("Customer Phone", serviceCall.customer.phone),
+            row("Customer Email", serviceCall.customer.email),
             row("Scheduled", formattedDateTime(serviceCall.scheduledDate)),
             row("Job Type", serviceCall.type.displayName),
             row("Site Address", serviceCall.siteAddress ?? serviceCall.customer.address),

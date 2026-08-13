@@ -1551,9 +1551,16 @@ struct GunnAire_OpsTests {
     }
 
     @Test func billingDocumentJobContextIncludesEquipmentDetails() async throws {
-        let customer = Customer(name: "Billing Customer", address: "123 Service Rd")
+        let customer = Customer(
+            name: "Billing Customer",
+            phone: "555-0200",
+            email: "billing@example.com",
+            address: "123 Service Rd"
+        )
         let technician = Technician(name: "Lead Tech")
+        let callID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
         let call = ServiceCall(
+            id: callID,
             equipmentName: "Main Furnace",
             equipmentManufacturer: "Carrier",
             equipmentModel: "59TN6",
@@ -1568,6 +1575,10 @@ struct GunnAire_OpsTests {
 
         let rows = CustomerDocumentExporter.billingJobContextSummaries(for: call)
 
+        #expect(rows.contains { $0.label == "Job ID" && $0.value == "AAAAAAAA" })
+        #expect(rows.contains { $0.label == "Customer" && $0.value == "Billing Customer" })
+        #expect(rows.contains { $0.label == "Customer Phone" && $0.value == "555-0200" })
+        #expect(rows.contains { $0.label == "Customer Email" && $0.value == "billing@example.com" })
         #expect(rows.contains { $0.label == "Equipment" && $0.value.contains("Gas Furnace") })
         #expect(rows.contains { $0.label == "Equipment" && $0.value.contains("Carrier") })
         #expect(rows.contains { $0.label == "Equipment" && $0.value.contains("S/N FURN123") })
