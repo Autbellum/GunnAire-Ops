@@ -86,6 +86,7 @@ final class CustomerEquipment {
         serviceCall.equipmentInstallDate = installDate
         serviceCall.equipmentWarrantyExpiration = warrantyExpiration
         serviceCall.filterSize = filterSize
+        serviceCall.equipmentNotes = notes
     }
 
     func matches(_ serviceCall: ServiceCall) -> Bool {
@@ -190,8 +191,11 @@ final class CustomerEquipment {
         self.isActive = isActive
     }
 
-    static func mergedNotes(existing: String?, serviceHistoryNote: String?) -> String? {
-        let trimmedExisting = existing?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    static func mergedNotes(existing: String?, currentProfileNote: String? = nil, serviceHistoryNote: String?) -> String? {
+        let trimmedProfileNote = currentProfileNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmedExisting = trimmedProfileNote.isEmpty
+            ? existing?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            : trimmedProfileNote
         let trimmedServiceNote = serviceHistoryNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmedServiceNote.isEmpty else {
             return trimmedExisting.isEmpty ? nil : trimmedExisting

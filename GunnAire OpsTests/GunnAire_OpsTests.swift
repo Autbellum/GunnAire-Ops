@@ -169,6 +169,7 @@ struct GunnAire_OpsTests {
         #expect(call.equipmentInstallDate == equipment.installDate)
         #expect(call.equipmentWarrantyExpiration == equipment.warrantyExpiration)
         #expect(call.filterSize == "20x25x1")
+        #expect(call.equipmentNotes == "Variable speed")
     }
 
     @Test func serviceCallAttachmentProgressRecalculatesPhotoCounts() async throws {
@@ -452,16 +453,17 @@ struct GunnAire_OpsTests {
             linkedInvoiceID: invoiceID
         )
         let note = try #require(call.equipmentProfileServiceHistoryNote)
-        let merged = CustomerEquipment.mergedNotes(existing: "Existing equipment note.", serviceHistoryNote: note)
+        let merged = try #require(CustomerEquipment.mergedNotes(existing: "Existing equipment note.", currentProfileNote: "Updated equipment note.", serviceHistoryNote: note))
         let mergedAgain = CustomerEquipment.mergedNotes(existing: merged, serviceHistoryNote: note)
 
+        #expect(merged.contains("Updated equipment note."))
+        #expect(merged.contains("Existing equipment note.") == false)
         #expect(note.contains("Maintenance"))
         #expect(note.contains("Heating maintenance completed."))
         #expect(note.contains("Filter: Replaced"))
         #expect(note.contains("Estimate: \(String(estimateID.uuidString.prefix(8)).uppercased())"))
         #expect(note.contains("Invoice: \(String(invoiceID.uuidString.prefix(8)).uppercased())"))
-        #expect(merged?.contains("Existing equipment note.") == true)
-        #expect(merged?.contains("Return in six months.") == true)
+        #expect(merged.contains("Return in six months.") == true)
         #expect(mergedAgain == merged)
     }
 
@@ -1794,6 +1796,7 @@ struct GunnAire_OpsTests {
             equipmentSerialNumber: "FURN123",
             equipmentLocation: "Attic",
             equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            equipmentNotes: "Requires low-profile filter access panel.",
             type: .maintenance,
             scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
             assignedTechnician: technician,
@@ -1810,6 +1813,7 @@ struct GunnAire_OpsTests {
         #expect(rows.contains { $0.label == "Equipment" && $0.value.contains("Carrier") })
         #expect(rows.contains { $0.label == "Equipment" && $0.value.contains("S/N FURN123") })
         #expect(rows.contains { $0.label == "Equipment Location" && $0.value == "Attic" })
+        #expect(rows.contains { $0.label == "Equipment Notes" && $0.value == "Requires low-profile filter access panel." })
     }
 
     @Test func serviceCallCalculatesTechnicalReadingsFromFieldInputs() async throws {

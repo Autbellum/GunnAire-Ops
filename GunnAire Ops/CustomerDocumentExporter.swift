@@ -129,7 +129,8 @@ enum CustomerDocumentExporter {
                     row("Install Date", serviceCall.equipmentInstallDate.map { formattedDate($0) }),
                     row("Warranty Expiration", serviceCall.equipmentWarrantyExpiration.map { formattedDate($0) }),
                     row("Filter Size", serviceCall.filterSize),
-                    row("Filter Condition", serviceCall.filterCondition)
+                    row("Filter Condition", serviceCall.filterCondition),
+                    row("Equipment Notes", serviceCall.equipmentNotes)
                 ]
             ),
             DocumentSection(
@@ -633,7 +634,8 @@ enum CustomerDocumentExporter {
             row("Site Address", serviceCall.siteAddress ?? serviceCall.customer.address),
             row("Technician", serviceCall.assignedTechnician?.name),
             row("Equipment", serviceCall.equipmentSummary),
-            row("Equipment Location", serviceCall.equipmentLocation)
+            row("Equipment Location", serviceCall.equipmentLocation),
+            row("Equipment Notes", serviceCall.equipmentNotes)
         ]
     }
 

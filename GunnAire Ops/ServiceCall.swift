@@ -645,6 +645,7 @@ final class ServiceCall {
     var equipmentWarrantyExpiration: Date?
     var customerEquipmentID: UUID?
     var equipmentTypeRaw: String?
+    var equipmentNotes: String?
     var serviceReportReadingsJSON: String?
     var filterSize: String?
     var filterCondition: String?
@@ -699,6 +700,7 @@ final class ServiceCall {
         equipmentWarrantyExpiration: Date? = nil,
         customerEquipmentID: UUID? = nil,
         equipmentTypeRaw: String? = nil,
+        equipmentNotes: String? = nil,
         serviceReportReadingsJSON: String? = nil,
         filterSize: String? = nil,
         filterCondition: String? = nil,
@@ -752,6 +754,7 @@ final class ServiceCall {
         self.equipmentWarrantyExpiration = equipmentWarrantyExpiration
         self.customerEquipmentID = customerEquipmentID
         self.equipmentTypeRaw = equipmentTypeRaw
+        self.equipmentNotes = equipmentNotes
         self.serviceReportReadingsJSON = serviceReportReadingsJSON
         self.filterSize = filterSize
         self.filterCondition = filterCondition

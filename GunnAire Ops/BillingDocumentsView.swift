@@ -2270,6 +2270,8 @@ GunnAire
             }
 
             TextField("Filter Size", text: optionalServiceCallTextBinding(call, \.filterSize))
+            TextField("Equipment Notes", text: optionalServiceCallTextBinding(call, \.equipmentNotes), axis: .vertical)
+                .lineLimit(2...4)
             serviceReportOptionPicker(
                 "Filter Condition",
                 selection: optionalServiceCallTextBinding(call, \.filterCondition),
@@ -2528,6 +2530,7 @@ GunnAire
             filterSize: call.filterSize,
             notes: CustomerEquipment.mergedNotes(
                 existing: equipment.notes,
+                currentProfileNote: call.equipmentNotes,
                 serviceHistoryNote: call.equipmentProfileServiceHistoryNote
             ),
             isActive: true

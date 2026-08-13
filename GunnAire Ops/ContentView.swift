@@ -1310,6 +1310,7 @@ struct AddServiceCallView: View {
     @State private var equipmentSerialNumber = ""
     @State private var equipmentLocation = ""
     @State private var filterSize = ""
+    @State private var equipmentNotes = ""
     @State private var equipmentInstallDate: Date = Date()
     @State private var includeInstallDate = false
     @State private var equipmentWarrantyExpiration: Date = Date()
@@ -1559,6 +1560,8 @@ struct AddServiceCallView: View {
                     TextField("Serial Number", text: $equipmentSerialNumber)
                     TextField("Equipment Location", text: $equipmentLocation)
                     TextField("Filter Size", text: $filterSize)
+                    TextField("Equipment Notes", text: $equipmentNotes, axis: .vertical)
+                        .lineLimit(2...4)
                     Toggle("Track Install Date", isOn: $includeInstallDate)
                     if includeInstallDate {
                         DatePicker("Install Date", selection: $equipmentInstallDate, displayedComponents: .date)
@@ -1680,6 +1683,7 @@ struct AddServiceCallView: View {
             equipmentWarrantyExpiration: includeWarrantyExpiration ? equipmentWarrantyExpiration : nil,
             customerEquipmentID: selectedCustomerEquipmentID,
             equipmentTypeRaw: equipmentType.rawValue,
+            equipmentNotes: equipmentNotes.nilIfBlank,
             filterSize: filterSize.nilIfBlank,
             type: callType,
             scheduledDate: scheduledTime,
@@ -1713,6 +1717,7 @@ struct AddServiceCallView: View {
         equipmentSerialNumber = equipment.serialNumber ?? ""
         equipmentLocation = equipment.location ?? ""
         filterSize = equipment.filterSize ?? ""
+        equipmentNotes = equipment.notes ?? ""
         if let installDate = equipment.installDate {
             equipmentInstallDate = installDate
             includeInstallDate = true
@@ -1815,6 +1820,7 @@ struct EditServiceCallView: View {
     @State private var equipmentSerialNumber: String
     @State private var equipmentLocation: String
     @State private var filterSize: String
+    @State private var equipmentNotes: String
     @State private var equipmentInstallDate: Date
     @State private var includeInstallDate: Bool
     @State private var equipmentWarrantyExpiration: Date
@@ -1856,6 +1862,7 @@ struct EditServiceCallView: View {
         _equipmentSerialNumber = State(initialValue: call.equipmentSerialNumber ?? "")
         _equipmentLocation = State(initialValue: call.equipmentLocation ?? "")
         _filterSize = State(initialValue: call.filterSize ?? "")
+        _equipmentNotes = State(initialValue: call.equipmentNotes ?? "")
         _equipmentInstallDate = State(initialValue: call.equipmentInstallDate ?? Date())
         _includeInstallDate = State(initialValue: call.equipmentInstallDate != nil)
         _equipmentWarrantyExpiration = State(initialValue: call.equipmentWarrantyExpiration ?? Date())
@@ -1991,6 +1998,8 @@ struct EditServiceCallView: View {
                     TextField("Serial Number", text: $equipmentSerialNumber)
                     TextField("Equipment Location", text: $equipmentLocation)
                     TextField("Filter Size", text: $filterSize)
+                    TextField("Equipment Notes", text: $equipmentNotes, axis: .vertical)
+                        .lineLimit(2...4)
                     Toggle("Track Install Date", isOn: $includeInstallDate)
                     if includeInstallDate {
                         DatePicker("Install Date", selection: $equipmentInstallDate, displayedComponents: .date)
@@ -2082,6 +2091,7 @@ struct EditServiceCallView: View {
         equipmentSerialNumber = equipment.serialNumber ?? ""
         equipmentLocation = equipment.location ?? ""
         filterSize = equipment.filterSize ?? ""
+        equipmentNotes = equipment.notes ?? ""
         if let installDate = equipment.installDate {
             equipmentInstallDate = installDate
             includeInstallDate = true
@@ -2122,6 +2132,7 @@ struct EditServiceCallView: View {
         call.equipmentSerialNumber = equipmentSerialNumber.nilIfBlank
         call.equipmentLocation = equipmentLocation.nilIfBlank
         call.equipmentType = equipmentType
+        call.equipmentNotes = equipmentNotes.nilIfBlank
         call.filterSize = filterSize.nilIfBlank
         call.equipmentInstallDate = includeInstallDate ? equipmentInstallDate : nil
         call.equipmentWarrantyExpiration = includeWarrantyExpiration ? equipmentWarrantyExpiration : nil
