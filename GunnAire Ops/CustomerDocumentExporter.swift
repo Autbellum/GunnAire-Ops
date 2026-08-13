@@ -641,6 +641,9 @@ enum CustomerDocumentExporter {
         serviceCall: ServiceCall
     ) -> [ServiceDocumentAttachment] {
         attachments.filter { attachment in
+            guard canIncludeInOnsiteReportEvidence(attachment) else {
+                return false
+            }
             if attachment.serviceCallID == serviceCall.id {
                 return true
             }
@@ -648,12 +651,16 @@ enum CustomerDocumentExporter {
                   attachment.serviceCallID == nil else {
                 return false
             }
-            switch attachment.kind {
-            case .beforePhoto, .afterPhoto, .diagnosticPhoto, .equipmentDataPlatePhoto, .customerDocument, .other:
-                return true
-            case .serviceReport, .customerProfilePhoto, .invoiceSupport, .estimateSupport, .receipt:
-                return false
-            }
+            return true
+        }
+    }
+
+    private static func canIncludeInOnsiteReportEvidence(_ attachment: ServiceDocumentAttachment) -> Bool {
+        switch attachment.kind {
+        case .beforePhoto, .afterPhoto, .diagnosticPhoto, .equipmentDataPlatePhoto, .customerDocument, .other:
+            return true
+        case .serviceReport, .customerProfilePhoto, .invoiceSupport, .estimateSupport, .receipt:
+            return false
         }
     }
 

@@ -6410,6 +6410,72 @@ struct GunnAire_OpsTests {
         #expect(selected.map(\.displayName) == ["equipment-manual.pdf", "equipment-data-plate.jpg", "invoice-after.jpg", "estimate-diagnostic.jpg", "job-before.jpg"])
     }
 
+    @Test func onsiteReportEvidenceExcludesJobScopedFinancialAndProfileFiles() async throws {
+        let customer = Customer(name: "Report Evidence Privacy Customer")
+        let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer)
+        let operationalPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+        let receipt = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .receipt,
+            displayName: "receipt.pdf",
+            localFilePath: "/tmp/receipt.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let invoiceSupport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .invoiceSupport,
+            displayName: "invoice.pdf",
+            localFilePath: "/tmp/invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let estimateSupport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .estimateSupport,
+            displayName: "estimate.pdf",
+            localFilePath: "/tmp/estimate.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let profilePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .customerProfilePhoto,
+            displayName: "profile.jpg",
+            localFilePath: "/tmp/profile.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+        let generatedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let selected = CustomerDocumentExporter.reportEvidenceAttachments(
+            for: [receipt, invoiceSupport, estimateSupport, profilePhoto, generatedReport, operationalPhoto],
+            serviceCall: call
+        )
+
+        #expect(selected.map(\.displayName) == ["diagnostic.jpg"])
+    }
+
     @Test func onsiteReportChecklistCountsActualJobPhotoAttachments() async throws {
         let customer = Customer(name: "Photo Count Customer")
         let call = ServiceCall(
