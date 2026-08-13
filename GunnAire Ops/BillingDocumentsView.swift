@@ -4749,6 +4749,7 @@ private struct RecordInvoicePaymentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var serviceCalls: [ServiceCall]
     @Query private var payments: [Payment]
+    @Query private var attachments: [ServiceDocumentAttachment]
 
     let invoice: Invoice
     let autoStartTapToPay: Bool
@@ -4812,6 +4813,18 @@ private struct RecordInvoicePaymentView: View {
         QuickBooksDataAPI.shared.canUseQuickBooksPaymentsAPI
     }
 
+    private var linkedServiceCall: ServiceCall? {
+        if let serviceCallID = invoice.serviceCallID,
+           let call = serviceCalls.first(where: { $0.id == serviceCallID }) {
+            return call
+        }
+        return serviceCalls.first { $0.linkedInvoiceID == invoice.id }
+    }
+
+    private var invoiceDocumentationStatus: InvoiceDocumentationStatus? {
+        linkedServiceCall?.invoiceDocumentationStatus(invoice: invoice, attachments: attachments)
+    }
+
     private var closeoutPaymentFormIsValid: Bool {
         guard shouldRecordPayment else { return true }
         if method == "card", quickBooksPaymentsEnabled {
@@ -4842,6 +4855,19 @@ private struct RecordInvoicePaymentView: View {
                         .foregroundColor(.secondary)
                     if let quickBooksID = invoice.quickBooksID, !quickBooksID.isEmpty {
                         Text("QuickBooks ID: \(quickBooksID)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if let invoiceDocumentationStatus {
+                    Section("Documentation") {
+                        Label(
+                            invoiceDocumentationStatus.statusLabel,
+                            systemImage: invoiceDocumentationStatus.isReady ? "checkmark.seal.fill" : "exclamationmark.triangle.fill"
+                        )
+                        .foregroundColor(invoiceDocumentationStatus.isReady ? .green : .orange)
+                        Text(invoiceDocumentationStatus.summary)
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
