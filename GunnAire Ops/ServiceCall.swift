@@ -396,6 +396,32 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
         return label
     }
 
+    var isCalculated: Bool {
+        switch key {
+        case "temperature_split", "temperature_rise", "superheat", "subcooling", "total_external_static":
+            return true
+        default:
+            return false
+        }
+    }
+
+    var calculationSourceHint: String? {
+        switch key {
+        case "temperature_split":
+            return "Calculated from Return Air Temp and Supply Air Temp."
+        case "temperature_rise":
+            return "Calculated from Return Air Temp and Supply Air Temp."
+        case "superheat":
+            return "Calculated from Suction Line Temp and Suction Saturation Temp."
+        case "subcooling":
+            return "Calculated from Liquid Line Temp and Liquid Saturation Temp."
+        case "total_external_static":
+            return "Calculated from Return Static and Supply Static."
+        default:
+            return nil
+        }
+    }
+
     var expectedRange: ClosedRange<Double>? {
         switch key {
         case "return_air_temp", "supply_air_temp", "outdoor_ambient_temp", "indoor_dry_bulb", "indoor_wet_bulb":
@@ -465,6 +491,10 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
             return "Manufacturer target or calculated target."
         case "superheat", "subcooling":
             return "Use Calculate button when supporting readings are entered."
+        case "temperature_rise":
+            return "Calculated from supply and return temperatures."
+        case "total_external_static":
+            return "Calculated from return and supply static pressure."
         case "line_voltage":
             return "Measured line voltage under operating load."
         case "control_voltage", "communication_voltage":
@@ -477,7 +507,7 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
             return "Rated and measured microfarads."
         case "gas_pressure_inlet", "gas_pressure_manifold":
             return "Measure with calibrated manometer."
-        case "draft_pressure", "static_pressure_return", "static_pressure_supply", "total_external_static", "static_pressure":
+        case "draft_pressure", "static_pressure_return", "static_pressure_supply", "static_pressure":
             return "Record pressure in inches water column."
         case "flame_sensor_microamps":
             return "Measure flame rectification signal."

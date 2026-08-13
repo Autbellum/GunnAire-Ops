@@ -703,6 +703,23 @@ struct GunnAire_OpsTests {
         #expect(coReading.inputHint?.contains("carbon monoxide") == true)
     }
 
+    @Test func calculatedTechnicalReadingDefinitionsExposeSourceGuidance() async throws {
+        let split = try #require(HVACEquipmentType.splitSystemAC.readingDefinitions.first { $0.key == "temperature_split" })
+        let superheat = try #require(HVACEquipmentType.splitSystemAC.readingDefinitions.first { $0.key == "superheat" })
+        let subcooling = try #require(HVACEquipmentType.splitSystemAC.readingDefinitions.first { $0.key == "subcooling" })
+        let totalStatic = try #require(HVACEquipmentType.airHandler.readingDefinitions.first { $0.key == "total_external_static" })
+        let lineVoltage = try #require(HVACEquipmentType.splitSystemAC.readingDefinitions.first { $0.key == "line_voltage" })
+
+        #expect(split.isCalculated)
+        #expect(superheat.isCalculated)
+        #expect(subcooling.isCalculated)
+        #expect(totalStatic.isCalculated)
+        #expect(lineVoltage.isCalculated == false)
+        #expect(superheat.calculationSourceHint?.contains("Suction Line Temp") == true)
+        #expect(subcooling.calculationSourceHint?.contains("Liquid Line Temp") == true)
+        #expect(totalStatic.calculationSourceHint?.contains("Return Static") == true)
+    }
+
     @Test func equipmentSpecificReportDefinitionsIncludeFieldServiceControls() async throws {
         let heatPumpKeys = Set(HVACEquipmentType.heatPump.readingDefinitions.map(\.key))
         let furnaceDefinitions = HVACEquipmentType.gasFurnace.readingDefinitions
