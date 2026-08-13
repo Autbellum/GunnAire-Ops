@@ -940,6 +940,38 @@ final class ServiceCall {
         Self.groupedTechnicalReadingDefinitions(for: technicalReadingDefinitions)
     }
 
+    func prioritizedTechnicalReadingDefinitions(in group: HVACTechnicalReadingGroup) -> [HVACTechnicalReadingDefinition] {
+        let requiredKeys = Set(requiredTechnicalReadingDefinitions.map(\.key))
+        return group.definitions.sorted { lhs, rhs in
+            let lhsRank = technicalReadingPriorityRank(lhs, requiredKeys: requiredKeys)
+            let rhsRank = technicalReadingPriorityRank(rhs, requiredKeys: requiredKeys)
+            if lhsRank == rhsRank {
+                return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
+            }
+            return lhsRank < rhsRank
+        }
+    }
+
+    private func technicalReadingPriorityRank(
+        _ definition: HVACTechnicalReadingDefinition,
+        requiredKeys: Set<String>
+    ) -> Int {
+        let value = technicalReading(for: definition.key).trimmingCharacters(in: .whitespacesAndNewlines)
+        if requiredKeys.contains(definition.key), value.isEmpty {
+            return 0
+        }
+        if technicalReadingValidationIssue(for: definition) != nil {
+            return 1
+        }
+        if requiredKeys.contains(definition.key) {
+            return 2
+        }
+        if value.isEmpty {
+            return 3
+        }
+        return 4
+    }
+
     static func groupedTechnicalReadingDefinitions(
         for definitions: [HVACTechnicalReadingDefinition]
     ) -> [HVACTechnicalReadingGroup] {

@@ -2175,7 +2175,7 @@ GunnAire
 
             ForEach(call.groupedTechnicalReadingDefinitions) { group in
                 DisclosureGroup {
-                    ForEach(group.definitions) { definition in
+                    ForEach(call.prioritizedTechnicalReadingDefinitions(in: group)) { definition in
                         technicalReadingInput(for: call, definition: definition)
                     }
                 } label: {

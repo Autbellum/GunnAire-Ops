@@ -827,6 +827,29 @@ struct GunnAire_OpsTests {
         #expect(progress.summary.contains("invalid"))
     }
 
+    @Test func prioritizedTechnicalReadingsPutMissingRequiredFieldsFirst() async throws {
+        let customer = Customer(name: "Priority Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("12", for: "line_voltage")
+        call.setTechnicalReading("18", for: "compressor_rla")
+        let electricalGroup = try #require(call.groupedTechnicalReadingDefinitions.first { $0.title == "Electrical" })
+
+        let prioritizedKeys = call.prioritizedTechnicalReadingDefinitions(in: electricalGroup).map(\.key)
+
+        #expect(prioritizedKeys.first == "compressor_amps")
+        #expect(prioritizedKeys.firstIndex(of: "compressor_amps")! < prioritizedKeys.firstIndex(of: "line_voltage")!)
+        #expect(prioritizedKeys.firstIndex(of: "compressor_rla")! < prioritizedKeys.firstIndex(of: "control_voltage")!)
+    }
+
     @Test func targetSuperheatAndSubcoolingDeviationBlocksReportCompletion() async throws {
         let customer = Customer(name: "Target Deviation Customer")
         let call = ServiceCall(
