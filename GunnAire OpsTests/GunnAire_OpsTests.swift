@@ -186,6 +186,35 @@ struct GunnAire_OpsTests {
         #expect(boilerGroups.first { $0.title == "Hydronics" }?.definitions.contains { $0.key == "water_temp_supply" } == true)
     }
 
+    @Test func onsiteReportTechnicalSectionsUseGroupedCapturedReadings() async throws {
+        let customer = Customer(name: "Report Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("12", for: "superheat")
+        call.setTechnicalReading("6.2", for: "compressor_amps")
+        call.setTechnicalReading("72", for: "return_air_temp")
+
+        let sections = CustomerDocumentExporter.technicalReportSectionSummaries(for: call)
+
+        #expect(sections.contains { section in
+            section.title == "Technical Readings - Refrigerant Circuit" &&
+                section.rows.contains { $0.label == "Superheat (F)" && $0.value == "12" }
+        })
+        #expect(sections.contains { section in
+            section.title == "Technical Readings - Electrical" &&
+                section.rows.contains { $0.label == "Compressor Amps (A)" && $0.value == "6.2" }
+        })
+        #expect(sections.contains { section in
+            section.title == "Technical Readings - Air Temperatures" &&
+                section.rows.contains { $0.label == "Return Air Temp (F)" && $0.value == "72" }
+        })
+        #expect(sections.flatMap(\.rows).contains { $0.label == "Subcooling (F)" } == false)
+    }
+
     @Test func quickBooksMimeTypeDetection() async throws {
         #expect(QuickBooksDataAPI.mimeType(for: URL(fileURLWithPath: "/tmp/file.jpg")) == "image/jpeg")
         #expect(QuickBooksDataAPI.mimeType(for: URL(fileURLWithPath: "/tmp/file.pdf")) == "application/pdf")

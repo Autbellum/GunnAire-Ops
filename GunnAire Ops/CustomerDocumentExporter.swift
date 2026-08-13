@@ -113,12 +113,12 @@ enum CustomerDocumentExporter {
 
     private static func technicalReportSections(for serviceCall: ServiceCall) -> [DocumentSection] {
         var sections: [DocumentSection] = []
-        let readingRows = serviceCall.populatedTechnicalReadingRows.map { reading in
-            row(reading.label, reading.value)
-        }
-        if !readingRows.isEmpty {
-            sections.append(DocumentSection(title: "Technical Readings", rows: readingRows))
-        }
+        sections.append(contentsOf: technicalReportSectionSummaries(for: serviceCall).map { summary in
+            DocumentSection(
+                title: summary.title,
+                rows: summary.rows.map { row($0.label, $0.value) }
+            )
+        })
 
         let conditionRows = [
             row("Indoor Coil", serviceCall.indoorCoilCondition),
@@ -131,6 +131,18 @@ enum CustomerDocumentExporter {
             sections.append(DocumentSection(title: "Maintenance Observations", rows: conditionRows))
         }
         return sections
+    }
+
+    static func technicalReportSectionSummaries(for serviceCall: ServiceCall) -> [(title: String, rows: [(label: String, value: String)])] {
+        serviceCall.groupedTechnicalReadingDefinitions.compactMap { group in
+            let rows = group.definitions.compactMap { definition -> (label: String, value: String)? in
+                let value = serviceCall.technicalReading(for: definition.key).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !value.isEmpty else { return nil }
+                return (definition.displayLabel, value)
+            }
+            guard !rows.isEmpty else { return nil }
+            return ("Technical Readings - \(group.title)", rows)
+        }
     }
 
     private static func attachmentSections(for attachments: [ServiceDocumentAttachment]) -> [DocumentSection] {
