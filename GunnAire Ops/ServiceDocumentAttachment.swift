@@ -148,6 +148,16 @@ final class ServiceDocumentAttachment {
         contentType.lowercased().hasPrefix("image/")
     }
 
+    var canUseAsCustomerProfilePhoto: Bool {
+        guard isImage else { return false }
+        switch kind {
+        case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .other:
+            return true
+        case .serviceReport, .invoiceSupport, .estimateSupport, .receipt:
+            return false
+        }
+    }
+
     var canLinkToInvoiceReport: Bool {
         kind == .serviceReport
     }
@@ -376,8 +386,7 @@ final class ServiceDocumentAttachment {
         attachments
             .filter { attachment in
                 attachment.customer?.id == customer.id &&
-                    attachment.isImage &&
-                    attachment.kind != .serviceReport
+                    attachment.canUseAsCustomerProfilePhoto
             }
             .sorted { lhs, rhs in
                 let lhsScore = customerProfilePhotoScore(lhs)

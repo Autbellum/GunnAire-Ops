@@ -1919,6 +1919,52 @@ struct GunnAire_OpsTests {
         #expect(selected === newerPhoto)
     }
 
+    @Test func customerPrimaryPhotoIgnoresBillingAndReceiptImages() async throws {
+        let customer = Customer(name: "Photo Customer")
+        let diagnosticPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .diagnosticPhoto,
+            displayName: "equipment.jpg",
+            localFilePath: "/tmp/equipment.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+        let receiptImage = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .receipt,
+            displayName: "profile-receipt.jpg",
+            caption: "Profile photo",
+            localFilePath: "/tmp/profile-receipt.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_300)
+        )
+        let invoiceImage = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .invoiceSupport,
+            displayName: "profile-invoice.jpg",
+            caption: "Customer photo",
+            localFilePath: "/tmp/profile-invoice.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_400)
+        )
+
+        let selected = ServiceDocumentAttachment.primaryCustomerPhoto(
+            for: customer,
+            in: [diagnosticPhoto, receiptImage, invoiceImage]
+        )
+
+        #expect(receiptImage.canUseAsCustomerProfilePhoto == false)
+        #expect(invoiceImage.canUseAsCustomerProfilePhoto == false)
+        #expect(diagnosticPhoto.canUseAsCustomerProfilePhoto == true)
+        #expect(selected === diagnosticPhoto)
+    }
+
     @Test func customerProfileAttachmentDetailLinksJobBillingAndStorageContext() async throws {
         let customer = Customer(name: "Report Customer")
         let call = ServiceCall(
