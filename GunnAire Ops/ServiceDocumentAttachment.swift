@@ -107,6 +107,13 @@ final class ServiceDocumentAttachment {
         kind == .serviceReport
     }
 
+    func canUploadToQuickBooksInvoice(_ invoice: Invoice) -> Bool {
+        canLinkToInvoiceReport &&
+            invoiceID == invoice.id &&
+            quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+            invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
     func linkToInvoiceIfNeeded(_ invoice: Invoice) {
         if invoiceID == nil {
             invoiceID = invoice.id

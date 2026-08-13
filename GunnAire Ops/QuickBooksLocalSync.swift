@@ -19,6 +19,7 @@ enum QuickBooksLocalSync {
         let existingPayments = try modelContext.fetch(FetchDescriptor<Payment>())
         let existingVendors = try modelContext.fetch(FetchDescriptor<Vendor>())
         let existingServiceCalls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
+        let existingAttachments = try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())
 
         var customersByQBID: [String: Customer] = [:]
         var customersByName: [String: Customer] = [:]
@@ -60,7 +61,7 @@ enum QuickBooksLocalSync {
         for invoice in existingInvoices {
             guard let quickBooksID = invoice.quickBooksID?.nilIfEmpty else { continue }
             if let existing = invoicesByQBID[quickBooksID], existing !== invoice {
-                mergeInvoice(existing, withDuplicate: invoice, payments: existingPayments, serviceCalls: existingServiceCalls, modelContext: modelContext)
+                mergeInvoice(existing, withDuplicate: invoice, payments: existingPayments, serviceCalls: existingServiceCalls, attachments: existingAttachments, modelContext: modelContext)
             } else {
                 invoicesByQBID[quickBooksID] = invoice
             }
@@ -183,7 +184,7 @@ enum QuickBooksLocalSync {
             }
             invoicesByQBID[quickBooksInvoice.Id] = invoice
             for duplicate in existingInvoices where duplicate !== invoice && isDuplicateInvoice(duplicate, of: quickBooksInvoice, customer: customer) {
-                mergeInvoice(invoice, withDuplicate: duplicate, payments: existingPayments, serviceCalls: existingServiceCalls, modelContext: modelContext)
+                mergeInvoice(invoice, withDuplicate: duplicate, payments: existingPayments, serviceCalls: existingServiceCalls, attachments: existingAttachments, modelContext: modelContext)
             }
         }
 
@@ -223,6 +224,13 @@ enum QuickBooksLocalSync {
         }
 
         try? modelContext.save()
+        let syncedInvoices = try modelContext.fetch(FetchDescriptor<Invoice>())
+        let serviceAttachments = try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())
+        QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
+            invoices: syncedInvoices,
+            attachments: serviceAttachments,
+            modelContext: modelContext
+        )
     }
 
     private static func resolveCustomer(
@@ -309,7 +317,14 @@ enum QuickBooksLocalSync {
         modelContext.delete(duplicate)
     }
 
-    private static func mergeInvoice(_ invoice: Invoice, withDuplicate duplicate: Invoice, payments: [Payment], serviceCalls: [ServiceCall], modelContext: ModelContext) {
+    private static func mergeInvoice(
+        _ invoice: Invoice,
+        withDuplicate duplicate: Invoice,
+        payments: [Payment],
+        serviceCalls: [ServiceCall],
+        attachments: [ServiceDocumentAttachment],
+        modelContext: ModelContext
+    ) {
         if invoice.serviceCallID == nil {
             invoice.serviceCallID = duplicate.serviceCallID
         }
@@ -329,6 +344,9 @@ enum QuickBooksLocalSync {
         }
         for call in serviceCalls where call.linkedInvoiceID == duplicate.id {
             call.linkedInvoiceID = invoice.id
+        }
+        for attachment in attachments where attachment.invoiceID == duplicate.id {
+            attachment.invoiceID = invoice.id
         }
         modelContext.delete(duplicate)
     }

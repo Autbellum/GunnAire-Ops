@@ -141,6 +141,85 @@ struct GunnAire_OpsTests {
         #expect(alreadyLinkedReport.invoiceID == alreadyLinkedInvoiceID)
     }
 
+    @Test func serviceReportAttachmentUploadEligibilityRequiresLinkedQuickBooksInvoice() async throws {
+        let customer = Customer(name: "Report Customer")
+        let invoice = Invoice(customer: customer, quickBooksID: "123", amount: 250)
+        let unSyncedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: invoice.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let uploadedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: invoice.id,
+            kind: .serviceReport,
+            displayName: "uploaded-report.pdf",
+            localFilePath: "/tmp/uploaded-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "attach-1"
+        )
+        let photo = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: invoice.id,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+        let localOnlyInvoice = Invoice(customer: customer, amount: 250)
+
+        #expect(unSyncedReport.canUploadToQuickBooksInvoice(invoice) == true)
+        #expect(uploadedReport.canUploadToQuickBooksInvoice(invoice) == false)
+        #expect(photo.canUploadToQuickBooksInvoice(invoice) == false)
+        #expect(unSyncedReport.canUploadToQuickBooksInvoice(localOnlyInvoice) == false)
+    }
+
+    @MainActor
+    @Test func quickBooksInvoiceAttachmentSyncFindsPendingServiceReports() async throws {
+        let customer = Customer(name: "Report Customer")
+        let invoice = Invoice(customer: customer, quickBooksID: "123", amount: 250)
+        let otherInvoice = Invoice(customer: customer, quickBooksID: "456", amount: 100)
+        let pendingReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: invoice.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let uploadedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: otherInvoice.id,
+            kind: .serviceReport,
+            displayName: "uploaded-report.pdf",
+            localFilePath: "/tmp/uploaded-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "attach-1"
+        )
+
+        let pending = QuickBooksInvoiceAttachmentSync.pendingServiceReports(
+            invoices: [invoice, otherInvoice],
+            attachments: [pendingReport, uploadedReport]
+        )
+
+        #expect(pending.count == 1)
+        #expect(pending.first?.attachment === pendingReport)
+        #expect(pending.first?.invoice === invoice)
+    }
+
     @Test func serviceDocumentAttachmentExposesLocalFileURLForOpening() async throws {
         let attachment = ServiceDocumentAttachment(
             customer: nil,
