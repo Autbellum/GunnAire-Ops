@@ -148,6 +148,22 @@ final class CustomerEquipment {
             .technicalReadingServiceHistorySummary
     }
 
+    func latestServiceContextSummary(in serviceCalls: [ServiceCall], now: Date = Date()) -> String? {
+        guard let call = latestCompletedServiceCall(in: serviceCalls, now: now) else {
+            return nil
+        }
+        let parts = [
+            "Last service: \(call.scheduledDate.formatted(date: .abbreviated, time: .omitted))",
+            call.serviceReportSummary.map { "Report: \($0)" },
+            call.technicalReadingServiceHistorySummary.map { "Readings: \($0)" }
+        ]
+            .compactMap { value -> String? in
+                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed?.isEmpty == false ? trimmed : nil
+            }
+        return parts.isEmpty ? nil : parts.joined(separator: " - ")
+    }
+
     func updateFrom(
         equipmentType: HVACEquipmentType,
         name: String,

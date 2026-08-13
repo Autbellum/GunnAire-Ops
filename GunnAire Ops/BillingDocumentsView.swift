@@ -2107,6 +2107,12 @@ GunnAire
                 )
             }
 
+            if let summary = latestServiceContextSummary(for: call) {
+                Label(summary, systemImage: "clock.arrow.circlepath")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             SearchableDropdownPicker(
                 title: "Equipment Type",
                 options: HVACEquipmentType.allCases.map {
@@ -2316,6 +2322,16 @@ GunnAire
                 }
             }
         }
+    }
+
+    private func latestServiceContextSummary(for call: ServiceCall) -> String? {
+        guard let equipment = activeCustomerEquipmentProfiles.first(where: { $0.matches(call) }) else {
+            return nil
+        }
+        return equipment.latestServiceContextSummary(
+            in: serviceCalls.filter { $0.id != call.id },
+            now: Date()
+        )
     }
 
     @ViewBuilder

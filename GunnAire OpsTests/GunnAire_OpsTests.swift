@@ -610,6 +610,56 @@ struct GunnAire_OpsTests {
         #expect(summary.contains("14") == false)
     }
 
+    @Test func customerEquipmentLatestServiceContextSummarizesReportAndReadings() async throws {
+        let customer = Customer(name: "Equipment Context Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            serialNumber: "AC123"
+        )
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let previousCall = ServiceCall(
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Cleaned condenser and verified charge.",
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400 * 12),
+            customer: customer,
+            status: .completed
+        )
+        previousCall.setTechnicalReading("10", for: "superheat")
+        previousCall.setTechnicalReading("8", for: "subcooling")
+        let currentCall = ServiceCall(
+            equipmentSerialNumber: "AC123",
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Current report should not be used.",
+            type: .maintenance,
+            scheduledDate: now,
+            customer: customer,
+            status: .completed
+        )
+        currentCall.setTechnicalReading("999", for: "superheat")
+
+        let summary = try #require(equipment.latestServiceContextSummary(
+            in: [previousCall],
+            now: now
+        ))
+        let excludingCurrentSummary = try #require(equipment.latestServiceContextSummary(
+            in: [previousCall, currentCall].filter { $0.id != currentCall.id },
+            now: now
+        ))
+
+        #expect(summary.contains("Last service:"))
+        #expect(summary.contains("Cleaned condenser"))
+        #expect(summary.contains("Superheat"))
+        #expect(summary.contains("10"))
+        #expect(summary.contains("Subcooling"))
+        #expect(summary.contains("8"))
+        #expect(excludingCurrentSummary.contains("999") == false)
+    }
+
     @Test func coolingEquipmentReadingDefinitionsIncludeStructuredRefrigerantOptions() async throws {
         let refrigerantDefinition = HVACEquipmentType.splitSystemAC.readingDefinitions.first {
             $0.key == "refrigerant_type"
