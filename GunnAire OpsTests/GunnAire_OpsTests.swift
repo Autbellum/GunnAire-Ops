@@ -1359,6 +1359,10 @@ struct GunnAire_OpsTests {
         #expect(readiness.requiredItems.contains("After photo captured"))
         #expect(readiness.missingItems.contains("Before photo captured"))
         #expect(readiness.missingItems.contains("After photo captured"))
+        let photoStatus = call.photoEvidenceStatus(from: [report])
+        #expect(photoStatus.isReady == false)
+        #expect(photoStatus.statusLabel == "Before and after photos missing")
+        #expect(photoStatus.summary == "0 before - 0 after")
     }
 
     @Test func serviceCloseoutAcceptsAttachedBeforeAndAfterPhotos() async throws {
@@ -1410,6 +1414,10 @@ struct GunnAire_OpsTests {
 
         #expect(readiness.missingItems.contains("Before photo captured") == false)
         #expect(readiness.missingItems.contains("After photo captured") == false)
+        let photoStatus = call.photoEvidenceStatus(from: [beforePhoto, afterPhoto])
+        #expect(photoStatus.isReady)
+        #expect(photoStatus.statusLabel == "Photo evidence complete")
+        #expect(photoStatus.summary == "1 before - 1 after")
     }
 
     @Test func meetingCloseoutDoesNotRequireFieldPhotos() async throws {
@@ -4188,6 +4196,7 @@ struct GunnAire_OpsTests {
 
         let rows = CustomerDocumentExporter.checklistRows(for: call, attachments: [beforePhoto, afterPhoto])
 
+        #expect(rows.contains { $0.label == "Photo Evidence" && $0.value == "Photo evidence complete - 1 before - 1 after" })
         #expect(rows.contains { $0.label == "Before Photos" && $0.value == "1" })
         #expect(rows.contains { $0.label == "After Photos" && $0.value == "1" })
     }

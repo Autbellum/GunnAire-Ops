@@ -2067,6 +2067,7 @@ GunnAire
             payments: currentJobPayments,
             attachments: activeJobAttachments
         )
+        let photoEvidence = call.photoEvidenceStatus(from: activeJobAttachments)
         Section("Closeout Readiness") {
             HStack {
                 Label(
@@ -2079,6 +2080,9 @@ GunnAire
                     .font(.caption.weight(.semibold))
                     .foregroundColor(.secondary)
             }
+            Text("\(photoEvidence.statusLabel) - \(photoEvidence.summary)")
+                .font(.caption)
+                .foregroundColor(photoEvidence.isReady ? .secondary : .orange)
 
             if readiness.missingItems.isEmpty {
                 Text("Required report, billing, signature, payment, and QuickBooks attachment evidence is complete.")

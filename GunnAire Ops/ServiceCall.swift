@@ -837,6 +837,28 @@ struct EstimateDocumentationStatus: Equatable {
     }
 }
 
+struct PhotoEvidenceStatus: Equatable {
+    let requiresBeforeAfter: Bool
+    let beforeCount: Int
+    let afterCount: Int
+
+    var isReady: Bool {
+        !requiresBeforeAfter || (beforeCount > 0 && afterCount > 0)
+    }
+
+    var statusLabel: String {
+        guard requiresBeforeAfter else { return "Photo evidence optional" }
+        if isReady { return "Photo evidence complete" }
+        if beforeCount == 0 && afterCount == 0 { return "Before and after photos missing" }
+        if beforeCount == 0 { return "Before photo missing" }
+        return "After photo missing"
+    }
+
+    var summary: String {
+        "\(beforeCount) before - \(afterCount) after"
+    }
+}
+
 @Model
 final class ServiceCall {
     @Attribute(.unique) var id: UUID
@@ -1829,8 +1851,8 @@ final class ServiceCall {
         if !hasGeneratedReport {
             missing.append("Onsite report generated")
         }
-        let photoEvidence = resolvedFieldPhotoEvidence(from: attachments)
-        if requiresFieldPhotoEvidence {
+        let photoEvidence = photoEvidenceStatus(from: attachments)
+        if photoEvidence.requiresBeforeAfter {
             if photoEvidence.beforeCount == 0 {
                 missing.append("Before photo captured")
             }
@@ -1929,6 +1951,15 @@ final class ServiceCall {
         case .estimate, .meeting, .reminder, .siteVisit, .other:
             return false
         }
+    }
+
+    func photoEvidenceStatus(from attachments: [ServiceDocumentAttachment]) -> PhotoEvidenceStatus {
+        let counts = resolvedFieldPhotoEvidence(from: attachments)
+        return PhotoEvidenceStatus(
+            requiresBeforeAfter: requiresFieldPhotoEvidence,
+            beforeCount: counts.beforeCount,
+            afterCount: counts.afterCount
+        )
     }
 
     private func resolvedFieldPhotoEvidence(from attachments: [ServiceDocumentAttachment]) -> (beforeCount: Int, afterCount: Int) {

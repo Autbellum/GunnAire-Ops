@@ -728,7 +728,7 @@ enum CustomerDocumentExporter {
     }
 
     static func checklistRows(for serviceCall: ServiceCall, attachments: [ServiceDocumentAttachment] = []) -> [(label: String, value: String)] {
-        let counts = fieldPhotoCounts(for: serviceCall, attachments: attachments)
+        let photoEvidence = serviceCall.photoEvidenceStatus(from: attachments)
         return [
             ("Customer Notified", yesNo(serviceCall.customerNotified)),
             ("Arrival Confirmed", yesNo(serviceCall.arrivalConfirmed)),
@@ -737,8 +737,9 @@ enum CustomerDocumentExporter {
             ("Payment Collected", yesNo(serviceCall.paymentCollectedChecklist)),
             ("Diagnostics Captured", yesNo(serviceCall.diagnosticsCaptured)),
             ("Safety Checklist", yesNo(serviceCall.safetyChecklistComplete)),
-            ("Before Photos", "\(counts.beforeCount)"),
-            ("After Photos", "\(counts.afterCount)")
+            ("Photo Evidence", "\(photoEvidence.statusLabel) - \(photoEvidence.summary)"),
+            ("Before Photos", "\(photoEvidence.beforeCount)"),
+            ("After Photos", "\(photoEvidence.afterCount)")
         ]
     }
 
