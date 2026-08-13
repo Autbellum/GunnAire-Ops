@@ -411,7 +411,7 @@ enum GoogleCalendarScheduleSync {
             try? modelContext.save()
             let message: String
             if skippedCount > 0 {
-                message = "Exported \(exportedCount) service calls and skipped \(skippedCount) calls on read-only Google calendars."
+                message = "Exported \(exportedCount) service calls and skipped \(skippedCount) read-only or externally managed Google events."
             } else {
                 message = "Exported \(exportedCount) service calls."
             }
@@ -420,6 +420,23 @@ enum GoogleCalendarScheduleSync {
         }
 
         let call = calls[index]
+        if !shouldAllowGoogleCalendarWrite(for: call) {
+            exportNext(
+                index: index + 1,
+                exportedCount: exportedCount,
+                skippedCount: skippedCount + 1,
+                calls: calls,
+                auth: auth,
+                modelContext: modelContext,
+                remoteEventsByKey: remoteEventsByKey,
+                remoteEventsByFingerprint: remoteEventsByFingerprint,
+                availableCalendarIDs: availableCalendarIDs,
+                writableCalendarIDs: writableCalendarIDs,
+                completion: completion
+            )
+            return
+        }
+
         if let eventID = call.googleEventID,
            !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            let currentCalendarID = call.googleCalendarID,
@@ -555,6 +572,13 @@ enum GoogleCalendarScheduleSync {
                 finish(targetCalendarID, result)
             }
         }
+    }
+
+    static func shouldAllowGoogleCalendarWrite(for call: ServiceCall) -> Bool {
+        guard call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return true
+        }
+        return call.googleEventManagedByApp
     }
 
     static func makeScheduleOnlyPatch(for call: ServiceCall) -> GoogleCalendarEventPatch {

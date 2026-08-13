@@ -2075,11 +2075,13 @@ struct EditServiceCallView: View {
         call.customer = customer
         call.assignedTechnician = technician
         call.status = status
-        call.googleCalendarID = ServiceCalendarRouting.validSelection(
-            selectedCalendarID,
-            technician: technician,
-            calendars: accessibleCalendars
-        )
+        if GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call) {
+            call.googleCalendarID = ServiceCalendarRouting.validSelection(
+                selectedCalendarID,
+                technician: technician,
+                calendars: accessibleCalendars
+            )
+        }
         call.siteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? customer.address : siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         call.equipmentName = equipmentName.nilIfBlank
         call.equipmentManufacturer = equipmentManufacturer.nilIfBlank
@@ -2104,7 +2106,9 @@ struct EditServiceCallView: View {
         if status == .completed || status == .invoiced {
             call.documentationCompletedAt = call.documentationCompletedAt ?? Date()
         }
-        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
+        if GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call) {
+            GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
+        }
         try? modelContext.save()
         publishToGoogleCalendar(call)
         dismiss()

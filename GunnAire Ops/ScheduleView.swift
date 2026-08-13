@@ -922,7 +922,10 @@ struct ScheduleView: View {
     }
 
     private func deleteCall(_ call: ServiceCall) {
-        GoogleCalendarScheduleSync.markCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: call.googleEventID)
+        let shouldDeleteGoogleEvent = GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call)
+        if shouldDeleteGoogleEvent {
+            GoogleCalendarScheduleSync.markCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: call.googleEventID)
+        }
 
         let calendarID = call.googleCalendarID
         let eventID = call.googleEventID
@@ -930,7 +933,8 @@ struct ScheduleView: View {
         try? modelContext.save()
         syncMessage = "Event deleted from the app."
 
-        guard googleAuth.isAuthenticated,
+        guard shouldDeleteGoogleEvent,
+              googleAuth.isAuthenticated,
               let eventID,
               !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return
@@ -1295,15 +1299,19 @@ GunnAire
 
     private func assign(_ call: ServiceCall, to technician: Technician) {
         call.assignedTechnician = technician
-        call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
-        call.googleEventID = nil
+        if GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call) {
+            call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
+            call.googleEventID = nil
+        }
         publishToGoogleCalendar(call)
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician, reschedulingTo newStart: Date) {
         call.assignedTechnician = technician
-        call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
-        call.googleEventID = nil
+        if GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call) {
+            call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
+            call.googleEventID = nil
+        }
         call.scheduledDate = newStart
         publishToGoogleCalendar(call)
     }

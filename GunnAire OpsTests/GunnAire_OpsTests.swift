@@ -291,6 +291,37 @@ struct GunnAire_OpsTests {
         #expect(payload.contains("attendees") == false)
     }
 
+    @MainActor
+    @Test func googleCalendarImportedEventsAreReadOnlyForExternalWrites() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let importedCall = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "google-owned-event",
+            googleEventManagedByApp: false,
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let appOwnedCall = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "app-owned-event",
+            googleEventManagedByApp: true,
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let newAppCall = ServiceCall(
+            googleCalendarID: "primary",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: importedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: newAppCall) == true)
+    }
+
     @Test func splashVideoLocatorPrefersStoredVideoOverBundledVideo() async throws {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
