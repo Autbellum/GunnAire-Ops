@@ -66,6 +66,8 @@ struct BillingDocumentsView: View {
     @State private var generatedCustomerDocumentURL: URL?
     @State private var generatedCustomerDocumentRecipientID: UUID?
     @State private var generatedCustomerDocumentServiceCallID: UUID?
+    @State private var generatedCustomerDocumentInvoiceID: UUID?
+    @State private var generatedCustomerDocumentEstimateID: UUID?
     @State private var generatedCustomerDocumentKind = "document"
     @State private var isEmailingGeneratedDocument = false
     @State private var showingDocumentationFileImporter = false
@@ -486,6 +488,8 @@ GunnAire
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall?.id
+            generatedCustomerDocumentInvoiceID = invoice.id
+            generatedCustomerDocumentEstimateID = nil
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
             generatedCustomerDocumentKind = documentLabel
             persistGeneratedBillingDocument(
@@ -501,6 +505,7 @@ GunnAire
             return CustomerDocumentExporter.customerEmailAttachmentURLs(
                 primaryDocumentURL: url,
                 serviceCallID: serviceCall?.id,
+                invoiceID: invoice.id,
                 attachments: attachments
             ).map(\.path)
         } catch {
@@ -544,6 +549,8 @@ GunnAire
         let attachmentURLs = CustomerDocumentExporter.customerEmailAttachmentURLs(
             primaryDocumentURL: url,
             serviceCallID: generatedCustomerDocumentServiceCallID,
+            invoiceID: generatedCustomerDocumentInvoiceID,
+            estimateID: generatedCustomerDocumentEstimateID,
             attachments: attachments
         )
         var gmailAttachments: [GmailAttachment] = []
@@ -3083,6 +3090,8 @@ GunnAire
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
             generatedCustomerDocumentServiceCallID = linkedCall?.id
+            generatedCustomerDocumentInvoiceID = nil
+            generatedCustomerDocumentEstimateID = estimate.id
             generatedCustomerDocumentKind = "estimate"
 
             let attachment: ServiceDocumentAttachment
@@ -3234,6 +3243,8 @@ GunnAire
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall?.id
+            generatedCustomerDocumentInvoiceID = invoice.id
+            generatedCustomerDocumentEstimateID = nil
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)
             generatedCustomerDocumentKind = documentLabel.lowercased()
             guard persistGeneratedBillingDocument(
@@ -3567,6 +3578,8 @@ GunnAire
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = serviceCall.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall.id
+            generatedCustomerDocumentInvoiceID = currentJobInvoice?.id ?? serviceCall.linkedInvoiceID
+            generatedCustomerDocumentEstimateID = currentJobEstimate?.id ?? serviceCall.linkedEstimateID
             generatedCustomerDocumentKind = "\(serviceCall.type.displayName.lowercased()) report"
             if !serviceCall.markDocumentationCompleteIfReady() {
                 serviceCall.documentationChecklist = false
@@ -3654,6 +3667,8 @@ GunnAire
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall?.id
+            generatedCustomerDocumentInvoiceID = nil
+            generatedCustomerDocumentEstimateID = estimate.id
             generatedCustomerDocumentKind = "estimate"
             persistGeneratedBillingDocument(
                 url,
@@ -3682,6 +3697,8 @@ GunnAire
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall?.id
+            generatedCustomerDocumentInvoiceID = invoice.id
+            generatedCustomerDocumentEstimateID = nil
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
             generatedCustomerDocumentKind = documentLabel
             persistGeneratedBillingDocument(

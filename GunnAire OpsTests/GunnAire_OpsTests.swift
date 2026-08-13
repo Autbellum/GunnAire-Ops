@@ -2010,6 +2010,71 @@ struct GunnAire_OpsTests {
         #expect(urls.map(\.lastPathComponent) == ["latest-report.pdf"])
     }
 
+    @Test func customerEmailAttachmentsPreferReportLinkedToInvoice() async throws {
+        let customer = Customer(name: "Email Report Customer")
+        let serviceCallID = UUID()
+        let invoiceID = UUID()
+        let otherInvoiceID = UUID()
+        let invoiceURL = URL(fileURLWithPath: "/tmp/gunnaire-invoice.pdf")
+        let newestWrongInvoiceReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            invoiceID: otherInvoiceID,
+            kind: .serviceReport,
+            displayName: "wrong-invoice-report.pdf",
+            localFilePath: "/tmp/wrong-invoice-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 300)
+        )
+        let linkedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            kind: .serviceReport,
+            displayName: "linked-invoice-report.pdf",
+            localFilePath: "/tmp/linked-invoice-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let urls = CustomerDocumentExporter.customerEmailAttachmentURLs(
+            primaryDocumentURL: invoiceURL,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            attachments: [newestWrongInvoiceReport, linkedReport]
+        )
+
+        #expect(urls.map(\.lastPathComponent) == ["gunnaire-invoice.pdf", "linked-invoice-report.pdf"])
+    }
+
+    @Test func customerEmailAttachmentsDoNotFallbackToUnlinkedReportForInvoice() async throws {
+        let customer = Customer(name: "Email Report Customer")
+        let serviceCallID = UUID()
+        let invoiceID = UUID()
+        let invoiceURL = URL(fileURLWithPath: "/tmp/gunnaire-invoice.pdf")
+        let unlinkedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .serviceReport,
+            displayName: "unlinked-report.pdf",
+            localFilePath: "/tmp/unlinked-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 300)
+        )
+
+        let urls = CustomerDocumentExporter.customerEmailAttachmentURLs(
+            primaryDocumentURL: invoiceURL,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            attachments: [unlinkedReport]
+        )
+
+        #expect(urls.map(\.lastPathComponent) == ["gunnaire-invoice.pdf"])
+    }
+
     @Test func serviceReportAttachmentLinksToEstimateWhenMissing() async throws {
         let customer = Customer(name: "Estimate Report Customer")
         let estimate = Estimate(customer: customer, amount: 250)

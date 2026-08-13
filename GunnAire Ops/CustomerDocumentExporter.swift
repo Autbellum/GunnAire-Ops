@@ -16,13 +16,15 @@ enum CustomerDocumentExporter {
     static func customerEmailAttachmentURLs(
         primaryDocumentURL: URL,
         serviceCallID: UUID?,
+        invoiceID: UUID? = nil,
+        estimateID: UUID? = nil,
         attachments: [ServiceDocumentAttachment]
     ) -> [URL] {
         var urls = [primaryDocumentURL]
         guard let serviceCallID else { return urls }
 
         let primaryPath = primaryDocumentURL.standardizedFileURL.path
-        guard let latestOnsiteReport = attachments
+        let onsiteReports = attachments
             .filter({
                 $0.serviceCallID == serviceCallID &&
                     $0.kind == .serviceReport &&
@@ -34,7 +36,17 @@ enum CustomerDocumentExporter {
                 }
                 return lhs.createdAt > rhs.createdAt
             })
-            .first else {
+
+        let latestOnsiteReport: ServiceDocumentAttachment?
+        if let invoiceID {
+            latestOnsiteReport = onsiteReports.first { $0.invoiceID == invoiceID }
+        } else if let estimateID {
+            latestOnsiteReport = onsiteReports.first { $0.estimateID == estimateID }
+        } else {
+            latestOnsiteReport = onsiteReports.first
+        }
+
+        guard let latestOnsiteReport else {
             return urls
         }
 
