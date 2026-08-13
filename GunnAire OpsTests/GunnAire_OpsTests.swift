@@ -3217,6 +3217,57 @@ struct GunnAire_OpsTests {
         #expect(history.map(\.displayName) == ["nameplate.jpg", "prior-report.pdf"])
     }
 
+    @Test func backfillsMissingEquipmentLinksForExistingJobAttachments() async throws {
+        let customer = Customer(name: "Equipment Backfill Customer")
+        let otherCustomer = Customer(name: "Other Customer")
+        let equipmentID = UUID()
+        let otherEquipmentID = UUID()
+        let call = ServiceCall(
+            customerEquipmentID: equipmentID,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let unlinkedPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .diagnosticPhoto,
+            displayName: "unlinked-photo.jpg",
+            localFilePath: "/tmp/unlinked-photo.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+        let explicitlyLinkedPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            customerEquipmentID: otherEquipmentID,
+            kind: .diagnosticPhoto,
+            displayName: "other-equipment-photo.jpg",
+            localFilePath: "/tmp/other-equipment-photo.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+        let wrongCustomerPhoto = ServiceDocumentAttachment(
+            customer: otherCustomer,
+            serviceCallID: call.id,
+            kind: .diagnosticPhoto,
+            displayName: "wrong-customer-photo.jpg",
+            localFilePath: "/tmp/wrong-customer-photo.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+
+        let updated = ServiceDocumentAttachment.backfillMissingEquipmentLinks(
+            for: call,
+            in: [unlinkedPhoto, explicitlyLinkedPhoto, wrongCustomerPhoto]
+        )
+
+        #expect(updated == 1)
+        #expect(unlinkedPhoto.customerEquipmentID == equipmentID)
+        #expect(explicitlyLinkedPhoto.customerEquipmentID == otherEquipmentID)
+        #expect(wrongCustomerPhoto.customerEquipmentID == nil)
+    }
+
     @Test func equipmentHistoryAttachmentsInferPriorEquipmentFromLinkedServiceCall() async throws {
         let customer = Customer(name: "Equipment History Customer")
         let linkedEquipmentID = UUID()

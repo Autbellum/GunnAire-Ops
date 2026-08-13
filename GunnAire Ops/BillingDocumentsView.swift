@@ -2516,7 +2516,10 @@ GunnAire
         equipment.apply(to: call)
         call.equipmentVerifiedChecklist = true
         call.diagnosticsCaptured = true
-        actionMessage = "Loaded equipment profile for this job."
+        let linkedCount = ServiceDocumentAttachment.backfillMissingEquipmentLinks(for: call, in: attachments)
+        actionMessage = linkedCount > 0
+            ? "Loaded equipment profile and linked \(linkedCount) existing job file\(linkedCount == 1 ? "" : "s") to this equipment."
+            : "Loaded equipment profile for this job."
     }
 
     private func saveCurrentEquipmentProfile(for call: ServiceCall, announce: Bool = true) {
@@ -2564,9 +2567,12 @@ GunnAire
             isActive: true
         )
         call.equipmentVerifiedChecklist = true
+        let linkedCount = ServiceDocumentAttachment.backfillMissingEquipmentLinks(for: call, in: attachments)
         try? modelContext.save()
         if announce {
-            actionMessage = "Saved equipment profile to \(call.customer.name)."
+            actionMessage = linkedCount > 0
+                ? "Saved equipment profile to \(call.customer.name) and linked \(linkedCount) existing job file\(linkedCount == 1 ? "" : "s")."
+                : "Saved equipment profile to \(call.customer.name)."
         }
     }
 

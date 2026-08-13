@@ -455,6 +455,24 @@ final class ServiceDocumentAttachment {
             .sorted { $0.createdAt > $1.createdAt }
     }
 
+    @discardableResult
+    static func backfillMissingEquipmentLinks(
+        for serviceCall: ServiceCall,
+        in attachments: [ServiceDocumentAttachment]
+    ) -> Int {
+        guard let equipmentID = serviceCall.customerEquipmentID else { return 0 }
+        var updatedCount = 0
+        for attachment in attachments where attachment.serviceCallID == serviceCall.id {
+            guard attachment.customerEquipmentID == nil,
+                  attachment.customer?.id == nil || attachment.customer?.id == serviceCall.customer.id else {
+                continue
+            }
+            attachment.customerEquipmentID = equipmentID
+            updatedCount += 1
+        }
+        return updatedCount
+    }
+
     static func groupedEquipmentAttachments(
         equipmentProfiles: [CustomerEquipment],
         attachments: [ServiceDocumentAttachment],
