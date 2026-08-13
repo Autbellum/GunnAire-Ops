@@ -62,6 +62,70 @@ struct GunnAire_OpsTests {
         #expect(call.equipmentSummary?.contains("S/N ABC123") == true)
     }
 
+    @Test func customerEquipmentProfileAppliesToServiceCall() async throws {
+        let customer = Customer(name: "Equipment Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .heatPump,
+            name: "Downstairs Heat Pump",
+            manufacturer: "Trane",
+            modelNumber: "XV20i",
+            serialNumber: "HP123",
+            location: "Downstairs closet",
+            installDate: Date(timeIntervalSince1970: 1_700_000_000),
+            warrantyExpiration: Date(timeIntervalSince1970: 1_900_000_000),
+            filterSize: "20x25x1",
+            notes: "Variable speed"
+        )
+        let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer)
+
+        equipment.apply(to: call)
+
+        #expect(call.customerEquipmentID == equipment.id)
+        #expect(call.equipmentType == .heatPump)
+        #expect(call.equipmentName == "Downstairs Heat Pump")
+        #expect(call.equipmentManufacturer == "Trane")
+        #expect(call.equipmentModel == "XV20i")
+        #expect(call.equipmentSerialNumber == "HP123")
+        #expect(call.equipmentLocation == "Downstairs closet")
+        #expect(call.equipmentInstallDate == equipment.installDate)
+        #expect(call.equipmentWarrantyExpiration == equipment.warrantyExpiration)
+    }
+
+    @Test func customerEquipmentProfileCanBeUpdatedInPlace() async throws {
+        let equipment = CustomerEquipment(
+            equipmentType: .splitSystemAC,
+            name: "Old System",
+            manufacturer: "Old Brand",
+            isActive: false
+        )
+
+        equipment.updateFrom(
+            equipmentType: .gasFurnace,
+            name: "Main Furnace",
+            manufacturer: "Carrier",
+            modelNumber: "59TN6",
+            serialNumber: "FURN123",
+            location: "Attic",
+            installDate: Date(timeIntervalSince1970: 1_600_000_000),
+            warrantyExpiration: nil,
+            filterSize: "16x25x1",
+            notes: "Updated during maintenance",
+            isActive: true
+        )
+
+        #expect(equipment.equipmentType == .gasFurnace)
+        #expect(equipment.name == "Main Furnace")
+        #expect(equipment.manufacturer == "Carrier")
+        #expect(equipment.modelNumber == "59TN6")
+        #expect(equipment.serialNumber == "FURN123")
+        #expect(equipment.location == "Attic")
+        #expect(equipment.warrantyExpiration == nil)
+        #expect(equipment.filterSize == "16x25x1")
+        #expect(equipment.notes == "Updated during maintenance")
+        #expect(equipment.isActive == true)
+    }
+
     @Test func coolingEquipmentReadingDefinitionsIncludeStructuredRefrigerantOptions() async throws {
         let refrigerantDefinition = HVACEquipmentType.splitSystemAC.readingDefinitions.first {
             $0.key == "refrigerant_type"

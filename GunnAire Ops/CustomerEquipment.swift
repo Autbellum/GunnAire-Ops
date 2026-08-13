@@ -74,4 +74,42 @@ final class CustomerEquipment {
         .joined(separator: " • ")
         return details.isEmpty ? name : "\(name) - \(details)"
     }
+
+    func apply(to serviceCall: ServiceCall) {
+        serviceCall.customerEquipmentID = id
+        serviceCall.equipmentType = equipmentType
+        serviceCall.equipmentName = name
+        serviceCall.equipmentManufacturer = manufacturer
+        serviceCall.equipmentModel = modelNumber
+        serviceCall.equipmentSerialNumber = serialNumber
+        serviceCall.equipmentLocation = location
+        serviceCall.equipmentInstallDate = installDate
+        serviceCall.equipmentWarrantyExpiration = warrantyExpiration
+    }
+
+    func updateFrom(
+        equipmentType: HVACEquipmentType,
+        name: String,
+        manufacturer: String?,
+        modelNumber: String?,
+        serialNumber: String?,
+        location: String?,
+        installDate: Date?,
+        warrantyExpiration: Date?,
+        filterSize: String?,
+        notes: String?,
+        isActive: Bool
+    ) {
+        self.equipmentType = equipmentType
+        self.name = name
+        self.manufacturer = manufacturer
+        self.modelNumber = modelNumber
+        self.serialNumber = serialNumber
+        self.location = location
+        self.installDate = installDate
+        self.warrantyExpiration = warrantyExpiration
+        self.filterSize = filterSize
+        self.notes = notes
+        self.isActive = isActive
+    }
 }

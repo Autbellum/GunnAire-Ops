@@ -1924,15 +1924,7 @@ GunnAire
     }
 
     private func applyEquipmentProfile(_ equipment: CustomerEquipment, to call: ServiceCall) {
-        call.customerEquipmentID = equipment.id
-        call.equipmentType = equipment.equipmentType
-        call.equipmentName = equipment.name
-        call.equipmentManufacturer = equipment.manufacturer
-        call.equipmentModel = equipment.modelNumber
-        call.equipmentSerialNumber = equipment.serialNumber
-        call.equipmentLocation = equipment.location
-        call.equipmentInstallDate = equipment.installDate
-        call.equipmentWarrantyExpiration = equipment.warrantyExpiration
+        equipment.apply(to: call)
         if call.filterSize?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             call.filterSize = equipment.filterSize
         }
@@ -1966,16 +1958,19 @@ GunnAire
             call.customerEquipmentID = equipment.id
         }
 
-        equipment.equipmentType = call.equipmentType
-        equipment.name = equipmentName
-        equipment.manufacturer = call.equipmentManufacturer
-        equipment.modelNumber = call.equipmentModel
-        equipment.serialNumber = call.equipmentSerialNumber
-        equipment.location = call.equipmentLocation
-        equipment.installDate = call.equipmentInstallDate
-        equipment.warrantyExpiration = call.equipmentWarrantyExpiration
-        equipment.filterSize = call.filterSize
-        equipment.isActive = true
+        equipment.updateFrom(
+            equipmentType: call.equipmentType ?? .splitSystemAC,
+            name: equipmentName,
+            manufacturer: call.equipmentManufacturer,
+            modelNumber: call.equipmentModel,
+            serialNumber: call.equipmentSerialNumber,
+            location: call.equipmentLocation,
+            installDate: call.equipmentInstallDate,
+            warrantyExpiration: call.equipmentWarrantyExpiration,
+            filterSize: call.filterSize,
+            notes: equipment.notes,
+            isActive: true
+        )
         call.equipmentVerifiedChecklist = true
         try? modelContext.save()
         actionMessage = "Saved equipment profile to \(call.customer.name)."

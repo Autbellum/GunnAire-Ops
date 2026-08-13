@@ -1578,6 +1578,7 @@ private struct CustomerEditorView: View {
     @State private var customerAttachmentKind: ServiceDocumentAttachmentKind = .customerDocument
     @State private var customerAttachmentCaption = ""
     @State private var customerAttachmentMessage: String?
+    @State private var editingEquipmentID: UUID?
     @State private var newEquipmentType: HVACEquipmentType = .splitSystemAC
     @State private var newEquipmentName = ""
     @State private var newEquipmentManufacturer = ""
@@ -1586,6 +1587,8 @@ private struct CustomerEditorView: View {
     @State private var newEquipmentLocation = ""
     @State private var newEquipmentFilterSize = ""
     @State private var newEquipmentNotes = ""
+    @State private var includeNewEquipmentInstallDate = false
+    @State private var newEquipmentInstallDate = Date()
     @State private var includeNewEquipmentWarranty = false
     @State private var newEquipmentWarranty = Date()
 
@@ -1786,9 +1789,21 @@ private struct CustomerEditorView: View {
                                         .foregroundColor(.secondary)
                                 }
                                 HStack {
+                                    Button("Edit") {
+                                        beginEditingEquipment(equipment)
+                                    }
+                                    .buttonStyle(.bordered)
+
                                     Button(equipment.isActive ? "Deactivate" : "Reactivate") {
                                         equipment.isActive.toggle()
                                         try? modelContext.save()
+                                    }
+                                    .buttonStyle(.bordered)
+
+                                    Button(role: .destructive) {
+                                        removeEquipmentProfile(equipment)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
                                     }
                                     .buttonStyle(.bordered)
                                 }
@@ -1810,6 +1825,10 @@ private struct CustomerEditorView: View {
                     TextField("Filter Size", text: $newEquipmentFilterSize)
                     TextField("Equipment Notes", text: $newEquipmentNotes, axis: .vertical)
                         .lineLimit(2...4)
+                    Toggle("Track Install Date", isOn: $includeNewEquipmentInstallDate)
+                    if includeNewEquipmentInstallDate {
+                        DatePicker("Install Date", selection: $newEquipmentInstallDate, displayedComponents: .date)
+                    }
                     Toggle("Track Warranty Expiration", isOn: $includeNewEquipmentWarranty)
                     if includeNewEquipmentWarranty {
                         DatePicker("Warranty Expiration", selection: $newEquipmentWarranty, displayedComponents: .date)
@@ -1817,12 +1836,18 @@ private struct CustomerEditorView: View {
                     Button {
                         addCustomerEquipmentProfile()
                     } label: {
-                        Label("Add Equipment Profile", systemImage: "wrench.and.screwdriver")
+                        Label(editingEquipmentID == nil ? "Add Equipment Profile" : "Update Equipment Profile", systemImage: "wrench.and.screwdriver")
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Color.brandGold)
                     .foregroundStyle(Color.primaryBlack)
                     .disabled(newEquipmentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if editingEquipmentID != nil {
+                        Button("Cancel Equipment Edit") {
+                            resetEquipmentEditor()
+                        }
+                        .buttonStyle(.bordered)
+                    }
                 }
 
                 Section("Documents & Photos") {
@@ -2224,20 +2249,63 @@ private struct CustomerEditorView: View {
     private func addCustomerEquipmentProfile() {
         let trimmedName = newEquipmentName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
-        let equipment = CustomerEquipment(
-            customer: customer,
+        let equipment: CustomerEquipment
+        if let editingEquipmentID,
+           let existing = equipmentProfiles.first(where: { $0.id == editingEquipmentID && $0.customer?.id == customer.id }) {
+            equipment = existing
+        } else {
+            equipment = CustomerEquipment(customer: customer, name: trimmedName)
+            modelContext.insert(equipment)
+        }
+
+        equipment.updateFrom(
             equipmentType: newEquipmentType,
             name: trimmedName,
             manufacturer: newEquipmentManufacturer.nilIfBlank,
             modelNumber: newEquipmentModel.nilIfBlank,
             serialNumber: newEquipmentSerial.nilIfBlank,
             location: newEquipmentLocation.nilIfBlank,
+            installDate: includeNewEquipmentInstallDate ? newEquipmentInstallDate : nil,
             warrantyExpiration: includeNewEquipmentWarranty ? newEquipmentWarranty : nil,
             filterSize: newEquipmentFilterSize.nilIfBlank,
-            notes: newEquipmentNotes.nilIfBlank
+            notes: newEquipmentNotes.nilIfBlank,
+            isActive: true
         )
-        modelContext.insert(equipment)
         try? modelContext.save()
+        let action = editingEquipmentID == nil ? "Added" : "Updated"
+        resetEquipmentEditor()
+        customerActionMessage = "\(action) equipment profile for \(customer.name)."
+    }
+
+    private func beginEditingEquipment(_ equipment: CustomerEquipment) {
+        editingEquipmentID = equipment.id
+        newEquipmentType = equipment.equipmentType ?? .splitSystemAC
+        newEquipmentName = equipment.name
+        newEquipmentManufacturer = equipment.manufacturer ?? ""
+        newEquipmentModel = equipment.modelNumber ?? ""
+        newEquipmentSerial = equipment.serialNumber ?? ""
+        newEquipmentLocation = equipment.location ?? ""
+        newEquipmentFilterSize = equipment.filterSize ?? ""
+        newEquipmentNotes = equipment.notes ?? ""
+        if let installDate = equipment.installDate {
+            includeNewEquipmentInstallDate = true
+            newEquipmentInstallDate = installDate
+        } else {
+            includeNewEquipmentInstallDate = false
+            newEquipmentInstallDate = Date()
+        }
+        if let warrantyExpiration = equipment.warrantyExpiration {
+            includeNewEquipmentWarranty = true
+            newEquipmentWarranty = warrantyExpiration
+        } else {
+            includeNewEquipmentWarranty = false
+            newEquipmentWarranty = Date()
+        }
+        customerActionMessage = "Editing \(equipment.name)."
+    }
+
+    private func resetEquipmentEditor() {
+        editingEquipmentID = nil
         newEquipmentType = .splitSystemAC
         newEquipmentName = ""
         newEquipmentManufacturer = ""
@@ -2246,9 +2314,22 @@ private struct CustomerEditorView: View {
         newEquipmentLocation = ""
         newEquipmentFilterSize = ""
         newEquipmentNotes = ""
+        includeNewEquipmentInstallDate = false
+        newEquipmentInstallDate = Date()
         includeNewEquipmentWarranty = false
         newEquipmentWarranty = Date()
-        customerActionMessage = "Added equipment profile to \(customer.name)."
+    }
+
+    private func removeEquipmentProfile(_ equipment: CustomerEquipment) {
+        for call in serviceCalls where call.customerEquipmentID == equipment.id {
+            call.customerEquipmentID = nil
+        }
+        modelContext.delete(equipment)
+        try? modelContext.save()
+        if editingEquipmentID == equipment.id {
+            resetEquipmentEditor()
+        }
+        customerActionMessage = "Deleted equipment profile from \(customer.name)."
     }
 
     private func deleteCustomer() {
