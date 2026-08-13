@@ -577,13 +577,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
 
     @available(*, unavailable, message: "Use patchCalendarEvent with the schedule-only GoogleCalendarEventPatch so existing Google details are preserved.")
     func updateCalendarEvent(calendarID: String = "primary", eventID: String, event: GoogleWritableCalendarEvent, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
-        let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
-        let encodedEventID = eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID
-        guard let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events/\(encodedEventID)") else {
-            completion(.failure(GoogleAuthError.invalidEndpoint))
-            return
-        }
-        authorizedJSONRequest(url: url, method: "PATCH", body: event, completion: completion)
+        completion(.failure(GoogleAuthError.unsafeCalendarPatch("summary, description, location, attendees, extendedProperties")))
     }
 
     func patchCalendarEvent(calendarID: String = "primary", eventID: String, patch: GoogleCalendarEventPatch, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
