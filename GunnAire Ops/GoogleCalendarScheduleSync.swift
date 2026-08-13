@@ -193,6 +193,7 @@ enum GoogleCalendarScheduleSync {
                                 modelContext: modelContext,
                                 remoteEventsByKey: remoteEventsByKey(from: calendarEvents),
                                 remoteEventsByFingerprint: remoteEventsByFingerprint(from: calendarEvents, writableCalendarIDs: writableCalendarIDs),
+                                remoteEventsByCollisionKey: remoteEventsByCollisionKey(from: calendarEvents, writableCalendarIDs: writableCalendarIDs),
                                 availableCalendarIDs: availableCalendarIDs,
                                 writableCalendarIDs: writableCalendarIDs,
                                 completion: { result in
@@ -411,6 +412,7 @@ enum GoogleCalendarScheduleSync {
                 modelContext: modelContext,
                 remoteEventsByKey: remoteEventsByKey(from: calendarEvents),
                 remoteEventsByFingerprint: remoteEventsByFingerprint(from: calendarEvents, writableCalendarIDs: writableCalendarIDs),
+                remoteEventsByCollisionKey: remoteEventsByCollisionKey(from: calendarEvents, writableCalendarIDs: writableCalendarIDs),
                 availableCalendarIDs: availableCalendarIDs,
                 writableCalendarIDs: writableCalendarIDs,
                 completion: completion
@@ -454,6 +456,7 @@ enum GoogleCalendarScheduleSync {
         modelContext: ModelContext,
         remoteEventsByKey: [String: (calendarID: String, event: GoogleCalendarEvent)],
         remoteEventsByFingerprint: [String: (calendarID: String, event: GoogleCalendarEvent)],
+        remoteEventsByCollisionKey: [String: (calendarID: String, event: GoogleCalendarEvent)],
         availableCalendarIDs: Set<String>,
         writableCalendarIDs: Set<String>,
         completion: @escaping (Result<String, Error>) -> Void
@@ -481,6 +484,7 @@ enum GoogleCalendarScheduleSync {
                 modelContext: modelContext,
                 remoteEventsByKey: remoteEventsByKey,
                 remoteEventsByFingerprint: remoteEventsByFingerprint,
+                remoteEventsByCollisionKey: remoteEventsByCollisionKey,
                 availableCalendarIDs: availableCalendarIDs,
                 writableCalendarIDs: writableCalendarIDs,
                 completion: completion
@@ -501,6 +505,7 @@ enum GoogleCalendarScheduleSync {
                 modelContext: modelContext,
                 remoteEventsByKey: remoteEventsByKey,
                 remoteEventsByFingerprint: remoteEventsByFingerprint,
+                remoteEventsByCollisionKey: remoteEventsByCollisionKey,
                 availableCalendarIDs: availableCalendarIDs,
                 writableCalendarIDs: writableCalendarIDs,
                 completion: completion
@@ -524,6 +529,7 @@ enum GoogleCalendarScheduleSync {
                 modelContext: modelContext,
                 remoteEventsByKey: remoteEventsByKey,
                 remoteEventsByFingerprint: remoteEventsByFingerprint,
+                remoteEventsByCollisionKey: remoteEventsByCollisionKey,
                 availableCalendarIDs: availableCalendarIDs,
                 writableCalendarIDs: writableCalendarIDs,
                 completion: completion
@@ -549,6 +555,7 @@ enum GoogleCalendarScheduleSync {
                         modelContext: modelContext,
                         remoteEventsByKey: remoteEventsByKey,
                         remoteEventsByFingerprint: remoteEventsByFingerprint,
+                        remoteEventsByCollisionKey: remoteEventsByCollisionKey,
                         availableCalendarIDs: availableCalendarIDs,
                         writableCalendarIDs: writableCalendarIDs,
                         completion: completion
@@ -571,6 +578,7 @@ enum GoogleCalendarScheduleSync {
                     modelContext: modelContext,
                     remoteEventsByKey: remoteEventsByKey,
                     remoteEventsByFingerprint: remoteEventsByFingerprint,
+                    remoteEventsByCollisionKey: remoteEventsByCollisionKey,
                     availableCalendarIDs: availableCalendarIDs,
                     writableCalendarIDs: writableCalendarIDs,
                     completion: completion
@@ -594,6 +602,7 @@ enum GoogleCalendarScheduleSync {
                     modelContext: modelContext,
                     remoteEventsByKey: remoteEventsByKey,
                     remoteEventsByFingerprint: remoteEventsByFingerprint,
+                    remoteEventsByCollisionKey: remoteEventsByCollisionKey,
                     availableCalendarIDs: availableCalendarIDs,
                     writableCalendarIDs: writableCalendarIDs,
                     completion: completion
@@ -610,6 +619,7 @@ enum GoogleCalendarScheduleSync {
                     modelContext: modelContext,
                     remoteEventsByKey: remoteEventsByKey,
                     remoteEventsByFingerprint: remoteEventsByFingerprint,
+                    remoteEventsByCollisionKey: remoteEventsByCollisionKey,
                     availableCalendarIDs: availableCalendarIDs,
                     writableCalendarIDs: writableCalendarIDs,
                     completion: completion
@@ -621,9 +631,11 @@ enum GoogleCalendarScheduleSync {
             auth.patchCalendarEvent(calendarID: currentCalendarID, eventID: eventID, patch: patch) { result in
                 finish(currentCalendarID, result)
             }
-        } else if let remote = remoteEventsByFingerprint[eventFingerprint(for: call)],
-                  remote.event.isManagedByGunnAire,
-                  contains(remote.calendarID, in: writableCalendarIDs) {
+        } else if let remote = existingRemoteEventMatch(
+            for: call,
+            remoteEventsByFingerprint: remoteEventsByFingerprint,
+            remoteEventsByCollisionKey: remoteEventsByCollisionKey
+        ) {
             call.googleCalendarID = remote.calendarID
             call.googleEventID = remote.event.id
             call.googleEventManagedByApp = remote.event.isManagedByGunnAire
@@ -637,6 +649,7 @@ enum GoogleCalendarScheduleSync {
                 modelContext: modelContext,
                 remoteEventsByKey: remoteEventsByKey,
                 remoteEventsByFingerprint: remoteEventsByFingerprint,
+                remoteEventsByCollisionKey: remoteEventsByCollisionKey,
                 availableCalendarIDs: availableCalendarIDs,
                 writableCalendarIDs: writableCalendarIDs,
                 completion: completion
@@ -880,6 +893,60 @@ enum GoogleCalendarScheduleSync {
         return indexed
     }
 
+    private static func remoteEventsByCollisionKey(
+        from calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)],
+        writableCalendarIDs: Set<String>
+    ) -> [String: (calendarID: String, event: GoogleCalendarEvent)] {
+        var indexed: [String: (calendarID: String, event: GoogleCalendarEvent)] = [:]
+        var indexedEventKeys: Set<String> = []
+        for calendarEvent in calendarEvents {
+            let eventKey = calendarEventStorageKey(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id)
+            guard !isCalendarEventDeleted(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id),
+                  indexedEventKeys.insert(eventKey).inserted,
+                  let startDate = parseEventDate(calendarEvent.event.start),
+                  let endDate = parseEventDate(calendarEvent.event.end) else {
+                continue
+            }
+            let collisionKey = eventCollisionKey(
+                summary: calendarEvent.event.summary,
+                startDate: startDate,
+                endDate: endDate
+            )
+            if let existing = indexed[collisionKey] {
+                if shouldPreferRemoteCalendarEvent(calendarEvent, over: existing, writableCalendarIDs: writableCalendarIDs) {
+                    indexed[collisionKey] = calendarEvent
+                }
+            } else {
+                indexed[collisionKey] = calendarEvent
+            }
+        }
+        return indexed
+    }
+
+    private static func existingRemoteEventMatch(
+        for call: ServiceCall,
+        remoteEventsByFingerprint: [String: (calendarID: String, event: GoogleCalendarEvent)],
+        remoteEventsByCollisionKey: [String: (calendarID: String, event: GoogleCalendarEvent)]
+    ) -> (calendarID: String, event: GoogleCalendarEvent)? {
+        remoteEventsByFingerprint[eventFingerprint(for: call)] ?? remoteEventsByCollisionKey[eventCollisionKey(for: call)]
+    }
+
+    private static func shouldPreferRemoteCalendarEvent(
+        _ candidate: (calendarID: String, event: GoogleCalendarEvent),
+        over existing: (calendarID: String, event: GoogleCalendarEvent),
+        writableCalendarIDs: Set<String>
+    ) -> Bool {
+        if candidate.event.isManagedByGunnAire != existing.event.isManagedByGunnAire {
+            return candidate.event.isManagedByGunnAire
+        }
+        let existingWritable = contains(existing.calendarID, in: writableCalendarIDs)
+        let candidateWritable = contains(candidate.calendarID, in: writableCalendarIDs)
+        if existingWritable != candidateWritable {
+            return candidateWritable
+        }
+        return candidate.calendarID == "primary" && existing.calendarID != "primary"
+    }
+
     private static func eventFingerprint(for call: ServiceCall) -> String {
         eventFingerprint(
             summary: calendarEventTitle(for: call, existingSummary: nil),
@@ -962,6 +1029,26 @@ enum GoogleCalendarScheduleSync {
         [
             normalized(summary ?? ""),
             normalized(location ?? ""),
+            String(Int(startDate.timeIntervalSince1970 / 60)),
+            String(Int(endDate.timeIntervalSince1970 / 60))
+        ].joined(separator: "|")
+    }
+
+    private static func eventCollisionKey(for call: ServiceCall) -> String {
+        eventCollisionKey(
+            summary: calendarEventTitle(for: call, existingSummary: nil),
+            startDate: call.scheduledDate,
+            endDate: call.scheduledDate.addingTimeInterval(call.duration)
+        )
+    }
+
+    private static func eventCollisionKey(
+        summary: String?,
+        startDate: Date,
+        endDate: Date
+    ) -> String {
+        [
+            normalized(summary ?? ""),
             String(Int(startDate.timeIntervalSince1970 / 60)),
             String(Int(endDate.timeIntervalSince1970 / 60))
         ].joined(separator: "|")

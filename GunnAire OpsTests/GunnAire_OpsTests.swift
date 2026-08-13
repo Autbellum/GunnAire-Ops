@@ -4671,6 +4671,34 @@ struct GunnAire_OpsTests {
         #expect(payload.contains("\"gunnaireOrigin\":\"ios-app\""))
     }
 
+    @MainActor
+    @Test func googleCalendarPatchPayloadCannotScrubExternalDetails() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let call = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "event-123",
+            googleEventManagedByApp: false,
+            eventTitle: "Do not send this title",
+            siteAddress: "",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3600,
+            customer: customer,
+            notes: ""
+        )
+
+        let patch = GoogleCalendarScheduleSync.makeManagedEventPatch(for: call, remoteEvent: nil)
+        let payload = String(data: try JSONEncoder().encode(patch), encoding: .utf8) ?? ""
+
+        #expect(payload.contains("\"start\""))
+        #expect(payload.contains("\"end\""))
+        #expect(!payload.contains("summary"))
+        #expect(!payload.contains("location"))
+        #expect(!payload.contains("description"))
+        #expect(!payload.contains("extendedProperties"))
+        #expect(!payload.contains("Do not send this title"))
+    }
+
     @Test func googleCalendarImportPreservesAppManagedOwnershipMarker() async throws {
         let start = GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T13:00:00Z", timeZone: nil)
         let end = GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T14:00:00Z", timeZone: nil)
