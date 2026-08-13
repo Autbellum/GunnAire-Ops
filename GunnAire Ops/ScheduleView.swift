@@ -1198,6 +1198,7 @@ GunnAire
     private func scheduleMaintenanceVisit(for contract: RecurringMaintenanceContract) {
         let serviceAddress = contract.customer.address?.trimmingCharacters(in: .whitespacesAndNewlines)
         let call = ServiceCall(
+            googleEventManagedByApp: true,
             siteAddress: serviceAddress?.isEmpty == false ? serviceAddress : nil,
             type: .maintenance,
             scheduledDate: contract.nextDate,
@@ -1225,6 +1226,7 @@ GunnAire
             .joined(separator: "\n\n")
 
         let followUpCall = ServiceCall(
+            googleEventManagedByApp: true,
             siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
             equipmentName: sourceCall.equipmentName,
             equipmentManufacturer: sourceCall.equipmentManufacturer,
@@ -1264,6 +1266,7 @@ GunnAire
             .joined(separator: "\n\n")
 
         let approvedWorkCall = ServiceCall(
+            googleEventManagedByApp: true,
             siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
             equipmentName: sourceCall.equipmentName,
             equipmentManufacturer: sourceCall.equipmentManufacturer,

@@ -571,6 +571,7 @@ GunnAire
             .joined(separator: "\n\n")
 
         let followUpCall = ServiceCall(
+            googleEventManagedByApp: true,
             siteAddress: call.siteAddress ?? call.customer.address,
             equipmentName: call.equipmentName,
             equipmentManufacturer: call.equipmentManufacturer,
@@ -607,6 +608,7 @@ GunnAire
             .joined(separator: "\n\n")
 
         let approvedWorkCall = ServiceCall(
+            googleEventManagedByApp: true,
             siteAddress: call.siteAddress ?? call.customer.address,
             equipmentName: call.equipmentName,
             equipmentManufacturer: call.equipmentManufacturer,
@@ -1672,6 +1674,7 @@ struct AddServiceCallView: View {
         )
         let call = ServiceCall(
             googleCalendarID: resolvedCalendarID,
+            googleEventManagedByApp: true,
             eventTitle: eventTitle.nilIfBlank,
             siteAddress: resolvedSiteAddress,
             equipmentName: equipmentName.nilIfBlank,

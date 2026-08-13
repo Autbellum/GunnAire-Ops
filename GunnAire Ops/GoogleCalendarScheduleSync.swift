@@ -618,7 +618,8 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldAllowGoogleCalendarWrite(for call: ServiceCall) -> Bool {
-        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+            call.googleEventManagedByApp
     }
 
     static func isExternalGoogleCalendarEvent(_ call: ServiceCall) -> Bool {
@@ -635,6 +636,7 @@ enum GoogleCalendarScheduleSync {
 
     static func shouldCreateGoogleCalendarEvent(for call: ServiceCall) -> Bool {
         call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+            call.googleEventManagedByApp &&
             shouldAllowGoogleCalendarWrite(for: call)
     }
 
@@ -648,6 +650,7 @@ enum GoogleCalendarScheduleSync {
 
     static func shouldSelectGoogleCalendarBeforeCreate(for call: ServiceCall) -> Bool {
         call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+            call.googleEventManagedByApp &&
             shouldAllowGoogleCalendarWrite(for: call)
     }
 

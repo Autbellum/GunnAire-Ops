@@ -668,11 +668,11 @@ struct SyncIntegrationsView: View {
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
     @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
-    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     @State private var availableCalendars: [GoogleCalendar] = []
@@ -1160,6 +1160,7 @@ struct OnsiteDocumentationView: View {
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @State private var selectedServiceCallID: UUID?
     @State private var didLoadPendingRoute = false
     @State private var generatedCustomerDocumentURL: URL?
@@ -1167,6 +1168,22 @@ struct OnsiteDocumentationView: View {
 
     private var quickBooksConnected: Bool {
         QuickBooksDataAPI.shared.isAuthenticated
+    }
+
+    private var currentUserEmail: String? {
+        GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+    }
+
+    private var canViewFinancials: Bool {
+        AppAccess.canViewBillingFinancialDetails(email: currentUserEmail, users: users)
+    }
+
+    private var canCollectFieldPayments: Bool {
+        AppAccess.canCollectFieldPayments(email: currentUserEmail, users: users)
+    }
+
+    private var canIncludeFinancialsInOnsiteReports: Bool {
+        canViewFinancials || canCollectFieldPayments
     }
 
     private var openJobs: [ServiceCall] {
@@ -1525,7 +1542,8 @@ struct OnsiteDocumentationView: View {
                 payments: payments(for: linkedInvoice),
                 attachments: attachments(for: call),
                 equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
+                serviceCalls: serviceCalls,
+                includeFinancials: canIncludeFinancialsInOnsiteReports
             )
             generatedCustomerDocumentURL = url
             if !call.markDocumentationCompleteIfReady() {
@@ -1545,7 +1563,8 @@ struct OnsiteDocumentationView: View {
             let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
                 serviceCall: call,
                 estimate: estimate,
-                invoice: invoice
+                invoice: invoice,
+                includeFinancials: canIncludeFinancialsInOnsiteReports
             )
             let attachment: ServiceDocumentAttachment
             if let reusable = ServiceDocumentAttachment.reusableGeneratedServiceReport(

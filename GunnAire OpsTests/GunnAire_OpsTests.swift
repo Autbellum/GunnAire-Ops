@@ -5364,6 +5364,45 @@ struct GunnAire_OpsTests {
         #expect(caption.contains("QuickBooks Estimate ID: QBO-EST-42"))
     }
 
+    @Test func onsiteReportLinkedRecordRowsCanHideFinancialReferences() async throws {
+        let customer = Customer(name: "Linked Report Customer")
+        let callID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let estimateID = UUID(uuidString: "22222222-3333-4444-5555-666666666666")!
+        let invoiceID = UUID(uuidString: "33333333-4444-5555-6666-777777777777")!
+        let call = ServiceCall(
+            id: callID,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let estimate = Estimate(id: estimateID, customer: customer, quickBooksID: "QBO-EST-42", amount: 500, status: "accepted")
+        let invoice = Invoice(id: invoiceID, customer: customer, quickBooksID: "QBO-INV-99", amount: 500, status: "paid")
+
+        let rows = CustomerDocumentExporter.linkedRecordRows(
+            serviceCall: call,
+            estimate: estimate,
+            invoice: invoice,
+            includeFinancials: false
+        )
+        let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
+            serviceCall: call,
+            estimate: estimate,
+            invoice: invoice,
+            includeFinancials: false
+        )
+
+        #expect(rows.contains { $0.label == "Job ID" && $0.value == "11111111" })
+        #expect(rows.contains { $0.label == "Estimate ID" && $0.value == "22222222" })
+        #expect(rows.contains { $0.label == "Estimate Status" && $0.value == "Accepted" })
+        #expect(rows.contains { $0.label == "Invoice ID" && $0.value == "33333333" })
+        #expect(rows.contains { $0.label == "Invoice Status" && $0.value == "Paid" })
+        #expect(rows.contains { $0.label.contains("Amount") || $0.label.contains("Total") || $0.label.contains("Balance") } == false)
+        #expect(rows.contains { $0.label.contains("QuickBooks") } == false)
+        #expect(caption.contains("Generated onsite maintenance report"))
+        #expect(caption.contains("QuickBooks") == false)
+        #expect(caption.contains("$") == false)
+    }
+
     @Test func invoiceDetailRowsUseQuickBooksBalanceWhenAvailable() async throws {
         let customer = Customer(name: "QBO Invoice Customer")
         let invoice = Invoice(
@@ -7101,6 +7140,7 @@ struct GunnAire_OpsTests {
         )
         let newAppCall = ServiceCall(
             googleCalendarID: "primary",
+            googleEventManagedByApp: true,
             type: .service,
             scheduledDate: Date(),
             customer: customer
@@ -7138,6 +7178,7 @@ struct GunnAire_OpsTests {
         )
         let newAppCall = ServiceCall(
             googleCalendarID: "primary",
+            googleEventManagedByApp: true,
             eventTitle: "New app event",
             siteAddress: "New address",
             type: .service,
@@ -7185,7 +7226,7 @@ struct GunnAire_OpsTests {
             notes: "Local app notes"
         )
 
-        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: localCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: localCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldExportDuringCalendarSync(localCall) == false)
     }
 
@@ -7205,7 +7246,7 @@ struct GunnAire_OpsTests {
         GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(localCall)
 
         #expect(GoogleCalendarScheduleSync.shouldExportDuringCalendarSync(localCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: localCall))
+        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: localCall) == false)
     }
 
     @MainActor
@@ -7592,6 +7633,7 @@ struct GunnAire_OpsTests {
             customer: customer
         )
         let newCall = ServiceCall(
+            googleEventManagedByApp: true,
             type: .service,
             scheduledDate: Date(),
             customer: customer

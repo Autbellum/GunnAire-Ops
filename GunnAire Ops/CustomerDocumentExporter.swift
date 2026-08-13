@@ -68,7 +68,8 @@ enum CustomerDocumentExporter {
         payments: [Payment],
         attachments: [ServiceDocumentAttachment] = [],
         equipmentProfiles: [CustomerEquipment] = [],
-        serviceCalls: [ServiceCall] = []
+        serviceCalls: [ServiceCall] = [],
+        includeFinancials: Bool = true
     ) throws -> URL {
         let scopedAttachments = onsiteReportAttachments(
             for: attachments,
@@ -89,7 +90,8 @@ enum CustomerDocumentExporter {
             payments: payments,
             attachments: scopedAttachments,
             equipmentProfiles: equipmentProfiles,
-            serviceCalls: serviceCalls
+            serviceCalls: serviceCalls,
+            includeFinancials: includeFinancials
         )
         return try renderPDF(
             title: title,
@@ -162,14 +164,15 @@ enum CustomerDocumentExporter {
         payments: [Payment],
         attachments: [ServiceDocumentAttachment],
         equipmentProfiles: [CustomerEquipment],
-        serviceCalls: [ServiceCall]
+        serviceCalls: [ServiceCall],
+        includeFinancials: Bool = true
     ) -> [DocumentSection] {
         var sections: [DocumentSection] = [
             DocumentSection(
                 title: "Job",
                 rows: onsiteReportJobRows(for: serviceCall).map { row($0.label, $0.value) }
             ),
-            linkedRecordSection(serviceCall: serviceCall, estimate: estimate, invoice: invoice, payments: payments),
+            linkedRecordSection(serviceCall: serviceCall, estimate: estimate, invoice: invoice, payments: payments, includeFinancials: includeFinancials),
             serviceReportReadinessSection(for: serviceCall),
             closeoutReadinessSection(
                 for: serviceCall,
@@ -323,7 +326,8 @@ enum CustomerDocumentExporter {
         serviceCall: ServiceCall,
         estimate: Estimate?,
         invoice: Invoice?,
-        payments: [Payment] = []
+        payments: [Payment] = [],
+        includeFinancials: Bool = true
     ) -> [(label: String, value: String)] {
         var rows: [(label: String, value: String)] = [
             ("Job ID", shortID(serviceCall.id))
@@ -331,8 +335,10 @@ enum CustomerDocumentExporter {
         if let estimate {
             rows.append(("Estimate ID", shortID(estimate.id)))
             rows.append(("Estimate Status", estimate.status.capitalized))
-            rows.append(("Estimate Amount", currency(estimate.amount)))
-            if let quickBooksID = normalizedValue(estimate.quickBooksID) {
+            if includeFinancials {
+                rows.append(("Estimate Amount", currency(estimate.amount)))
+            }
+            if includeFinancials, let quickBooksID = normalizedValue(estimate.quickBooksID) {
                 rows.append(("QuickBooks Estimate ID", quickBooksID))
             }
         } else if serviceCall.linkedEstimateID != nil {
@@ -340,12 +346,14 @@ enum CustomerDocumentExporter {
         }
         if let invoice {
             let resolvedStatus = Invoice.resolvedStatus(for: invoice, payments: payments)
-            let balance = Invoice.outstandingBalance(for: invoice, payments: payments)
             rows.append(("Invoice ID", shortID(invoice.id)))
             rows.append(("Invoice Status", resolvedStatus.capitalized))
-            rows.append(("Invoice Total", currency(invoice.amount)))
-            rows.append(("Invoice Balance Due", currency(balance)))
-            if let quickBooksID = normalizedValue(invoice.quickBooksID) {
+            if includeFinancials {
+                let balance = Invoice.outstandingBalance(for: invoice, payments: payments)
+                rows.append(("Invoice Total", currency(invoice.amount)))
+                rows.append(("Invoice Balance Due", currency(balance)))
+            }
+            if includeFinancials, let quickBooksID = normalizedValue(invoice.quickBooksID) {
                 rows.append(("QuickBooks Invoice ID", quickBooksID))
             }
         } else if serviceCall.linkedInvoiceID != nil {
@@ -357,9 +365,10 @@ enum CustomerDocumentExporter {
     static func onsiteReportAttachmentCaption(
         serviceCall: ServiceCall,
         estimate: Estimate?,
-        invoice: Invoice?
+        invoice: Invoice?,
+        includeFinancials: Bool = true
     ) -> String {
-        let details = linkedRecordRows(serviceCall: serviceCall, estimate: estimate, invoice: invoice)
+        let details = linkedRecordRows(serviceCall: serviceCall, estimate: estimate, invoice: invoice, includeFinancials: includeFinancials)
             .filter { $0.label != "Job ID" || !$0.value.isEmpty }
             .map { "\($0.label): \($0.value)" }
             .joined(separator: " - ")
@@ -371,11 +380,12 @@ enum CustomerDocumentExporter {
         serviceCall: ServiceCall,
         estimate: Estimate?,
         invoice: Invoice?,
-        payments: [Payment]
+        payments: [Payment],
+        includeFinancials: Bool = true
     ) -> DocumentSection {
         DocumentSection(
             title: "Linked Records",
-            rows: linkedRecordRows(serviceCall: serviceCall, estimate: estimate, invoice: invoice, payments: payments).map { row($0.label, $0.value) }
+            rows: linkedRecordRows(serviceCall: serviceCall, estimate: estimate, invoice: invoice, payments: payments, includeFinancials: includeFinancials).map { row($0.label, $0.value) }
         )
     }
 

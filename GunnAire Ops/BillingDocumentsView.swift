@@ -3650,7 +3650,8 @@ GunnAire
             payments: payments,
             attachments: jobAttachments,
             equipmentProfiles: equipmentProfiles,
-            serviceCalls: serviceCalls
+            serviceCalls: serviceCalls,
+            includeFinancials: canViewFinancials || canCollectFieldPayments
         )
         let data = try Data(contentsOf: url)
         let invoiceID = invoice?.id ?? serviceCall.linkedInvoiceID
@@ -3658,7 +3659,8 @@ GunnAire
         let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
             serviceCall: serviceCall,
             estimate: estimate,
-            invoice: invoice
+            invoice: invoice,
+            includeFinancials: canViewFinancials || canCollectFieldPayments
         )
 
         let attachment: ServiceDocumentAttachment
@@ -4039,7 +4041,8 @@ GunnAire
                 payments: currentJobPayments,
                 attachments: activeJobAttachments,
                 equipmentProfiles: equipmentProfiles,
-                serviceCalls: serviceCalls
+                serviceCalls: serviceCalls,
+                includeFinancials: canViewFinancials || canCollectFieldPayments
             )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = serviceCall.customer.id
@@ -4066,7 +4069,8 @@ GunnAire
             let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
                 serviceCall: serviceCall,
                 estimate: estimate,
-                invoice: invoice
+                invoice: invoice,
+                includeFinancials: canViewFinancials || canCollectFieldPayments
             )
             let attachment: ServiceDocumentAttachment
             if let reusable = ServiceDocumentAttachment.reusableGeneratedServiceReport(
@@ -4445,6 +4449,7 @@ GunnAire
             .joined(separator: "\n\n")
 
         let followUpCall = ServiceCall(
+            googleEventManagedByApp: true,
             siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
             equipmentName: sourceCall.equipmentName,
             equipmentManufacturer: sourceCall.equipmentManufacturer,
@@ -4482,6 +4487,7 @@ GunnAire
             .joined(separator: "\n\n")
 
         let approvedWorkCall = ServiceCall(
+            googleEventManagedByApp: true,
             siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
             equipmentName: sourceCall.equipmentName,
             equipmentManufacturer: sourceCall.equipmentManufacturer,
