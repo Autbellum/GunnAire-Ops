@@ -3400,8 +3400,8 @@ GunnAire
         syncLinkedInvoiceAttachmentsToQuickBooks(invoice)
     }
 
-    private func prepareLinkedOnsiteReportForInvoiceCreation(_ invoice: Invoice, serviceCall: ServiceCall?) {
-        guard let serviceCall else { return }
+    private func prepareLinkedOnsiteReportForInvoiceCreation(_ invoice: Invoice, serviceCall: ServiceCall?) -> String? {
+        guard let serviceCall else { return nil }
         linkExistingInvoiceAttachments(to: invoice, serviceCallID: serviceCall.id)
         saveCurrentEquipmentProfile(for: serviceCall, announce: false)
         do {
@@ -3418,8 +3418,9 @@ GunnAire
             )
             report.attachment.linkToInvoiceIfNeeded(invoice)
             syncAttachmentIfPossible(report.attachment, data: report.data)
+            return nil
         } catch {
-            actionMessage = "Invoice created, but the onsite report could not be generated automatically: \(error.localizedDescription)"
+            return "Invoice created, but the onsite report could not be generated automatically: \(error.localizedDescription)"
         }
     }
 
@@ -3898,10 +3899,16 @@ GunnAire
             return
         }
 
-        let invoice = convertEstimate(estimate)
+        let conversion = convertEstimate(estimate)
+        let invoice = conversion.invoice
         selectedInvoiceForCloseout = invoice
         let restoredItems = items.filter { matchingItemIDs(from: estimate.lineItemSummary).contains($0.id) }
-        if isQuickBooksConnected, !restoredItems.isEmpty {
+        if let reportErrorMessage = conversion.reportErrorMessage {
+            actionMessage = reportErrorMessage
+            if isQuickBooksConnected, !restoredItems.isEmpty {
+                syncInvoiceIfNeeded(invoice, customer: estimate.customer, items: restoredItems)
+            }
+        } else if isQuickBooksConnected, !restoredItems.isEmpty {
             actionMessage = "Invoice created from estimate. Syncing to QuickBooks..."
             syncInvoiceIfNeeded(invoice, customer: estimate.customer, items: restoredItems)
         } else if isQuickBooksConnected {
@@ -4557,8 +4564,8 @@ GunnAire
             activeServiceCall?.linkedInvoiceID = invoice.id
             activeServiceCall?.markDocumentationCompleteIfReady()
             activeServiceCall?.status = .invoiced
-            prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: activeServiceCall)
-            actionMessage = isQuickBooksConnected ? "Invoice created locally. Syncing to QuickBooks..." : "Invoice created locally."
+            let reportErrorMessage = prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: activeServiceCall)
+            actionMessage = reportErrorMessage ?? (isQuickBooksConnected ? "Invoice created locally with onsite report. Syncing to QuickBooks..." : "Invoice created locally with onsite report.")
             guard saveBillingContext(failureMessage: "Could not save invoice locally") else {
                 isCreatingDocument = false
                 return
@@ -4825,7 +4832,7 @@ GunnAire
     }
 
     @discardableResult
-    private func convertEstimate(_ estimate: Estimate) -> Invoice {
+    private func convertEstimate(_ estimate: Estimate) -> (invoice: Invoice, reportErrorMessage: String?) {
         let invoice = Invoice(
             serviceCallID: estimate.serviceCallID,
             customer: estimate.customer,
@@ -4844,8 +4851,8 @@ GunnAire
             call.status = .invoiced
             call.markDocumentationCompleteIfReady()
         }
-        prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: linkedServiceCall)
-        return invoice
+        let reportErrorMessage = prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: linkedServiceCall)
+        return (invoice, reportErrorMessage)
     }
 
     @ViewBuilder
