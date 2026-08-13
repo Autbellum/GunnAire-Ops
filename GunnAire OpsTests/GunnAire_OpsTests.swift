@@ -5348,6 +5348,41 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
+    @Test func googleCalendarSyncDoesNotPublishUnlinkedLocalJobsByDefault() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let localCall = ServiceCall(
+            googleCalendarID: "primary",
+            eventTitle: "Local service call",
+            siteAddress: "123 App Address",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer,
+            notes: "Local app notes"
+        )
+
+        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: localCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldExportDuringCalendarSync(localCall) == false)
+    }
+
+    @MainActor
+    @Test func googleCalendarSyncOnlyPublishesExplicitlyMarkedLocalCalendarEdits() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let localCall = ServiceCall(
+            googleCalendarID: "primary",
+            eventTitle: "Local service call",
+            siteAddress: "123 App Address",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer,
+            notes: "Local app notes"
+        )
+
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(localCall)
+
+        #expect(GoogleCalendarScheduleSync.shouldExportDuringCalendarSync(localCall))
+    }
+
+    @MainActor
     @Test func googleCalendarExternalEventsRemainReadOnlyAfterLocalFieldChanges() async throws {
         let customer = Customer(name: "Calendar Customer")
         let importedCall = ServiceCall(

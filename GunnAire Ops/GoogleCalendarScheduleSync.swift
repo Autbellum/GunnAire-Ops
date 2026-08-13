@@ -385,7 +385,7 @@ enum GoogleCalendarScheduleSync {
         do {
             let calls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
                 .filter { call in
-                    guard shouldConsiderForGoogleCalendarExport(call) else {
+                    guard shouldExportDuringCalendarSync(call) else {
                         return false
                     }
                     if CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
@@ -424,6 +424,13 @@ enum GoogleCalendarScheduleSync {
 
     private static func shouldConsiderForGoogleCalendarExport(_ call: ServiceCall) -> Bool {
         shouldCreateGoogleCalendarEvent(for: call)
+    }
+
+    static func shouldExportDuringCalendarSync(_ call: ServiceCall) -> Bool {
+        guard shouldConsiderForGoogleCalendarExport(call) else {
+            return false
+        }
+        return isCalendarCallLocallyEdited(call)
     }
 
     private static func shouldExportSystemCalendarCall(_ call: ServiceCall) -> Bool {
