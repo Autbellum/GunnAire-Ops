@@ -934,6 +934,7 @@ struct GunnAire_OpsTests {
         let airHandlerDefinitions = HVACEquipmentType.airHandler.readingDefinitions
         let packageUnitDefinitions = HVACEquipmentType.packageUnit.readingDefinitions
         let miniSplitDefinitions = HVACEquipmentType.miniSplit.readingDefinitions
+        let iaqDefinitions = HVACEquipmentType.iaqAccessory.readingDefinitions
 
         #expect(heatPumpKeys.contains("reversing_valve_operation"))
         #expect(heatPumpKeys.contains("defrost_control_status"))
@@ -947,6 +948,10 @@ struct GunnAire_OpsTests {
         #expect(packageUnitDefinitions.contains { $0.key == "co_ppm" })
         #expect(miniSplitDefinitions.contains { $0.key == "communication_voltage" })
         #expect(miniSplitDefinitions.contains { $0.key == "indoor_filter_condition" })
+        #expect(iaqDefinitions.first { $0.key == "accessory_type" }?.options.contains("Humidifier") == true)
+        #expect(iaqDefinitions.first { $0.key == "accessory_type" }?.options.contains("ERV") == true)
+        #expect(iaqDefinitions.contains { $0.key == "uv_lamp_status" })
+        #expect(iaqDefinitions.contains { $0.key == "return_humidity" })
     }
 
     @Test func packageUnitReportsRequireCombustionSafetyReading() async throws {
@@ -962,11 +967,14 @@ struct GunnAire_OpsTests {
     @Test func equipmentSpecificServiceActionsDriveMaintenanceCloseout() async throws {
         let splitActions = HVACEquipmentType.splitSystemAC.serviceActionDefinitions
         let furnaceActions = HVACEquipmentType.gasFurnace.serviceActionDefinitions
+        let iaqActions = HVACEquipmentType.iaqAccessory.serviceActionDefinitions
 
         #expect(splitActions.contains { $0.key == "condenser_coil_serviced" && $0.required })
         #expect(splitActions.contains { $0.key == "condensate_drain_checked" && $0.group == "Drainage" })
         #expect(furnaceActions.contains { $0.key == "heat_exchanger_checked" && $0.group == "Safety" && $0.required })
         #expect(furnaceActions.contains { $0.key == "flame_sensor_serviced" })
+        #expect(iaqActions.contains { $0.key == "filter_or_media_serviced" && $0.required })
+        #expect(iaqActions.contains { $0.key == "uv_lamp_checked" && !$0.required })
     }
 
     @Test func serviceCallStoresEquipmentServiceActionStatuses() async throws {
@@ -1039,11 +1047,14 @@ struct GunnAire_OpsTests {
         let splitGroups = ServiceCall.groupedTechnicalReadingDefinitions(for: HVACEquipmentType.splitSystemAC.readingDefinitions)
         let furnaceGroups = ServiceCall.groupedTechnicalReadingDefinitions(for: HVACEquipmentType.gasFurnace.readingDefinitions)
         let boilerGroups = ServiceCall.groupedTechnicalReadingDefinitions(for: HVACEquipmentType.boiler.readingDefinitions)
+        let iaqGroups = ServiceCall.groupedTechnicalReadingDefinitions(for: HVACEquipmentType.iaqAccessory.readingDefinitions)
 
         #expect(splitGroups.first { $0.title == "Refrigerant Circuit" }?.definitions.contains { $0.key == "superheat" } == true)
         #expect(splitGroups.first { $0.title == "Electrical" }?.definitions.contains { $0.key == "compressor_amps" } == true)
         #expect(furnaceGroups.first { $0.title == "Combustion" }?.definitions.contains { $0.key == "flue_temp" } == true)
         #expect(boilerGroups.first { $0.title == "Hydronics" }?.definitions.contains { $0.key == "water_temp_supply" } == true)
+        #expect(iaqGroups.first { $0.title == "IAQ & Accessories" }?.definitions.contains { $0.key == "accessory_type" } == true)
+        #expect(iaqGroups.first { $0.title == "IAQ & Accessories" }?.definitions.contains { $0.key == "uv_lamp_status" } == true)
     }
 
     @Test func technicalReadingGroupProgressSummarizesCapturedRequiredAndInvalidFields() async throws {

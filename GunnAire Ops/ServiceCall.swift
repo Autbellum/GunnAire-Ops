@@ -49,6 +49,7 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
     case boiler = "boiler"
     case waterHeater = "water_heater"
     case ventilation = "ventilation"
+    case iaqAccessory = "iaq_accessory"
     case other = "other"
 
     var id: String { rawValue }
@@ -64,6 +65,7 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         case .boiler: return "Boiler"
         case .waterHeater: return "Water Heater"
         case .ventilation: return "Ventilation"
+        case .iaqAccessory: return "IAQ / Accessory"
         case .other: return "Other"
         }
     }
@@ -148,6 +150,18 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         "Corroded",
         "Replacement Recommended",
         "Not Accessible"
+    ]
+
+    private static let iaqAccessoryOptions = [
+        "Humidifier",
+        "Dehumidifier",
+        "Media Air Cleaner",
+        "Electronic Air Cleaner",
+        "UV Light",
+        "ERV",
+        "HRV",
+        "Fresh Air Damper",
+        "Other"
     ]
 
     var readingDefinitions: [HVACTechnicalReadingDefinition] {
@@ -270,6 +284,21 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
                 HVACTechnicalReadingDefinition(key: "belt_condition", label: "Belt Condition", unit: nil, options: Self.conditionOptions),
                 HVACTechnicalReadingDefinition(key: "damper_operation", label: "Damper Operation", unit: nil, options: Self.conditionOptions)
             ]
+        case .iaqAccessory:
+            return [
+                HVACTechnicalReadingDefinition(key: "accessory_type", label: "Accessory Type", unit: nil, options: Self.iaqAccessoryOptions),
+                HVACTechnicalReadingDefinition(key: "line_voltage", label: "Line Voltage", unit: "V"),
+                HVACTechnicalReadingDefinition(key: "control_voltage", label: "Control Voltage", unit: "V"),
+                HVACTechnicalReadingDefinition(key: "return_humidity", label: "Return Humidity", unit: "% RH"),
+                HVACTechnicalReadingDefinition(key: "supply_humidity", label: "Supply Humidity", unit: "% RH"),
+                HVACTechnicalReadingDefinition(key: "airflow", label: "Airflow", unit: "CFM"),
+                HVACTechnicalReadingDefinition(key: "static_pressure", label: "Static Pressure", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "filter_media_condition", label: "Filter/Media Condition", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "water_panel_condition", label: "Water Panel Condition", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "drain_condition", label: "Drain Condition", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "uv_lamp_status", label: "UV Lamp Status", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "damper_operation", label: "Damper Operation", unit: nil, options: Self.conditionOptions)
+            ]
         case .other:
             return common
         }
@@ -375,6 +404,11 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
                 "motor_amps", "line_voltage", "static_pressure",
                 "belt_condition", "damper_operation"
             ]
+        case .iaqAccessory:
+            return [
+                "accessory_type", "line_voltage", "control_voltage",
+                "filter_media_condition", "drain_condition"
+            ]
         case .other:
             return ["return_air_temp", "supply_air_temp", "line_voltage"]
         }
@@ -451,6 +485,14 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
                 HVACServiceActionDefinition(key: "motor_checked", label: "Motor operation checked", group: "Electrical", required: true),
                 HVACServiceActionDefinition(key: "dampers_checked", label: "Dampers verified", group: "Airflow", required: true),
                 HVACServiceActionDefinition(key: "airflow_verified", label: "Airflow verified", group: "Airflow", required: true)
+            ]
+        case .iaqAccessory:
+            return [
+                HVACServiceActionDefinition(key: "accessory_operation_verified", label: "Accessory operation verified", group: "Controls", required: true),
+                HVACServiceActionDefinition(key: "filter_or_media_serviced", label: "Filter/media/pad checked or replaced", group: "Maintenance", required: true),
+                HVACServiceActionDefinition(key: "drain_and_water_path_checked", label: "Drain and water path checked", group: "Drainage", required: true),
+                HVACServiceActionDefinition(key: "airflow_or_damper_verified", label: "Airflow or damper operation verified", group: "Airflow", required: true),
+                HVACServiceActionDefinition(key: "uv_lamp_checked", label: "UV lamp checked where applicable", group: "IAQ", required: false)
             ]
         case .other:
             return airflow
@@ -1258,6 +1300,7 @@ final class ServiceCall {
             "Airflow & Static",
             "Combustion",
             "Hydronics",
+            "IAQ & Accessories",
             "Controls & Safeties",
             "Conditions",
             "General"
@@ -1319,6 +1362,13 @@ final class ServiceCall {
             key.contains("tank") ||
             key.contains("anode") {
             return "Hydronics"
+        }
+        if key.contains("accessory") ||
+            key.contains("humidity") ||
+            key.contains("uv_lamp") ||
+            key.contains("filter_media") ||
+            key.contains("water_panel") {
+            return "IAQ & Accessories"
         }
         if key.contains("temp") || key.contains("temperature") || key.contains("wet_bulb") || key.contains("dry_bulb") {
             return "Air Temperatures"
