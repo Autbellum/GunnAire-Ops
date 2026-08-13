@@ -368,6 +368,20 @@ enum CustomerDocumentExporter {
             }
     }
 
+    static func photoAttachmentCaption(for attachment: ServiceDocumentAttachment) -> String {
+        [
+            attachment.kind.label,
+            attachment.caption,
+            attachment.displayName,
+            formattedDateTime(attachment.createdAt)
+        ]
+            .compactMap { value -> String? in
+                guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: " - ")
+    }
+
     static func attachmentManifestSummaries(for attachments: [ServiceDocumentAttachment]) -> [(label: String, detail: String)] {
         attachments
             .filter { $0.kind != .serviceReport }
@@ -716,16 +730,7 @@ enum CustomerDocumentExporter {
             item.image.draw(in: imageRect)
             y += drawSize.height + 6
 
-            let caption = [
-                item.attachment.kind.label,
-                item.attachment.caption,
-                item.attachment.displayName
-            ]
-                .compactMap { value -> String? in
-                    guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-                    return value
-                }
-                .joined(separator: " - ")
+            let caption = photoAttachmentCaption(for: item.attachment)
             drawWrapped(caption, in: CGRect(x: margin, y: y, width: contentWidth, height: 42), font: .systemFont(ofSize: 9), color: .darkGray)
             y += measuredHeight(caption, width: contentWidth, font: .systemFont(ofSize: 9)) + 16
         }

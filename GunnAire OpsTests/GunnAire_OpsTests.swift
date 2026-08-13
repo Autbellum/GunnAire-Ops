@@ -2568,6 +2568,28 @@ struct GunnAire_OpsTests {
         #expect(summaries.contains { $0.detail.contains("generated-report.pdf") } == false)
     }
 
+    @Test func onsiteReportPhotoCaptionIncludesTimestampForFieldEvidence() async throws {
+        let customer = Customer(name: "Photo Evidence Customer")
+        let photo = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            kind: .diagnosticPhoto,
+            displayName: "before-repair.jpg",
+            caption: "Before repair",
+            localFilePath: "/tmp/before-repair.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+
+        let caption = CustomerDocumentExporter.photoAttachmentCaption(for: photo)
+
+        #expect(caption.contains("Diagnostic Photo"))
+        #expect(caption.contains("Before repair"))
+        #expect(caption.contains("before-repair.jpg"))
+        #expect(caption.contains("2027") || caption.contains("Jan"))
+    }
+
     @Test func onsiteReportPhotoEvidenceIncludesJobImagesInStableOrder() async throws {
         let customer = Customer(name: "Report Customer")
         let serviceCallID = UUID()
