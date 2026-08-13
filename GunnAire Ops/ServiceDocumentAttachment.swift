@@ -662,6 +662,22 @@ final class ServiceDocumentAttachment {
             .sorted { $0.createdAt > $1.createdAt }
     }
 
+    @discardableResult
+    static func detachEquipmentProfileLinks(
+        for equipment: CustomerEquipment,
+        from attachments: [ServiceDocumentAttachment],
+        serviceCalls: [ServiceCall] = []
+    ) -> Int {
+        var updatedCount = 0
+        for attachment in attachments {
+            if attachment.customerEquipmentID == equipment.id {
+                attachment.customerEquipmentID = nil
+                updatedCount += 1
+            }
+        }
+        return updatedCount
+    }
+
     func isLinkedToEquipment(
         equipmentProfiles: [CustomerEquipment],
         serviceCalls: [ServiceCall] = []

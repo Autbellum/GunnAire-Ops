@@ -3060,6 +3060,16 @@ private struct CustomerEditorView: View {
     }
 
     private func removeEquipmentProfile(_ equipment: CustomerEquipment) {
+        let preservedAttachmentCount = ServiceDocumentAttachment.equipmentAttachments(
+            for: equipment,
+            in: documentAttachments,
+            serviceCalls: serviceCalls
+        ).count
+        ServiceDocumentAttachment.detachEquipmentProfileLinks(
+            for: equipment,
+            from: documentAttachments,
+            serviceCalls: serviceCalls
+        )
         for call in serviceCalls where call.customerEquipmentID == equipment.id {
             call.customerEquipmentID = nil
         }
@@ -3068,7 +3078,9 @@ private struct CustomerEditorView: View {
         if editingEquipmentID == equipment.id {
             resetEquipmentEditor()
         }
-        customerActionMessage = "Deleted equipment profile from \(customer.name)."
+        customerActionMessage = preservedAttachmentCount > 0
+            ? "Deleted equipment profile from \(customer.name). Preserved \(preservedAttachmentCount) linked file\(preservedAttachmentCount == 1 ? "" : "s") under the customer."
+            : "Deleted equipment profile from \(customer.name)."
     }
 
     private func deleteCustomer() {

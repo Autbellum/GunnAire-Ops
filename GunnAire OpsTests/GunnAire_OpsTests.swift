@@ -4900,6 +4900,68 @@ struct GunnAire_OpsTests {
         #expect(legacyJobPhoto.isLinkedToEquipment(equipmentProfiles: [equipment], serviceCalls: [serviceCall]))
     }
 
+    @Test func deletingEquipmentProfilePreservesFilesAtCustomerLevel() async throws {
+        let customer = Customer(name: "Equipment Delete Customer")
+        let equipment = CustomerEquipment(customer: customer, name: "Downstairs AC", modelNumber: "24ABC6")
+        let serviceCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer
+        )
+        let directEquipmentFile = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: equipment.id,
+            kind: .customerDocument,
+            displayName: "downstairs-manual.pdf",
+            localFilePath: "/tmp/downstairs-manual.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let legacyJobFile = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCall.id,
+            customerEquipmentID: nil,
+            kind: .diagnosticPhoto,
+            displayName: "legacy-job-photo.jpg",
+            localFilePath: "/tmp/legacy-job-photo.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048
+        )
+        let unrelatedEquipment = CustomerEquipment(customer: customer, name: "Upstairs Furnace")
+        let unrelatedFile = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: unrelatedEquipment.id,
+            kind: .customerDocument,
+            displayName: "upstairs-manual.pdf",
+            localFilePath: "/tmp/upstairs-manual.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let detachedCount = ServiceDocumentAttachment.detachEquipmentProfileLinks(
+            for: equipment,
+            from: [directEquipmentFile, legacyJobFile, unrelatedFile],
+            serviceCalls: [serviceCall]
+        )
+        serviceCall.customerEquipmentID = nil
+        let customerLevel = ServiceDocumentAttachment.customerLevelAttachments(
+            in: [directEquipmentFile, legacyJobFile, unrelatedFile],
+            equipmentProfiles: [unrelatedEquipment],
+            serviceCalls: [serviceCall]
+        )
+
+        #expect(detachedCount == 1)
+        #expect(directEquipmentFile.customerEquipmentID == nil)
+        #expect(legacyJobFile.customerEquipmentID == nil)
+        #expect(unrelatedFile.customerEquipmentID == unrelatedEquipment.id)
+        #expect(customerLevel.map(\.displayName).contains("downstairs-manual.pdf"))
+        #expect(customerLevel.map(\.displayName).contains("legacy-job-photo.jpg"))
+        #expect(customerLevel.map(\.displayName).contains("upstairs-manual.pdf") == false)
+    }
+
     @Test func customerEquipmentAttachmentGroupSummarizesFileTypes() async throws {
         let customer = Customer(name: "Equipment Summary Customer")
         let equipment = CustomerEquipment(customer: customer, name: "Main System")
