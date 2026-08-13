@@ -1285,6 +1285,27 @@ struct GunnAire_OpsTests {
         #expect(call.serviceActionStatus(for: "condensate_drain_checked") == .needsService)
     }
 
+    @Test func serviceActionStatusesRequireSupportedEquipmentType() async throws {
+        let customer = Customer(name: "Unsupported Action Customer")
+        let call = ServiceCall(
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        call.setServiceActionStatus(.completed, for: "condenser_coil_serviced")
+        #expect(call.serviceActionStatus(for: "condenser_coil_serviced") == .notChecked)
+        #expect(call.serviceActionChecklistJSON == nil)
+
+        call.equipmentType = .gasFurnace
+        call.setServiceActionStatus(.completed, for: "condenser_coil_serviced")
+        call.setServiceActionStatus(.needsService, for: "heat_exchanger_checked")
+
+        #expect(call.serviceActionStatus(for: "condenser_coil_serviced") == .notChecked)
+        #expect(call.serviceActionStatus(for: "heat_exchanger_checked") == .needsService)
+        #expect(call.populatedServiceActionRows.contains { $0.label == "Heat exchanger inspected" && $0.value == "Needs Service" })
+    }
+
     @Test func changingEquipmentTypePrunesIncompatibleServiceActions() async throws {
         let customer = Customer(name: "Equipment Change Customer")
         let call = ServiceCall(
@@ -5337,7 +5358,7 @@ struct GunnAire_OpsTests {
         call.setTechnicalReading("76", for: "return_air_temp")
         call.setTechnicalReading("56", for: "supply_air_temp")
         call.setTechnicalReading("12", for: "superheat")
-        call.setServiceActionStatus(.needsService, for: "condenser_coil_inspected_washed")
+        call.setServiceActionStatus(.needsService, for: "condenser_coil_serviced")
         call.setServiceActionStatus(.completed, for: "electrical_connections_checked")
 
         let summaries = CustomerDocumentExporter.billingDocumentationSummaries(for: call)

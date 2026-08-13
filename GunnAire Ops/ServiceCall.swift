@@ -1692,11 +1692,22 @@ final class ServiceCall {
 
     func setServiceActionStatus(_ status: HVACServiceActionStatus, for key: String) {
         var statuses = serviceActionStatuses
+        let allowedKeys = Set(serviceActionDefinitions.map(\.key))
+        guard allowedKeys.contains(key) else {
+            statuses.removeValue(forKey: key)
+            writeServiceActionStatuses(statuses)
+            return
+        }
         if status == .notChecked {
             statuses.removeValue(forKey: key)
         } else {
             statuses[key] = status
         }
+        writeServiceActionStatuses(statuses.filter { allowedKeys.contains($0.key) })
+        diagnosticsCaptured = true
+    }
+
+    private func writeServiceActionStatuses(_ statuses: [String: HVACServiceActionStatus]) {
         let rawStatuses = statuses.mapValues(\.rawValue)
         guard !rawStatuses.isEmpty,
               let data = try? JSONEncoder().encode(rawStatuses),
@@ -1705,7 +1716,6 @@ final class ServiceCall {
             return
         }
         serviceActionChecklistJSON = json
-        diagnosticsCaptured = true
     }
 
     @discardableResult
