@@ -622,6 +622,46 @@ struct GunnAire_OpsTests {
         #expect(summary.contains("14") == false)
     }
 
+    @Test func customerEquipmentLatestConcernSummaryShowsOnlyOpenServiceActions() async throws {
+        let customer = Customer(name: "Equipment Concern Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            serialNumber: "AC123"
+        )
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let olderCall = ServiceCall(
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400 * 30),
+            customer: customer,
+            status: .completed
+        )
+        olderCall.setServiceActionStatus(.needsService, for: "condenser_coil_serviced")
+        let latestCall = ServiceCall(
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400 * 2),
+            customer: customer,
+            status: .completed
+        )
+        latestCall.setServiceActionStatus(.monitor, for: "condensate_drain_checked")
+        latestCall.setServiceActionStatus(.needsService, for: "electrical_connections_checked")
+        latestCall.setServiceActionStatus(.completed, for: "filter_checked")
+        latestCall.setServiceActionStatus(.notApplicable, for: "thermostat_verified")
+
+        let summary = try #require(equipment.latestServiceConcernSummary(in: [olderCall, latestCall], now: now))
+
+        #expect(summary.contains("Electrical connections inspected: Needs Service"))
+        #expect(summary.contains("Condensate drain checked/treated: Monitor"))
+        #expect(summary.contains("Filter checked/replaced") == false)
+        #expect(summary.contains("Thermostat operation verified") == false)
+        #expect(summary.contains("Condenser coil inspected/washed") == false)
+    }
+
     @Test func customerEquipmentLatestServiceContextSummarizesReportAndReadings() async throws {
         let customer = Customer(name: "Equipment Context Customer")
         let equipment = CustomerEquipment(
@@ -4733,6 +4773,9 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: importedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: newAppCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: importedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: appOwnedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: newAppCall) == true)
     }
 
     @MainActor
@@ -4788,6 +4831,7 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: appOwnedCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: appOwnedCall) == false)
     }
 
     @MainActor
@@ -4899,7 +4943,39 @@ struct GunnAire_OpsTests {
         #expect(!payload.contains("Do not send this title"))
     }
 
-    @Test func googleCalendarImportPreservesAppManagedOwnershipMarker() async throws {
+    @MainActor
+    @Test func googleCalendarLinkedEventsCannotCreateOrPatchScrubPayloads() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let linkedCall = ServiceCall(
+            googleCalendarID: "shared-calendar@example.com",
+            googleEventID: "google-event-123",
+            googleEventManagedByApp: false,
+            eventTitle: "",
+            siteAddress: "",
+            type: .other,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3600,
+            customer: customer,
+            notes: ""
+        )
+
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: linkedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: linkedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: linkedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: linkedCall, remoteEvent: nil) == false)
+
+        let payload = String(
+            data: try JSONEncoder().encode(GoogleCalendarScheduleSync.makeScheduleOnlyPatch(for: linkedCall)),
+            encoding: .utf8
+        ) ?? ""
+
+        #expect(payload.contains("summary") == false)
+        #expect(payload.contains("location") == false)
+        #expect(payload.contains("description") == false)
+        #expect(payload.contains("attendees") == false)
+    }
+
+    @Test func googleCalendarImportTreatsManagedMarkersAsReadOnly() async throws {
         let start = GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T13:00:00Z", timeZone: nil)
         let end = GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T14:00:00Z", timeZone: nil)
         let externallyManagedEvent = GoogleCalendarEvent(

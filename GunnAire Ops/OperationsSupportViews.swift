@@ -2117,6 +2117,12 @@ private struct CustomerEditorView: View {
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
+                                if let concerns = equipment.latestServiceConcernSummary(in: customerServiceCalls) {
+                                    Text("Open concerns: \(concerns)")
+                                        .font(.caption2)
+                                        .foregroundColor(.orange)
+                                        .lineLimit(3)
+                                }
                                 if let readings = equipment.latestTechnicalReadingsSummary(in: customerServiceCalls) {
                                     Text("Last readings: \(readings)")
                                         .font(.caption2)

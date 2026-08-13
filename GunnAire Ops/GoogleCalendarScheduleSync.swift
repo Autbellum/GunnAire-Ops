@@ -144,7 +144,7 @@ enum GoogleCalendarScheduleSync {
         isAdminUser: Bool,
         completion: ((Result<String, Error>) -> Void)? = nil
     ) {
-        guard shouldPublishAfterLocalSave(for: call) else {
+        guard shouldCreateGoogleCalendarEvent(for: call) else {
             completion?(.success("Skipped externally managed Google event."))
             return
         }
@@ -180,7 +180,7 @@ enum GoogleCalendarScheduleSync {
                                 completion?(.failure(error))
                                 return
                             }
-                            guard shouldPublishAfterLocalSave(for: call) else {
+                            guard shouldCreateGoogleCalendarEvent(for: call) else {
                                 completion?(.success("Skipped externally managed Google event."))
                                 return
                             }
@@ -423,10 +423,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     private static func shouldConsiderForGoogleCalendarExport(_ call: ServiceCall) -> Bool {
-        if isExternalGoogleCalendarEvent(call) {
-            return false
-        }
-        return shouldPublishAfterLocalSave(for: call)
+        shouldCreateGoogleCalendarEvent(for: call)
     }
 
     private static func shouldExportSystemCalendarCall(_ call: ServiceCall) -> Bool {
@@ -681,10 +678,12 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldPublishAfterLocalSave(for call: ServiceCall) -> Bool {
-        guard call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
-            return false
-        }
-        return shouldAllowGoogleCalendarWrite(for: call)
+        shouldCreateGoogleCalendarEvent(for: call)
+    }
+
+    static func shouldCreateGoogleCalendarEvent(for call: ServiceCall) -> Bool {
+        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+            shouldAllowGoogleCalendarWrite(for: call)
     }
 
     static func shouldPatchExistingGoogleCalendarEvent(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> Bool {

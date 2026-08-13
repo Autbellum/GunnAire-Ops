@@ -149,6 +149,32 @@ final class CustomerEquipment {
             .technicalReadingServiceHistorySummary
     }
 
+    func latestServiceConcernSummary(in serviceCalls: [ServiceCall], now: Date = Date()) -> String? {
+        guard let call = latestCompletedServiceCall(in: serviceCalls, now: now) else {
+            return nil
+        }
+        let concernRows = call.serviceActionDefinitions.compactMap { definition -> (label: String, status: HVACServiceActionStatus)? in
+            let status = call.serviceActionStatus(for: definition.key)
+            switch status {
+            case .needsService, .monitor:
+                return (definition.label, status)
+            case .notChecked, .completed, .notApplicable:
+                return nil
+            }
+        }
+        guard !concernRows.isEmpty else { return nil }
+        return concernRows
+            .sorted { lhs, rhs in
+                if lhs.status == rhs.status {
+                    return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+                }
+                return lhs.status == .needsService
+            }
+            .prefix(5)
+            .map { "\($0.label): \($0.status.label)" }
+            .joined(separator: "; ")
+    }
+
     func latestServiceContextSummary(in serviceCalls: [ServiceCall], now: Date = Date()) -> String? {
         guard let call = latestCompletedServiceCall(in: serviceCalls, now: now) else {
             return nil
