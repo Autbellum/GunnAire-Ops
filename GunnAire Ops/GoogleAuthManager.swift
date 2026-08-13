@@ -80,8 +80,13 @@ struct GoogleCalendarEvent: Codable, Identifiable {
     let location: String?
     let htmlLink: String?
     let attendees: [GoogleCalendarAttendee]?
+    let extendedProperties: GoogleCalendarExtendedProperties?
     let start: GoogleCalendarEventDate
     let end: GoogleCalendarEventDate
+
+    var isManagedByGunnAire: Bool {
+        extendedProperties?.privateProperties?["gunnaireManaged"] == "true"
+    }
 }
 
 struct GoogleCalendarAttendee: Codable {
@@ -116,6 +121,7 @@ struct GoogleWritableCalendarEvent: Codable {
     let start: GoogleWritableCalendarEventDate
     let end: GoogleWritableCalendarEventDate
     let attendees: [GoogleWritableCalendarAttendee]?
+    let extendedProperties: GoogleCalendarExtendedProperties?
 }
 
 struct GoogleCalendarEventPatch: Codable {
@@ -125,6 +131,14 @@ struct GoogleCalendarEventPatch: Codable {
     let start: GoogleWritableCalendarEventDate?
     let end: GoogleWritableCalendarEventDate?
     let attendees: [GoogleWritableCalendarAttendee]?
+}
+
+struct GoogleCalendarExtendedProperties: Codable {
+    let privateProperties: [String: String]?
+
+    private enum CodingKeys: String, CodingKey {
+        case privateProperties = "private"
+    }
 }
 
 struct GoogleWritableCalendarAttendee: Codable {

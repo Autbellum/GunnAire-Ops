@@ -709,6 +709,65 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
+    @Test func googleCalendarExistingEventRequiresRemoteOwnershipMarkerBeforePatch() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let call = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "event-123",
+            googleEventManagedByApp: true,
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer
+        )
+        let start = GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T13:00:00Z", timeZone: nil)
+        let end = GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T14:00:00Z", timeZone: nil)
+        let unmarkedRemoteEvent = GoogleCalendarEvent(
+            id: "event-123",
+            summary: "Existing Google title",
+            description: "Keep this body",
+            location: "Keep this address",
+            htmlLink: nil,
+            attendees: nil,
+            extendedProperties: nil,
+            start: start,
+            end: end
+        )
+        let managedRemoteEvent = GoogleCalendarEvent(
+            id: "event-123",
+            summary: "Existing Google title",
+            description: "Keep this body",
+            location: "Keep this address",
+            htmlLink: nil,
+            attendees: nil,
+            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: ["gunnaireManaged": "true"]),
+            start: start,
+            end: end
+        )
+
+        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: nil) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: unmarkedRemoteEvent) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent) == true)
+    }
+
+    @Test func googleCalendarManagedMarkerUsesGooglePrivateExtendedProperties() async throws {
+        let event = GoogleWritableCalendarEvent(
+            summary: "App-created service call",
+            description: nil,
+            location: nil,
+            start: GoogleWritableCalendarEventDate(dateTime: "2027-01-15T13:00:00Z", timeZone: "America/New_York"),
+            end: GoogleWritableCalendarEventDate(dateTime: "2027-01-15T14:00:00Z", timeZone: "America/New_York"),
+            attendees: nil,
+            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: ["gunnaireManaged": "true"])
+        )
+        let encoded = try JSONEncoder().encode(event)
+        let payload = String(data: encoded, encoding: .utf8) ?? ""
+
+        #expect(payload.contains("\"extendedProperties\""))
+        #expect(payload.contains("\"private\""))
+        #expect(payload.contains("\"gunnaireManaged\":\"true\""))
+    }
+
+    @MainActor
     @Test func googleCalendarRoutingOnlyChangesBeforeEventExists() async throws {
         let customer = Customer(name: "Calendar Customer")
         let linkedAppCall = ServiceCall(
