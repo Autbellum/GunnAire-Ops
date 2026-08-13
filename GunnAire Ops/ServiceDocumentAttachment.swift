@@ -360,6 +360,10 @@ final class ServiceDocumentAttachment {
                    !readings.isEmpty {
                     lines.append("Readings: \(readings)")
                 }
+                if let actions = call.serviceActionServiceHistorySummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !actions.isEmpty {
+                    lines.append("Actions: \(actions)")
+                }
             }
         }
         if canViewFinancials, let invoice = linkedInvoice(in: invoices) {

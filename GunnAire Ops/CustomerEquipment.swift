@@ -156,7 +156,8 @@ final class CustomerEquipment {
         let parts = [
             "Last service: \(call.scheduledDate.formatted(date: .abbreviated, time: .omitted))",
             call.serviceReportSummary.map { "Report: \($0)" },
-            call.technicalReadingServiceHistorySummary.map { "Readings: \($0)" }
+            call.technicalReadingServiceHistorySummary.map { "Readings: \($0)" },
+            call.serviceActionServiceHistorySummary.map { "Actions: \($0)" }
         ]
             .compactMap { value -> String? in
                 let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)

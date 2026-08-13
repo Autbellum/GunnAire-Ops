@@ -452,6 +452,8 @@ struct GunnAire_OpsTests {
             linkedEstimateID: estimateID,
             linkedInvoiceID: invoiceID
         )
+        call.setServiceActionStatus(.completed, for: "burner_assembly_checked")
+        call.setServiceActionStatus(.needsService, for: "heat_exchanger_checked")
         let note = try #require(call.equipmentProfileServiceHistoryNote)
         let merged = try #require(CustomerEquipment.mergedNotes(existing: "Existing equipment note.", currentProfileNote: "Updated equipment note.", serviceHistoryNote: note))
         let mergedAgain = CustomerEquipment.mergedNotes(existing: merged, serviceHistoryNote: note)
@@ -460,6 +462,8 @@ struct GunnAire_OpsTests {
         #expect(merged.contains("Existing equipment note.") == false)
         #expect(note.contains("Maintenance"))
         #expect(note.contains("Heating maintenance completed."))
+        #expect(note.contains("Actions:"))
+        #expect(note.contains("Heat exchanger inspected: Needs Service"))
         #expect(note.contains("Filter: Replaced"))
         #expect(note.contains("Estimate: \(String(estimateID.uuidString.prefix(8)).uppercased())"))
         #expect(note.contains("Invoice: \(String(invoiceID.uuidString.prefix(8)).uppercased())"))
@@ -638,6 +642,8 @@ struct GunnAire_OpsTests {
         )
         previousCall.setTechnicalReading("10", for: "superheat")
         previousCall.setTechnicalReading("8", for: "subcooling")
+        previousCall.setServiceActionStatus(.completed, for: "condenser_coil_serviced")
+        previousCall.setServiceActionStatus(.monitor, for: "condensate_drain_checked")
         let currentCall = ServiceCall(
             equipmentSerialNumber: "AC123",
             customerEquipmentID: equipment.id,
@@ -665,6 +671,8 @@ struct GunnAire_OpsTests {
         #expect(summary.contains("10"))
         #expect(summary.contains("Subcooling"))
         #expect(summary.contains("8"))
+        #expect(summary.contains("Actions:"))
+        #expect(summary.contains("Condensate drain checked/treated: Monitor"))
         #expect(excludingCurrentSummary.contains("999") == false)
     }
 
@@ -3210,6 +3218,8 @@ struct GunnAire_OpsTests {
         call.setTechnicalReading("76", for: "return_air_temp")
         call.setTechnicalReading("56", for: "supply_air_temp")
         call.setTechnicalReading("12", for: "superheat")
+        call.setServiceActionStatus(.completed, for: "condenser_coil_serviced")
+        call.setServiceActionStatus(.needsService, for: "condensate_drain_checked")
         let attachment = ServiceDocumentAttachment(
             customer: customer,
             serviceCallID: call.id,
@@ -3232,6 +3242,8 @@ struct GunnAire_OpsTests {
         #expect(lines.contains { $0.hasPrefix("Readings:") && $0.contains("Return Air Temp") })
         #expect(lines.contains { $0.hasPrefix("Readings:") && $0.contains("Supply Air Temp") })
         #expect(lines.contains { $0.hasPrefix("Readings:") && $0.contains("Superheat") })
+        #expect(lines.contains { $0.hasPrefix("Actions:") && $0.contains("Condensate drain checked/treated: Needs Service") })
+        #expect(lines.contains { $0.hasPrefix("Actions:") && $0.contains("Condenser coil inspected/washed: Completed") })
         #expect(lines.contains { $0.contains("Invoice") } == false)
         #expect(lines.contains { $0.contains("QuickBooks") } == false)
     }

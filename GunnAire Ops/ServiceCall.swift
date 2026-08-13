@@ -982,6 +982,7 @@ final class ServiceCall {
             findingsSummary.map { "Findings: \($0)" },
             recommendedWorkSummary.map { "Recommended: \($0)" },
             technicalReadingServiceHistorySummary.map { "Readings: \($0)" },
+            serviceActionServiceHistorySummary.map { "Actions: \($0)" },
             filterCondition.map { "Filter: \($0)" },
             indoorCoilCondition.map { "Indoor coil: \($0)" },
             outdoorCoilCondition.map { "Outdoor coil: \($0)" },
@@ -1046,6 +1047,41 @@ final class ServiceCall {
             .prefix(12)
             .map { "\($0.label): \($0.value)" }
             .joined(separator: "; ")
+    }
+
+    var serviceActionServiceHistorySummary: String? {
+        let captured = serviceActionDefinitions.compactMap { definition -> (label: String, status: HVACServiceActionStatus) in
+            (definition.label, serviceActionStatus(for: definition.key))
+        }
+        let completedRows = captured.filter { $0.status != .notChecked }
+        guard !completedRows.isEmpty else { return nil }
+        let ordered = completedRows.sorted { lhs, rhs in
+            let lhsRank = serviceActionHistoryRank(lhs.status)
+            let rhsRank = serviceActionHistoryRank(rhs.status)
+            if lhsRank == rhsRank {
+                return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+            }
+            return lhsRank < rhsRank
+        }
+        return ordered
+            .prefix(8)
+            .map { "\($0.label): \($0.status.label)" }
+            .joined(separator: "; ")
+    }
+
+    private func serviceActionHistoryRank(_ status: HVACServiceActionStatus) -> Int {
+        switch status {
+        case .needsService:
+            return 0
+        case .monitor:
+            return 1
+        case .completed:
+            return 2
+        case .notApplicable:
+            return 3
+        case .notChecked:
+            return 4
+        }
     }
 
     var equipmentType: HVACEquipmentType? {
