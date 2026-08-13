@@ -784,6 +784,30 @@ struct GunnAire_OpsTests {
         #expect(call.documentationCompletionBlockedMessage?.contains("Line Voltage") == true)
     }
 
+    @Test func unsafeCarbonMonoxideReadingBlocksCombustionReportCompletion() async throws {
+        let customer = Customer(name: "Combustion Safety Customer")
+        let call = ServiceCall(
+            equipmentName: "Gas Furnace",
+            equipmentModel: "GM9C",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        call.setTechnicalReading("125", for: "co_ppm")
+
+        #expect(call.serviceReportMissingRequiredItemLabels.isEmpty)
+        #expect(call.serviceReportReadingValidationIssueLabels.contains { $0.contains("CO Reading") })
+        #expect(call.serviceReportReadingValidationIssueLabels.contains { $0.contains("100 ppm") })
+        #expect(call.canCompleteDocumentation == false)
+        #expect(call.markDocumentationCompleteIfReady() == false)
+    }
+
     @Test func incompleteTechnicalServiceReportDoesNotMarkDocumentationComplete() async throws {
         let customer = Customer(name: "Incomplete Report Customer")
         let call = ServiceCall(
@@ -1226,6 +1250,30 @@ struct GunnAire_OpsTests {
         #expect(rows.contains { $0.label == "Missing Required Items" } == false)
         #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("Line Voltage") })
         #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("90-600 V") })
+    }
+
+    @Test func onsiteReportReadinessRowsExposeUnsafeCarbonMonoxideReadings() async throws {
+        let customer = Customer(name: "CO Report Customer")
+        let call = ServiceCall(
+            equipmentName: "Gas Furnace",
+            equipmentModel: "GM9C",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        call.setTechnicalReading("125", for: "co_ppm")
+
+        let rows = CustomerDocumentExporter.serviceReportReadinessRows(for: call)
+
+        #expect(rows.contains { $0.label == "Completion" && $0.value == "Needs details" })
+        #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("CO Reading") })
+        #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("100 ppm") })
     }
 
     @Test func onsiteReportCloseoutRowsExposeIntegratedJobReadiness() async throws {

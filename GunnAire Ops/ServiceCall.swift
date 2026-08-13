@@ -1148,7 +1148,8 @@ final class ServiceCall {
                 measuredLabel: "Outdoor Fan Amps",
                 ratingLabel: "Outdoor Fan FLA",
                 toleranceMultiplier: 1.15
-            )
+            ),
+            combustionSafetyValidationIssue()
         ].compactMap { $0 }
     }
 
@@ -1166,6 +1167,14 @@ final class ServiceCall {
             return nil
         }
         return "\(measuredLabel) exceeds \(ratingLabel) by more than \(Int((toleranceMultiplier - 1) * 100))%"
+    }
+
+    private func combustionSafetyValidationIssue() -> String? {
+        guard let coPPM = numericTechnicalReading(for: "co_ppm"),
+              coPPM >= 100 else {
+            return nil
+        }
+        return "CO Reading requires documented safety action at 100 ppm or higher"
     }
 
     var serviceReportMissingRequirementLabels: [String] {
