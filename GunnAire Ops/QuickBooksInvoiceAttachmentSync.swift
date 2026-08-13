@@ -66,19 +66,16 @@ enum QuickBooksInvoiceAttachmentSync {
             try? modelContext.save()
         }
 
-        for pending in pendingInvoiceAttachments(invoices: invoices, attachments: attachments) {
-            let attachment = pending.attachment
-            let invoice = pending.invoice
-            guard let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !quickBooksID.isEmpty else {
+        for attachment in pendingQuickBooksAttachmentUploads(estimates: estimates, invoices: invoices, attachments: attachments) {
+            let references = quickBooksAttachableReferences(for: attachment, estimates: estimates, invoices: invoices)
+            guard !references.isEmpty else {
                 continue
             }
 
             api.uploadDocument(
                 fileURL: attachment.localFileURL,
                 note: attachment.caption,
-                attachToEntityType: .invoice,
-                attachToEntityID: quickBooksID
+                attachableReferences: references
             ) { result in
                 DispatchQueue.main.async {
                     switch result {
@@ -92,33 +89,47 @@ enum QuickBooksInvoiceAttachmentSync {
                 }
             }
         }
+    }
 
-        for pending in pendingEstimateAttachments(estimates: estimates, attachments: attachments) {
-            let attachment = pending.attachment
-            let estimate = pending.estimate
-            guard let quickBooksID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !quickBooksID.isEmpty else {
-                continue
+    static func pendingQuickBooksAttachmentUploads(
+        estimates: [Estimate],
+        invoices: [Invoice],
+        attachments: [ServiceDocumentAttachment]
+    ) -> [ServiceDocumentAttachment] {
+        var seenAttachmentIDs: Set<UUID> = []
+        return attachments.filter { attachment in
+            guard attachment.quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+                  !quickBooksAttachableReferences(for: attachment, estimates: estimates, invoices: invoices).isEmpty,
+                  seenAttachmentIDs.insert(attachment.id).inserted else {
+                return false
             }
-
-            api.uploadDocument(
-                fileURL: attachment.localFileURL,
-                note: attachment.caption,
-                attachToEntityType: .estimate,
-                attachToEntityID: quickBooksID
-            ) { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success(let attachableID):
-                        attachment.quickBooksAttachableID = attachableID
-                        attachment.quickBooksSyncError = nil
-                    case .failure(let error):
-                        attachment.quickBooksSyncError = error.localizedDescription
-                    }
-                    try? modelContext.save()
-                }
-            }
+            return true
         }
+    }
+
+    static func quickBooksAttachableReferences(
+        for attachment: ServiceDocumentAttachment,
+        estimates: [Estimate],
+        invoices: [Invoice]
+    ) -> [QuickBooksAttachableReference] {
+        var references: [QuickBooksAttachableReference] = []
+        if let invoice = invoices.first(where: { attachment.canUploadToQuickBooksInvoice($0) }),
+           let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !quickBooksID.isEmpty {
+            references.append(QuickBooksAttachableReference(
+                EntityRef: QuickBooksAttachableEntityRef(type: QuickBooksAttachableEntityType.invoice.rawValue, value: quickBooksID),
+                IncludeOnSend: true
+            ))
+        }
+        if let estimate = estimates.first(where: { attachment.canUploadToQuickBooksEstimate($0) }),
+           let quickBooksID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !quickBooksID.isEmpty {
+            references.append(QuickBooksAttachableReference(
+                EntityRef: QuickBooksAttachableEntityRef(type: QuickBooksAttachableEntityType.estimate.rawValue, value: quickBooksID),
+                IncludeOnSend: true
+            ))
+        }
+        return references
     }
 
     @discardableResult

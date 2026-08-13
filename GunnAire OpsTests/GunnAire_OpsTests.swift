@@ -3038,6 +3038,16 @@ struct GunnAire_OpsTests {
             estimates: [estimate],
             attachments: [serviceReport, diagnosticPhoto, mismatchedCustomerDocument]
         )
+        let pendingUploads = QuickBooksInvoiceAttachmentSync.pendingQuickBooksAttachmentUploads(
+            estimates: [estimate],
+            invoices: [invoice],
+            attachments: [serviceReport, diagnosticPhoto, mismatchedCustomerDocument]
+        )
+        let serviceReportRefs = QuickBooksInvoiceAttachmentSync.quickBooksAttachableReferences(
+            for: serviceReport,
+            estimates: [estimate],
+            invoices: [invoice]
+        )
 
         #expect(changedCount == 4)
         #expect(serviceReport.invoiceID == invoice.id)
@@ -3050,6 +3060,11 @@ struct GunnAire_OpsTests {
         #expect(pendingInvoices.contains { $0.attachment === diagnosticPhoto && $0.invoice === invoice })
         #expect(pendingEstimates.contains { $0.attachment === serviceReport && $0.estimate === estimate })
         #expect(pendingEstimates.contains { $0.attachment === diagnosticPhoto && $0.estimate === estimate })
+        #expect(pendingUploads.count == 2)
+        #expect(pendingUploads.contains { $0 === serviceReport })
+        #expect(pendingUploads.contains { $0 === diagnosticPhoto })
+        #expect(serviceReportRefs.map(\.EntityRef.type) == ["Invoice", "Estimate"])
+        #expect(serviceReportRefs.map(\.EntityRef.value) == ["INV-123", "EST-123"])
     }
 
     @MainActor
@@ -5180,6 +5195,32 @@ struct GunnAire_OpsTests {
         #expect(payload.contains("\"type\":\"Invoice\""))
         #expect(payload.contains("\"value\":\"123\""))
         #expect(payload.contains("\"IncludeOnSend\":true"))
+    }
+
+    @Test func quickBooksUploadMetadataCanReferenceEstimateAndInvoiceTogether() async throws {
+        let metadata = QuickBooksUploadMetadata(
+            FileName: "onsite-report.pdf",
+            ContentType: "application/pdf",
+            Note: "Generated onsite service report",
+            AttachableRef: [
+                QuickBooksAttachableReference(
+                    EntityRef: QuickBooksAttachableEntityRef(type: QuickBooksAttachableEntityType.invoice.rawValue, value: "INV-123"),
+                    IncludeOnSend: true
+                ),
+                QuickBooksAttachableReference(
+                    EntityRef: QuickBooksAttachableEntityRef(type: QuickBooksAttachableEntityType.estimate.rawValue, value: "EST-123"),
+                    IncludeOnSend: true
+                )
+            ]
+        )
+
+        let data = try JSONEncoder().encode(metadata)
+        let payload = String(data: data, encoding: .utf8) ?? ""
+
+        #expect(payload.contains("\"type\":\"Invoice\""))
+        #expect(payload.contains("\"value\":\"INV-123\""))
+        #expect(payload.contains("\"type\":\"Estimate\""))
+        #expect(payload.contains("\"value\":\"EST-123\""))
     }
 
     @Test func quickBooksFaultDecoderHandlesLowercaseAuthorizationFaults() async throws {

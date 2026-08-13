@@ -1216,6 +1216,36 @@ final class QuickBooksDataAPI: ObservableObject {
         completion: @escaping (Result<String, Error>) -> Void,
         attempt: Int = 0
     ) {
+        let attachableReferences: [QuickBooksAttachableReference]
+        if let attachToEntityType, let attachToEntityID, !attachToEntityID.isEmpty {
+            attachableReferences = [
+                QuickBooksAttachableReference(
+                    EntityRef: QuickBooksAttachableEntityRef(
+                        type: attachToEntityType.rawValue,
+                        value: attachToEntityID
+                    ),
+                    IncludeOnSend: true
+                )
+            ]
+        } else {
+            attachableReferences = []
+        }
+        uploadDocument(
+            fileURL: fileURL,
+            note: note,
+            attachableReferences: attachableReferences,
+            completion: completion,
+            attempt: attempt
+        )
+    }
+
+    func uploadDocument(
+        fileURL: URL,
+        note: String? = nil,
+        attachableReferences: [QuickBooksAttachableReference],
+        completion: @escaping (Result<String, Error>) -> Void,
+        attempt: Int = 0
+    ) {
         refreshTokensIfNeeded { ok in
             guard ok else {
                 completion(.failure(QBError.unauthorized))
@@ -1225,26 +1255,12 @@ final class QuickBooksDataAPI: ObservableObject {
             let filename = fileURL.lastPathComponent
             let contentType = Self.mimeType(for: fileURL)
             let boundary = "Boundary-\(UUID().uuidString)"
-            let attachableRefs: [QuickBooksAttachableReference]
-            if let attachToEntityType, let attachToEntityID, !attachToEntityID.isEmpty {
-                attachableRefs = [
-                    QuickBooksAttachableReference(
-                        EntityRef: QuickBooksAttachableEntityRef(
-                            type: attachToEntityType.rawValue,
-                            value: attachToEntityID
-                        ),
-                        IncludeOnSend: true
-                    )
-                ]
-            } else {
-                attachableRefs = []
-            }
 
             let metadata = QuickBooksUploadMetadata(
                 FileName: filename,
                 ContentType: contentType,
                 Note: note ?? "Uploaded from GunnAire Ops",
-                AttachableRef: attachableRefs.isEmpty ? nil : attachableRefs
+                AttachableRef: attachableReferences.isEmpty ? nil : attachableReferences
             )
 
             guard
@@ -1275,16 +1291,15 @@ final class QuickBooksDataAPI: ObservableObject {
             }
 
             URLSession.shared.dataTask(with: request) { data, response, error in
-                if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
-                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                        self.uploadDocument(
-                            fileURL: fileURL,
-                            note: note,
-                            attachToEntityType: attachToEntityType,
-                            attachToEntityID: attachToEntityID,
-                            completion: completion,
-                            attempt: attempt + 1
-                        )
+                    if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
+                        DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                            self.uploadDocument(
+                                fileURL: fileURL,
+                                note: note,
+                                attachableReferences: attachableReferences,
+                                completion: completion,
+                                attempt: attempt + 1
+                            )
                     }
                     return
                 }
