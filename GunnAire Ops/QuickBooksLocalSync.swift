@@ -219,6 +219,7 @@ enum QuickBooksLocalSync {
             }
         }
 
+        var invoicesAffectedByImportedPayments: [UUID: Invoice] = [:]
         for quickBooksPayment in payments {
             let linkedTransactions = quickBooksPayment.Line?
                 .flatMap { $0.LinkedTxn ?? [] } ?? []
@@ -252,6 +253,12 @@ enum QuickBooksLocalSync {
                 payment.processor = processor
             }
             paymentsByQBID[quickBooksPayment.Id] = payment
+            invoicesAffectedByImportedPayments[invoice.id] = invoice
+        }
+
+        for invoice in invoicesAffectedByImportedPayments.values where !invoice.hasQuickBooksBalance {
+            let invoicePayments = paymentsByQBID.values.filter { $0.invoice.id == invoice.id }
+            invoice.status = Invoice.resolvedStatus(for: invoice, payments: invoicePayments)
         }
 
         try? modelContext.save()

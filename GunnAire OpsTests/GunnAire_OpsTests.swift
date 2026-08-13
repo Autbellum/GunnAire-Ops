@@ -6650,6 +6650,64 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
+    @Test func quickBooksLocalSyncReconcilesInvoiceStatusFromImportedPaymentOnlySnapshot() async throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(quickBooksID: "QB-CUST-PAY-1", name: "Payment Customer")
+        let invoice = Invoice(
+            customer: customer,
+            quickBooksID: "QB-INV-PAY-1",
+            lineItemSummary: "Synced invoice",
+            amount: 500,
+            status: "unpaid"
+        )
+        context.insert(customer)
+        context.insert(invoice)
+        try context.save()
+
+        let quickBooksPayment = try JSONDecoder().decode(QuickBooksPayment.self, from: Data("""
+        {
+          "Id": "QB-PAY-1",
+          "CustomerRef": { "value": "QB-CUST-PAY-1", "name": "Payment Customer" },
+          "TotalAmt": 500,
+          "TxnDate": "2026-08-13",
+          "PaymentRefNum": "AUTH-1",
+          "Line": [
+            {
+              "Amount": 500,
+              "LinkedTxn": [
+                { "TxnId": "QB-INV-PAY-1", "TxnType": "Invoice" }
+              ]
+            }
+          ],
+          "PaymentMethodRef": { "value": "1", "name": "Credit Card" }
+        }
+        """.utf8))
+
+        try QuickBooksLocalSync.importSnapshot(
+            customers: [],
+            items: [],
+            estimates: [],
+            invoices: [],
+            payments: [quickBooksPayment],
+            vendors: [],
+            into: context
+        )
+
+        let payments = try context.fetch(FetchDescriptor<Payment>())
+        let importedPayment = try #require(payments.first { $0.quickBooksID == "QB-PAY-1" })
+
+        #expect(importedPayment.invoice.id == invoice.id)
+        #expect(importedPayment.method == "card")
+        #expect(invoice.status == "paid")
+        #expect(Invoice.resolvedStatus(for: invoice, payments: payments) == "paid")
+    }
+
+    @MainActor
     @Test func quickBooksLocalSyncLinksImportedEstimateToMatchingServiceCall() async throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(
