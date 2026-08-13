@@ -532,6 +532,29 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(oldManagedEvent) == false)
     }
 
+    @Test func importedGoogleCalendarEventsRemainReadOnlyAfterLocalEdits() async throws {
+        let customer = Customer(name: "Calendar Customer", address: "123 Main St")
+        let call = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "google-owned-event",
+            googleEventManagedByApp: false,
+            eventTitle: "Locally edited title",
+            siteAddress: "Locally edited location",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3_600,
+            customer: customer,
+            notes: "Locally edited details"
+        )
+
+        #expect(GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(call) == true)
+        #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: call) == true)
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) == false)
+        #expect(GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: nil) == false)
+    }
+
     @Test func externalGoogleCalendarImportDoesNotReplaceLocalDetailsWithBlankRemoteFields() async throws {
         #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
             remoteValue: " ",

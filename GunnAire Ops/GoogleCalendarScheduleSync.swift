@@ -66,7 +66,6 @@ enum GoogleCalendarScheduleSync {
             case .success(let calendars):
                 let filteredCalendars = calendars.filter { !isExcludedCalendarID($0.id) }
                 let availableCalendarIDs = Set(["primary"] + filteredCalendars.map(\.id))
-                let writableCalendarIDs = Set(["primary"] + filteredCalendars.filter(\.isWritable).map(\.id))
                 fetchEvents(
                     auth: auth,
                     calendarIDs: Array(availableCalendarIDs),
@@ -84,45 +83,7 @@ enum GoogleCalendarScheduleSync {
                                     into: modelContext,
                                     signedInEmail: signedInEmail
                                 )
-                                exportCalls(
-                                    auth: auth,
-                                    modelContext: modelContext,
-                                    calendarEvents: calendarEvents,
-                                    signedInEmail: signedInEmail,
-                                    isAdminUser: isAdminUser,
-                                    availableCalendarIDs: availableCalendarIDs,
-                                    writableCalendarIDs: writableCalendarIDs
-                                ) { exportResult in
-                                    switch exportResult {
-                                    case .failure(let error):
-                                        completion(.failure(error))
-                                    case .success(let exportSummary):
-                                        fetchEvents(
-                                            auth: auth,
-                                            calendarIDs: Array(availableCalendarIDs),
-                                            timeMin: syncStart,
-                                            timeMax: horizon
-                                        ) { refreshedFetchResult in
-                                            switch refreshedFetchResult {
-                                            case .failure(let error):
-                                                completion(.failure(error))
-                                            case .success(let refreshedCalendarEvents):
-                                                Task { @MainActor in
-                                                    do {
-                                                        let refreshedImportCount = try importEvents(
-                                                            refreshedCalendarEvents,
-                                                            into: modelContext,
-                                                            signedInEmail: signedInEmail
-                                                        )
-                                                        completion(.success("\(exportSummary) Imported \(importedCount) Google events before export and refreshed \(refreshedImportCount) events after export."))
-                                                    } catch {
-                                                        completion(.failure(error))
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                completion(.success("Imported \(importedCount) Google Calendar events. Existing Google events are read-only in GunnAire Ops, so sync will not overwrite titles, locations, descriptions, attendees, or reminders."))
                             } catch {
                                 completion(.failure(error))
                             }
