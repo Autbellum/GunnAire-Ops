@@ -3234,6 +3234,86 @@ struct GunnAire_OpsTests {
         #expect(urls.map(\.lastPathComponent) == ["gunnaire-invoice.pdf"])
     }
 
+    @Test func customerEmailAttachmentsUseConvertedEstimateReportForInvoice() async throws {
+        let customer = Customer(name: "Email Report Customer")
+        let serviceCallID = UUID()
+        let invoiceID = UUID()
+        let estimateID = UUID()
+        let invoiceURL = URL(fileURLWithPath: "/tmp/gunnaire-invoice.pdf")
+        let estimateReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            estimateID: estimateID,
+            kind: .serviceReport,
+            displayName: "estimate-onsite-report.pdf",
+            localFilePath: "/tmp/estimate-onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+        let unlinkedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .serviceReport,
+            displayName: "unlinked-report.pdf",
+            localFilePath: "/tmp/unlinked-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 300)
+        )
+
+        let urls = CustomerDocumentExporter.customerEmailAttachmentURLs(
+            primaryDocumentURL: invoiceURL,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            estimateID: estimateID,
+            attachments: [unlinkedReport, estimateReport]
+        )
+
+        #expect(urls.map(\.lastPathComponent) == ["gunnaire-invoice.pdf", "estimate-onsite-report.pdf"])
+    }
+
+    @Test func customerEmailAttachmentsPreferInvoiceReportOverConvertedEstimateReport() async throws {
+        let customer = Customer(name: "Email Report Customer")
+        let serviceCallID = UUID()
+        let invoiceID = UUID()
+        let estimateID = UUID()
+        let invoiceURL = URL(fileURLWithPath: "/tmp/gunnaire-invoice.pdf")
+        let newerEstimateReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            estimateID: estimateID,
+            kind: .serviceReport,
+            displayName: "newer-estimate-report.pdf",
+            localFilePath: "/tmp/newer-estimate-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 300)
+        )
+        let invoiceReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            estimateID: estimateID,
+            kind: .serviceReport,
+            displayName: "invoice-report.pdf",
+            localFilePath: "/tmp/invoice-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let urls = CustomerDocumentExporter.customerEmailAttachmentURLs(
+            primaryDocumentURL: invoiceURL,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            estimateID: estimateID,
+            attachments: [newerEstimateReport, invoiceReport]
+        )
+
+        #expect(urls.map(\.lastPathComponent) == ["gunnaire-invoice.pdf", "invoice-report.pdf"])
+    }
+
     @Test func customerEmailAttachmentsPreferReportLinkedToEstimate() async throws {
         let customer = Customer(name: "Email Estimate Customer")
         let serviceCallID = UUID()

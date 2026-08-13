@@ -39,7 +39,11 @@ enum CustomerDocumentExporter {
 
         let latestOnsiteReport: ServiceDocumentAttachment?
         if let invoiceID {
-            latestOnsiteReport = onsiteReports.first { $0.invoiceID == invoiceID }
+            latestOnsiteReport = onsiteReports.first { $0.invoiceID == invoiceID } ??
+                onsiteReports.first { report in
+                    guard let estimateID else { return false }
+                    return report.invoiceID == nil && report.estimateID == estimateID
+                }
         } else if let estimateID {
             latestOnsiteReport = onsiteReports.first { $0.estimateID == estimateID }
         } else {

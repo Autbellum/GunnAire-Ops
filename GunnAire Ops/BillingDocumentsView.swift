@@ -587,7 +587,7 @@ GunnAire
             generatedCustomerDocumentRecipientID = invoice.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall?.id
             generatedCustomerDocumentInvoiceID = invoice.id
-            generatedCustomerDocumentEstimateID = nil
+            generatedCustomerDocumentEstimateID = linkedEstimate(for: serviceCall)?.id
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
             generatedCustomerDocumentKind = documentLabel
             var emailAttachments = attachments
@@ -624,6 +624,7 @@ GunnAire
                 primaryDocumentURL: url,
                 serviceCallID: serviceCall?.id,
                 invoiceID: invoice.id,
+                estimateID: linkedEstimate(for: serviceCall)?.id,
                 attachments: emailAttachments
             ).map(\.path)
         } catch {
@@ -3688,7 +3689,7 @@ GunnAire
             generatedCustomerDocumentRecipientID = invoice.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall?.id
             generatedCustomerDocumentInvoiceID = invoice.id
-            generatedCustomerDocumentEstimateID = nil
+            generatedCustomerDocumentEstimateID = linkedEstimate(for: serviceCall)?.id
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)
             generatedCustomerDocumentKind = documentLabel.lowercased()
             guard persistGeneratedBillingDocument(
@@ -4133,7 +4134,7 @@ GunnAire
             generatedCustomerDocumentRecipientID = invoice.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall?.id
             generatedCustomerDocumentInvoiceID = invoice.id
-            generatedCustomerDocumentEstimateID = nil
+            generatedCustomerDocumentEstimateID = linkedEstimate(for: serviceCall)?.id
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
             generatedCustomerDocumentKind = documentLabel
             persistGeneratedBillingDocument(
@@ -4303,6 +4304,15 @@ GunnAire
     private func serviceCall(for invoice: Invoice) -> ServiceCall? {
         guard let serviceCallID = invoice.serviceCallID else { return nil }
         return serviceCalls.first(where: { $0.id == serviceCallID })
+    }
+
+    private func linkedEstimate(for serviceCall: ServiceCall?) -> Estimate? {
+        guard let serviceCall else { return nil }
+        if let linkedEstimateID = serviceCall.linkedEstimateID,
+           let estimate = estimates.first(where: { $0.id == linkedEstimateID }) {
+            return estimate
+        }
+        return estimates.first { $0.serviceCallID == serviceCall.id }
     }
 
     private func invoice(for estimate: Estimate) -> Invoice? {
