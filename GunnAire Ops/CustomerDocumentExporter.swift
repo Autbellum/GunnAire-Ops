@@ -17,12 +17,13 @@ enum CustomerDocumentExporter {
         serviceCall: ServiceCall,
         estimate: Estimate?,
         invoice: Invoice?,
-        payments: [Payment]
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment] = []
     ) throws -> URL {
         let title = "\(serviceCall.type.displayName) Report"
         let fileName = makeFileName(prefix: "GunnAire-Onsite-Report", customerName: serviceCall.customer.name)
         let sections = onsiteReportSections(serviceCall: serviceCall, estimate: estimate, invoice: invoice, payments: payments)
-        return try renderPDF(title: title, customer: serviceCall.customer, sections: sections, fileName: fileName)
+        return try renderPDF(title: title, customer: serviceCall.customer, sections: sections, imageAttachments: attachments, fileName: fileName)
     }
 
     static func exportEstimate(_ estimate: Estimate, serviceCall: ServiceCall?) throws -> URL {
@@ -230,6 +231,7 @@ enum CustomerDocumentExporter {
         title: String,
         customer: Customer,
         sections: [DocumentSection],
+        imageAttachments: [ServiceDocumentAttachment] = [],
         fileName: String
     ) throws -> URL {
         let folder = try exportFolder()
@@ -242,6 +244,7 @@ enum CustomerDocumentExporter {
             for section in sections {
                 y = drawSection(section, at: y, in: pageBounds, context: context, title: title, customer: customer)
             }
+            y = drawImageAttachments(imageAttachments, at: y, in: pageBounds, context: context, title: title, customer: customer)
             drawFooter(in: pageBounds)
         }
 
@@ -326,6 +329,68 @@ enum CustomerDocumentExporter {
         }
 
         return y + 12
+    }
+
+    private static func drawImageAttachments(
+        _ attachments: [ServiceDocumentAttachment],
+        at initialY: CGFloat,
+        in bounds: CGRect,
+        context: UIGraphicsPDFRendererContext,
+        title: String,
+        customer: Customer
+    ) -> CGFloat {
+        let images = attachments
+            .filter(\.isImage)
+            .prefix(12)
+            .compactMap { attachment -> (attachment: ServiceDocumentAttachment, image: UIImage)? in
+                guard let image = UIImage(contentsOfFile: attachment.localFilePath) else { return nil }
+                return (attachment, image)
+            }
+        guard !images.isEmpty else { return initialY }
+
+        let margin: CGFloat = 42
+        let contentWidth = bounds.width - margin * 2
+        var y = initialY
+        if y > bounds.height - 180 {
+            drawFooter(in: bounds)
+            y = startPage(context: context, bounds: bounds, title: title, customer: customer)
+        }
+
+        "Attached Photos".draw(at: CGPoint(x: margin, y: y), withAttributes: [
+            .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+            .foregroundColor: UIColor.black
+        ])
+        y += 26
+
+        for item in images {
+            if y > bounds.height - 230 {
+                drawFooter(in: bounds)
+                y = startPage(context: context, bounds: bounds, title: title, customer: customer)
+            }
+
+            let maxHeight: CGFloat = 190
+            let imageSize = item.image.size
+            let scale = min(contentWidth / max(imageSize.width, 1), maxHeight / max(imageSize.height, 1))
+            let drawSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+            let imageRect = CGRect(x: margin, y: y, width: drawSize.width, height: drawSize.height)
+            item.image.draw(in: imageRect)
+            y += drawSize.height + 6
+
+            let caption = [
+                item.attachment.kind.label,
+                item.attachment.caption,
+                item.attachment.displayName
+            ]
+                .compactMap { value -> String? in
+                    guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                    return value
+                }
+                .joined(separator: " - ")
+            drawWrapped(caption, in: CGRect(x: margin, y: y, width: contentWidth, height: 42), font: .systemFont(ofSize: 9), color: .darkGray)
+            y += measuredHeight(caption, width: contentWidth, font: .systemFont(ofSize: 9)) + 16
+        }
+
+        return y
     }
 
     private static func drawFooter(in bounds: CGRect) {

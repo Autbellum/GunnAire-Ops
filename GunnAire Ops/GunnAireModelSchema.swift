@@ -14,6 +14,7 @@ enum GunnAireModelSchema {
             TimeEntry.self,
             Vendor.self,
             AppUser.self,
+            ServiceDocumentAttachment.self,
         ])
     }
 }

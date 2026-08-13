@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import UniformTypeIdentifiers
 
 struct BillingDocumentsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -13,12 +14,18 @@ struct BillingDocumentsView: View {
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
 
     private let initialServiceCall: ServiceCall?
     private let showsDismissButton: Bool
     private let dismissButtonTitle: String
     private let liveAPI = QuickBooksDataAPI.shared
     private let googleAuth = GoogleAuthManager.shared
+    private let byteCountFormatter: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter
+    }()
 
     @State private var selectedDocumentKind: BillingDocumentKind
     @State private var selectedCustomerID: UUID?
@@ -55,6 +62,11 @@ struct BillingDocumentsView: View {
     @State private var showingItemCreator = false
     @State private var selectedInvoiceForCloseout: Invoice?
     @State private var generatedCustomerDocumentURL: URL?
+    @State private var showingDocumentationFileImporter = false
+    @State private var showingDocumentationCamera = false
+    @State private var attachmentKind: ServiceDocumentAttachmentKind = .diagnosticPhoto
+    @State private var attachmentCaption = ""
+    @State private var attachmentMessage: String?
     private let workspaceMode: BillingWorkspaceMode
 
     init(
@@ -407,6 +419,11 @@ GunnAire
         workspaceMode == .all || isJobDocumentationMode
     }
 
+    private var activeJobAttachments: [ServiceDocumentAttachment] {
+        guard let call = activeServiceCall else { return [] }
+        return attachments.filter { $0.serviceCallID == call.id }
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -476,6 +493,7 @@ GunnAire
                     }
 
                     technicalServiceReportSection(for: call)
+                    attachmentSection(for: call)
 
                     Section("Documentation Builder") {
                         if allowsDocumentSwitching {
@@ -1564,9 +1582,21 @@ GunnAire
                     onCreated: handleCreatedItem
                 )
             }
+            .sheet(isPresented: $showingDocumentationCamera) {
+                JobDocumentationCameraPicker(sourceType: .camera) { image in
+                    handleCapturedDocumentationImage(image)
+                }
+            }
             .sheet(item: $selectedInvoiceForCloseout) { invoice in
                 RecordInvoicePaymentView(invoice: invoice)
                     .tint(Color.brandGold)
+            }
+            .fileImporter(
+                isPresented: $showingDocumentationFileImporter,
+                allowedContentTypes: [.image, .pdf, .plainText, .data],
+                allowsMultipleSelection: true
+            ) { result in
+                handleImportedDocumentationFiles(result)
             }
             .onAppear(perform: loadInitialContextIfNeeded)
             .onChange(of: selectedCustomerID) { _, newValue in
@@ -1786,6 +1816,254 @@ GunnAire
         let split = abs(returnTemp - supplyTemp)
         call.setTechnicalReading(String(format: "%.1f", split), for: "temperature_split")
         actionMessage = "Temperature split calculated."
+    }
+
+    @ViewBuilder
+    private func attachmentSection(for call: ServiceCall) -> some View {
+        Section("Photos & Attachments") {
+            Picker("Type", selection: $attachmentKind) {
+                ForEach(ServiceDocumentAttachmentKind.allCases) { kind in
+                    Text(kind.label).tag(kind)
+                }
+            }
+
+            TextField("Caption or note", text: $attachmentCaption)
+
+            HStack {
+                Button {
+                    if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                        showingDocumentationCamera = true
+                    } else {
+                        attachmentMessage = "Camera is not available on this device."
+                    }
+                } label: {
+                    Label("Camera", systemImage: "camera")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    showingDocumentationFileImporter = true
+                } label: {
+                    Label("Files", systemImage: "paperclip")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if let attachmentMessage {
+                Text(attachmentMessage)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            if activeJobAttachments.isEmpty {
+                Text("No photos or documents attached to this job yet.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(activeJobAttachments.prefix(8)) { attachment in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: attachment.isImage ? "photo" : "doc")
+                                .foregroundStyle(Color.brandGold)
+                            Text(attachment.displayName)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(attachment.kind.label)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        if let caption = attachment.caption, !caption.isEmpty {
+                            Text(caption)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                        }
+                        HStack {
+                            Text(byteCountFormatter.string(fromByteCount: Int64(attachment.fileSizeBytes)))
+                            if attachment.backendDocumentID != nil {
+                                Text("Company storage")
+                            }
+                            if attachment.quickBooksAttachableID != nil {
+                                Text("QuickBooks")
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func handleCapturedDocumentationImage(_ image: UIImage) {
+        guard let data = image.jpegData(compressionQuality: 0.85) else {
+            attachmentMessage = "Could not encode camera image."
+            return
+        }
+        let filename = "job-photo-\(UUID().uuidString).jpg"
+        saveDocumentationAttachment(data: data, filename: filename, contentType: "image/jpeg")
+    }
+
+    private func handleImportedDocumentationFiles(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            attachmentMessage = "File import failed: \(error.localizedDescription)"
+        case .success(let urls):
+            guard !urls.isEmpty else { return }
+            var savedCount = 0
+            var lastError: String?
+            for url in urls {
+                let accessed = url.startAccessingSecurityScopedResource()
+                defer {
+                    if accessed {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+                do {
+                    let data = try Data(contentsOf: url)
+                    saveDocumentationAttachment(
+                        data: data,
+                        filename: url.lastPathComponent,
+                        contentType: contentType(for: url)
+                    )
+                    savedCount += 1
+                } catch {
+                    lastError = error.localizedDescription
+                }
+            }
+            if let lastError, savedCount == 0 {
+                attachmentMessage = "Could not import file: \(lastError)"
+            } else if savedCount > 1 {
+                attachmentMessage = "Attached \(savedCount) files."
+            }
+        }
+    }
+
+    private func saveDocumentationAttachment(data: Data, filename: String, contentType: String) {
+        guard let call = activeServiceCall else {
+            attachmentMessage = "Open a job before attaching files."
+            return
+        }
+        do {
+            let storedURL = try persistAttachmentData(data, originalFilename: filename)
+            let attachment = ServiceDocumentAttachment(
+                customer: call.customer,
+                serviceCallID: call.id,
+                invoiceID: call.linkedInvoiceID,
+                estimateID: call.linkedEstimateID,
+                kind: attachmentKind,
+                displayName: storedURL.lastPathComponent,
+                caption: nilIfBlank(attachmentCaption),
+                localFilePath: storedURL.path,
+                contentType: contentType,
+                fileSizeBytes: data.count
+            )
+            modelContext.insert(attachment)
+            applyAttachmentProgress(attachment, to: call)
+            try modelContext.save()
+            attachmentCaption = ""
+            attachmentMessage = "Attached \(attachment.displayName)."
+            syncAttachmentIfPossible(attachment, data: data)
+        } catch {
+            attachmentMessage = "Could not save attachment: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistAttachmentData(_ data: Data, originalFilename: String) throws -> URL {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let folder = documents.appendingPathComponent("GunnAire Attachments", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let sanitizedName = sanitizeAttachmentFilename(originalFilename)
+        let url = folder.appendingPathComponent("\(UUID().uuidString)-\(sanitizedName)")
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    private func sanitizeAttachmentFilename(_ filename: String) -> String {
+        let base = filename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "attachment" : filename
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        return base.unicodeScalars.map { allowed.contains($0) ? String($0) : "-" }.joined()
+    }
+
+    private func applyAttachmentProgress(_ attachment: ServiceDocumentAttachment, to call: ServiceCall) {
+        switch attachment.kind {
+        case .beforePhoto:
+            call.beforePhotoCount += 1
+        case .afterPhoto:
+            call.afterPhotoCount += 1
+        case .diagnosticPhoto, .customerDocument, .invoiceSupport, .estimateSupport, .receipt, .other:
+            break
+        }
+        call.documentationStartedAt = call.documentationStartedAt ?? Date()
+        call.documentationChecklist = true
+    }
+
+    private func syncAttachmentIfPossible(_ attachment: ServiceDocumentAttachment, data: Data) {
+        if GunnAireBackendService.isConfigured {
+            Task {
+                do {
+                    let response = try await GunnAireBackendService.uploadDocument(
+                        data: data,
+                        filename: attachment.displayName,
+                        contentType: attachment.contentType,
+                        kind: attachment.kindRaw,
+                        serviceCallID: attachment.serviceCallID,
+                        customerName: attachment.customer?.name
+                    )
+                    attachment.backendDocumentID = response.id
+                    try? modelContext.save()
+                } catch {
+                    attachmentMessage = "Attachment saved locally. Company storage upload failed: \(error.localizedDescription)"
+                }
+            }
+        }
+
+        guard let call = activeServiceCall,
+              let invoiceID = call.linkedInvoiceID,
+              let invoice = invoices.first(where: { $0.id == invoiceID }),
+              let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !quickBooksID.isEmpty,
+              QuickBooksDataAPI.shared.isAuthenticated else {
+            return
+        }
+
+        QuickBooksDataAPI.shared.uploadDocument(
+            fileURL: attachment.localFileURL,
+            note: attachment.caption,
+            attachToEntityType: .invoice,
+            attachToEntityID: quickBooksID
+        ) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let attachableID):
+                    attachment.quickBooksAttachableID = attachableID
+                    try? modelContext.save()
+                case .failure(let error):
+                    attachment.quickBooksSyncError = error.localizedDescription
+                    try? modelContext.save()
+                }
+            }
+        }
+    }
+
+    private func contentType(for url: URL) -> String {
+        if let type = UTType(filenameExtension: url.pathExtension),
+           let mimeType = type.preferredMIMEType {
+            return mimeType
+        }
+        switch url.pathExtension.lowercased() {
+        case "jpg", "jpeg": return "image/jpeg"
+        case "png": return "image/png"
+        case "pdf": return "application/pdf"
+        default: return "application/octet-stream"
+        }
+    }
+
+    private func nilIfBlank(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func loadPendingIntentServiceCallIfNeeded() {
@@ -2020,7 +2298,8 @@ GunnAire
                 serviceCall: serviceCall,
                 estimate: currentJobEstimate,
                 invoice: currentJobInvoice,
-                payments: currentJobPayments
+                payments: currentJobPayments,
+                attachments: activeJobAttachments
             )
             generatedCustomerDocumentURL = url
             serviceCall.documentationChecklist = true
@@ -3627,6 +3906,46 @@ private enum SignatureRenderer {
             }
 
             bezier.stroke()
+        }
+    }
+}
+
+private struct JobDocumentationCameraPicker: UIViewControllerRepresentable {
+    let sourceType: UIImagePickerController.SourceType
+    let onImagePicked: (UIImage) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = sourceType
+        picker.delegate = context.coordinator
+        picker.allowsEditing = false
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        private let parent: JobDocumentationCameraPicker
+
+        init(_ parent: JobDocumentationCameraPicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage {
+                parent.onImagePicked(image)
+            }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
         }
     }
 }

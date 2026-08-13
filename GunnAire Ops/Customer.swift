@@ -14,6 +14,7 @@ final class Customer {
     @Relationship(inverse: \RecurringMaintenanceContract.customer) var recurringContracts: [RecurringMaintenanceContract] = []
     @Relationship(inverse: \ServiceCall.customer) var serviceCalls: [ServiceCall] = []
     @Relationship(inverse: \Invoice.customer) var invoices: [Invoice] = []
+    @Relationship(inverse: \ServiceDocumentAttachment.customer) var documentAttachments: [ServiceDocumentAttachment] = []
     
     init(id: UUID = UUID(), quickBooksID: String? = nil, name: String, phone: String? = nil, email: String? = nil, address: String? = nil) {
         self.id = id
