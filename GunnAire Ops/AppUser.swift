@@ -109,13 +109,13 @@ enum AppAccess {
             return Set(serviceCalls.map(\.id))
         }
 
+        guard canCollectFieldPayments(email: email, users: users) else {
+            return []
+        }
+
         var ids = Set<UUID>()
         if let activeServiceCall {
             ids.insert(activeServiceCall.id)
-        }
-
-        guard canCollectFieldPayments(email: email, users: users) else {
-            return ids
         }
 
         let email = normalizedEmail(email)

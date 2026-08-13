@@ -282,6 +282,7 @@ struct BillingDocumentsView: View {
     private var displayedEstimates: [Estimate] {
         let displayEstimates = Estimate.displayDeduplicated(estimates)
         guard !canViewFinancials else { return displayEstimates }
+        guard canCollectFieldPayments else { return [] }
         let visibleCallIDs = visibleBillingServiceCallIDsForFieldUser
         let visibleEstimateIDs = visibleLinkedEstimateIDsForFieldUser
         return displayEstimates.filter { estimate in
@@ -295,6 +296,7 @@ struct BillingDocumentsView: View {
     private var displayedInvoices: [Invoice] {
         let displayInvoices = Invoice.displayDeduplicated(invoices)
         guard !canViewFinancials else { return displayInvoices }
+        guard canCollectFieldPayments else { return [] }
         let visibleCallIDs = visibleBillingServiceCallIDsForFieldUser
         let visibleInvoiceIDs = visibleLinkedInvoiceIDsForFieldUser
         return displayInvoices.filter { invoice in
@@ -396,6 +398,10 @@ struct BillingDocumentsView: View {
 
     private var canViewFinancials: Bool {
         AppAccess.canViewBillingFinancialDetails(email: currentUserEmail, users: users)
+    }
+
+    private var canCollectFieldPayments: Bool {
+        AppAccess.canCollectFieldPayments(email: currentUserEmail, users: users)
     }
 
     private var mapsURL: URL? {
@@ -1152,7 +1158,7 @@ GunnAire
                     }
                 }
 
-                if currentJobEstimate != nil || currentJobInvoice != nil {
+                if (canViewFinancials || canCollectFieldPayments) && (currentJobEstimate != nil || currentJobInvoice != nil) {
                     Section("Current Job Documents") {
                         if let estimate = currentJobEstimate {
                             VStack(alignment: .leading, spacing: 4) {
@@ -1283,18 +1289,20 @@ GunnAire
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
-                                Button(isInvoicePaid(invoice) ? "Invoice Paid" : "Collect Payment") {
-                                    openInvoiceCloseout(invoice)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(Color.brandGold)
-                                .foregroundStyle(Color.primaryBlack)
-                                .disabled(isInvoicePaid(invoice))
+                                if canCollectFieldPayments {
+                                    Button(isInvoicePaid(invoice) ? "Invoice Paid" : "Collect Payment") {
+                                        openInvoiceCloseout(invoice)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(Color.brandGold)
+                                    .foregroundStyle(Color.primaryBlack)
+                                    .disabled(isInvoicePaid(invoice))
 
-                                Button("Resume Invoice") {
-                                    openInvoiceCloseout(invoice)
+                                    Button("Resume Invoice") {
+                                        openInvoiceCloseout(invoice)
+                                    }
+                                    .buttonStyle(.bordered)
                                 }
-                                .buttonStyle(.bordered)
 
                                 Button("Send Invoice Through QuickBooks") {
                                     sendInvoiceThroughQuickBooks(invoice)
@@ -1308,7 +1316,7 @@ GunnAire
                                 }
                                 .buttonStyle(.bordered)
 
-                                if !isInvoicePaid(invoice) {
+                                if canCollectFieldPayments && !isInvoicePaid(invoice) {
                                     Button("Record Additional Payment") {
                                         openInvoiceCloseout(invoice)
                                     }
@@ -1976,18 +1984,20 @@ GunnAire
                                                 .font(.caption2)
                                                 .foregroundColor(.green)
                                         }
-                                        Button("Open Invoice") {
-                                            openInvoiceCloseout(invoice)
-                                        }
-                                        .buttonStyle(.bordered)
+                                        if canCollectFieldPayments {
+                                            Button("Open Invoice") {
+                                                openInvoiceCloseout(invoice)
+                                            }
+                                            .buttonStyle(.bordered)
 
-                                        Button(isInvoicePaid(invoice) ? "Paid" : "Collect Payment") {
-                                            openInvoiceCloseout(invoice)
+                                            Button(isInvoicePaid(invoice) ? "Paid" : "Collect Payment") {
+                                                openInvoiceCloseout(invoice)
+                                            }
+                                            .buttonStyle(.borderedProminent)
+                                            .tint(Color.brandGold)
+                                            .foregroundStyle(Color.primaryBlack)
+                                            .disabled(isInvoicePaid(invoice))
                                         }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(Color.brandGold)
-                                        .foregroundStyle(Color.primaryBlack)
-                                        .disabled(isInvoicePaid(invoice))
 
                                         Button("Generate Invoice PDF") {
                                             generateInvoiceDocument(invoice)
@@ -4667,6 +4677,10 @@ GunnAire
     }
 
     private func openInvoiceCloseout(_ invoice: Invoice) {
+        guard canCollectFieldPayments else {
+            actionMessage = "Your role cannot open invoice collection tools."
+            return
+        }
         selectedInvoiceForCloseout = invoice
     }
 

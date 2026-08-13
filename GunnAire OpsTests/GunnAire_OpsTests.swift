@@ -125,7 +125,7 @@ struct GunnAire_OpsTests {
         )
 
         #expect(fieldVisible == Set([assignedCall.id, activeRoutedCall.id]))
-        #expect(standardVisible == Set([activeRoutedCall.id]))
+        #expect(standardVisible.isEmpty)
         #expect(adminVisible == Set(calls.map(\.id)))
     }
 
