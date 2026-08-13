@@ -2030,10 +2030,13 @@ final class ServiceCall {
             missing.append("Technical report complete")
         }
         let hasGeneratedReport = attachments.contains {
-            $0.serviceCallID == id &&
-                $0.kind == .serviceReport &&
-                (invoice == nil || $0.invoiceID == invoice?.id) &&
-                $0.localFilePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            guard $0.serviceCallID == id,
+                  $0.kind == .serviceReport,
+                  $0.localFilePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                return false
+            }
+            guard let invoice else { return true }
+            return isInvoiceDocumentationAttachment($0, for: invoice)
         }
         if !hasGeneratedReport {
             missing.append("Onsite report generated")
@@ -2087,10 +2090,10 @@ final class ServiceCall {
     ) -> InvoiceDocumentationStatus {
         let jobAttachments = attachments.filter { $0.serviceCallID == id }
         let linkedReports = jobAttachments.filter {
-            $0.kind == .serviceReport && $0.invoiceID == invoice.id
+            $0.kind == .serviceReport && isInvoiceDocumentationAttachment($0, for: invoice)
         }
         let linkedPhotoEvidence = jobAttachments.filter {
-            ($0.kind.isPhoto || $0.isImage) && $0.invoiceID == invoice.id
+            ($0.kind.isPhoto || $0.isImage) && isInvoiceDocumentationAttachment($0, for: invoice)
         }
         let linkedBillingDocuments = jobAttachments.filter {
             $0.kind == .invoiceSupport && $0.invoiceID == invoice.id
@@ -2100,7 +2103,7 @@ final class ServiceCall {
             ? jobAttachments.filter { $0.canBePendingQuickBooksInvoiceAttachment(for: invoice) }
             : []
         let syncedQuickBooksAttachments = jobAttachments.filter {
-            guard $0.invoiceID == invoice.id,
+            guard isInvoiceDocumentationAttachment($0, for: invoice),
                   let reference = $0.quickBooksInvoiceReference(for: invoice) else {
                 return false
             }
@@ -2115,6 +2118,23 @@ final class ServiceCall {
             syncedQuickBooksAttachmentCount: syncedQuickBooksAttachments.count,
             requiresQuickBooksAttachmentSync: hasQuickBooksInvoice
         )
+    }
+
+    private func isInvoiceDocumentationAttachment(_ attachment: ServiceDocumentAttachment, for invoice: Invoice) -> Bool {
+        if attachment.invoiceID == invoice.id {
+            return true
+        }
+        guard attachment.invoiceID == nil,
+              invoiceBelongsToThisCall(invoice),
+              let linkedEstimateID,
+              attachment.estimateID == linkedEstimateID else {
+            return false
+        }
+        return true
+    }
+
+    private func invoiceBelongsToThisCall(_ invoice: Invoice) -> Bool {
+        invoice.serviceCallID == id || linkedInvoiceID == invoice.id
     }
 
     func estimateDocumentationStatus(

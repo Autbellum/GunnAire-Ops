@@ -2124,6 +2124,54 @@ struct GunnAire_OpsTests {
         #expect(readiness.missingItems.contains("Onsite report generated"))
     }
 
+    @Test func closeoutReadinessAcceptsEstimateReportAfterInvoiceConversion() async throws {
+        let customer = Customer(name: "Converted Estimate Customer")
+        let estimate = Estimate(customer: customer, amount: 500)
+        let invoice = Invoice(
+            serviceCallID: UUID(),
+            customer: customer,
+            amount: 500,
+            status: "paid",
+            customerSignatureName: "Customer",
+            customerSignedAt: Date(),
+            finalizedAt: Date()
+        )
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .invoiced,
+            workCompletedChecklist: true,
+            documentationChecklist: true,
+            paymentCollectedChecklist: true,
+            linkedEstimateID: estimate.id,
+            linkedInvoiceID: invoice.id
+        )
+        invoice.serviceCallID = call.id
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        let estimateLinkedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            estimateID: estimate.id,
+            kind: .serviceReport,
+            displayName: "estimate-onsite-report.pdf",
+            localFilePath: "/tmp/estimate-onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let readiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [estimateLinkedReport])
+
+        #expect(readiness.missingItems.contains("Onsite report generated") == false)
+    }
+
     @Test func jobCloseoutReadinessDetectsPendingQuickBooksAttachments() async throws {
         let customer = Customer(name: "Closeout Customer")
         let call = ServiceCall(
@@ -2237,6 +2285,47 @@ struct GunnAire_OpsTests {
         #expect(synced.isReady)
         #expect(synced.statusLabel == "Invoice documentation ready")
         #expect(synced.syncedQuickBooksAttachmentCount == 3)
+    }
+
+    @Test func invoiceDocumentationStatusCountsConvertedEstimatePackage() async throws {
+        let customer = Customer(name: "Converted Documentation Customer")
+        let estimate = Estimate(customer: customer, amount: 500)
+        let invoice = Invoice(customer: customer, amount: 500)
+        let call = ServiceCall(
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            linkedEstimateID: estimate.id,
+            linkedInvoiceID: invoice.id
+        )
+        invoice.serviceCallID = call.id
+        let estimateReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            estimateID: estimate.id,
+            kind: .serviceReport,
+            displayName: "estimate-report.pdf",
+            localFilePath: "/tmp/estimate-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let estimatePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            estimateID: estimate.id,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+
+        let status = call.invoiceDocumentationStatus(invoice: invoice, attachments: [estimateReport, estimatePhoto])
+
+        #expect(status.isReady)
+        #expect(status.statusLabel == "Invoice documentation ready")
+        #expect(status.linkedReportCount == 1)
+        #expect(status.linkedPhotoEvidenceCount == 1)
     }
 
     @Test func estimateDocumentationStatusTracksMissingPendingAndSyncedReports() async throws {
