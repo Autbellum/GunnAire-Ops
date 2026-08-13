@@ -2364,8 +2364,15 @@ GunnAire
             if definition.isCalculated {
                 calculatedTechnicalReadingValue(for: call, definition: definition)
             } else if definition.options.isEmpty {
-                TextField(definition.displayLabel, text: technicalReadingBinding(for: call, key: definition.key))
-                    .keyboardType(.numbersAndPunctuation)
+                HStack {
+                    TextField(definition.displayLabel, text: technicalReadingBinding(for: call, key: definition.key))
+                        .keyboardType(.numbersAndPunctuation)
+                    Button(HVACTechnicalReadingDefinition.unableToTestValue) {
+                        call.setTechnicalReading(HVACTechnicalReadingDefinition.unableToTestValue, for: definition.key)
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption)
+                }
             } else {
                 serviceReportOptionPicker(
                     definition.displayLabel,
@@ -2389,14 +2396,20 @@ GunnAire
     @ViewBuilder
     private func calculatedTechnicalReadingValue(for call: ServiceCall, definition: HVACTechnicalReadingDefinition) -> some View {
         let value = call.technicalReading(for: definition.key).trimmingCharacters(in: .whitespacesAndNewlines)
+        let isNonNumericStatus = HVACTechnicalReadingDefinition.isNonNumericStatus(value)
         HStack {
             Label(
-                value.isEmpty ? "Calculated after source readings are entered" : "\(value)\(definition.unit.map { " \($0)" } ?? "")",
+                value.isEmpty ? "Calculated after source readings are entered" : "\(value)\(!isNonNumericStatus ? definition.unit.map { " \($0)" } ?? "" : "")",
                 systemImage: value.isEmpty ? "function" : "checkmark.circle.fill"
             )
             .font(.subheadline)
             .foregroundColor(value.isEmpty ? .secondary : .green)
             Spacer()
+            Button(HVACTechnicalReadingDefinition.unableToTestValue) {
+                call.setTechnicalReading(HVACTechnicalReadingDefinition.unableToTestValue, for: definition.key)
+            }
+            .buttonStyle(.bordered)
+            .font(.caption)
         }
         if let hint = definition.calculationSourceHint {
             Text(hint)

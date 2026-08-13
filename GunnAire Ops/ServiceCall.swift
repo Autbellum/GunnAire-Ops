@@ -378,6 +378,16 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
 }
 
 struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
+    static let unableToTestValue = "Unable to Test"
+    private static let nonNumericStatusValues = [
+        "n/a",
+        "na",
+        "not applicable",
+        "not tested",
+        "not accessible",
+        "unable to test"
+    ]
+
     let key: String
     let label: String
     let unit: String?
@@ -532,6 +542,9 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
     func validationIssue(for rawValue: String) -> String? {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let expectedRange else { return nil }
+        if Self.isNonNumericStatus(trimmed) {
+            return nil
+        }
         guard let value = Double(trimmed.replacingOccurrences(of: ",", with: ".")) else {
             return "\(displayLabel) must be numeric"
         }
@@ -539,6 +552,10 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
             return "\(displayLabel) outside expected range\(expectedRangeLabel.map { " (\($0))" } ?? "")"
         }
         return nil
+    }
+
+    static func isNonNumericStatus(_ value: String) -> Bool {
+        nonNumericStatusValues.contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 
     private static func formatRangeBound(_ value: Double) -> String {

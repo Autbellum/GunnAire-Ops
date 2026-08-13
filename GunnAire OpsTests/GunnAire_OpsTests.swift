@@ -968,7 +968,30 @@ struct GunnAire_OpsTests {
         #expect(voltage.validationIssue(for: "240") == nil)
         #expect(voltage.validationIssue(for: "12")?.contains("outside expected range") == true)
         #expect(superheat.validationIssue(for: "not a number") == "Superheat (F) must be numeric")
+        #expect(superheat.validationIssue(for: HVACTechnicalReadingDefinition.unableToTestValue) == nil)
+        #expect(HVACTechnicalReadingDefinition.isNonNumericStatus("Not Applicable"))
         #expect(condition.validationIssue(for: "Needs Cleaning") == nil)
+    }
+
+    @Test func unableToTestReadingsCanSatisfyRequiredFieldCompletion() async throws {
+        let customer = Customer(name: "Unable To Test Customer")
+        let call = ServiceCall(
+            equipmentName: "Main AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Unable to run cooling cycle during service.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(HVACTechnicalReadingDefinition.unableToTestValue, for: definition.key)
+        }
+
+        #expect(call.serviceReportMissingRequiredItemLabels.isEmpty)
+        #expect(call.serviceReportReadingValidationIssueLabels.isEmpty)
+        #expect(call.markDocumentationCompleteIfReady())
     }
 
     @Test func invalidTechnicalReadingsBlockReportCompletion() async throws {
