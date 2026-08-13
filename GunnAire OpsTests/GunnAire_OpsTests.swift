@@ -237,7 +237,7 @@ struct GunnAire_OpsTests {
         #expect(object["attendees"] == nil)
     }
 
-    @Test func googleCalendarManagedPatchPreservesExistingGoogleDetails() async throws {
+    @Test func googleCalendarManagedPatchEchoesExistingGoogleDetails() async throws {
         let customer = Customer(name: "Calendar Customer", address: "123 Main St")
         let call = ServiceCall(
             googleCalendarID: "primary",
@@ -274,11 +274,11 @@ struct GunnAire_OpsTests {
 
         #expect(object["start"] != nil)
         #expect(object["end"] != nil)
-        #expect(object["summary"] == nil)
-        #expect(object["description"] == nil)
-        #expect(object["location"] == nil)
+        #expect(object["summary"] as? String == "Google title stays")
+        #expect(object["description"] as? String == "Google body stays")
+        #expect(object["location"] as? String == "Google location stays")
         #expect(object["extendedProperties"] == nil)
-        #expect(Set(object.keys) == ["start", "end"])
+        #expect(Set(object.keys) == ["summary", "description", "location", "start", "end"])
     }
 
     @Test func googleCalendarManagedPatchDoesNotRepairMissingGoogleDetails() async throws {
@@ -317,11 +317,11 @@ struct GunnAire_OpsTests {
 
         #expect(object["summary"] == nil)
         #expect(object["description"] == nil)
-        #expect(object["location"] == nil)
+        #expect(object["location"] as? String == "Google location stays")
         #expect(object["start"] != nil)
         #expect(object["end"] != nil)
         #expect(object["extendedProperties"] == nil)
-        #expect(Set(object.keys) == ["start", "end"])
+        #expect(Set(object.keys) == ["location", "start", "end"])
     }
 
     @Test func googleCalendarCreatePayloadOmitsBlankLocationAndDetails() async throws {
@@ -2147,12 +2147,44 @@ struct GunnAire_OpsTests {
             contentType: "application/pdf",
             fileSizeBytes: 1024
         )
+        let priorInvoicePDF = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: previousCall.id,
+            customerEquipmentID: linkedEquipmentID,
+            kind: .invoiceSupport,
+            displayName: "prior-invoice.pdf",
+            localFilePath: "/tmp/prior-invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date().addingTimeInterval(100)
+        )
+        let priorReceipt = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: previousCall.id,
+            customerEquipmentID: linkedEquipmentID,
+            kind: .receipt,
+            displayName: "receipt.jpg",
+            localFilePath: "/tmp/receipt.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024,
+            createdAt: Date().addingTimeInterval(200)
+        )
 
         let history = ServiceDocumentAttachment.equipmentHistoryAttachments(
             for: currentCall,
-            in: [priorEquipmentReport, priorEquipmentPhoto, currentJobAttachment, unrelatedAttachment]
+            in: [
+                priorEquipmentReport,
+                priorEquipmentPhoto,
+                currentJobAttachment,
+                unrelatedAttachment,
+                priorInvoicePDF,
+                priorReceipt
+            ]
         )
 
+        #expect(priorEquipmentReport.canShowInActiveEquipmentHistory == true)
+        #expect(priorInvoicePDF.canShowInActiveEquipmentHistory == false)
+        #expect(priorReceipt.canShowInActiveEquipmentHistory == false)
         #expect(history.map(\.displayName) == ["nameplate.jpg", "prior-report.pdf"])
     }
 

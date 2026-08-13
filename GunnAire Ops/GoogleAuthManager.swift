@@ -128,11 +128,17 @@ struct GoogleWritableCalendarEvent: Codable {
 }
 
 struct GoogleCalendarEventPatch: Codable {
+    let summary: String?
+    let description: String?
+    let location: String?
     let start: GoogleWritableCalendarEventDate?
     let end: GoogleWritableCalendarEventDate?
     let extendedProperties: GoogleCalendarExtendedProperties?
 
     private enum CodingKeys: String, CodingKey {
+        case summary
+        case description
+        case location
         case start
         case end
         case extendedProperties

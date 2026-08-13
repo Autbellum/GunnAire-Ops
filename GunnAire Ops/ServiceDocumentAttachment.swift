@@ -158,6 +158,15 @@ final class ServiceDocumentAttachment {
         }
     }
 
+    var canShowInActiveEquipmentHistory: Bool {
+        switch kind {
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .other:
+            return true
+        case .invoiceSupport, .estimateSupport, .receipt:
+            return false
+        }
+    }
+
     var canLinkToInvoiceReport: Bool {
         kind == .serviceReport
     }
@@ -359,7 +368,8 @@ final class ServiceDocumentAttachment {
         return attachments
             .filter { attachment in
                 attachment.customerEquipmentID == equipmentID &&
-                    attachment.serviceCallID != serviceCall.id
+                    attachment.serviceCallID != serviceCall.id &&
+                    attachment.canShowInActiveEquipmentHistory
             }
             .sorted { $0.createdAt > $1.createdAt }
     }

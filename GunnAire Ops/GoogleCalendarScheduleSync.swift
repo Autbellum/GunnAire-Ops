@@ -689,6 +689,9 @@ enum GoogleCalendarScheduleSync {
         let timeZone = TimeZone.current.identifier
         let endDate = call.scheduledDate.addingTimeInterval(call.duration)
         return GoogleCalendarEventPatch(
+            summary: nil,
+            description: nil,
+            location: nil,
             start: GoogleWritableCalendarEventDate(
                 dateTime: ISO8601DateFormatter().string(from: call.scheduledDate),
                 timeZone: timeZone
@@ -702,7 +705,22 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func makeManagedEventPatch(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> GoogleCalendarEventPatch {
-        makeScheduleOnlyPatch(for: call)
+        let timeZone = TimeZone.current.identifier
+        let endDate = call.scheduledDate.addingTimeInterval(call.duration)
+        return GoogleCalendarEventPatch(
+            summary: normalizedOptional(remoteEvent?.summary),
+            description: normalizedOptional(remoteEvent?.description),
+            location: normalizedOptional(remoteEvent?.location),
+            start: GoogleWritableCalendarEventDate(
+                dateTime: ISO8601DateFormatter().string(from: call.scheduledDate),
+                timeZone: timeZone
+            ),
+            end: GoogleWritableCalendarEventDate(
+                dateTime: ISO8601DateFormatter().string(from: endDate),
+                timeZone: timeZone
+            ),
+            extendedProperties: nil
+        )
     }
 
     static func makeCalendarCreateEvent(for call: ServiceCall) -> GoogleWritableCalendarEvent {
