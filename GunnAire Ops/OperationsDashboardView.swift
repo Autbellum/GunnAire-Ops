@@ -36,6 +36,10 @@ struct OperationsDashboardView: View {
         AppAccess.isAdmin(email: currentUserEmail, users: users)
     }
 
+    private var canCollectFieldPayments: Bool {
+        AppAccess.canCollectFieldPayments(email: currentUserEmail, users: users)
+    }
+
     private var isAdminUser: Bool {
         AppAccess.isAdmin(email: currentUserEmail, users: users)
     }
@@ -289,7 +293,8 @@ struct OperationsDashboardView: View {
                     invoices: invoices,
                     estimates: estimates,
                     payments: payments,
-                    canViewFinancials: canViewFinancials
+                    canViewFinancials: canViewFinancials,
+                    canCollectFieldPayments: canCollectFieldPayments
                 )
                     .tint(Color.brandGold)
             }
@@ -329,7 +334,7 @@ struct OperationsDashboardView: View {
                     Label("Schedule", systemImage: "calendar.badge.clock")
                 }
 
-                if canViewFinancials {
+                if canCollectFieldPayments {
                     Button {
                         GunnAireAppIntentRouter.store(.payments)
                     } label: {
@@ -746,7 +751,9 @@ struct OperationsDashboardView: View {
                 ) {
                     GunnAireAppIntentRouter.store(.quickBooks)
                 }
+            }
 
+            if canCollectFieldPayments {
                 Divider()
 
                 systemRow(
@@ -1689,6 +1696,7 @@ private struct OperationsCommandPalette: View {
     let estimates: [Estimate]
     let payments: [Payment]
     let canViewFinancials: Bool
+    let canCollectFieldPayments: Bool
 
     @State private var searchText = ""
 
@@ -1791,10 +1799,12 @@ private struct OperationsCommandPalette: View {
             commandButton("Open Schedule", detail: "Calendar and dispatch board", systemImage: "calendar.badge.clock") {
                 GunnAireAppIntentRouter.store(.schedule)
             }
-            if canViewFinancials {
+            if canCollectFieldPayments {
                 commandButton("Collect Payment", detail: "Open payment collection", systemImage: "creditcard") {
                     GunnAireAppIntentRouter.store(.payments)
                 }
+            }
+            if canViewFinancials {
                 commandButton("Job Documentation", detail: "Estimate, invoice, and closeout queue", systemImage: "book") {
                     GunnAireAppIntentRouter.store(.documentation)
                 }
