@@ -92,6 +92,43 @@ struct GunnAire_OpsTests {
         #expect(GunnAireAppIntentRouter.consumePendingServiceCallID() == serviceCallID)
     }
 
+    @Test func billingVisibilityScopesFieldTechniciansToAssignedAndActiveJobs() async throws {
+        let customer = Customer(name: "Billing Access Customer")
+        let technician = Technician(name: "Field Tech", contactInfo: "tech@gunnaire.com")
+        let otherTechnician = Technician(name: "Other Tech", contactInfo: "other@gunnaire.com")
+        let assignedCall = ServiceCall(type: .service, scheduledDate: Date(), assignedTechnician: technician, customer: customer)
+        let activeRoutedCall = ServiceCall(type: .maintenance, scheduledDate: Date(), assignedTechnician: otherTechnician, customer: customer)
+        let unrelatedCall = ServiceCall(type: .install, scheduledDate: Date(), assignedTechnician: otherTechnician, customer: customer)
+        let standard = AppUser(email: "standard@gunnaire.com", role: .standard)
+        let fieldUser = AppUser(email: "tech@gunnaire.com", role: .fieldTechnician)
+        let admin = AppUser(email: "admin@gunnaire.com", role: .admin)
+        let users = [standard, fieldUser, admin]
+        let calls = [assignedCall, activeRoutedCall, unrelatedCall]
+
+        let fieldVisible = AppAccess.visibleBillingServiceCallIDs(
+            email: fieldUser.email,
+            users: users,
+            serviceCalls: calls,
+            activeServiceCall: activeRoutedCall
+        )
+        let standardVisible = AppAccess.visibleBillingServiceCallIDs(
+            email: standard.email,
+            users: users,
+            serviceCalls: calls,
+            activeServiceCall: activeRoutedCall
+        )
+        let adminVisible = AppAccess.visibleBillingServiceCallIDs(
+            email: admin.email,
+            users: users,
+            serviceCalls: calls,
+            activeServiceCall: nil
+        )
+
+        #expect(fieldVisible == Set([assignedCall.id, activeRoutedCall.id]))
+        #expect(standardVisible == Set([activeRoutedCall.id]))
+        #expect(adminVisible == Set(calls.map(\.id)))
+    }
+
     @Test func serviceCallEquipmentSummaryIncludesManufacturer() async throws {
         let customer = Customer(name: "Equipment Customer")
         let call = ServiceCall(

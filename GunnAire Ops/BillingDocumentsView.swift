@@ -242,15 +242,14 @@ struct BillingDocumentsView: View {
     }
 
     private var estimateMetrics: (pending: Int, accepted: Int, followUp: Int) {
-        let displayEstimates = Estimate.displayDeduplicated(estimates)
-        let pending = displayEstimates.filter { $0.status == "pending" }.count
-        let accepted = displayEstimates.filter { $0.status == "accepted" }.count
-        let followUp = displayEstimates.filter { $0.status == "follow-up" }.count
+        let pending = displayedEstimates.filter { $0.status == "pending" }.count
+        let accepted = displayedEstimates.filter { $0.status == "accepted" }.count
+        let followUp = displayedEstimates.filter { $0.status == "follow-up" }.count
         return (pending, accepted, followUp)
     }
 
     private var invoiceMetrics: (open: Int, overdue: Int, outstandingBalance: Double) {
-        let openInvoices = Invoice.displayDeduplicated(invoices).filter { invoice in
+        let openInvoices = displayedInvoices.filter { invoice in
             invoiceBalanceDue(for: invoice) > 0.009
         }
         let overdueInvoices = openInvoices.filter(isInvoiceOverdue)
@@ -261,17 +260,17 @@ struct BillingDocumentsView: View {
     }
 
     private var estimatesNeedingFollowUp: [Estimate] {
-        Estimate.displayDeduplicated(estimates).filter { estimate in
+        displayedEstimates.filter { estimate in
             estimate.status == "pending" || estimate.status == "follow-up"
         }
     }
 
     private var acceptedEstimatesReadyToSchedule: [Estimate] {
-        Estimate.displayDeduplicated(estimates).filter { $0.status == "accepted" }
+        displayedEstimates.filter { $0.status == "accepted" }
     }
 
     private var collectibleInvoices: [Invoice] {
-        Invoice.displayDeduplicated(invoices).filter { invoice in
+        displayedInvoices.filter { invoice in
             invoiceBalanceDue(for: invoice) > 0.009
         }
     }
@@ -281,11 +280,50 @@ struct BillingDocumentsView: View {
     }
 
     private var displayedEstimates: [Estimate] {
-        Estimate.displayDeduplicated(estimates)
+        let displayEstimates = Estimate.displayDeduplicated(estimates)
+        guard !canViewFinancials else { return displayEstimates }
+        let visibleCallIDs = visibleBillingServiceCallIDsForFieldUser
+        let visibleEstimateIDs = visibleLinkedEstimateIDsForFieldUser
+        return displayEstimates.filter { estimate in
+            if let serviceCallID = estimate.serviceCallID, visibleCallIDs.contains(serviceCallID) {
+                return true
+            }
+            return visibleEstimateIDs.contains(estimate.id)
+        }
     }
 
     private var displayedInvoices: [Invoice] {
-        Invoice.displayDeduplicated(invoices)
+        let displayInvoices = Invoice.displayDeduplicated(invoices)
+        guard !canViewFinancials else { return displayInvoices }
+        let visibleCallIDs = visibleBillingServiceCallIDsForFieldUser
+        let visibleInvoiceIDs = visibleLinkedInvoiceIDsForFieldUser
+        return displayInvoices.filter { invoice in
+            if let serviceCallID = invoice.serviceCallID, visibleCallIDs.contains(serviceCallID) {
+                return true
+            }
+            return visibleInvoiceIDs.contains(invoice.id)
+        }
+    }
+
+    private var visibleBillingServiceCallIDsForFieldUser: Set<UUID> {
+        AppAccess.visibleBillingServiceCallIDs(
+            email: currentUserEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            activeServiceCall: activeServiceCall
+        )
+    }
+
+    private var visibleLinkedInvoiceIDsForFieldUser: Set<UUID> {
+        Set(serviceCalls.compactMap { call in
+            visibleBillingServiceCallIDsForFieldUser.contains(call.id) ? call.linkedInvoiceID : nil
+        })
+    }
+
+    private var visibleLinkedEstimateIDsForFieldUser: Set<UUID> {
+        Set(serviceCalls.compactMap { call in
+            visibleBillingServiceCallIDsForFieldUser.contains(call.id) ? call.linkedEstimateID : nil
+        })
     }
 
     private var contextCustomer: Customer? {

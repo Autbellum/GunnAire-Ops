@@ -99,6 +99,33 @@ enum AppAccess {
         return role == .fieldTechnician || role == .admin
     }
 
+    static func visibleBillingServiceCallIDs(
+        email: String?,
+        users: [AppUser],
+        serviceCalls: [ServiceCall],
+        activeServiceCall: ServiceCall?
+    ) -> Set<UUID> {
+        guard !canViewBillingFinancialDetails(email: email, users: users) else {
+            return Set(serviceCalls.map(\.id))
+        }
+
+        var ids = Set<UUID>()
+        if let activeServiceCall {
+            ids.insert(activeServiceCall.id)
+        }
+
+        guard canCollectFieldPayments(email: email, users: users) else {
+            return ids
+        }
+
+        let email = normalizedEmail(email)
+        guard !email.isEmpty else { return ids }
+        for call in serviceCalls where normalizedEmail(call.assignedTechnician?.contactInfo) == email {
+            ids.insert(call.id)
+        }
+        return ids
+    }
+
     @discardableResult
     static func ensureTechnicianRecord(
         for email: String,
