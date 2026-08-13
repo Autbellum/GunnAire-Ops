@@ -1720,6 +1720,8 @@ struct GunnAire_OpsTests {
         let rows = CustomerDocumentExporter.serviceReportReadinessRows(for: call)
 
         #expect(rows.contains { $0.label == "Completion" && $0.value == "Needs details" })
+        #expect(rows.contains { $0.label == "Safety Alerts" && $0.value.contains("CO Reading") })
+        #expect(rows.contains { $0.label == "Safety Alerts" && $0.value.contains("100 ppm") })
         #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("CO Reading") })
         #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("100 ppm") })
     }

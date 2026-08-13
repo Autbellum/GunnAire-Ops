@@ -1325,6 +1325,10 @@ final class ServiceCall {
         ].compactMap { $0 }
     }
 
+    var serviceReportSafetyAlertLabels: [String] {
+        [combustionSafetyValidationIssue()].compactMap { $0 }
+    }
+
     private func serviceReportCrossReadingValidationIssue(for key: String) -> String? {
         switch key {
         case "compressor_amps":

@@ -255,10 +255,14 @@ enum CustomerDocumentExporter {
         let completionIssues = serviceCall.serviceReportMissingRequirementLabels
         let missing = serviceCall.serviceReportMissingRequiredItemLabels
         let validationIssues = serviceCall.serviceReportReadingValidationIssueLabels
+        let safetyAlerts = serviceCall.serviceReportSafetyAlertLabels
         var rows: [(label: String, value: String)] = [
             ("Completion", completionIssues.isEmpty ? "Ready" : "Needs details"),
             ("Required Items", serviceCall.serviceReportReadinessSummary)
         ]
+        if !safetyAlerts.isEmpty {
+            rows.append(("Safety Alerts", safetyAlerts.joined(separator: ", ")))
+        }
         if !missing.isEmpty {
             rows.append(("Missing Required Items", missing.joined(separator: ", ")))
         }
@@ -331,6 +335,10 @@ enum CustomerDocumentExporter {
         ]
         if conditionRows.contains(where: { !$0.value.isEmpty }) {
             sections.append(DocumentSection(title: "Maintenance Observations", rows: conditionRows))
+        }
+        let safetyRows = serviceCall.serviceReportSafetyAlertLabels.map { row("Alert", $0) }
+        if !safetyRows.isEmpty {
+            sections.append(DocumentSection(title: "Safety Alerts", rows: safetyRows))
         }
         return sections
     }
