@@ -461,9 +461,69 @@ GunnAire
 
     private func openEstimateFollowUpEmail(for estimate: Estimate, fallbackURL: URL) {
         if googleAuth.isAuthenticated, let draft = followUpEmailDraft(for: estimate) {
-            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: draft.to,
+                subject: draft.subject,
+                body: draft.body,
+                attachmentPaths: estimateEmailAttachmentPaths(for: estimate)
+            )
         } else {
             openURL(fallbackURL)
+        }
+    }
+
+    private func estimateEmailAttachmentPaths(for estimate: Estimate) -> [String] {
+        do {
+            let serviceCall = serviceCall(for: estimate)
+            if let serviceCall {
+                saveCurrentEquipmentProfile(for: serviceCall, announce: false)
+                linkExistingEstimateAttachments(to: estimate, serviceCallID: serviceCall.id)
+            }
+            let url = try CustomerDocumentExporter.exportEstimate(
+                estimate,
+                serviceCall: serviceCall,
+                attachments: attachments
+            )
+            generatedCustomerDocumentURL = url
+            generatedCustomerDocumentRecipientID = estimate.customer.id
+            generatedCustomerDocumentServiceCallID = serviceCall?.id
+            generatedCustomerDocumentInvoiceID = nil
+            generatedCustomerDocumentEstimateID = estimate.id
+            generatedCustomerDocumentKind = "estimate"
+            var emailAttachments = attachments
+            if let estimateAttachment = persistGeneratedBillingDocument(
+                url,
+                customer: estimate.customer,
+                serviceCallID: serviceCall?.id,
+                invoiceID: nil,
+                estimateID: estimate.id,
+                kind: .estimateSupport,
+                caption: "Generated estimate PDF",
+                successMessage: "Estimate PDF generated for email."
+            ) {
+                emailAttachments.append(estimateAttachment)
+            }
+            if let serviceCall {
+                let report = try generateAndPersistOnsiteReportAttachment(
+                    for: serviceCall,
+                    estimate: estimate,
+                    invoice: nil,
+                    payments: [],
+                    attachments: emailAttachments.filter { $0.serviceCallID == serviceCall.id }
+                )
+                report.attachment.linkToEstimateIfNeeded(estimate)
+                syncAttachmentIfPossible(report.attachment, data: report.data)
+                emailAttachments.append(report.attachment)
+            }
+            return CustomerDocumentExporter.customerEmailAttachmentURLs(
+                primaryDocumentURL: url,
+                serviceCallID: serviceCall?.id,
+                estimateID: estimate.id,
+                attachments: emailAttachments
+            ).map(\.path)
+        } catch {
+            actionMessage = "Could not prepare estimate attachment for email: \(error.localizedDescription)"
+            return []
         }
     }
 
