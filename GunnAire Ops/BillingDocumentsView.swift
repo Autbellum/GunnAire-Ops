@@ -1783,8 +1783,27 @@ GunnAire
             }
 
             TextField("Equipment Name", text: optionalServiceCallTextBinding(call, \.equipmentName))
+            TextField("Manufacturer", text: optionalServiceCallTextBinding(call, \.equipmentManufacturer))
             TextField("Model", text: optionalServiceCallTextBinding(call, \.equipmentModel))
             TextField("Serial Number", text: optionalServiceCallTextBinding(call, \.equipmentSerialNumber))
+            TextField("Equipment Location", text: optionalServiceCallTextBinding(call, \.equipmentLocation))
+            if call.equipmentInstallDate == nil {
+                Button("Set Install Date") {
+                    call.equipmentInstallDate = Date()
+                    call.diagnosticsCaptured = true
+                }
+                .buttonStyle(.bordered)
+            } else {
+                DatePicker(
+                    "Install Date",
+                    selection: optionalServiceCallDateBinding(call, \.equipmentInstallDate),
+                    displayedComponents: .date
+                )
+                Button("Clear Install Date") {
+                    call.equipmentInstallDate = nil
+                }
+                .buttonStyle(.bordered)
+            }
 
             Button(call.customerEquipmentID == nil ? "Save as Customer Equipment" : "Update Customer Equipment") {
                 saveCurrentEquipmentProfile(for: call)
@@ -1843,6 +1862,16 @@ GunnAire
         )
     }
 
+    private func optionalServiceCallDateBinding(_ call: ServiceCall, _ keyPath: ReferenceWritableKeyPath<ServiceCall, Date?>) -> Binding<Date> {
+        Binding(
+            get: { call[keyPath: keyPath] ?? Date() },
+            set: { newValue in
+                call[keyPath: keyPath] = newValue
+                call.diagnosticsCaptured = true
+            }
+        )
+    }
+
     private func technicalReadingBinding(for call: ServiceCall, key: String) -> Binding<String> {
         Binding(
             get: { call.technicalReading(for: key) },
@@ -1854,8 +1883,11 @@ GunnAire
         call.customerEquipmentID = equipment.id
         call.equipmentType = equipment.equipmentType
         call.equipmentName = equipment.name
+        call.equipmentManufacturer = equipment.manufacturer
         call.equipmentModel = equipment.modelNumber
         call.equipmentSerialNumber = equipment.serialNumber
+        call.equipmentLocation = equipment.location
+        call.equipmentInstallDate = equipment.installDate
         call.equipmentWarrantyExpiration = equipment.warrantyExpiration
         if call.filterSize?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             call.filterSize = equipment.filterSize
@@ -1892,8 +1924,11 @@ GunnAire
 
         equipment.equipmentType = call.equipmentType
         equipment.name = equipmentName
+        equipment.manufacturer = call.equipmentManufacturer
         equipment.modelNumber = call.equipmentModel
         equipment.serialNumber = call.equipmentSerialNumber
+        equipment.location = call.equipmentLocation
+        equipment.installDate = call.equipmentInstallDate
         equipment.warrantyExpiration = call.equipmentWarrantyExpiration
         equipment.filterSize = call.filterSize
         equipment.isActive = true
@@ -2617,9 +2652,13 @@ GunnAire
         let followUpCall = ServiceCall(
             siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
             equipmentName: sourceCall.equipmentName,
+            equipmentManufacturer: sourceCall.equipmentManufacturer,
             equipmentModel: sourceCall.equipmentModel,
             equipmentSerialNumber: sourceCall.equipmentSerialNumber,
+            equipmentLocation: sourceCall.equipmentLocation,
+            equipmentInstallDate: sourceCall.equipmentInstallDate,
             equipmentWarrantyExpiration: sourceCall.equipmentWarrantyExpiration,
+            customerEquipmentID: sourceCall.customerEquipmentID,
             type: sourceCall.type,
             scheduledDate: scheduledDate,
             duration: sourceCall.duration,
@@ -2650,9 +2689,13 @@ GunnAire
         let approvedWorkCall = ServiceCall(
             siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
             equipmentName: sourceCall.equipmentName,
+            equipmentManufacturer: sourceCall.equipmentManufacturer,
             equipmentModel: sourceCall.equipmentModel,
             equipmentSerialNumber: sourceCall.equipmentSerialNumber,
+            equipmentLocation: sourceCall.equipmentLocation,
+            equipmentInstallDate: sourceCall.equipmentInstallDate,
             equipmentWarrantyExpiration: sourceCall.equipmentWarrantyExpiration,
+            customerEquipmentID: sourceCall.customerEquipmentID,
             type: sourceCall.type == .estimate ? .install : sourceCall.type,
             scheduledDate: scheduledDate,
             duration: sourceCall.duration,

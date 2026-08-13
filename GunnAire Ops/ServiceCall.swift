@@ -152,8 +152,11 @@ final class ServiceCall {
     var eventTitle: String?
     var siteAddress: String?
     var equipmentName: String?
+    var equipmentManufacturer: String?
     var equipmentModel: String?
     var equipmentSerialNumber: String?
+    var equipmentLocation: String?
+    var equipmentInstallDate: Date?
     var equipmentWarrantyExpiration: Date?
     var customerEquipmentID: UUID?
     var equipmentTypeRaw: String?
@@ -203,8 +206,11 @@ final class ServiceCall {
         eventTitle: String? = nil,
         siteAddress: String? = nil,
         equipmentName: String? = nil,
+        equipmentManufacturer: String? = nil,
         equipmentModel: String? = nil,
         equipmentSerialNumber: String? = nil,
+        equipmentLocation: String? = nil,
+        equipmentInstallDate: Date? = nil,
         equipmentWarrantyExpiration: Date? = nil,
         customerEquipmentID: UUID? = nil,
         equipmentTypeRaw: String? = nil,
@@ -253,8 +259,11 @@ final class ServiceCall {
         self.eventTitle = eventTitle
         self.siteAddress = siteAddress
         self.equipmentName = equipmentName
+        self.equipmentManufacturer = equipmentManufacturer
         self.equipmentModel = equipmentModel
         self.equipmentSerialNumber = equipmentSerialNumber
+        self.equipmentLocation = equipmentLocation
+        self.equipmentInstallDate = equipmentInstallDate
         self.equipmentWarrantyExpiration = equipmentWarrantyExpiration
         self.customerEquipmentID = customerEquipmentID
         self.equipmentTypeRaw = equipmentTypeRaw
@@ -319,6 +328,7 @@ final class ServiceCall {
         let decoratedParts: [String] = [
             equipmentType?.displayName,
             equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines),
+            equipmentManufacturer?.trimmingCharacters(in: .whitespacesAndNewlines),
             equipmentModel?.trimmingCharacters(in: .whitespacesAndNewlines),
             equipmentSerialNumber.flatMap { serial -> String? in
                 let trimmed = serial.trimmingCharacters(in: .whitespacesAndNewlines)

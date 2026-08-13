@@ -61,8 +61,11 @@ enum CustomerDocumentExporter {
                 rows: [
                     row("Type", serviceCall.equipmentType?.displayName),
                     row("Name", serviceCall.equipmentName),
+                    row("Manufacturer", serviceCall.equipmentManufacturer),
                     row("Model", serviceCall.equipmentModel),
                     row("Serial", serviceCall.equipmentSerialNumber),
+                    row("Location", serviceCall.equipmentLocation),
+                    row("Install Date", serviceCall.equipmentInstallDate.map { formattedDate($0) }),
                     row("Warranty Expiration", serviceCall.equipmentWarrantyExpiration.map { formattedDate($0) }),
                     row("Filter Size", serviceCall.filterSize),
                     row("Filter Condition", serviceCall.filterCondition)

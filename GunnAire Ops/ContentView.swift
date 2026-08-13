@@ -581,9 +581,13 @@ GunnAire
         let followUpCall = ServiceCall(
             siteAddress: call.siteAddress ?? call.customer.address,
             equipmentName: call.equipmentName,
+            equipmentManufacturer: call.equipmentManufacturer,
             equipmentModel: call.equipmentModel,
             equipmentSerialNumber: call.equipmentSerialNumber,
+            equipmentLocation: call.equipmentLocation,
+            equipmentInstallDate: call.equipmentInstallDate,
             equipmentWarrantyExpiration: call.equipmentWarrantyExpiration,
+            customerEquipmentID: call.customerEquipmentID,
             type: call.type,
             scheduledDate: scheduledDate,
             duration: call.duration,
@@ -613,9 +617,13 @@ GunnAire
         let approvedWorkCall = ServiceCall(
             siteAddress: call.siteAddress ?? call.customer.address,
             equipmentName: call.equipmentName,
+            equipmentManufacturer: call.equipmentManufacturer,
             equipmentModel: call.equipmentModel,
             equipmentSerialNumber: call.equipmentSerialNumber,
+            equipmentLocation: call.equipmentLocation,
+            equipmentInstallDate: call.equipmentInstallDate,
             equipmentWarrantyExpiration: call.equipmentWarrantyExpiration,
+            customerEquipmentID: call.customerEquipmentID,
             type: call.type == .estimate ? .install : call.type,
             scheduledDate: scheduledDate,
             duration: call.duration,
@@ -1304,8 +1312,12 @@ struct AddServiceCallView: View {
     @State private var newCustomerAddress = ""
     @State private var siteAddress: String = ""
     @State private var equipmentName = ""
+    @State private var equipmentManufacturer = ""
     @State private var equipmentModel = ""
     @State private var equipmentSerialNumber = ""
+    @State private var equipmentLocation = ""
+    @State private var equipmentInstallDate: Date = Date()
+    @State private var includeInstallDate = false
     @State private var equipmentWarrantyExpiration: Date = Date()
     @State private var includeWarrantyExpiration = false
     @State private var selectedCustomerEquipmentID: UUID?
@@ -1543,8 +1555,14 @@ struct AddServiceCallView: View {
                         }
                     }
                     TextField("Equipment", text: $equipmentName)
+                    TextField("Manufacturer", text: $equipmentManufacturer)
                     TextField("Model", text: $equipmentModel)
                     TextField("Serial Number", text: $equipmentSerialNumber)
+                    TextField("Equipment Location", text: $equipmentLocation)
+                    Toggle("Track Install Date", isOn: $includeInstallDate)
+                    if includeInstallDate {
+                        DatePicker("Install Date", selection: $equipmentInstallDate, displayedComponents: .date)
+                    }
                     Toggle("Track Warranty Expiration", isOn: $includeWarrantyExpiration)
                     if includeWarrantyExpiration {
                         DatePicker("Warranty Expiration", selection: $equipmentWarrantyExpiration, displayedComponents: .date)
@@ -1654,8 +1672,11 @@ struct AddServiceCallView: View {
             eventTitle: eventTitle.nilIfBlank,
             siteAddress: resolvedSiteAddress,
             equipmentName: equipmentName.nilIfBlank,
+            equipmentManufacturer: equipmentManufacturer.nilIfBlank,
             equipmentModel: equipmentModel.nilIfBlank,
             equipmentSerialNumber: equipmentSerialNumber.nilIfBlank,
+            equipmentLocation: equipmentLocation.nilIfBlank,
+            equipmentInstallDate: includeInstallDate ? equipmentInstallDate : nil,
             equipmentWarrantyExpiration: includeWarrantyExpiration ? equipmentWarrantyExpiration : nil,
             customerEquipmentID: selectedCustomerEquipmentID,
             type: callType,
@@ -1684,11 +1705,21 @@ struct AddServiceCallView: View {
     private func applyEquipmentProfile(_ equipment: CustomerEquipment) {
         selectedCustomerEquipmentID = equipment.id
         equipmentName = equipment.name
+        equipmentManufacturer = equipment.manufacturer ?? ""
         equipmentModel = equipment.modelNumber ?? ""
         equipmentSerialNumber = equipment.serialNumber ?? ""
+        equipmentLocation = equipment.location ?? ""
+        if let installDate = equipment.installDate {
+            equipmentInstallDate = installDate
+            includeInstallDate = true
+        } else {
+            includeInstallDate = false
+        }
         if let warranty = equipment.warrantyExpiration {
             equipmentWarrantyExpiration = warranty
             includeWarrantyExpiration = true
+        } else {
+            includeWarrantyExpiration = false
         }
     }
 
@@ -1774,8 +1805,12 @@ struct EditServiceCallView: View {
     @State private var status: JobStatus
     @State private var siteAddress: String
     @State private var equipmentName: String
+    @State private var equipmentManufacturer: String
     @State private var equipmentModel: String
     @State private var equipmentSerialNumber: String
+    @State private var equipmentLocation: String
+    @State private var equipmentInstallDate: Date
+    @State private var includeInstallDate: Bool
     @State private var equipmentWarrantyExpiration: Date
     @State private var includeWarrantyExpiration: Bool
     @State private var selectedCustomerEquipmentID: UUID?
@@ -1809,8 +1844,12 @@ struct EditServiceCallView: View {
         _status = State(initialValue: call.status)
         _siteAddress = State(initialValue: call.siteAddress ?? call.customer.address ?? "")
         _equipmentName = State(initialValue: call.equipmentName ?? "")
+        _equipmentManufacturer = State(initialValue: call.equipmentManufacturer ?? "")
         _equipmentModel = State(initialValue: call.equipmentModel ?? "")
         _equipmentSerialNumber = State(initialValue: call.equipmentSerialNumber ?? "")
+        _equipmentLocation = State(initialValue: call.equipmentLocation ?? "")
+        _equipmentInstallDate = State(initialValue: call.equipmentInstallDate ?? Date())
+        _includeInstallDate = State(initialValue: call.equipmentInstallDate != nil)
         _equipmentWarrantyExpiration = State(initialValue: call.equipmentWarrantyExpiration ?? Date())
         _includeWarrantyExpiration = State(initialValue: call.equipmentWarrantyExpiration != nil)
         _selectedCustomerEquipmentID = State(initialValue: call.customerEquipmentID)
@@ -1923,8 +1962,14 @@ struct EditServiceCallView: View {
                         }
                     }
                     TextField("Equipment", text: $equipmentName)
+                    TextField("Manufacturer", text: $equipmentManufacturer)
                     TextField("Model", text: $equipmentModel)
                     TextField("Serial Number", text: $equipmentSerialNumber)
+                    TextField("Equipment Location", text: $equipmentLocation)
+                    Toggle("Track Install Date", isOn: $includeInstallDate)
+                    if includeInstallDate {
+                        DatePicker("Install Date", selection: $equipmentInstallDate, displayedComponents: .date)
+                    }
                     Toggle("Track Warranty Expiration", isOn: $includeWarrantyExpiration)
                     if includeWarrantyExpiration {
                         DatePicker("Warranty Expiration", selection: $equipmentWarrantyExpiration, displayedComponents: .date)
@@ -2005,11 +2050,21 @@ struct EditServiceCallView: View {
     private func applyEquipmentProfile(_ equipment: CustomerEquipment) {
         selectedCustomerEquipmentID = equipment.id
         equipmentName = equipment.name
+        equipmentManufacturer = equipment.manufacturer ?? ""
         equipmentModel = equipment.modelNumber ?? ""
         equipmentSerialNumber = equipment.serialNumber ?? ""
+        equipmentLocation = equipment.location ?? ""
+        if let installDate = equipment.installDate {
+            equipmentInstallDate = installDate
+            includeInstallDate = true
+        } else {
+            includeInstallDate = false
+        }
         if let warranty = equipment.warrantyExpiration {
             equipmentWarrantyExpiration = warranty
             includeWarrantyExpiration = true
+        } else {
+            includeWarrantyExpiration = false
         }
     }
 
@@ -2027,8 +2082,11 @@ struct EditServiceCallView: View {
         )
         call.siteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? customer.address : siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         call.equipmentName = equipmentName.nilIfBlank
+        call.equipmentManufacturer = equipmentManufacturer.nilIfBlank
         call.equipmentModel = equipmentModel.nilIfBlank
         call.equipmentSerialNumber = equipmentSerialNumber.nilIfBlank
+        call.equipmentLocation = equipmentLocation.nilIfBlank
+        call.equipmentInstallDate = includeInstallDate ? equipmentInstallDate : nil
         call.equipmentWarrantyExpiration = includeWarrantyExpiration ? equipmentWarrantyExpiration : nil
         call.customerEquipmentID = selectedCustomerEquipmentID
         call.scheduledDate = scheduledTime

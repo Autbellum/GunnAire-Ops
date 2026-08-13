@@ -46,6 +46,22 @@ struct GunnAire_OpsTests {
         #expect(call.isUpcomingThisWeek == false)
     }
 
+    @Test func serviceCallEquipmentSummaryIncludesManufacturer() async throws {
+        let customer = Customer(name: "Equipment Customer")
+        let call = ServiceCall(
+            equipmentName: "Upstairs System",
+            equipmentManufacturer: "Carrier",
+            equipmentModel: "25VNA4",
+            equipmentSerialNumber: "ABC123",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        #expect(call.equipmentSummary?.contains("Carrier") == true)
+        #expect(call.equipmentSummary?.contains("S/N ABC123") == true)
+    }
+
     @Test func quickBooksMimeTypeDetection() async throws {
         #expect(QuickBooksDataAPI.mimeType(for: URL(fileURLWithPath: "/tmp/file.jpg")) == "image/jpeg")
         #expect(QuickBooksDataAPI.mimeType(for: URL(fileURLWithPath: "/tmp/file.pdf")) == "application/pdf")
