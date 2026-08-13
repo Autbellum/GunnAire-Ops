@@ -90,6 +90,7 @@ final class CustomerEquipment {
         serviceCall.equipmentWarrantyExpiration = warrantyExpiration
         serviceCall.filterSize = filterSize
         serviceCall.equipmentNotes = notes
+        applyTechnicalBaselines(to: serviceCall)
     }
 
     var technicalBaselineReadings: [String: String] {

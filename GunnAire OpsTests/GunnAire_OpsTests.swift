@@ -294,6 +294,38 @@ struct GunnAire_OpsTests {
         #expect(equipment.technicalBaselineReadings["superheat"] == nil)
     }
 
+    @Test func applyingEquipmentProfilePrefillsTechnicalBaselinesWithoutOverwritingEnteredReadings() async throws {
+        let customer = Customer(name: "Equipment Baseline Customer")
+        let baselineJSON = try #require(String(
+            data: JSONEncoder().encode([
+                "refrigerant_type": "R-410A",
+                "metering_device": "TXV",
+                "compressor_rla": "16.4"
+            ]),
+            encoding: .utf8
+        ))
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            technicalBaselineReadingsJSON: baselineJSON
+        )
+        let call = ServiceCall(
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("Existing piston", for: "metering_device")
+
+        equipment.apply(to: call)
+
+        #expect(call.customerEquipmentID == equipment.id)
+        #expect(call.equipmentType == .splitSystemAC)
+        #expect(call.technicalReading(for: "refrigerant_type") == "R-410A")
+        #expect(call.technicalReading(for: "compressor_rla") == "16.4")
+        #expect(call.technicalReading(for: "metering_device") == "Existing piston")
+    }
+
     @Test func customerEquipmentBaselinesDoNotDefaultBeforeEquipmentTypeSelection() async throws {
         let customer = Customer(name: "Untyped Equipment Customer")
         let baselineJSON = try #require(String(

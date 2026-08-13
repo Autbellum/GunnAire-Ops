@@ -1701,6 +1701,10 @@ struct AddServiceCallView: View {
             followUpAction: followUpRequired ? followUpAction.nilIfBlank : nil,
             followUpDueDate: followUpRequired ? followUpDueDate : nil
         )
+        if let selectedCustomerEquipmentID,
+           let equipment = selectedCustomerEquipmentProfiles.first(where: { $0.id == selectedCustomerEquipmentID }) {
+            equipment.applyTechnicalBaselines(to: call)
+        }
         modelContext.insert(call)
         publishToGoogleCalendar(call)
         dismiss()
@@ -2140,6 +2144,10 @@ struct EditServiceCallView: View {
         call.equipmentInstallDate = includeInstallDate ? equipmentInstallDate : nil
         call.equipmentWarrantyExpiration = includeWarrantyExpiration ? equipmentWarrantyExpiration : nil
         call.customerEquipmentID = selectedCustomerEquipmentID
+        if let selectedCustomerEquipmentID,
+           let equipment = selectedCustomerEquipmentProfiles.first(where: { $0.id == selectedCustomerEquipmentID }) {
+            equipment.applyTechnicalBaselines(to: call)
+        }
         call.scheduledDate = scheduledTime
         call.duration = duration
         if !preserveExternalCalendarDetails {
