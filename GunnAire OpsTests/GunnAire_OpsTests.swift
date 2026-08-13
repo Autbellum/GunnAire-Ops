@@ -6568,6 +6568,116 @@ struct GunnAire_OpsTests {
         #expect(importedInvoice.status == "paid")
     }
 
+    @MainActor
+    @Test func quickBooksLocalSyncLinksImportedEstimateToMatchingServiceCall() async throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(quickBooksID: "QB-CUST-EST-1", name: "Estimate Linked Customer")
+        let scheduled = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 8, day: 14, hour: 9)))
+        let call = ServiceCall(
+            type: .estimate,
+            scheduledDate: scheduled,
+            customer: customer
+        )
+        context.insert(customer)
+        context.insert(call)
+        try context.save()
+
+        let quickBooksCustomer = QuickBooksCustomer(
+            Id: "QB-CUST-EST-1",
+            DisplayName: "Estimate Linked Customer",
+            PrimaryPhone: nil,
+            PrimaryEmailAddr: nil,
+            BillAddr: nil
+        )
+        let quickBooksEstimate = try JSONDecoder().decode(QuickBooksEstimate.self, from: Data("""
+        {
+          "Id": "QB-EST-LINK-1",
+          "DocNumber": "2042",
+          "CustomerRef": { "value": "QB-CUST-EST-1", "name": "Estimate Linked Customer" },
+          "TotalAmt": 875,
+          "TxnDate": "2026-08-14",
+          "BillEmail": { "Address": "customer@example.com" },
+          "EmailStatus": "NotSet"
+        }
+        """.utf8))
+
+        try QuickBooksLocalSync.importSnapshot(
+            customers: [quickBooksCustomer],
+            items: [],
+            estimates: [quickBooksEstimate],
+            invoices: [],
+            payments: [],
+            vendors: [],
+            into: context
+        )
+
+        let estimates = try context.fetch(FetchDescriptor<Estimate>())
+        let importedEstimate = try #require(estimates.first { $0.quickBooksID == "QB-EST-LINK-1" })
+
+        #expect(importedEstimate.serviceCallID == call.id)
+        #expect(call.linkedEstimateID == importedEstimate.id)
+        #expect(importedEstimate.amount == 875)
+    }
+
+    @MainActor
+    @Test func quickBooksLocalSyncDoesNotLinkImportedEstimateWhenServiceCallMatchIsAmbiguous() async throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(quickBooksID: "QB-CUST-EST-2", name: "Ambiguous Estimate Customer")
+        let scheduled = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 8, day: 15, hour: 9)))
+        let firstCall = ServiceCall(type: .estimate, scheduledDate: scheduled, customer: customer)
+        let secondCall = ServiceCall(type: .service, scheduledDate: scheduled, customer: customer)
+        context.insert(customer)
+        context.insert(firstCall)
+        context.insert(secondCall)
+        try context.save()
+
+        let quickBooksCustomer = QuickBooksCustomer(
+            Id: "QB-CUST-EST-2",
+            DisplayName: "Ambiguous Estimate Customer",
+            PrimaryPhone: nil,
+            PrimaryEmailAddr: nil,
+            BillAddr: nil
+        )
+        let quickBooksEstimate = try JSONDecoder().decode(QuickBooksEstimate.self, from: Data("""
+        {
+          "Id": "QB-EST-AMBIGUOUS-1",
+          "DocNumber": "2043",
+          "CustomerRef": { "value": "QB-CUST-EST-2", "name": "Ambiguous Estimate Customer" },
+          "TotalAmt": 925,
+          "TxnDate": "2026-08-15",
+          "BillEmail": null,
+          "EmailStatus": "NotSet"
+        }
+        """.utf8))
+
+        try QuickBooksLocalSync.importSnapshot(
+            customers: [quickBooksCustomer],
+            items: [],
+            estimates: [quickBooksEstimate],
+            invoices: [],
+            payments: [],
+            vendors: [],
+            into: context
+        )
+
+        let estimates = try context.fetch(FetchDescriptor<Estimate>())
+        let importedEstimate = try #require(estimates.first { $0.quickBooksID == "QB-EST-AMBIGUOUS-1" })
+
+        #expect(importedEstimate.serviceCallID == nil)
+        #expect(firstCall.linkedEstimateID == nil)
+        #expect(secondCall.linkedEstimateID == nil)
+    }
+
     @Test func technicianCalendarAssessmentDetectsWritableCalendar() async throws {
         let calendars = [
             GoogleCalendar(id: "tech@example.com", summary: "Tech Schedule", timeZone: "America/New_York", accessRole: "writer")

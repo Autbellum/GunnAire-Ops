@@ -153,6 +153,19 @@ enum QuickBooksLocalSync {
             estimate.notes = quickBooksEstimate.DocNumber
             estimate.status = "pending"
             estimate.createdAt = parseQuickBooksDate(quickBooksEstimate.TxnDate) ?? estimate.createdAt
+            if estimate.serviceCallID == nil,
+               let serviceCall = matchingServiceCall(
+                   for: quickBooksEstimate,
+                   importedEstimate: estimate,
+                   customer: customer,
+                   serviceCalls: existingServiceCalls,
+                   estimates: existingEstimates
+               ) {
+                estimate.serviceCallID = serviceCall.id
+                if serviceCall.linkedEstimateID == nil {
+                    serviceCall.linkedEstimateID = estimate.id
+                }
+            }
             estimatesByQBID[quickBooksEstimate.Id] = estimate
             for duplicate in existingEstimates where duplicate !== estimate && isDuplicateEstimate(duplicate, of: quickBooksEstimate, customer: customer) {
                 mergeEstimate(estimate, withDuplicate: duplicate, serviceCalls: existingServiceCalls, modelContext: modelContext)
@@ -361,6 +374,49 @@ enum QuickBooksLocalSync {
             if lhs.score != rhs.score { return lhs.score > rhs.score }
             let lhsDistance = abs(lhs.call.scheduledDate.timeIntervalSince(invoiceDate))
             let rhsDistance = abs(rhs.call.scheduledDate.timeIntervalSince(invoiceDate))
+            return lhsDistance < rhsDistance
+        }
+        guard let best = ranked.first else { return nil }
+        if ranked.dropFirst().first?.score == best.score {
+            return nil
+        }
+        return best.call
+    }
+
+    private static func matchingServiceCall(
+        for quickBooksEstimate: QuickBooksEstimate,
+        importedEstimate: Estimate,
+        customer: Customer,
+        serviceCalls: [ServiceCall],
+        estimates: [Estimate]
+    ) -> ServiceCall? {
+        guard let estimateDate = parseQuickBooksDate(quickBooksEstimate.TxnDate) else { return nil }
+        let eligibleCalls = serviceCalls.filter { call in
+            sameCustomer(call.customer, customer) &&
+                (call.linkedEstimateID == nil || call.linkedEstimateID == importedEstimate.id) &&
+                abs(call.scheduledDate.timeIntervalSince(estimateDate)) <= 3 * 24 * 60 * 60
+        }
+        let scored = eligibleCalls.compactMap { call -> (call: ServiceCall, score: Int)? in
+            var score = 0
+            if Calendar.current.isDate(call.scheduledDate, inSameDayAs: estimateDate) {
+                score += 3
+            } else {
+                score += 1
+            }
+            if estimates.contains(where: { estimate in
+                estimate.serviceCallID == call.id && amountsMatch(estimate.amount, quickBooksEstimate.TotalAmt)
+            }) {
+                score += 2
+            }
+            if call.linkedEstimateID == nil {
+                score += 1
+            }
+            return score >= 4 ? (call, score) : nil
+        }
+        let ranked = scored.sorted { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            let lhsDistance = abs(lhs.call.scheduledDate.timeIntervalSince(estimateDate))
+            let rhsDistance = abs(rhs.call.scheduledDate.timeIntervalSince(estimateDate))
             return lhsDistance < rhsDistance
         }
         guard let best = ranked.first else { return nil }
