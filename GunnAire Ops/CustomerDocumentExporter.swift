@@ -22,7 +22,13 @@ enum CustomerDocumentExporter {
     ) throws -> URL {
         let title = "\(serviceCall.type.displayName) Report"
         let fileName = makeFileName(prefix: "GunnAire-Onsite-Report", customerName: serviceCall.customer.name)
-        let sections = onsiteReportSections(serviceCall: serviceCall, estimate: estimate, invoice: invoice, payments: payments)
+        let sections = onsiteReportSections(
+            serviceCall: serviceCall,
+            estimate: estimate,
+            invoice: invoice,
+            payments: payments,
+            attachments: attachments
+        )
         return try renderPDF(title: title, customer: serviceCall.customer, sections: sections, imageAttachments: attachments, fileName: fileName)
     }
 
@@ -42,7 +48,8 @@ enum CustomerDocumentExporter {
         serviceCall: ServiceCall,
         estimate: Estimate?,
         invoice: Invoice?,
-        payments: [Payment]
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment]
     ) -> [DocumentSection] {
         var sections: [DocumentSection] = [
             DocumentSection(
@@ -83,6 +90,7 @@ enum CustomerDocumentExporter {
         ]
 
         sections.append(contentsOf: technicalReportSections(for: serviceCall))
+        sections.append(contentsOf: attachmentSections(for: attachments))
 
         if let estimate {
             sections.append(DocumentSection(
@@ -123,6 +131,40 @@ enum CustomerDocumentExporter {
             sections.append(DocumentSection(title: "Maintenance Observations", rows: conditionRows))
         }
         return sections
+    }
+
+    private static func attachmentSections(for attachments: [ServiceDocumentAttachment]) -> [DocumentSection] {
+        let rows = attachmentManifestSummaries(for: attachments).map { summary in
+            row(summary.label, summary.detail)
+        }
+        guard !rows.isEmpty else { return [] }
+        return [DocumentSection(title: "Attached Job Files", rows: rows)]
+    }
+
+    static func attachmentManifestSummaries(for attachments: [ServiceDocumentAttachment]) -> [(label: String, detail: String)] {
+        attachments
+            .filter { $0.kind != .serviceReport }
+            .sorted { lhs, rhs in
+                if lhs.kind.label == rhs.kind.label {
+                    return lhs.createdAt < rhs.createdAt
+                }
+                return lhs.kind.label < rhs.kind.label
+            }
+            .map { attachment in
+                let details = [
+                    attachment.displayName,
+                    attachment.caption,
+                    attachment.fileSizeBytes > 0 ? formattedFileSize(attachment.fileSizeBytes) : nil
+                ]
+                    .compactMap { value -> String? in
+                        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                            return nil
+                        }
+                        return value
+                    }
+                    .joined(separator: " - ")
+                return (attachment.kind.label, details)
+            }
     }
 
     private static func estimateSections(estimate: Estimate, serviceCall: ServiceCall?) -> [DocumentSection] {
@@ -343,6 +385,7 @@ enum CustomerDocumentExporter {
         customer: Customer
     ) -> CGFloat {
         let images = attachments
+            .filter { $0.kind != .serviceReport }
             .filter(\.isImage)
             .prefix(12)
             .compactMap { attachment -> (attachment: ServiceDocumentAttachment, image: UIImage)? in
@@ -467,6 +510,10 @@ enum CustomerDocumentExporter {
 
     private static func currency(_ value: Double) -> String {
         value.formatted(.currency(code: "USD"))
+    }
+
+    private static func formattedFileSize(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
     private static func formattedDate(_ date: Date) -> String {

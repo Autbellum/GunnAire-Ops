@@ -20,6 +20,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func markCalendarCallLocallyEdited(_ call: ServiceCall) {
+        guard shouldAllowGoogleCalendarWrite(for: call) else { return }
         let hasCalendarLink = call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
             call.googleCalendarID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         guard hasCalendarLink else { return }
@@ -294,22 +295,10 @@ enum GoogleCalendarScheduleSync {
             if call.modelContext == nil {
                 modelContext.insert(call)
             }
-            if isCalendarCallLocallyEdited(call) {
-                if call.googleCalendarID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-                    call.googleCalendarID = calendarEvent.calendarID
-                }
-                if call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-                    call.googleEventID = event.id
-                }
-                callsByGoogleEventKey[eventKey] = call
-                callsByGoogleEventID[event.id] = call
-                callsByFingerprint[fingerprint] = call
-                imported += 1
-                continue
-            }
             call.googleCalendarID = calendarEvent.calendarID
             call.googleEventID = event.id
             call.googleEventManagedByApp = false
+            clearCalendarCallLocallyEdited(call)
             call.eventTitle = normalizedOptional(event.summary)
             call.type = inferCallType(from: event.summary, description: event.description)
             call.scheduledDate = startDate

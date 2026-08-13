@@ -261,6 +261,49 @@ struct GunnAire_OpsTests {
         #expect(attachment.isImage == true)
     }
 
+    @Test func onsiteReportAttachmentManifestIncludesSupportFilesAndExcludesGeneratedReports() async throws {
+        let customer = Customer(name: "Report Customer")
+        let serviceCallID = UUID()
+        let diagnosticPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            caption: "Burner compartment",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048
+        )
+        let customerDocument = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .customerDocument,
+            displayName: "site-access.pdf",
+            caption: "Gate instructions",
+            localFilePath: "/tmp/site-access.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 4096
+        )
+        let generatedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .serviceReport,
+            displayName: "generated-report.pdf",
+            localFilePath: "/tmp/generated-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 8192
+        )
+
+        let summaries = CustomerDocumentExporter.attachmentManifestSummaries(
+            for: [diagnosticPhoto, customerDocument, generatedReport]
+        )
+
+        #expect(summaries.count == 2)
+        #expect(summaries.contains { $0.label == "Diagnostic Photo" && $0.detail.contains("Burner compartment") })
+        #expect(summaries.contains { $0.label == "Customer Document" && $0.detail.contains("site-access.pdf") })
+        #expect(summaries.contains { $0.detail.contains("generated-report.pdf") } == false)
+    }
+
     @Test func quickBooksUploadMetadataCanReferenceInvoiceForSend() async throws {
         let metadata = QuickBooksUploadMetadata(
             FileName: "onsite-report.pdf",

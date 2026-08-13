@@ -1130,6 +1130,7 @@ struct OnsiteDocumentationView: View {
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
     @State private var selectedServiceCallID: UUID?
     @State private var didLoadPendingRoute = false
     @State private var generatedCustomerDocumentURL: URL?
@@ -1441,7 +1442,8 @@ struct OnsiteDocumentationView: View {
                 serviceCall: call,
                 estimate: estimate(for: call),
                 invoice: linkedInvoice,
-                payments: payments(for: linkedInvoice)
+                payments: payments(for: linkedInvoice),
+                attachments: attachments(for: call)
             )
             generatedCustomerDocumentURL = url
             documentExportMessage = "Onsite report generated for \(call.customer.name)."
@@ -1450,6 +1452,10 @@ struct OnsiteDocumentationView: View {
         } catch {
             documentExportMessage = "Could not generate onsite report: \(error.localizedDescription)"
         }
+    }
+
+    private func attachments(for call: ServiceCall) -> [ServiceDocumentAttachment] {
+        documentAttachments.filter { $0.serviceCallID == call.id }
     }
 
     private func generateEstimateDocument(for call: ServiceCall) {
