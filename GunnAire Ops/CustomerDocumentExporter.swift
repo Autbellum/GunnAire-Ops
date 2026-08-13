@@ -644,9 +644,16 @@ enum CustomerDocumentExporter {
             if attachment.serviceCallID == serviceCall.id {
                 return true
             }
-            return attachment.kind == .equipmentDataPlatePhoto &&
-                attachment.customerEquipmentID == serviceCall.customerEquipmentID &&
-                attachment.serviceCallID == nil
+            guard attachment.customerEquipmentID == serviceCall.customerEquipmentID,
+                  attachment.serviceCallID == nil else {
+                return false
+            }
+            switch attachment.kind {
+            case .beforePhoto, .afterPhoto, .diagnosticPhoto, .equipmentDataPlatePhoto, .customerDocument, .other:
+                return true
+            case .serviceReport, .customerProfilePhoto, .invoiceSupport, .estimateSupport, .receipt:
+                return false
+            }
         }
     }
 

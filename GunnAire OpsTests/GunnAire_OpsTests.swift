@@ -6289,6 +6289,17 @@ struct GunnAire_OpsTests {
             fileSizeBytes: 2048,
             createdAt: Date(timeIntervalSince1970: 600)
         )
+        let equipmentManual = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: equipmentID,
+            kind: .customerDocument,
+            displayName: "equipment-manual.pdf",
+            localFilePath: "/tmp/equipment-manual.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 650)
+        )
         let otherEquipmentDataPlate = ServiceDocumentAttachment(
             customer: customer,
             serviceCallID: nil,
@@ -6300,15 +6311,37 @@ struct GunnAire_OpsTests {
             fileSizeBytes: 2048,
             createdAt: Date(timeIntervalSince1970: 700)
         )
+        let equipmentProfilePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: equipmentID,
+            kind: .customerProfilePhoto,
+            displayName: "profile-only.jpg",
+            localFilePath: "/tmp/profile-only.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 800)
+        )
+        let equipmentReceipt = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: equipmentID,
+            kind: .receipt,
+            displayName: "equipment-receipt.pdf",
+            localFilePath: "/tmp/equipment-receipt.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 900)
+        )
 
         let selected = CustomerDocumentExporter.onsiteReportAttachments(
-            for: [otherEquipmentDataPlate, equipmentDataPlate, unrelatedJobPhoto, wrongInvoicePhoto, invoicePhoto, estimatePhoto, jobPhoto],
+            for: [equipmentReceipt, equipmentProfilePhoto, otherEquipmentDataPlate, equipmentManual, equipmentDataPlate, unrelatedJobPhoto, wrongInvoicePhoto, invoicePhoto, estimatePhoto, jobPhoto],
             serviceCall: call,
             estimate: estimate,
             invoice: invoice
         )
 
-        #expect(selected.map(\.displayName) == ["equipment-data-plate.jpg", "invoice-after.jpg", "estimate-diagnostic.jpg", "job-before.jpg"])
+        #expect(selected.map(\.displayName) == ["equipment-manual.pdf", "equipment-data-plate.jpg", "invoice-after.jpg", "estimate-diagnostic.jpg", "job-before.jpg"])
     }
 
     @Test func onsiteReportChecklistCountsActualJobPhotoAttachments() async throws {
