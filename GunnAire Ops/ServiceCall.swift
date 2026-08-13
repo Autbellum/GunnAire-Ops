@@ -1808,6 +1808,13 @@ final class ServiceCall {
         !requiresTechnicalServiceReportCompletion || serviceReportMissingRequirementLabels.isEmpty
     }
 
+    var isReadyToCreateBillingDocument: Bool {
+        linkedInvoiceID == nil &&
+            status != .cancelled &&
+            (workCompletedChecklist || documentationChecklist || status == .completed) &&
+            canCompleteDocumentation
+    }
+
     @discardableResult
     func markDocumentationCompleteIfReady(at date: Date = Date()) -> Bool {
         guard canCompleteDocumentation else {

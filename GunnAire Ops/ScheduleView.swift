@@ -104,15 +104,7 @@ struct ScheduleView: View {
 
     private var readyToInvoiceCalls: [ServiceCall] {
         callsForSignedInUser
-            .filter { call in
-                call.linkedInvoiceID == nil &&
-                call.status != .cancelled &&
-                (
-                    call.workCompletedChecklist ||
-                    call.documentationChecklist ||
-                    call.status == .completed
-                )
-            }
+            .filter(\.isReadyToCreateBillingDocument)
             .sorted { $0.scheduledDate > $1.scheduledDate }
     }
 
@@ -765,7 +757,7 @@ struct ScheduleView: View {
                         assign(call, to: signedInTechnician)
                     }
                     .buttonStyle(.bordered)
-                } else if isAdminUser && call.linkedInvoiceID == nil && (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
+                } else if isAdminUser && call.isReadyToCreateBillingDocument {
                     Button("Invoice") {
                         openDocumentationInCloseout = false
                         openDocumentationInTapToPay = false
@@ -827,7 +819,7 @@ struct ScheduleView: View {
                 if call.documentationStartedAt != nil {
                     Label("Started", systemImage: "doc.text")
                 }
-                if isAdminUser && call.linkedInvoiceID == nil && (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
+                if isAdminUser && call.isReadyToCreateBillingDocument {
                     Label("Ready to Bill", systemImage: "doc.badge.plus")
                 }
                 if isAdminUser, let invoice = invoice(for: call), invoice.finalizedAt == nil || invoice.customerSignedAt == nil {

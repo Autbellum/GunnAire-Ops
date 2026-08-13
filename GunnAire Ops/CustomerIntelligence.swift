@@ -143,11 +143,7 @@ enum CustomerIntelligence {
             return status != "rejected" && status != "invoiced"
         }
 
-        let readyToBillCalls = customerCalls.filter { call in
-            call.linkedInvoiceID == nil &&
-            call.status != .cancelled &&
-            (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed)
-        }
+        let readyToBillCalls = customerCalls.filter(\.isReadyToCreateBillingDocument)
 
         let followUpCalls = customerCalls.filter { call in
             call.followUpRequired || (call.type == .estimate && call.linkedInvoiceID == nil)

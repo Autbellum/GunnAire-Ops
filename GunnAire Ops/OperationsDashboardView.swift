@@ -68,11 +68,7 @@ struct OperationsDashboardView: View {
 
     private var readyToBillCalls: [ServiceCall] {
         serviceCalls
-            .filter { call in
-                call.linkedInvoiceID == nil &&
-                call.status != .cancelled &&
-                (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed)
-            }
+            .filter(\.isReadyToCreateBillingDocument)
             .sorted { $0.scheduledDate > $1.scheduledDate }
     }
 
@@ -1396,8 +1392,7 @@ struct OperationsDashboardView: View {
            ) {
             reasons.append("Calendar route")
         }
-        if call.linkedInvoiceID == nil &&
-            (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
+        if call.isReadyToCreateBillingDocument {
             reasons.append("Ready to bill")
         }
         if let invoice = invoice(for: call) {

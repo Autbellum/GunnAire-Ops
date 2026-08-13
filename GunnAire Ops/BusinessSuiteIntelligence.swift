@@ -131,11 +131,7 @@ enum BusinessSuiteIntelligence {
             return address?.isEmpty != false
         }
 
-        let readyToBillCalls = serviceCalls.filter { call in
-            call.linkedInvoiceID == nil &&
-            call.status != .cancelled &&
-            (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed)
-        }
+        let readyToBillCalls = serviceCalls.filter(\.isReadyToCreateBillingDocument)
         let documentationInProgressCalls = serviceCalls.filter {
             $0.documentationStartedAt != nil && $0.documentationCompletedAt == nil
         }

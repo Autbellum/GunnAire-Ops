@@ -1380,6 +1380,65 @@ struct GunnAire_OpsTests {
         #expect(call.documentationCompletionBlockedMessage == nil)
     }
 
+    @Test func incompleteTechnicalReportBlocksReadyToBillEvenWhenWorkIsComplete() async throws {
+        let customer = Customer(name: "Incomplete Bill Ready Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .completed,
+            workCompletedChecklist: true
+        )
+        call.setTechnicalReading("72", for: "return_air_temp")
+
+        #expect(call.canCompleteDocumentation == false)
+        #expect(call.isReadyToCreateBillingDocument == false)
+    }
+
+    @Test func completeTechnicalReportAllowsReadyToBillBeforeInvoiceExists() async throws {
+        let customer = Customer(name: "Bill Ready Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Cooling service completed.",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .completed,
+            workCompletedChecklist: true
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(HVACTechnicalReadingDefinition.unableToTestValue, for: definition.key)
+        }
+
+        #expect(call.canCompleteDocumentation)
+        #expect(call.isReadyToCreateBillingDocument)
+
+        call.linkedInvoiceID = UUID()
+        #expect(call.isReadyToCreateBillingDocument == false)
+    }
+
+    @Test func generalAppointmentCanBeReadyToBillWithoutTechnicalReport() async throws {
+        let customer = Customer(name: "General Appointment Customer")
+        let call = ServiceCall(
+            type: .other,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .completed,
+            workCompletedChecklist: true
+        )
+
+        #expect(call.requiresTechnicalServiceReportCompletion == false)
+        #expect(call.isReadyToCreateBillingDocument)
+    }
+
     @Test func jobCloseoutReadinessShowsMissingOperationalEvidence() async throws {
         let customer = Customer(name: "Closeout Customer")
         let call = ServiceCall(
