@@ -58,10 +58,13 @@ enum CustomerDocumentExporter {
             DocumentSection(
                 title: "Equipment",
                 rows: [
+                    row("Type", serviceCall.equipmentType?.displayName),
                     row("Name", serviceCall.equipmentName),
                     row("Model", serviceCall.equipmentModel),
                     row("Serial", serviceCall.equipmentSerialNumber),
-                    row("Warranty Expiration", serviceCall.equipmentWarrantyExpiration.map { formattedDate($0) })
+                    row("Warranty Expiration", serviceCall.equipmentWarrantyExpiration.map { formattedDate($0) }),
+                    row("Filter Size", serviceCall.filterSize),
+                    row("Filter Condition", serviceCall.filterCondition)
                 ]
             ),
             DocumentSection(
@@ -74,6 +77,8 @@ enum CustomerDocumentExporter {
             ),
             checklistSection(for: serviceCall)
         ]
+
+        sections.append(contentsOf: technicalReportSections(for: serviceCall))
 
         if let estimate {
             sections.append(DocumentSection(
@@ -91,6 +96,28 @@ enum CustomerDocumentExporter {
             sections.append(contentsOf: invoiceSections(invoice: invoice, serviceCall: nil, payments: payments, includeCustomerHeader: false))
         }
 
+        return sections
+    }
+
+    private static func technicalReportSections(for serviceCall: ServiceCall) -> [DocumentSection] {
+        var sections: [DocumentSection] = []
+        let readingRows = serviceCall.populatedTechnicalReadingRows.map { reading in
+            row(reading.label, reading.value)
+        }
+        if !readingRows.isEmpty {
+            sections.append(DocumentSection(title: "Technical Readings", rows: readingRows))
+        }
+
+        let conditionRows = [
+            row("Indoor Coil", serviceCall.indoorCoilCondition),
+            row("Outdoor Coil", serviceCall.outdoorCoilCondition),
+            row("Drain Line", serviceCall.drainLineCondition),
+            row("Thermostat", serviceCall.thermostatOperation),
+            row("Report Summary", serviceCall.serviceReportSummary)
+        ]
+        if conditionRows.contains(where: { !$0.value.isEmpty }) {
+            sections.append(DocumentSection(title: "Maintenance Observations", rows: conditionRows))
+        }
         return sections
     }
 

@@ -475,6 +475,8 @@ GunnAire
                         }
                     }
 
+                    technicalServiceReportSection(for: call)
+
                     Section("Documentation Builder") {
                         if allowsDocumentSwitching {
                             Picker("Document", selection: $selectedDocumentKind) {
@@ -1695,6 +1697,95 @@ GunnAire
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         activeServiceCall?.notes = trimmedNotes.isEmpty ? nil : trimmedNotes
         actionMessage = trimmedNotes.isEmpty ? "Cleared job notes." : "Saved documentation notes back to the job."
+    }
+
+    @ViewBuilder
+    private func technicalServiceReportSection(for call: ServiceCall) -> some View {
+        Section("Technical HVAC Report") {
+            Picker("Equipment Type", selection: Binding(
+                get: { call.equipmentType ?? .splitSystemAC },
+                set: { newValue in
+                    call.equipmentType = newValue
+                    call.diagnosticsCaptured = true
+                }
+            )) {
+                ForEach(HVACEquipmentType.allCases) { type in
+                    Text(type.displayName).tag(type)
+                }
+            }
+
+            TextField("Equipment Name", text: optionalServiceCallTextBinding(call, \.equipmentName))
+            TextField("Model", text: optionalServiceCallTextBinding(call, \.equipmentModel))
+            TextField("Serial Number", text: optionalServiceCallTextBinding(call, \.equipmentSerialNumber))
+
+            ForEach(call.technicalReadingDefinitions) { definition in
+                TextField(definition.displayLabel, text: technicalReadingBinding(for: call, key: definition.key))
+                    .keyboardType(.numbersAndPunctuation)
+            }
+
+            HStack {
+                Button("Calculate Temp Split") {
+                    calculateTemperatureSplit(for: call)
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+
+                let split = call.technicalReading(for: "temperature_split")
+                if !split.isEmpty {
+                    Text("\(split) F")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            TextField("Filter Size", text: optionalServiceCallTextBinding(call, \.filterSize))
+            TextField("Filter Condition", text: optionalServiceCallTextBinding(call, \.filterCondition))
+            TextField("Indoor Coil Condition", text: optionalServiceCallTextBinding(call, \.indoorCoilCondition))
+            TextField("Outdoor Coil Condition", text: optionalServiceCallTextBinding(call, \.outdoorCoilCondition))
+            TextField("Drain Line Condition", text: optionalServiceCallTextBinding(call, \.drainLineCondition))
+            TextField("Thermostat Operation", text: optionalServiceCallTextBinding(call, \.thermostatOperation))
+            TextField("Service Report Summary", text: optionalServiceCallTextBinding(call, \.serviceReportSummary), axis: .vertical)
+                .lineLimit(2...5)
+
+            if !call.populatedTechnicalReadingRows.isEmpty {
+                Text("\(call.populatedTechnicalReadingRows.count) technical reading\(call.populatedTechnicalReadingRows.count == 1 ? "" : "s") captured")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func optionalServiceCallTextBinding(_ call: ServiceCall, _ keyPath: ReferenceWritableKeyPath<ServiceCall, String?>) -> Binding<String> {
+        Binding(
+            get: { call[keyPath: keyPath] ?? "" },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                call[keyPath: keyPath] = trimmed.isEmpty ? nil : trimmed
+                if !trimmed.isEmpty {
+                    call.diagnosticsCaptured = true
+                }
+            }
+        )
+    }
+
+    private func technicalReadingBinding(for call: ServiceCall, key: String) -> Binding<String> {
+        Binding(
+            get: { call.technicalReading(for: key) },
+            set: { call.setTechnicalReading($0, for: key) }
+        )
+    }
+
+    private func calculateTemperatureSplit(for call: ServiceCall) {
+        let returnTemp = Double(call.technicalReading(for: "return_air_temp").replacingOccurrences(of: ",", with: "."))
+        let supplyTemp = Double(call.technicalReading(for: "supply_air_temp").replacingOccurrences(of: ",", with: "."))
+        guard let returnTemp, let supplyTemp else {
+            actionMessage = "Enter return and supply air temperatures before calculating temperature split."
+            return
+        }
+        let split = abs(returnTemp - supplyTemp)
+        call.setTechnicalReading(String(format: "%.1f", split), for: "temperature_split")
+        actionMessage = "Temperature split calculated."
     }
 
     private func loadPendingIntentServiceCallIfNeeded() {
