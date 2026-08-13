@@ -2589,6 +2589,58 @@ struct GunnAire_OpsTests {
         #expect(lines.contains("Synced to company storage"))
     }
 
+    @Test func customerProfileAttachmentDetailShowsQueuedQuickBooksAttachmentStatus() async throws {
+        let customer = Customer(name: "Queued Attachment Customer")
+        let invoice = Invoice(customer: customer, quickBooksID: "qbo-invoice", amount: 250)
+        let estimate = Estimate(customer: customer, quickBooksID: "qbo-estimate", amount: 250)
+        let invoiceAttachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: invoice.id,
+            kind: .invoiceSupport,
+            displayName: "invoice.pdf",
+            localFilePath: "/tmp/invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let estimateAttachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            estimateID: estimate.id,
+            kind: .estimateSupport,
+            displayName: "estimate.pdf",
+            localFilePath: "/tmp/estimate.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let invoiceLines = invoiceAttachment.customerProfileDetailLines(
+            serviceCalls: [],
+            invoices: [invoice],
+            estimates: [estimate],
+            equipmentProfiles: [],
+            canViewFinancials: true
+        )
+        let estimateLines = estimateAttachment.customerProfileDetailLines(
+            serviceCalls: [],
+            invoices: [invoice],
+            estimates: [estimate],
+            equipmentProfiles: [],
+            canViewFinancials: true
+        )
+        let standardUserLines = invoiceAttachment.customerProfileDetailLines(
+            serviceCalls: [],
+            invoices: [invoice],
+            estimates: [estimate],
+            equipmentProfiles: [],
+            canViewFinancials: false
+        )
+
+        #expect(invoiceLines.contains("Queued for QuickBooks invoice attachment"))
+        #expect(estimateLines.contains("Queued for QuickBooks estimate attachment"))
+        #expect(standardUserLines.contains("Queued for QuickBooks invoice attachment") == false)
+    }
+
     @Test func customerProfileAttachmentDetailUsesQuickBooksInvoiceBalanceStatus() async throws {
         let customer = Customer(name: "QBO Attachment Customer")
         let paidInQuickBooks = Invoice(

@@ -354,6 +354,14 @@ final class ServiceDocumentAttachment {
                   let quickBooksSyncError,
                   !quickBooksSyncError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             lines.append("QuickBooks attachment failed: \(quickBooksSyncError)")
+        } else if canViewFinancials,
+                  let invoice = linkedInvoice(in: invoices),
+                  canBePendingQuickBooksInvoiceAttachment(for: invoice) {
+            lines.append("Queued for QuickBooks invoice attachment")
+        } else if canViewFinancials,
+                  let estimate = linkedEstimate(in: estimates),
+                  canUploadToQuickBooksEstimate(estimate) {
+            lines.append("Queued for QuickBooks estimate attachment")
         }
         if backendDocumentID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             lines.append("Synced to company storage")
