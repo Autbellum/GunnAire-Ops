@@ -623,7 +623,11 @@ enum CustomerDocumentExporter {
         let invoiceID = invoice?.id ?? serviceCall.linkedInvoiceID
         let estimateID = estimate?.id ?? serviceCall.linkedEstimateID
         return attachments.filter { attachment in
-            guard attachment.serviceCallID == serviceCall.id else {
+            let isJobAttachment = attachment.serviceCallID == serviceCall.id
+            let isServicedEquipmentPhoto = attachment.kind == .equipmentDataPlatePhoto &&
+                attachment.customerEquipmentID == serviceCall.customerEquipmentID &&
+                attachment.serviceCallID == nil
+            guard isJobAttachment || isServicedEquipmentPhoto else {
                 return false
             }
             if let attachmentInvoiceID = attachment.invoiceID {
