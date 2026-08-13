@@ -165,7 +165,8 @@ struct ScheduleView: View {
     }
 
     private var canCollectFieldPayments: Bool {
-        true
+        let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        return AppAccess.canCollectFieldPayments(email: email, users: users)
     }
     
     var body: some View {
