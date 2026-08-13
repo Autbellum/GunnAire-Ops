@@ -7558,6 +7558,62 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: linkedCall) == false)
     }
 
+    @MainActor
+    @Test func googleCalendarCreateGuardMatchesExistingEventByScheduleSlotOnly() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let call = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventManagedByApp: true,
+            eventTitle: "Local app title",
+            siteAddress: "Local app address",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3_600,
+            customer: customer,
+            notes: "Local app notes"
+        )
+        let remoteEvent = GoogleCalendarEvent(
+            id: "google-owned-event",
+            summary: "External Google title must remain",
+            description: "External Google body must remain",
+            location: "External Google location must remain",
+            htmlLink: nil,
+            attendees: nil,
+            extendedProperties: nil,
+            start: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T08:00:00Z", timeZone: nil),
+            end: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T09:00:00Z", timeZone: nil)
+        )
+
+        #expect(GoogleCalendarScheduleSync.remoteEventMatchesScheduleSlot(call: call, remoteEvent: remoteEvent))
+    }
+
+    @MainActor
+    @Test func googleCalendarCreateGuardRejectsDifferentScheduleSlot() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let call = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventManagedByApp: true,
+            eventTitle: "Local app title",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3_600,
+            customer: customer
+        )
+        let remoteEvent = GoogleCalendarEvent(
+            id: "different-slot-event",
+            summary: "External Google title",
+            description: "External Google body",
+            location: "External Google location",
+            htmlLink: nil,
+            attendees: nil,
+            extendedProperties: nil,
+            start: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T10:00:00Z", timeZone: nil),
+            end: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T11:00:00Z", timeZone: nil)
+        )
+
+        #expect(GoogleCalendarScheduleSync.remoteEventMatchesScheduleSlot(call: call, remoteEvent: remoteEvent) == false)
+    }
+
     @Test func googleCalendarImportTreatsManagedMarkersAsReadOnly() async throws {
         let start = GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T13:00:00Z", timeZone: nil)
         let end = GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T14:00:00Z", timeZone: nil)

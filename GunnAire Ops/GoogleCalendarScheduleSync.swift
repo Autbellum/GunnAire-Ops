@@ -881,7 +881,35 @@ enum GoogleCalendarScheduleSync {
         remoteEventsByFingerprint: [String: (calendarID: String, event: GoogleCalendarEvent)],
         remoteEventsByCollisionKey: [String: (calendarID: String, event: GoogleCalendarEvent)]
     ) -> (calendarID: String, event: GoogleCalendarEvent)? {
-        remoteEventsByFingerprint[eventFingerprint(for: call)] ?? remoteEventsByCollisionKey[eventCollisionKey(for: call)]
+        if let exactMatch = remoteEventsByFingerprint[eventFingerprint(for: call)] {
+            return exactMatch
+        }
+        if let titleAndTimeMatch = remoteEventsByCollisionKey[eventCollisionKey(for: call)] {
+            return titleAndTimeMatch
+        }
+
+        let scheduleSlotMatches = remoteEventsByCollisionKey.values.filter { remote in
+            remoteEventMatchesScheduleSlot(call: call, remoteEvent: remote.event)
+        }
+        let uniqueMatches = Dictionary(
+            scheduleSlotMatches.map { remote in
+                (calendarEventStorageKey(calendarID: remote.calendarID, eventID: remote.event.id), remote)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        return uniqueMatches.count == 1 ? uniqueMatches.values.first : nil
+    }
+
+    static func remoteEventMatchesScheduleSlot(call: ServiceCall, remoteEvent: GoogleCalendarEvent) -> Bool {
+        guard let remoteStart = parseEventDate(remoteEvent.start),
+              let remoteEnd = parseEventDate(remoteEvent.end) else {
+            return false
+        }
+        let callStartMinute = Int(call.scheduledDate.timeIntervalSince1970 / 60)
+        let callEndMinute = Int(call.scheduledDate.addingTimeInterval(call.duration).timeIntervalSince1970 / 60)
+        let remoteStartMinute = Int(remoteStart.timeIntervalSince1970 / 60)
+        let remoteEndMinute = Int(remoteEnd.timeIntervalSince1970 / 60)
+        return callStartMinute == remoteStartMinute && callEndMinute == remoteEndMinute
     }
 
     private static func shouldPreferRemoteCalendarEvent(
