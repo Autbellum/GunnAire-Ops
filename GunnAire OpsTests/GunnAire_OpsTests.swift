@@ -2648,12 +2648,34 @@ struct GunnAire_OpsTests {
 
         #expect(rows.contains { $0.label == "Job ID" && $0.value == "11111111" })
         #expect(rows.contains { $0.label == "Estimate ID" && $0.value == "22222222" })
+        #expect(rows.contains { $0.label == "Estimate Amount" && $0.value == "$500.00" })
         #expect(rows.contains { $0.label == "QuickBooks Estimate ID" && $0.value == "QBO-EST-42" })
         #expect(rows.contains { $0.label == "Invoice ID" && $0.value == "33333333" })
+        #expect(rows.contains { $0.label == "Invoice Total" && $0.value == "$500.00" })
+        #expect(rows.contains { $0.label == "Invoice Balance Due" && $0.value == "$0.00" })
         #expect(rows.contains { $0.label == "QuickBooks Invoice ID" && $0.value == "QBO-INV-99" })
         #expect(caption.contains("Generated onsite maintenance report"))
         #expect(caption.contains("QuickBooks Invoice ID: QBO-INV-99"))
         #expect(caption.contains("QuickBooks Estimate ID: QBO-EST-42"))
+    }
+
+    @Test func invoiceDetailRowsUseQuickBooksBalanceWhenAvailable() async throws {
+        let customer = Customer(name: "QBO Invoice Customer")
+        let invoice = Invoice(
+            customer: customer,
+            quickBooksID: "QBO-INV-100",
+            quickBooksBalanceDue: 125,
+            amount: 500,
+            status: "unpaid"
+        )
+        let localPayment = Payment(invoice: invoice, amount: 500, method: "card")
+
+        let rows = CustomerDocumentExporter.invoiceDetailRows(for: invoice, payments: [localPayment])
+
+        #expect(rows.contains { $0.label == "Status" && $0.value == "Partial" })
+        #expect(rows.contains { $0.label == "Invoice Total" && $0.value == "$500.00" })
+        #expect(rows.contains { $0.label == "Payments" && $0.value == "$500.00" })
+        #expect(rows.contains { $0.label == "Balance Due" && $0.value == "$125.00" })
     }
 
     @Test func billingDocumentsIncludeLinkedOnsiteDocumentationSummary() async throws {

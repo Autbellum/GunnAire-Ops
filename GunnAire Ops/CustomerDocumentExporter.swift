@@ -104,7 +104,7 @@ enum CustomerDocumentExporter {
                     row("Site Address", serviceCall.siteAddress ?? serviceCall.customer.address)
                 ]
             ),
-            linkedRecordSection(serviceCall: serviceCall, estimate: estimate, invoice: invoice),
+            linkedRecordSection(serviceCall: serviceCall, estimate: estimate, invoice: invoice, payments: payments),
             serviceReportReadinessSection(for: serviceCall),
             closeoutReadinessSection(
                 for: serviceCall,
@@ -164,7 +164,8 @@ enum CustomerDocumentExporter {
     static func linkedRecordRows(
         serviceCall: ServiceCall,
         estimate: Estimate?,
-        invoice: Invoice?
+        invoice: Invoice?,
+        payments: [Payment] = []
     ) -> [(label: String, value: String)] {
         var rows: [(label: String, value: String)] = [
             ("Job ID", shortID(serviceCall.id))
@@ -172,6 +173,7 @@ enum CustomerDocumentExporter {
         if let estimate {
             rows.append(("Estimate ID", shortID(estimate.id)))
             rows.append(("Estimate Status", estimate.status.capitalized))
+            rows.append(("Estimate Amount", currency(estimate.amount)))
             if let quickBooksID = normalizedValue(estimate.quickBooksID) {
                 rows.append(("QuickBooks Estimate ID", quickBooksID))
             }
@@ -179,8 +181,12 @@ enum CustomerDocumentExporter {
             rows.append(("Estimate ID", shortID(serviceCall.linkedEstimateID)))
         }
         if let invoice {
+            let resolvedStatus = Invoice.resolvedStatus(for: invoice, payments: payments)
+            let balance = Invoice.outstandingBalance(for: invoice, payments: payments)
             rows.append(("Invoice ID", shortID(invoice.id)))
-            rows.append(("Invoice Status", invoice.status.capitalized))
+            rows.append(("Invoice Status", resolvedStatus.capitalized))
+            rows.append(("Invoice Total", currency(invoice.amount)))
+            rows.append(("Invoice Balance Due", currency(balance)))
             if let quickBooksID = normalizedValue(invoice.quickBooksID) {
                 rows.append(("QuickBooks Invoice ID", quickBooksID))
             }
@@ -206,11 +212,12 @@ enum CustomerDocumentExporter {
     private static func linkedRecordSection(
         serviceCall: ServiceCall,
         estimate: Estimate?,
-        invoice: Invoice?
+        invoice: Invoice?,
+        payments: [Payment]
     ) -> DocumentSection {
         DocumentSection(
             title: "Linked Records",
-            rows: linkedRecordRows(serviceCall: serviceCall, estimate: estimate, invoice: invoice).map { row($0.label, $0.value) }
+            rows: linkedRecordRows(serviceCall: serviceCall, estimate: estimate, invoice: invoice, payments: payments).map { row($0.label, $0.value) }
         )
     }
 
@@ -447,22 +454,9 @@ enum CustomerDocumentExporter {
             sections.append(contentsOf: billingDocumentationSections(for: serviceCall))
         }
 
-        let paidTotal = payments.reduce(0) { partial, payment in
-            partial + (payment.isRefund ? -payment.amount : payment.amount)
-        }
-        let balance = max(invoice.amount - paidTotal, 0)
         sections.append(DocumentSection(
             title: "Invoice Detail",
-            rows: [
-                row("Created", formattedDateTime(invoice.createdAt)),
-                row("Status", invoice.status.capitalized),
-                row("QuickBooks ID", invoice.quickBooksID),
-                row("Items", invoice.lineItemSummary),
-                row("Completion Notes", invoice.completionNotes),
-                row("Invoice Total", currency(invoice.amount)),
-                row("Payments", currency(paidTotal)),
-                row("Balance Due", currency(balance))
-            ]
+            rows: invoiceDetailRows(for: invoice, payments: payments).map { row($0.label, $0.value) }
         ))
 
         if !payments.isEmpty {
@@ -485,6 +479,24 @@ enum CustomerDocumentExporter {
         }
 
         return sections
+    }
+
+    static func invoiceDetailRows(for invoice: Invoice, payments: [Payment]) -> [(label: String, value: String)] {
+        let paidTotal = payments.reduce(0) { partial, payment in
+            partial + (payment.isRefund ? -payment.amount : payment.amount)
+        }
+        let balance = Invoice.outstandingBalance(for: invoice, payments: payments)
+        let status = Invoice.resolvedStatus(for: invoice, payments: payments)
+        return [
+            ("Created", formattedDateTime(invoice.createdAt)),
+            ("Status", status.capitalized),
+            ("QuickBooks ID", invoice.quickBooksID ?? ""),
+            ("Items", invoice.lineItemSummary),
+            ("Completion Notes", invoice.completionNotes ?? ""),
+            ("Invoice Total", currency(invoice.amount)),
+            ("Payments", currency(paidTotal)),
+            ("Balance Due", currency(balance))
+        ]
     }
 
     static func billingJobContextSummaries(for serviceCall: ServiceCall) -> [(label: String, value: String)] {
