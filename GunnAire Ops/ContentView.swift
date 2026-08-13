@@ -1286,6 +1286,7 @@ struct AddServiceCallView: View {
     @Query private var technicians: [Technician]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query private var existingServiceCalls: [ServiceCall]
+    @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("defaultJobDurationMinutes") private var defaultJobDurationMinutes = 90
     
@@ -1307,6 +1308,7 @@ struct AddServiceCallView: View {
     @State private var equipmentSerialNumber = ""
     @State private var equipmentWarrantyExpiration: Date = Date()
     @State private var includeWarrantyExpiration = false
+    @State private var selectedCustomerEquipmentID: UUID?
     @State private var notes: String = ""
     @State private var findingsSummary = ""
     @State private var recommendedWorkSummary = ""
@@ -1383,6 +1385,11 @@ struct AddServiceCallView: View {
         return conflictingCalls
             .map { $0.scheduledDate.addingTimeInterval($0.duration) }
             .max()
+    }
+
+    private var selectedCustomerEquipmentProfiles: [CustomerEquipment] {
+        guard let customer else { return [] }
+        return equipmentProfiles.filter { $0.customer?.id == customer.id && $0.isActive }
     }
     
     var body: some View {
@@ -1522,6 +1529,19 @@ struct AddServiceCallView: View {
                 TextField("Service Address", text: $siteAddress, axis: .vertical)
                     .lineLimit(2...3)
                 Section("Equipment") {
+                    if !selectedCustomerEquipmentProfiles.isEmpty {
+                        Picker("Customer Equipment", selection: $selectedCustomerEquipmentID) {
+                            Text("No linked equipment").tag(UUID?.none)
+                            ForEach(selectedCustomerEquipmentProfiles) { equipment in
+                                Text(equipment.displayName).tag(UUID?.some(equipment.id))
+                            }
+                        }
+                        .onChange(of: selectedCustomerEquipmentID) { _, selectedID in
+                            guard let selectedID,
+                                  let equipment = selectedCustomerEquipmentProfiles.first(where: { $0.id == selectedID }) else { return }
+                            applyEquipmentProfile(equipment)
+                        }
+                    }
                     TextField("Equipment", text: $equipmentName)
                     TextField("Model", text: $equipmentModel)
                     TextField("Serial Number", text: $equipmentSerialNumber)
@@ -1614,6 +1634,7 @@ struct AddServiceCallView: View {
             selectedCalendarID = ServiceCalendarRouting.preferredCalendarID(for: newTechnician, calendars: accessibleCalendars)
         }
         .onChange(of: customer) { _, newCustomer in
+            selectedCustomerEquipmentID = nil
             guard siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             siteAddress = newCustomer?.address ?? ""
         }
@@ -1636,6 +1657,7 @@ struct AddServiceCallView: View {
             equipmentModel: equipmentModel.nilIfBlank,
             equipmentSerialNumber: equipmentSerialNumber.nilIfBlank,
             equipmentWarrantyExpiration: includeWarrantyExpiration ? equipmentWarrantyExpiration : nil,
+            customerEquipmentID: selectedCustomerEquipmentID,
             type: callType,
             scheduledDate: scheduledTime,
             duration: duration,
@@ -1656,6 +1678,17 @@ struct AddServiceCallView: View {
             DispatchQueue.main.async {
                 onCreated?(call)
             }
+        }
+    }
+
+    private func applyEquipmentProfile(_ equipment: CustomerEquipment) {
+        selectedCustomerEquipmentID = equipment.id
+        equipmentName = equipment.name
+        equipmentModel = equipment.modelNumber ?? ""
+        equipmentSerialNumber = equipment.serialNumber ?? ""
+        if let warranty = equipment.warrantyExpiration {
+            equipmentWarrantyExpiration = warranty
+            includeWarrantyExpiration = true
         }
     }
 
@@ -1727,6 +1760,7 @@ struct EditServiceCallView: View {
     @Query private var technicians: [Technician]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query private var existingServiceCalls: [ServiceCall]
+    @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     let call: ServiceCall
@@ -1744,6 +1778,7 @@ struct EditServiceCallView: View {
     @State private var equipmentSerialNumber: String
     @State private var equipmentWarrantyExpiration: Date
     @State private var includeWarrantyExpiration: Bool
+    @State private var selectedCustomerEquipmentID: UUID?
     @State private var notes: String
     @State private var findingsSummary: String
     @State private var recommendedWorkSummary: String
@@ -1778,6 +1813,7 @@ struct EditServiceCallView: View {
         _equipmentSerialNumber = State(initialValue: call.equipmentSerialNumber ?? "")
         _equipmentWarrantyExpiration = State(initialValue: call.equipmentWarrantyExpiration ?? Date())
         _includeWarrantyExpiration = State(initialValue: call.equipmentWarrantyExpiration != nil)
+        _selectedCustomerEquipmentID = State(initialValue: call.customerEquipmentID)
         _notes = State(initialValue: call.notes ?? "")
         _findingsSummary = State(initialValue: call.findingsSummary ?? "")
         _recommendedWorkSummary = State(initialValue: call.recommendedWorkSummary ?? "")
@@ -1826,6 +1862,11 @@ struct EditServiceCallView: View {
         customers.filter { !CustomerDataMaintenance.isSystemCalendarCustomer($0) }
     }
 
+    private var selectedCustomerEquipmentProfiles: [CustomerEquipment] {
+        guard let customer else { return [] }
+        return equipmentProfiles.filter { $0.customer?.id == customer.id && $0.isActive }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -1868,6 +1909,19 @@ struct EditServiceCallView: View {
                 TextField("Service Address", text: $siteAddress, axis: .vertical)
                     .lineLimit(2...3)
                 Section("Equipment") {
+                    if !selectedCustomerEquipmentProfiles.isEmpty {
+                        Picker("Customer Equipment", selection: $selectedCustomerEquipmentID) {
+                            Text("No linked equipment").tag(UUID?.none)
+                            ForEach(selectedCustomerEquipmentProfiles) { equipment in
+                                Text(equipment.displayName).tag(UUID?.some(equipment.id))
+                            }
+                        }
+                        .onChange(of: selectedCustomerEquipmentID) { _, selectedID in
+                            guard let selectedID,
+                                  let equipment = selectedCustomerEquipmentProfiles.first(where: { $0.id == selectedID }) else { return }
+                            applyEquipmentProfile(equipment)
+                        }
+                    }
                     TextField("Equipment", text: $equipmentName)
                     TextField("Model", text: $equipmentModel)
                     TextField("Serial Number", text: $equipmentSerialNumber)
@@ -1940,6 +1994,23 @@ struct EditServiceCallView: View {
         .onChange(of: technician) { _, newTechnician in
             selectedCalendarID = ServiceCalendarRouting.preferredCalendarID(for: newTechnician, calendars: accessibleCalendars)
         }
+        .onChange(of: customer) { _, _ in
+            if let selectedCustomerEquipmentID,
+               !selectedCustomerEquipmentProfiles.contains(where: { $0.id == selectedCustomerEquipmentID }) {
+                self.selectedCustomerEquipmentID = nil
+            }
+        }
+    }
+
+    private func applyEquipmentProfile(_ equipment: CustomerEquipment) {
+        selectedCustomerEquipmentID = equipment.id
+        equipmentName = equipment.name
+        equipmentModel = equipment.modelNumber ?? ""
+        equipmentSerialNumber = equipment.serialNumber ?? ""
+        if let warranty = equipment.warrantyExpiration {
+            equipmentWarrantyExpiration = warranty
+            includeWarrantyExpiration = true
+        }
     }
 
     private func saveChanges() {
@@ -1959,6 +2030,7 @@ struct EditServiceCallView: View {
         call.equipmentModel = equipmentModel.nilIfBlank
         call.equipmentSerialNumber = equipmentSerialNumber.nilIfBlank
         call.equipmentWarrantyExpiration = includeWarrantyExpiration ? equipmentWarrantyExpiration : nil
+        call.customerEquipmentID = selectedCustomerEquipmentID
         call.scheduledDate = scheduledTime
         call.duration = duration
         call.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes.trimmingCharacters(in: .whitespacesAndNewlines)
