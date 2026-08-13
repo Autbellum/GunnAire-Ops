@@ -1812,8 +1812,23 @@ GunnAire
             .buttonStyle(.bordered)
             .disabled(call.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
 
-            ForEach(call.technicalReadingDefinitions) { definition in
-                technicalReadingInput(for: call, definition: definition)
+            ForEach(call.groupedTechnicalReadingDefinitions) { group in
+                DisclosureGroup {
+                    ForEach(group.definitions) { definition in
+                        technicalReadingInput(for: call, definition: definition)
+                    }
+                } label: {
+                    HStack {
+                        Text(group.title)
+                        Spacer()
+                        let capturedCount = capturedTechnicalReadingCount(for: call, in: group)
+                        if capturedCount > 0 {
+                            Text("\(capturedCount)/\(group.definitions.count)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
             }
 
             HStack {
@@ -1921,6 +1936,12 @@ GunnAire
             get: { call.technicalReading(for: key) },
             set: { call.setTechnicalReading($0, for: key) }
         )
+    }
+
+    private func capturedTechnicalReadingCount(for call: ServiceCall, in group: HVACTechnicalReadingGroup) -> Int {
+        group.definitions.filter {
+            !call.technicalReading(for: $0.key).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }.count
     }
 
     private func applyEquipmentProfile(_ equipment: CustomerEquipment, to call: ServiceCall) {

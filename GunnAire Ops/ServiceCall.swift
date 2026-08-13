@@ -298,6 +298,13 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
     }
 }
 
+struct HVACTechnicalReadingGroup: Identifiable, Hashable {
+    let title: String
+    let definitions: [HVACTechnicalReadingDefinition]
+
+    var id: String { title }
+}
+
 @Model
 final class ServiceCall {
     @Attribute(.unique) var id: UUID
@@ -510,6 +517,102 @@ final class ServiceCall {
 
     var technicalReadingDefinitions: [HVACTechnicalReadingDefinition] {
         (equipmentType ?? .splitSystemAC).readingDefinitions
+    }
+
+    var groupedTechnicalReadingDefinitions: [HVACTechnicalReadingGroup] {
+        Self.groupedTechnicalReadingDefinitions(for: technicalReadingDefinitions)
+    }
+
+    static func groupedTechnicalReadingDefinitions(
+        for definitions: [HVACTechnicalReadingDefinition]
+    ) -> [HVACTechnicalReadingGroup] {
+        let groupOrder = [
+            "Air Temperatures",
+            "Refrigerant Circuit",
+            "Electrical",
+            "Airflow & Static",
+            "Combustion",
+            "Hydronics",
+            "Controls & Safeties",
+            "Conditions",
+            "General"
+        ]
+        var grouped: [String: [HVACTechnicalReadingDefinition]] = [:]
+        for definition in definitions {
+            grouped[technicalReadingGroupTitle(for: definition.key), default: []].append(definition)
+        }
+        return groupOrder.compactMap { title in
+            guard let definitions = grouped[title], !definitions.isEmpty else { return nil }
+            return HVACTechnicalReadingGroup(title: title, definitions: definitions)
+        }
+    }
+
+    private static func technicalReadingGroupTitle(for key: String) -> String {
+        if key.contains("refrigerant") ||
+            key.contains("suction") ||
+            key.contains("liquid") ||
+            key.contains("superheat") ||
+            key.contains("subcooling") ||
+            key.contains("metering") {
+            return "Refrigerant Circuit"
+        }
+        if key.contains("voltage") ||
+            key.contains("amps") ||
+            key.contains("capacitor") ||
+            key.contains("contactor") ||
+            key.contains("communication") ||
+            key.contains("motor") ||
+            key.contains("flame_sensor") {
+            return "Electrical"
+        }
+        if key.contains("airflow") ||
+            key.contains("cfm") ||
+            key.contains("static") ||
+            key.contains("blower") ||
+            key.contains("duct") ||
+            key.contains("belt") ||
+            key.contains("damper") {
+            return "Airflow & Static"
+        }
+        if key.contains("fuel") ||
+            key.contains("ignition") ||
+            key.contains("venting") ||
+            key.contains("gas_pressure") ||
+            key.contains("draft") ||
+            key.contains("flue") ||
+            key.contains("o2") ||
+            key.contains("co2") ||
+            key.contains("co_ppm") {
+            return "Combustion"
+        }
+        if key.contains("water") ||
+            key.contains("system_pressure") ||
+            key.contains("expansion") ||
+            key.contains("circulator") ||
+            key.contains("relief") ||
+            key.contains("backflow") ||
+            key.contains("tank") ||
+            key.contains("anode") {
+            return "Hydronics"
+        }
+        if key.contains("temp") || key.contains("temperature") || key.contains("wet_bulb") || key.contains("dry_bulb") {
+            return "Air Temperatures"
+        }
+        if key.contains("mode") ||
+            key.contains("reversing") ||
+            key.contains("defrost") ||
+            key.contains("economizer") ||
+            key.contains("condensate") ||
+            key.contains("remote") ||
+            key.contains("limit_switch") {
+            return "Controls & Safeties"
+        }
+        if key.contains("condition") ||
+            key.contains("coil") ||
+            key.contains("heat_exchanger") {
+            return "Conditions"
+        }
+        return "General"
     }
 
     var technicalReadings: [String: String] {

@@ -164,6 +164,28 @@ struct GunnAire_OpsTests {
         }
     }
 
+    @Test func groupedTechnicalReadingsPreserveAllEquipmentFields() async throws {
+        for equipmentType in HVACEquipmentType.allCases {
+            let definitions = equipmentType.readingDefinitions
+            let groupedDefinitions = ServiceCall.groupedTechnicalReadingDefinitions(for: definitions)
+                .flatMap(\.definitions)
+
+            #expect(groupedDefinitions.count == definitions.count, "\(equipmentType.displayName) reading grouping dropped or duplicated fields")
+            #expect(Set(groupedDefinitions.map(\.key)) == Set(definitions.map(\.key)), "\(equipmentType.displayName) reading grouping changed field coverage")
+        }
+    }
+
+    @Test func groupedTechnicalReadingsUseFieldServiceCategories() async throws {
+        let splitGroups = ServiceCall.groupedTechnicalReadingDefinitions(for: HVACEquipmentType.splitSystemAC.readingDefinitions)
+        let furnaceGroups = ServiceCall.groupedTechnicalReadingDefinitions(for: HVACEquipmentType.gasFurnace.readingDefinitions)
+        let boilerGroups = ServiceCall.groupedTechnicalReadingDefinitions(for: HVACEquipmentType.boiler.readingDefinitions)
+
+        #expect(splitGroups.first { $0.title == "Refrigerant Circuit" }?.definitions.contains { $0.key == "superheat" } == true)
+        #expect(splitGroups.first { $0.title == "Electrical" }?.definitions.contains { $0.key == "compressor_amps" } == true)
+        #expect(furnaceGroups.first { $0.title == "Combustion" }?.definitions.contains { $0.key == "flue_temp" } == true)
+        #expect(boilerGroups.first { $0.title == "Hydronics" }?.definitions.contains { $0.key == "water_temp_supply" } == true)
+    }
+
     @Test func quickBooksMimeTypeDetection() async throws {
         #expect(QuickBooksDataAPI.mimeType(for: URL(fileURLWithPath: "/tmp/file.jpg")) == "image/jpeg")
         #expect(QuickBooksDataAPI.mimeType(for: URL(fileURLWithPath: "/tmp/file.pdf")) == "application/pdf")
