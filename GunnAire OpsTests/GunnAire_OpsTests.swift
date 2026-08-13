@@ -2151,6 +2151,64 @@ struct GunnAire_OpsTests {
         #expect(lines.contains("Synced to company storage"))
     }
 
+    @Test func customerProfileAttachmentDetailUsesQuickBooksInvoiceBalanceStatus() async throws {
+        let customer = Customer(name: "QBO Attachment Customer")
+        let paidInQuickBooks = Invoice(
+            customer: customer,
+            quickBooksID: "paid-qbo",
+            quickBooksBalanceDue: 0,
+            amount: 400,
+            status: "unpaid"
+        )
+        let openInQuickBooks = Invoice(
+            customer: customer,
+            quickBooksID: "open-qbo",
+            quickBooksBalanceDue: 125,
+            amount: 400,
+            status: "paid"
+        )
+        let paidAttachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            invoiceID: paidInQuickBooks.id,
+            kind: .serviceReport,
+            displayName: "paid-report.pdf",
+            localFilePath: "/tmp/paid-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let openAttachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            invoiceID: openInQuickBooks.id,
+            kind: .serviceReport,
+            displayName: "open-report.pdf",
+            localFilePath: "/tmp/open-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let paidLines = paidAttachment.customerProfileDetailLines(
+            serviceCalls: [],
+            invoices: [paidInQuickBooks],
+            estimates: [],
+            equipmentProfiles: [],
+            canViewFinancials: true
+        )
+        let openLines = openAttachment.customerProfileDetailLines(
+            serviceCalls: [],
+            invoices: [openInQuickBooks],
+            estimates: [],
+            equipmentProfiles: [],
+            canViewFinancials: true
+        )
+
+        #expect(paidLines.contains("Invoice: Paid - QuickBooks synced"))
+        #expect(paidLines.contains("Invoice Balance: $0.00"))
+        #expect(openLines.contains("Invoice: Partial - QuickBooks synced"))
+        #expect(openLines.contains("Invoice Balance: $125.00"))
+    }
+
     @Test func customerProfileAttachmentDetailShowsLinkedEquipment() async throws {
         let customer = Customer(name: "Equipment Attachment Customer")
         let equipment = CustomerEquipment(

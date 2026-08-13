@@ -295,7 +295,12 @@ final class ServiceDocumentAttachment {
             let quickBooksStatus = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                 ? " - QuickBooks synced"
                 : ""
-            lines.append("Invoice: \(invoice.status.capitalized)\(quickBooksStatus)")
+            let resolvedInvoiceStatus = Invoice.resolvedStatus(for: invoice, payments: [])
+            lines.append("Invoice: \(resolvedInvoiceStatus.capitalized)\(quickBooksStatus)")
+            if invoice.hasQuickBooksBalance {
+                let balance = Invoice.outstandingBalance(for: invoice, payments: [])
+                lines.append("Invoice Balance: \(balance.formatted(.currency(code: "USD")))")
+            }
         }
         if canViewFinancials, let estimate = linkedEstimate(in: estimates) {
             let quickBooksStatus = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
