@@ -669,11 +669,14 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldPublishAfterLocalSave(for call: ServiceCall) -> Bool {
-        shouldAllowGoogleCalendarWrite(for: call)
+        guard call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
+            return false
+        }
+        return shouldAllowGoogleCalendarWrite(for: call)
     }
 
     static func shouldPatchExistingGoogleCalendarEvent(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> Bool {
-        shouldAllowGoogleCalendarWrite(for: call) && remoteEvent?.isManagedByGunnAire == true
+        false
     }
 
     static func isImportedEventManagedByApp(_ event: GoogleCalendarEvent) -> Bool {

@@ -4152,7 +4152,7 @@ struct GunnAire_OpsTests {
         )
 
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: importedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: newAppCall) == true)
     }
 
@@ -4190,7 +4190,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func googleCalendarAppOwnedEventsCanMaintainAppDetails() async throws {
+    @Test func googleCalendarAppOwnedEventsDoNotPublishLocalEditsBackToGoogle() async throws {
         let customer = Customer(name: "Calendar Customer")
         let appOwnedCall = ServiceCall(
             googleCalendarID: "primary",
@@ -4207,12 +4207,12 @@ struct GunnAire_OpsTests {
 
         #expect(GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall) == true)
-        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: appOwnedCall) == false)
     }
 
     @MainActor
-    @Test func googleCalendarExistingEventRequiresRemoteOwnershipMarkerBeforePatch() async throws {
+    @Test func googleCalendarExistingEventsAreNeverPatchedFromLocalEdits() async throws {
         let customer = Customer(name: "Calendar Customer")
         let call = ServiceCall(
             googleCalendarID: "primary",
@@ -4265,7 +4265,7 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: nil) == false)
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: unmarkedRemoteEvent) == false)
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: legacyMarkedRemoteEvent) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent) == true)
+        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent) == false)
     }
 
     @Test func googleCalendarManagedMarkerUsesVersionedGooglePrivateExtendedProperties() async throws {
