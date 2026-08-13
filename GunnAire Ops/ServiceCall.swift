@@ -1246,6 +1246,7 @@ final class ServiceCall {
             equipmentTypeRaw = newValue?.rawValue
             if previousValue != equipmentTypeRaw {
                 pruneTechnicalReadingsToCurrentEquipmentType()
+                pruneServiceActionsToCurrentEquipmentType()
             }
         }
     }
@@ -1412,6 +1413,21 @@ final class ServiceCall {
         } else if let data = try? JSONEncoder().encode(prunedReadings),
                   let encoded = String(data: data, encoding: .utf8) {
             serviceReportReadingsJSON = encoded
+        }
+    }
+
+    func pruneServiceActionsToCurrentEquipmentType() {
+        let allowedKeys = Set(serviceActionDefinitions.map(\.key))
+        let prunedStatuses = serviceActionStatuses.filter { allowedKeys.contains($0.key) }
+        guard prunedStatuses.count != serviceActionStatuses.count else { return }
+        if prunedStatuses.isEmpty {
+            serviceActionChecklistJSON = nil
+        } else {
+            let rawStatuses = prunedStatuses.mapValues(\.rawValue)
+            if let data = try? JSONEncoder().encode(rawStatuses),
+               let encoded = String(data: data, encoding: .utf8) {
+                serviceActionChecklistJSON = encoded
+            }
         }
     }
 

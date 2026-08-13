@@ -1059,6 +1059,25 @@ struct GunnAire_OpsTests {
         #expect(call.serviceActionStatus(for: "condensate_drain_checked") == .needsService)
     }
 
+    @Test func changingEquipmentTypePrunesIncompatibleServiceActions() async throws {
+        let customer = Customer(name: "Equipment Change Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setServiceActionStatus(.completed, for: "condenser_coil_serviced")
+        call.setServiceActionStatus(.needsService, for: "heat_exchanger_checked")
+
+        call.equipmentType = .gasFurnace
+
+        #expect(call.serviceActionStatus(for: "condenser_coil_serviced") == .notChecked)
+        #expect(call.serviceActionStatus(for: "heat_exchanger_checked") == .needsService)
+        #expect(call.populatedServiceActionRows.contains { $0.label == "Condenser coil inspected/washed" } == false)
+        #expect(call.populatedServiceActionRows.contains { $0.label == "Heat exchanger inspected" && $0.value == "Needs Service" })
+    }
+
     @Test func maintenanceReportRequiresEquipmentServiceActions() async throws {
         let customer = Customer(name: "Maintenance Action Customer")
         let call = ServiceCall(
