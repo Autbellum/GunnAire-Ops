@@ -616,8 +616,12 @@ final class ServiceDocumentAttachment {
         ]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             .joined(separator: " ")
+        let isCustomerLevel = attachment.serviceCallID == nil && attachment.customerEquipmentID == nil
         if searchableText.contains("profile") || searchableText.contains("customer photo") {
-            return 300
+            return isCustomerLevel ? 400 : 300
+        }
+        if isCustomerLevel {
+            return 250
         }
         if attachment.kind == .diagnosticPhoto {
             return 200

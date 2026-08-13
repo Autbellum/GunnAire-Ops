@@ -3340,6 +3340,62 @@ struct GunnAire_OpsTests {
         #expect(selected === newerPhoto)
     }
 
+    @Test func customerPrimaryPhotoPrefersCustomerLevelImageOverEquipmentPhoto() async throws {
+        let customer = Customer(name: "Photo Customer")
+        let equipmentPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            customerEquipmentID: UUID(),
+            kind: .diagnosticPhoto,
+            displayName: "profile-equipment.jpg",
+            caption: "Profile photo from service visit",
+            localFilePath: "/tmp/profile-equipment.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_300)
+        )
+        let customerLevelPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: nil,
+            kind: .customerDocument,
+            displayName: "customer-front.jpg",
+            localFilePath: "/tmp/customer-front.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+
+        let selected = ServiceDocumentAttachment.primaryCustomerPhoto(
+            for: customer,
+            in: [equipmentPhoto, customerLevelPhoto]
+        )
+
+        #expect(selected === customerLevelPhoto)
+    }
+
+    @Test func customerPrimaryPhotoCanFallbackToLinkedFieldPhoto() async throws {
+        let customer = Customer(name: "Photo Customer")
+        let linkedFieldPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            customerEquipmentID: UUID(),
+            kind: .diagnosticPhoto,
+            displayName: "equipment-panel.jpg",
+            localFilePath: "/tmp/equipment-panel.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+
+        let selected = ServiceDocumentAttachment.primaryCustomerPhoto(
+            for: customer,
+            in: [linkedFieldPhoto]
+        )
+
+        #expect(selected === linkedFieldPhoto)
+    }
+
     @Test func customerPrimaryPhotoIgnoresBillingAndReceiptImages() async throws {
         let customer = Customer(name: "Photo Customer")
         let diagnosticPhoto = ServiceDocumentAttachment(
