@@ -3400,6 +3400,29 @@ GunnAire
         syncLinkedInvoiceAttachmentsToQuickBooks(invoice)
     }
 
+    private func prepareLinkedOnsiteReportForInvoiceCreation(_ invoice: Invoice, serviceCall: ServiceCall?) {
+        guard let serviceCall else { return }
+        linkExistingInvoiceAttachments(to: invoice, serviceCallID: serviceCall.id)
+        saveCurrentEquipmentProfile(for: serviceCall, announce: false)
+        do {
+            let linkedEstimate = estimates.first { estimate in
+                estimate.id == serviceCall.linkedEstimateID || estimate.serviceCallID == serviceCall.id
+            }
+            let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
+            let report = try generateAndPersistOnsiteReportAttachment(
+                for: serviceCall,
+                estimate: linkedEstimate,
+                invoice: invoice,
+                payments: invoicePayments,
+                attachments: attachments.filter { $0.serviceCallID == serviceCall.id }
+            )
+            report.attachment.linkToInvoiceIfNeeded(invoice)
+            syncAttachmentIfPossible(report.attachment, data: report.data)
+        } catch {
+            actionMessage = "Invoice created, but the onsite report could not be generated automatically: \(error.localizedDescription)"
+        }
+    }
+
     private func syncLinkedInvoiceAttachmentsToQuickBooks(_ invoice: Invoice) {
         let invoiceAttachments = attachments.filter {
             $0.invoiceID == invoice.id && $0.canLinkToQuickBooksInvoiceDocument
@@ -4534,7 +4557,7 @@ GunnAire
             activeServiceCall?.linkedInvoiceID = invoice.id
             activeServiceCall?.markDocumentationCompleteIfReady()
             activeServiceCall?.status = .invoiced
-            linkExistingServiceReports(to: invoice, serviceCallID: activeServiceCall?.id)
+            prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: activeServiceCall)
             actionMessage = isQuickBooksConnected ? "Invoice created locally. Syncing to QuickBooks..." : "Invoice created locally."
             guard saveBillingContext(failureMessage: "Could not save invoice locally") else {
                 isCreatingDocument = false
@@ -4812,14 +4835,16 @@ GunnAire
         )
         estimate.status = "invoiced"
         modelContext.insert(invoice)
+        var linkedServiceCall: ServiceCall?
         if let serviceCallID = estimate.serviceCallID,
            let calls = try? modelContext.fetch(FetchDescriptor<ServiceCall>()),
            let call = calls.first(where: { $0.id == serviceCallID }) {
+            linkedServiceCall = call
             call.linkedInvoiceID = invoice.id
             call.status = .invoiced
             call.markDocumentationCompleteIfReady()
         }
-        linkExistingServiceReports(to: invoice, serviceCallID: estimate.serviceCallID)
+        prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: linkedServiceCall)
         return invoice
     }
 
