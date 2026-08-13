@@ -689,9 +689,6 @@ enum GoogleCalendarScheduleSync {
         let timeZone = TimeZone.current.identifier
         let endDate = call.scheduledDate.addingTimeInterval(call.duration)
         return GoogleCalendarEventPatch(
-            summary: nil,
-            description: nil,
-            location: nil,
             start: GoogleWritableCalendarEventDate(
                 dateTime: ISO8601DateFormatter().string(from: call.scheduledDate),
                 timeZone: timeZone
@@ -699,8 +696,7 @@ enum GoogleCalendarScheduleSync {
             end: GoogleWritableCalendarEventDate(
                 dateTime: ISO8601DateFormatter().string(from: endDate),
                 timeZone: timeZone
-            ),
-            extendedProperties: nil
+            )
         )
     }
 
