@@ -3497,7 +3497,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func quickBooksAttachmentSyncClearsTargetTrackingWhenNewBillingDocumentLinks() async throws {
+    @Test func quickBooksAttachmentSyncPreservesKnownTargetTrackingWhenNewBillingDocumentLinks() async throws {
         let customer = Customer(name: "Retarget Attachment Customer")
         let serviceCallID = UUID()
         let invoice = Invoice(
@@ -3529,9 +3529,49 @@ struct GunnAire_OpsTests {
         serviceReport.linkToInvoiceIfNeeded(invoice)
 
         #expect(serviceReport.invoiceID == invoice.id)
-        #expect(serviceReport.quickBooksAttachableID == nil)
-        #expect(serviceReport.quickBooksAttachedEntityKeys.isEmpty)
+        #expect(serviceReport.quickBooksAttachableID == "ATTACH-EST")
+        #expect(serviceReport.quickBooksAttachedEntityKeys == [
+            ServiceDocumentAttachment.quickBooksAttachedEntityKey(
+                type: QuickBooksAttachableEntityType.estimate.rawValue,
+                value: "EST-789"
+            )
+        ])
         #expect(serviceReport.quickBooksSyncError == nil)
+        let missingReferences = QuickBooksInvoiceAttachmentSync.missingQuickBooksAttachableReferences(
+            for: serviceReport,
+            estimates: [estimate],
+            invoices: [invoice]
+        )
+        #expect(missingReferences.map(\.EntityRef.value) == ["INV-789"])
+    }
+
+    @MainActor
+    @Test func quickBooksAttachmentSyncClearsLegacyUnknownTargetWhenNewBillingDocumentLinks() async throws {
+        let customer = Customer(name: "Legacy Attachment Customer")
+        let serviceCallID = UUID()
+        let invoice = Invoice(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "INV-LEGACY",
+            amount: 525
+        )
+        let legacyReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "LEGACY-ATTACH"
+        )
+
+        legacyReport.linkToInvoiceIfNeeded(invoice)
+
+        #expect(legacyReport.invoiceID == invoice.id)
+        #expect(legacyReport.quickBooksAttachableID == nil)
+        #expect(legacyReport.quickBooksAttachedEntityKeys.isEmpty)
+        #expect(legacyReport.quickBooksSyncError == nil)
     }
 
     @MainActor
@@ -5977,6 +6017,55 @@ struct GunnAire_OpsTests {
 
         #expect(reusable.quickBooksAttachableID == "attachable-123")
         #expect(reusable.quickBooksSyncError == nil)
+    }
+
+    @Test func reusedGeneratedReportPreservesEstimateAttachmentWhenInvoiceTargetIsAdded() async throws {
+        let customer = Customer(name: "Current Customer")
+        let serviceCallID = UUID()
+        let equipmentID = UUID()
+        let invoice = Invoice(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "INV-REUSE",
+            amount: 700
+        )
+        let estimate = Estimate(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "EST-REUSE",
+            amount: 700
+        )
+        let reusable = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            customerEquipmentID: equipmentID,
+            estimateID: estimate.id,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "attachable-estimate"
+        )
+        let estimateReference = try #require(reusable.quickBooksEstimateReference(for: estimate))
+        reusable.markQuickBooksAttached(to: [estimateReference])
+
+        reusable.refreshGeneratedDocumentContext(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            customerEquipmentID: equipmentID,
+            invoiceID: invoice.id,
+            estimateID: estimate.id
+        )
+
+        #expect(reusable.quickBooksAttachableID == "attachable-estimate")
+        #expect(reusable.isQuickBooksAttached(to: [estimateReference]))
+        let missingReferences = QuickBooksInvoiceAttachmentSync.missingQuickBooksAttachableReferences(
+            for: reusable,
+            estimates: [estimate],
+            invoices: [invoice]
+        )
+        #expect(missingReferences.map(\.EntityRef.value) == ["INV-REUSE"])
     }
 
     @Test func generatedBillingDocumentAttachmentCanBeReusedForSameBillingLink() async throws {

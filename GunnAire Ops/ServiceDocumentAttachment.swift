@@ -271,7 +271,7 @@ final class ServiceDocumentAttachment {
     func linkToInvoiceIfNeeded(_ invoice: Invoice) {
         if invoiceID == nil {
             invoiceID = invoice.id
-            clearQuickBooksAttachmentSyncState()
+            clearQuickBooksAttachmentSyncStateIfTargetTrackingIsUnsafe()
         }
         if customer?.id != invoice.customer.id {
             customer = invoice.customer
@@ -281,7 +281,7 @@ final class ServiceDocumentAttachment {
     func linkToEstimateIfNeeded(_ estimate: Estimate) {
         if estimateID == nil {
             estimateID = estimate.id
-            clearQuickBooksAttachmentSyncState()
+            clearQuickBooksAttachmentSyncStateIfTargetTrackingIsUnsafe()
         }
         if customer?.id != estimate.customer.id {
             customer = estimate.customer
@@ -292,6 +292,15 @@ final class ServiceDocumentAttachment {
         quickBooksAttachableID = nil
         quickBooksSyncError = nil
         quickBooksAttachedEntityKeysRaw = nil
+    }
+
+    private func clearQuickBooksAttachmentSyncStateIfTargetTrackingIsUnsafe() {
+        if quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+            quickBooksAttachedEntityKeys.isEmpty {
+            clearQuickBooksAttachmentSyncState()
+        } else {
+            quickBooksSyncError = nil
+        }
     }
 
     func refreshGeneratedDocumentContext(
@@ -308,9 +317,7 @@ final class ServiceDocumentAttachment {
         self.invoiceID = invoiceID
         self.estimateID = estimateID
         if changedQuickBooksTarget {
-            quickBooksAttachableID = nil
-            quickBooksSyncError = nil
-            quickBooksAttachedEntityKeysRaw = nil
+            clearQuickBooksAttachmentSyncStateIfTargetTrackingIsUnsafe()
         }
     }
 
