@@ -411,6 +411,38 @@ final class ServiceDocumentAttachment {
         return lines
     }
 
+    func matchesCustomerProfileSearch(
+        _ query: String,
+        serviceCalls: [ServiceCall],
+        invoices: [Invoice],
+        estimates: [Estimate],
+        equipmentProfiles: [CustomerEquipment],
+        canViewFinancials: Bool
+    ) -> Bool {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedQuery.isEmpty else { return true }
+        guard canViewFinancials || !isFinancialCustomerProfileAttachment else { return false }
+
+        let detailLines = customerProfileDetailLines(
+            serviceCalls: serviceCalls,
+            invoices: invoices,
+            estimates: estimates,
+            equipmentProfiles: equipmentProfiles,
+            canViewFinancials: canViewFinancials
+        )
+        let haystack = [
+            displayName,
+            caption,
+            kind.label,
+            kind.customerProfileGroupTitle,
+            contentType
+        ] + detailLines
+        return haystack
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+            .contains(normalizedQuery)
+    }
+
     private static func formattedFileSize(_ bytes: Int) -> String {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file

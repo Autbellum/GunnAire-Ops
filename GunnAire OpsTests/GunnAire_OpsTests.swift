@@ -3436,6 +3436,100 @@ struct GunnAire_OpsTests {
         #expect(lines.contains("Synced to company storage"))
     }
 
+    @Test func customerProfileAttachmentSearchMatchesReportEquipmentAndReadingContext() async throws {
+        let customer = Customer(name: "Search Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            modelNumber: "24ABC6"
+        )
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Replaced weak capacitor and verified cooling.",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .completed
+        )
+        call.setTechnicalReading("72", for: "return_air_temp")
+        call.setTechnicalReading("54", for: "supply_air_temp")
+        call.setTechnicalReading("12", for: "superheat")
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            customerEquipmentID: equipment.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            caption: "Final cooling service report",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        #expect(attachment.matchesCustomerProfileSearch(
+            "weak capacitor",
+            serviceCalls: [call],
+            invoices: [],
+            estimates: [],
+            equipmentProfiles: [equipment],
+            canViewFinancials: false
+        ))
+        #expect(attachment.matchesCustomerProfileSearch(
+            "Downstairs AC",
+            serviceCalls: [call],
+            invoices: [],
+            estimates: [],
+            equipmentProfiles: [equipment],
+            canViewFinancials: false
+        ))
+        #expect(attachment.matchesCustomerProfileSearch(
+            "superheat",
+            serviceCalls: [call],
+            invoices: [],
+            estimates: [],
+            equipmentProfiles: [equipment],
+            canViewFinancials: false
+        ))
+    }
+
+    @Test func customerProfileAttachmentSearchRespectsFinancialVisibility() async throws {
+        let customer = Customer(name: "Private Billing Customer")
+        let invoice = Invoice(customer: customer, quickBooksID: "INV-123", amount: 500, status: "unpaid")
+        let invoiceAttachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            invoiceID: invoice.id,
+            kind: .invoiceSupport,
+            displayName: "invoice-500.pdf",
+            localFilePath: "/tmp/invoice-500.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "attach-123"
+        )
+
+        #expect(invoiceAttachment.matchesCustomerProfileSearch(
+            "QuickBooks",
+            serviceCalls: [],
+            invoices: [invoice],
+            estimates: [],
+            equipmentProfiles: [],
+            canViewFinancials: true
+        ))
+        #expect(invoiceAttachment.matchesCustomerProfileSearch(
+            "invoice",
+            serviceCalls: [],
+            invoices: [invoice],
+            estimates: [],
+            equipmentProfiles: [],
+            canViewFinancials: false
+        ) == false)
+    }
+
     @Test func customerProfileAttachmentDetailShowsQueuedQuickBooksAttachmentStatus() async throws {
         let customer = Customer(name: "Queued Attachment Customer")
         let invoice = Invoice(customer: customer, quickBooksID: "qbo-invoice", amount: 250)

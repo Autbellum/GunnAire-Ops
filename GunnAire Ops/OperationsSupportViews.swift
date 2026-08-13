@@ -1816,24 +1816,15 @@ private struct CustomerEditorView: View {
     private var filteredCustomerAttachments: [ServiceDocumentAttachment] {
         let query = customerAttachmentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return visibleCustomerAttachments }
-        return visibleCustomerAttachments.filter { attachment in
-            let detailLines = attachment.customerProfileDetailLines(
+        return visibleCustomerAttachments.filter {
+            $0.matchesCustomerProfileSearch(
+                query,
                 serviceCalls: serviceCalls,
                 invoices: invoices,
                 estimates: estimates,
                 equipmentProfiles: equipmentProfiles,
                 canViewFinancials: canViewFinancials
             )
-            let haystack = [
-                attachment.displayName,
-                attachment.caption,
-                attachment.kind.label,
-                attachment.contentType
-            ] + detailLines
-            return haystack
-                .compactMap { $0?.lowercased() }
-                .joined(separator: " ")
-                .contains(query)
         }
     }
 
