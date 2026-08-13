@@ -145,6 +145,11 @@ enum GunnAireAppIntentRouter {
         store(.documentation)
     }
 
+    nonisolated static func storeInvoiceBuilderRoute(_ id: UUID) {
+        UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingServiceCallID")
+        store(.invoices)
+    }
+
     nonisolated static func consumePendingServiceCallID() -> UUID? {
         guard let rawValue = UserDefaults.standard.string(forKey: "GunnAirePendingServiceCallID"),
               let id = UUID(uuidString: rawValue) else {

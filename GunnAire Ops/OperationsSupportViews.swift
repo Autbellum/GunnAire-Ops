@@ -1474,7 +1474,14 @@ struct OnsiteDocumentationView: View {
                             }
                             .buttonStyle(.bordered)
 
-                            if call.linkedInvoiceID != nil {
+                            if call.linkedInvoiceID == nil {
+                                Button("Create Invoice") {
+                                    GunnAireAppIntentRouter.storeInvoiceBuilderRoute(call.id)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(Color.brandGold)
+                                .disabled(!call.canCreateInvoiceDocument)
+                            } else {
                                 Button("Collect Payment") {
                                     if let linkedInvoiceID = call.linkedInvoiceID {
                                         GunnAireAppIntentRouter.storePaymentCollectionRoute(linkedInvoiceID)
@@ -1483,6 +1490,12 @@ struct OnsiteDocumentationView: View {
                                 .buttonStyle(.borderedProminent)
                                 .tint(.green)
                             }
+                        }
+                        if call.linkedInvoiceID == nil,
+                           let blockedMessage = call.invoiceCreationBlockedMessage {
+                            Text(blockedMessage)
+                                .font(.caption2)
+                                .foregroundColor(.orange)
                         }
                     }
                 }
@@ -1573,6 +1586,8 @@ struct OnsiteDocumentationView: View {
             let completionNote = call.documentationCompletionBlockedMessage.map { " \($0)" } ?? ""
             if invoice?.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
                 documentExportMessage = "Onsite report generated and queued for QuickBooks invoice attachment.\(completionNote)"
+            } else if call.linkedInvoiceID == nil && call.canCreateInvoiceDocument {
+                documentExportMessage = "Onsite report generated and saved to this job. Create the invoice from this job to carry the report into billing.\(completionNote)"
             } else {
                 documentExportMessage = "Onsite report generated and saved to this job.\(completionNote)"
             }

@@ -81,6 +81,17 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canViewBillingFinancialDetails(email: admin.email, users: users) == true)
     }
 
+    @Test func invoiceBuilderRoutePreservesServiceCallContext() async throws {
+        _ = GunnAireAppIntentRouter.consumePendingRoute()
+        _ = GunnAireAppIntentRouter.consumePendingServiceCallID()
+        let serviceCallID = UUID()
+
+        GunnAireAppIntentRouter.storeInvoiceBuilderRoute(serviceCallID)
+
+        #expect(GunnAireAppIntentRouter.consumePendingRoute() == .invoices)
+        #expect(GunnAireAppIntentRouter.consumePendingServiceCallID() == serviceCallID)
+    }
+
     @Test func serviceCallEquipmentSummaryIncludesManufacturer() async throws {
         let customer = Customer(name: "Equipment Customer")
         let call = ServiceCall(
