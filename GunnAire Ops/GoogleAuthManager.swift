@@ -581,7 +581,25 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func patchCalendarEvent(calendarID: String = "primary", eventID: String, patch: GoogleCalendarEventPatch, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
-        completion(.failure(GoogleAuthError.unsafeCalendarPatch("Calendar PATCH is disabled so imported Google Calendar titles, locations, descriptions, attendees, and reminders cannot be scrubbed by the app.")))
+        let encodedPatch: Data
+        do {
+            encodedPatch = try JSONEncoder().encode(patch)
+        } catch {
+            completion(.failure(GoogleAuthError.decoding))
+            return
+        }
+        let unsafeKeys = GoogleCalendarEventPatch.unsafeDetailKeys(in: encodedPatch)
+        guard unsafeKeys.isEmpty else {
+            completion(.failure(GoogleAuthError.unsafeCalendarPatch(unsafeKeys.joined(separator: ", "))))
+            return
+        }
+        let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
+        let encodedEventID = eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID
+        guard let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events/\(encodedEventID)") else {
+            completion(.failure(GoogleAuthError.invalidEndpoint))
+            return
+        }
+        authorizedJSONRequest(url: url, method: "PATCH", body: patch, completion: completion)
     }
 
     func deleteCalendarEvent(calendarID: String = "primary", eventID: String, completion: @escaping (Result<Void, Error>) -> Void) {

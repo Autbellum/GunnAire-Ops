@@ -97,7 +97,7 @@ enum GoogleCalendarScheduleSync {
         isAdminUser: Bool,
         completion: ((Result<String, Error>) -> Void)? = nil
     ) {
-        guard shouldCreateGoogleCalendarEvent(for: call) else {
+        guard shouldAllowGoogleCalendarWrite(for: call) else {
             completion?(.success("Skipped externally managed Google event."))
             return
         }
@@ -133,7 +133,7 @@ enum GoogleCalendarScheduleSync {
                                 completion?(.failure(error))
                                 return
                             }
-                            guard shouldCreateGoogleCalendarEvent(for: call) else {
+                            guard shouldAllowGoogleCalendarWrite(for: call) else {
                                 completion?(.success("Skipped externally managed Google event."))
                                 return
                             }
@@ -260,12 +260,12 @@ enum GoogleCalendarScheduleSync {
                 }
             }
             let eventNotes = calendarNotes(description: event.description)
-            let isManagedByApp = false
+            let isManagedByApp = isImportedEventManagedByApp(event)
 
             let call = callsByGoogleEventKey[eventKey] ?? callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint] ?? ServiceCall(
                 googleCalendarID: calendarEvent.calendarID,
                 googleEventID: event.id,
-                googleEventManagedByApp: false,
+                googleEventManagedByApp: isManagedByApp,
                 eventTitle: normalizedOptional(event.summary),
                 siteAddress: event.location,
                 type: inferCallType(from: event.summary, description: event.description),
@@ -286,7 +286,7 @@ enum GoogleCalendarScheduleSync {
             }
             call.googleCalendarID = calendarEvent.calendarID
             call.googleEventID = event.id
-            call.googleEventManagedByApp = false
+            call.googleEventManagedByApp = isManagedByApp
             clearCalendarCallLocallyEdited(call)
             call.eventTitle = mergedImportedCalendarText(
                 remoteValue: event.summary,
@@ -497,6 +497,7 @@ enum GoogleCalendarScheduleSync {
                 case .success(let saved):
                     call.googleCalendarID = savedCalendarID
                     call.googleEventID = saved.id
+                    call.googleEventManagedByApp = call.googleEventManagedByApp || saved.isManagedByGunnAire
                     clearCalendarCallLocallyEdited(call)
                     exportNext(
                         index: index + 1,
@@ -578,7 +579,6 @@ enum GoogleCalendarScheduleSync {
                 )
                 return
             }
-            call.googleEventManagedByApp = false
             let patch = makeManagedEventPatch(for: call, remoteEvent: remoteEvent)
             auth.patchCalendarEvent(calendarID: currentCalendarID, eventID: eventID, patch: patch) { result in
                 finish(currentCalendarID, result)
@@ -590,7 +590,7 @@ enum GoogleCalendarScheduleSync {
         ) {
             call.googleCalendarID = remote.calendarID
             call.googleEventID = remote.event.id
-            call.googleEventManagedByApp = false
+            call.googleEventManagedByApp = remote.event.isManagedByGunnAire
             clearCalendarCallLocallyEdited(call)
             exportNext(
                 index: index + 1,
@@ -610,7 +610,7 @@ enum GoogleCalendarScheduleSync {
             let event = makeCalendarCreateEvent(for: call)
             auth.createCalendarEvent(calendarID: targetCalendarID, event: event) { result in
                 if case .success = result {
-                    call.googleEventManagedByApp = false
+                    call.googleEventManagedByApp = true
                 }
                 finish(targetCalendarID, result)
             }
@@ -618,12 +618,12 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldAllowGoogleCalendarWrite(for call: ServiceCall) -> Bool {
-        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
-            call.googleEventManagedByApp
+        call.googleEventManagedByApp
     }
 
     static func isExternalGoogleCalendarEvent(_ call: ServiceCall) -> Bool {
-        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+            !call.googleEventManagedByApp
     }
 
     static func shouldPreserveExternalGoogleCalendarDetails(for call: ServiceCall) -> Bool {
@@ -631,7 +631,9 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldPublishAfterLocalSave(for call: ServiceCall) -> Bool {
-        shouldCreateGoogleCalendarEvent(for: call)
+        shouldCreateGoogleCalendarEvent(for: call) ||
+            (call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+                call.googleEventManagedByApp)
     }
 
     static func shouldCreateGoogleCalendarEvent(for call: ServiceCall) -> Bool {
@@ -641,11 +643,13 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldPatchExistingGoogleCalendarEvent(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> Bool {
-        false
+        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+            call.googleEventManagedByApp &&
+            remoteEvent?.isManagedByGunnAire == true
     }
 
-    static func isImportedEventManagedByApp(_: GoogleCalendarEvent) -> Bool {
-        false
+    static func isImportedEventManagedByApp(_ event: GoogleCalendarEvent) -> Bool {
+        event.isManagedByGunnAire
     }
 
     static func shouldSelectGoogleCalendarBeforeCreate(for call: ServiceCall) -> Bool {
@@ -704,7 +708,11 @@ enum GoogleCalendarScheduleSync {
                 timeZone: timeZone
             ),
             attendees: attendees,
-            extendedProperties: nil
+            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
+                "gunnaireManaged": "true",
+                "gunnaireManagedVersion": "3",
+                "gunnaireOrigin": "ios-app"
+            ])
         )
     }
 
