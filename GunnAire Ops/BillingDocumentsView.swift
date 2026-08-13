@@ -2925,7 +2925,7 @@ GunnAire
         guard let serviceCallID else { return }
         let invoiceAttachments = attachments.filter {
             $0.serviceCallID == serviceCallID &&
-                $0.canLinkToQuickBooksInvoiceAttachment &&
+                $0.canLinkToQuickBooksInvoiceDocument &&
                 $0.customerMatches(invoice.customer)
         }
         guard !invoiceAttachments.isEmpty else { return }
@@ -2941,7 +2941,7 @@ GunnAire
         guard let serviceCallID else { return }
         let estimateAttachments = attachments.filter {
             $0.serviceCallID == serviceCallID &&
-                $0.canLinkToQuickBooksInvoiceAttachment &&
+                $0.canLinkToQuickBooksEstimateDocument &&
                 $0.customerMatches(estimate.customer)
         }
         guard !estimateAttachments.isEmpty else { return }
@@ -2959,7 +2959,7 @@ GunnAire
 
     private func syncLinkedInvoiceAttachmentsToQuickBooks(_ invoice: Invoice) {
         let invoiceAttachments = attachments.filter {
-            $0.invoiceID == invoice.id && $0.canLinkToQuickBooksInvoiceAttachment
+            $0.invoiceID == invoice.id && $0.canLinkToQuickBooksInvoiceDocument
         }
         for attachment in invoiceAttachments {
             syncAttachmentToQuickBooksInvoiceIfPossible(attachment, invoice: invoice)
@@ -2968,7 +2968,7 @@ GunnAire
 
     private func syncLinkedEstimateAttachmentsToQuickBooks(_ estimate: Estimate) {
         let estimateAttachments = attachments.filter {
-            $0.estimateID == estimate.id && $0.canLinkToQuickBooksInvoiceAttachment
+            $0.estimateID == estimate.id && $0.canLinkToQuickBooksEstimateDocument
         }
         for attachment in estimateAttachments {
             syncAttachmentToQuickBooksEstimateIfPossible(attachment, estimate: estimate)

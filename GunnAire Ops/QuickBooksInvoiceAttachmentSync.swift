@@ -150,14 +150,16 @@ enum QuickBooksInvoiceAttachmentSync {
         for attachment in attachments where attachment.canLinkToQuickBooksInvoiceAttachment {
             guard let serviceCallID = attachment.serviceCallID else { continue }
 
-            if attachment.invoiceID == nil,
+            if attachment.canLinkToQuickBooksInvoiceDocument,
+               attachment.invoiceID == nil,
                let invoice = invoicesByServiceCallID[serviceCallID],
                attachment.customerMatches(invoice.customer) {
                 attachment.linkToInvoiceIfNeeded(invoice)
                 changed += 1
             }
 
-            if attachment.estimateID == nil,
+            if attachment.canLinkToQuickBooksEstimateDocument,
+               attachment.estimateID == nil,
                let estimate = estimatesByServiceCallID[serviceCallID],
                attachment.customerMatches(estimate.customer) {
                 attachment.linkToEstimateIfNeeded(estimate)

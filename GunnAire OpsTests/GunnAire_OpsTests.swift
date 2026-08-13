@@ -1562,6 +1562,8 @@ struct GunnAire_OpsTests {
         #expect(uploadedReport.canUploadToQuickBooksInvoice(invoice) == false)
         #expect(photo.canUploadToQuickBooksInvoice(invoice) == true)
         #expect(invoiceSupport.canUploadToQuickBooksInvoice(invoice) == true)
+        #expect(invoiceSupport.canUploadToQuickBooksEstimate(estimate) == false)
+        #expect(estimateSupport.canUploadToQuickBooksInvoice(invoice) == false)
         #expect(receipt.canUploadToQuickBooksInvoice(invoice) == false)
         #expect(wrongCustomerInvoiceAttachment.canUploadToQuickBooksInvoice(invoice) == false)
         #expect(unSyncedReport.canUploadToQuickBooksInvoice(localOnlyInvoice) == false)
@@ -1796,10 +1798,14 @@ struct GunnAire_OpsTests {
             attachments: [generatedInvoicePDF, generatedEstimatePDF]
         )
 
-        #expect(changed == 4)
+        #expect(changed == 2)
         #expect(generatedInvoicePDF.invoiceID == invoice.id)
+        #expect(generatedInvoicePDF.estimateID == nil)
+        #expect(generatedEstimatePDF.invoiceID == nil)
         #expect(generatedEstimatePDF.estimateID == estimate.id)
         #expect(pendingInvoices.contains { $0.attachment === generatedInvoicePDF && $0.invoice === invoice })
+        #expect(pendingInvoices.contains { $0.attachment === generatedEstimatePDF } == false)
+        #expect(pendingEstimates.contains { $0.attachment === generatedInvoicePDF } == false)
         #expect(pendingEstimates.contains { $0.attachment === generatedEstimatePDF && $0.estimate === estimate })
     }
 

@@ -161,8 +161,26 @@ final class ServiceDocumentAttachment {
         }
     }
 
+    var canLinkToQuickBooksInvoiceDocument: Bool {
+        switch kind {
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .invoiceSupport, .other:
+            return true
+        case .estimateSupport, .receipt:
+            return false
+        }
+    }
+
+    var canLinkToQuickBooksEstimateDocument: Bool {
+        switch kind {
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .estimateSupport, .other:
+            return true
+        case .invoiceSupport, .receipt:
+            return false
+        }
+    }
+
     func canUploadToQuickBooksInvoice(_ invoice: Invoice) -> Bool {
-        canLinkToQuickBooksInvoiceAttachment &&
+        canLinkToQuickBooksInvoiceDocument &&
             invoiceID == invoice.id &&
             quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
@@ -170,7 +188,7 @@ final class ServiceDocumentAttachment {
     }
 
     func canUploadToQuickBooksEstimate(_ estimate: Estimate) -> Bool {
-        canLinkToQuickBooksInvoiceAttachment &&
+        canLinkToQuickBooksEstimateDocument &&
             estimateID == estimate.id &&
             quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
             estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
