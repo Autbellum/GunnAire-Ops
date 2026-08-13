@@ -220,6 +220,34 @@ struct GunnAire_OpsTests {
         #expect(selected == "route.tech@example.com")
     }
 
+    @MainActor
+    @Test func googleCalendarExistingEventPatchDoesNotOverwriteExternalDetails() async throws {
+        let customer = Customer(name: "Calendar Customer", email: "customer@example.com", address: "123 Local Address")
+        let call = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "event-123",
+            googleEventManagedByApp: true,
+            eventTitle: "App Title",
+            siteAddress: "456 App Address",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3600,
+            customer: customer,
+            notes: "App notes"
+        )
+
+        let patch = GoogleCalendarScheduleSync.makeScheduleOnlyPatch(for: call)
+        let encoded = try JSONEncoder().encode(patch)
+        let payload = String(data: encoded, encoding: .utf8) ?? ""
+
+        #expect(payload.contains("\"start\""))
+        #expect(payload.contains("\"end\""))
+        #expect(payload.contains("summary") == false)
+        #expect(payload.contains("description") == false)
+        #expect(payload.contains("location") == false)
+        #expect(payload.contains("attendees") == false)
+    }
+
     @Test func splashVideoLocatorPrefersStoredVideoOverBundledVideo() async throws {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
