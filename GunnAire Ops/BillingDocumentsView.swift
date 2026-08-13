@@ -2202,7 +2202,38 @@ GunnAire
 
         let resolvedInvoiceID = attachment.invoiceID ?? activeServiceCall?.linkedInvoiceID
         guard let invoiceID = resolvedInvoiceID,
-              let invoice = invoices.first(where: { $0.id == invoiceID }),
+              let invoice = invoices.first(where: { $0.id == invoiceID }) else {
+            return
+        }
+
+        syncAttachmentToQuickBooksInvoiceIfPossible(attachment, invoice: invoice)
+    }
+
+    private func linkExistingServiceReports(to invoice: Invoice, serviceCallID: UUID?) {
+        guard let serviceCallID else { return }
+        let reportAttachments = attachments.filter {
+            $0.serviceCallID == serviceCallID && $0.canLinkToInvoiceReport
+        }
+        guard !reportAttachments.isEmpty else { return }
+
+        for attachment in reportAttachments {
+            attachment.linkToInvoiceIfNeeded(invoice)
+        }
+        try? modelContext.save()
+        syncLinkedServiceReportsToQuickBooks(invoice)
+    }
+
+    private func syncLinkedServiceReportsToQuickBooks(_ invoice: Invoice) {
+        let reportAttachments = attachments.filter {
+            $0.invoiceID == invoice.id && $0.canLinkToInvoiceReport
+        }
+        for attachment in reportAttachments {
+            syncAttachmentToQuickBooksInvoiceIfPossible(attachment, invoice: invoice)
+        }
+    }
+
+    private func syncAttachmentToQuickBooksInvoiceIfPossible(_ attachment: ServiceDocumentAttachment, invoice: Invoice) {
+        guard attachment.quickBooksAttachableID == nil,
               let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
               !quickBooksID.isEmpty,
               QuickBooksDataAPI.shared.isAuthenticated else {
@@ -2926,6 +2957,7 @@ GunnAire
             activeServiceCall?.linkedInvoiceID = invoice.id
             activeServiceCall?.documentationCompletedAt = Date()
             activeServiceCall?.status = .invoiced
+            linkExistingServiceReports(to: invoice, serviceCallID: activeServiceCall?.id)
             actionMessage = isQuickBooksConnected ? "Invoice created locally. Syncing to QuickBooks..." : "Invoice created locally."
             guard saveBillingContext(failureMessage: "Could not save invoice locally") else {
                 isCreatingDocument = false
@@ -3002,6 +3034,7 @@ GunnAire
                         case .success(let quickBooksInvoice):
                             invoice.quickBooksID = quickBooksInvoice.Id
                             saveQuickBooksSyncState()
+                            syncLinkedServiceReportsToQuickBooks(invoice)
                             actionMessage = "Invoice created and synced to QuickBooks."
                         case .failure(let error):
                             actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
@@ -3208,6 +3241,7 @@ GunnAire
             call.status = .invoiced
             call.documentationCompletedAt = Date()
         }
+        linkExistingServiceReports(to: invoice, serviceCallID: estimate.serviceCallID)
         return invoice
     }
 

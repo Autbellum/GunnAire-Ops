@@ -102,4 +102,14 @@ final class ServiceDocumentAttachment {
     var isImage: Bool {
         contentType.lowercased().hasPrefix("image/")
     }
+
+    var canLinkToInvoiceReport: Bool {
+        kind == .serviceReport
+    }
+
+    func linkToInvoiceIfNeeded(_ invoice: Invoice) {
+        if invoiceID == nil {
+            invoiceID = invoice.id
+        }
+    }
 }

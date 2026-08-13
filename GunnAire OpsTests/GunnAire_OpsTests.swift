@@ -109,6 +109,38 @@ struct GunnAire_OpsTests {
         #expect(ServiceDocumentAttachmentKind.serviceReport.isPhoto == false)
     }
 
+    @Test func serviceReportAttachmentLinksToInvoiceWhenMissing() async throws {
+        let customer = Customer(name: "Report Customer")
+        let invoice = Invoice(customer: customer, amount: 250)
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let alreadyLinkedInvoiceID = UUID()
+        let alreadyLinkedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: alreadyLinkedInvoiceID,
+            kind: .serviceReport,
+            displayName: "existing-report.pdf",
+            localFilePath: "/tmp/existing-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        report.linkToInvoiceIfNeeded(invoice)
+        alreadyLinkedReport.linkToInvoiceIfNeeded(invoice)
+
+        #expect(report.canLinkToInvoiceReport == true)
+        #expect(report.invoiceID == invoice.id)
+        #expect(alreadyLinkedReport.invoiceID == alreadyLinkedInvoiceID)
+    }
+
     @Test func serviceDocumentAttachmentExposesLocalFileURLForOpening() async throws {
         let attachment = ServiceDocumentAttachment(
             customer: nil,
