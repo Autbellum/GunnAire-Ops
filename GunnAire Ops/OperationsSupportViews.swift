@@ -1126,6 +1126,7 @@ struct SyncIntegrationsView: View {
 }
 
 struct OnsiteDocumentationView: View {
+    @Environment(\.modelContext) private var modelContext
     @Query(sort: \ServiceCall.scheduledDate, order: .forward) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
@@ -1446,11 +1447,65 @@ struct OnsiteDocumentationView: View {
                 attachments: attachments(for: call)
             )
             generatedCustomerDocumentURL = url
-            documentExportMessage = "Onsite report generated for \(call.customer.name)."
             call.documentationChecklist = true
             call.documentationCompletedAt = call.documentationCompletedAt ?? Date()
+            persistGeneratedOnsiteReport(url, for: call, invoice: linkedInvoice, estimate: estimate(for: call))
         } catch {
             documentExportMessage = "Could not generate onsite report: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistGeneratedOnsiteReport(_ url: URL, for call: ServiceCall, invoice: Invoice?, estimate: Estimate?) {
+        do {
+            let data = try Data(contentsOf: url)
+            let invoiceID = invoice?.id ?? call.linkedInvoiceID
+            let estimateID = estimate?.id ?? call.linkedEstimateID
+            let caption = "Generated onsite \(call.type.displayName.lowercased()) report"
+            let attachment: ServiceDocumentAttachment
+            if let reusable = ServiceDocumentAttachment.reusableGeneratedServiceReport(
+                in: documentAttachments,
+                serviceCallID: call.id,
+                invoiceID: invoiceID,
+                estimateID: estimateID
+            ) {
+                reusable.replaceGeneratedFile(
+                    displayName: url.lastPathComponent,
+                    localFilePath: url.path,
+                    contentType: "application/pdf",
+                    fileSizeBytes: data.count,
+                    caption: caption
+                )
+                attachment = reusable
+            } else {
+                let generated = ServiceDocumentAttachment(
+                    customer: call.customer,
+                    serviceCallID: call.id,
+                    invoiceID: invoiceID,
+                    estimateID: estimateID,
+                    kind: .serviceReport,
+                    displayName: url.lastPathComponent,
+                    caption: caption,
+                    localFilePath: url.path,
+                    contentType: "application/pdf",
+                    fileSizeBytes: data.count
+                )
+                modelContext.insert(generated)
+                attachment = generated
+            }
+
+            try? modelContext.save()
+            QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
+                invoices: invoices,
+                attachments: documentAttachments + [attachment],
+                modelContext: modelContext
+            )
+            if invoice?.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                documentExportMessage = "Onsite report generated and queued for QuickBooks invoice attachment."
+            } else {
+                documentExportMessage = "Onsite report generated and saved to this job."
+            }
+        } catch {
+            documentExportMessage = "Onsite report generated, but could not save it as a job attachment: \(error.localizedDescription)"
         }
     }
 

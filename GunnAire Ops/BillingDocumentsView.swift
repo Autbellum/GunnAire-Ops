@@ -2526,19 +2526,40 @@ GunnAire
             let data = try Data(contentsOf: url)
             let invoice = currentJobInvoice
             let estimate = currentJobEstimate
-            let attachment = ServiceDocumentAttachment(
-                customer: serviceCall.customer,
+            let invoiceID = invoice?.id ?? serviceCall.linkedInvoiceID
+            let estimateID = estimate?.id ?? serviceCall.linkedEstimateID
+            let caption = "Generated onsite \(serviceCall.type.displayName.lowercased()) report"
+            let attachment: ServiceDocumentAttachment
+            if let reusable = ServiceDocumentAttachment.reusableGeneratedServiceReport(
+                in: attachments,
                 serviceCallID: serviceCall.id,
-                invoiceID: invoice?.id ?? serviceCall.linkedInvoiceID,
-                estimateID: estimate?.id ?? serviceCall.linkedEstimateID,
-                kind: .serviceReport,
-                displayName: url.lastPathComponent,
-                caption: "Generated onsite \(serviceCall.type.displayName.lowercased()) report",
-                localFilePath: url.path,
-                contentType: "application/pdf",
-                fileSizeBytes: data.count
-            )
-            modelContext.insert(attachment)
+                invoiceID: invoiceID,
+                estimateID: estimateID
+            ) {
+                reusable.replaceGeneratedFile(
+                    displayName: url.lastPathComponent,
+                    localFilePath: url.path,
+                    contentType: "application/pdf",
+                    fileSizeBytes: data.count,
+                    caption: caption
+                )
+                attachment = reusable
+            } else {
+                let generated = ServiceDocumentAttachment(
+                    customer: serviceCall.customer,
+                    serviceCallID: serviceCall.id,
+                    invoiceID: invoiceID,
+                    estimateID: estimateID,
+                    kind: .serviceReport,
+                    displayName: url.lastPathComponent,
+                    caption: caption,
+                    localFilePath: url.path,
+                    contentType: "application/pdf",
+                    fileSizeBytes: data.count
+                )
+                modelContext.insert(generated)
+                attachment = generated
+            }
             try? modelContext.save()
             syncAttachmentIfPossible(attachment, data: data)
             if invoice?.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {

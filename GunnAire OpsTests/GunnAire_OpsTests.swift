@@ -304,6 +304,69 @@ struct GunnAire_OpsTests {
         #expect(summaries.contains { $0.detail.contains("generated-report.pdf") } == false)
     }
 
+    @Test func generatedServiceReportAttachmentCanBeReusedForSameJobBillingLink() async throws {
+        let customer = Customer(name: "Report Customer")
+        let serviceCallID = UUID()
+        let invoiceID = UUID()
+        let olderReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            kind: .serviceReport,
+            displayName: "older-report.pdf",
+            localFilePath: "/tmp/older-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 10)
+        )
+        let latestReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            kind: .serviceReport,
+            displayName: "latest-report.pdf",
+            localFilePath: "/tmp/latest-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 2048,
+            quickBooksAttachableID: "123",
+            quickBooksSyncError: "Old error",
+            createdAt: Date(timeIntervalSince1970: 20)
+        )
+        let unrelatedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: invoiceID,
+            kind: .serviceReport,
+            displayName: "other-job-report.pdf",
+            localFilePath: "/tmp/other-job-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 30)
+        )
+
+        let reusable = try #require(ServiceDocumentAttachment.reusableGeneratedServiceReport(
+            in: [olderReport, latestReport, unrelatedReport],
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            estimateID: nil
+        ))
+
+        #expect(reusable.id == latestReport.id)
+
+        reusable.replaceGeneratedFile(
+            displayName: "regenerated-report.pdf",
+            localFilePath: "/tmp/regenerated-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 4096,
+            caption: "Generated onsite service report"
+        )
+
+        #expect(reusable.displayName == "regenerated-report.pdf")
+        #expect(reusable.fileSizeBytes == 4096)
+        #expect(reusable.quickBooksAttachableID == nil)
+        #expect(reusable.quickBooksSyncError == nil)
+    }
+
     @Test func quickBooksUploadMetadataCanReferenceInvoiceForSend() async throws {
         let metadata = QuickBooksUploadMetadata(
             FileName: "onsite-report.pdf",

@@ -119,4 +119,38 @@ final class ServiceDocumentAttachment {
             invoiceID = invoice.id
         }
     }
+
+    static func reusableGeneratedServiceReport(
+        in attachments: [ServiceDocumentAttachment],
+        serviceCallID: UUID,
+        invoiceID: UUID?,
+        estimateID: UUID?
+    ) -> ServiceDocumentAttachment? {
+        attachments
+            .filter { attachment in
+                attachment.kind == .serviceReport &&
+                    attachment.serviceCallID == serviceCallID &&
+                    attachment.invoiceID == invoiceID &&
+                    attachment.estimateID == estimateID
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+            .first
+    }
+
+    func replaceGeneratedFile(
+        displayName: String,
+        localFilePath: String,
+        contentType: String,
+        fileSizeBytes: Int,
+        caption: String?
+    ) {
+        self.displayName = displayName
+        self.localFilePath = localFilePath
+        self.contentType = contentType
+        self.fileSizeBytes = fileSizeBytes
+        self.caption = caption
+        self.quickBooksAttachableID = nil
+        self.quickBooksSyncError = nil
+        self.createdAt = Date()
+    }
 }
