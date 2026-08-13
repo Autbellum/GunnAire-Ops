@@ -2209,6 +2209,7 @@ private struct CustomerEditorView: View {
 
                 Section("Documents & Photos") {
                     Picker("Attachment Type", selection: $customerAttachmentKind) {
+                        Text(ServiceDocumentAttachmentKind.customerProfilePhoto.label).tag(ServiceDocumentAttachmentKind.customerProfilePhoto)
                         Text(ServiceDocumentAttachmentKind.customerDocument.label).tag(ServiceDocumentAttachmentKind.customerDocument)
                         Text(ServiceDocumentAttachmentKind.diagnosticPhoto.label).tag(ServiceDocumentAttachmentKind.diagnosticPhoto)
                         if canViewFinancials {

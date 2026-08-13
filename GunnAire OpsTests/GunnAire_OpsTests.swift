@@ -3299,6 +3299,43 @@ struct GunnAire_OpsTests {
         #expect(selected === profilePhoto)
     }
 
+    @Test func customerPrimaryPhotoPrefersDedicatedProfilePhotoKind() async throws {
+        let customer = Customer(name: "Photo Customer")
+        let captionedPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .customerDocument,
+            displayName: "captioned-profile.jpg",
+            caption: "Profile photo",
+            localFilePath: "/tmp/captioned-profile.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_300)
+        )
+        let dedicatedProfilePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .customerProfilePhoto,
+            displayName: "customer-front.jpg",
+            localFilePath: "/tmp/customer-front.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+
+        let selected = ServiceDocumentAttachment.primaryCustomerPhoto(
+            for: customer,
+            in: [captionedPhoto, dedicatedProfilePhoto]
+        )
+
+        #expect(ServiceDocumentAttachmentKind.customerProfilePhoto.customerProfileGroupTitle == "Photos")
+        #expect(dedicatedProfilePhoto.canUseAsCustomerProfilePhoto)
+        #expect(dedicatedProfilePhoto.canLinkToQuickBooksInvoiceAttachment == false)
+        #expect(dedicatedProfilePhoto.canLinkToQuickBooksInvoiceDocument == false)
+        #expect(dedicatedProfilePhoto.canLinkToQuickBooksEstimateDocument == false)
+        #expect(selected === dedicatedProfilePhoto)
+    }
+
     @Test func customerPrimaryPhotoFallsBackToLatestUsableImageForThatCustomer() async throws {
         let customer = Customer(name: "Photo Customer")
         let otherCustomer = Customer(name: "Other Customer")

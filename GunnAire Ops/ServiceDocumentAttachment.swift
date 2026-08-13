@@ -6,6 +6,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
     case beforePhoto = "before_photo"
     case afterPhoto = "after_photo"
     case diagnosticPhoto = "diagnostic_photo"
+    case customerProfilePhoto = "customer_profile_photo"
     case customerDocument = "customer_document"
     case invoiceSupport = "invoice_support"
     case estimateSupport = "estimate_support"
@@ -20,6 +21,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
         case .beforePhoto: return "Before Photo"
         case .afterPhoto: return "After Photo"
         case .diagnosticPhoto: return "Diagnostic Photo"
+        case .customerProfilePhoto: return "Customer Profile Photo"
         case .customerDocument: return "Customer Document"
         case .invoiceSupport: return "Invoice Support"
         case .estimateSupport: return "Estimate Support"
@@ -30,7 +32,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
 
     var isPhoto: Bool {
         switch self {
-        case .beforePhoto, .afterPhoto, .diagnosticPhoto:
+        case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto:
             return true
         case .serviceReport, .customerDocument, .invoiceSupport, .estimateSupport, .receipt, .other:
             return false
@@ -41,7 +43,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
         switch self {
         case .invoiceSupport, .estimateSupport, .receipt:
             return true
-        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .other:
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .customerDocument, .other:
             return false
         }
     }
@@ -56,7 +58,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
             return "Invoice Documents"
         case .receipt:
             return "Receipts & Bills"
-        case .beforePhoto, .afterPhoto, .diagnosticPhoto:
+        case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto:
             return "Photos"
         case .customerDocument, .other:
             return "Customer Files"
@@ -177,7 +179,7 @@ final class ServiceDocumentAttachment {
     var canUseAsCustomerProfilePhoto: Bool {
         guard isImage else { return false }
         switch kind {
-        case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .other:
+        case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .customerDocument, .other:
             return true
         case .serviceReport, .invoiceSupport, .estimateSupport, .receipt:
             return false
@@ -186,7 +188,7 @@ final class ServiceDocumentAttachment {
 
     var canShowInActiveEquipmentHistory: Bool {
         switch kind {
-        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .other:
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .customerDocument, .other:
             return true
         case .invoiceSupport, .estimateSupport, .receipt:
             return false
@@ -205,7 +207,7 @@ final class ServiceDocumentAttachment {
         switch kind {
         case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .invoiceSupport, .estimateSupport, .other:
             return true
-        case .receipt:
+        case .customerProfilePhoto, .receipt:
             return false
         }
     }
@@ -214,7 +216,7 @@ final class ServiceDocumentAttachment {
         switch kind {
         case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .invoiceSupport, .other:
             return true
-        case .estimateSupport, .receipt:
+        case .customerProfilePhoto, .estimateSupport, .receipt:
             return false
         }
     }
@@ -223,7 +225,7 @@ final class ServiceDocumentAttachment {
         switch kind {
         case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .estimateSupport, .other:
             return true
-        case .invoiceSupport, .receipt:
+        case .customerProfilePhoto, .invoiceSupport, .receipt:
             return false
         }
     }
@@ -617,6 +619,9 @@ final class ServiceDocumentAttachment {
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             .joined(separator: " ")
         let isCustomerLevel = attachment.serviceCallID == nil && attachment.customerEquipmentID == nil
+        if attachment.kind == .customerProfilePhoto {
+            return isCustomerLevel ? 500 : 350
+        }
         if searchableText.contains("profile") || searchableText.contains("customer photo") {
             return isCustomerLevel ? 400 : 300
         }
