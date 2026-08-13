@@ -78,6 +78,69 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         "Other"
     ]
 
+    private static let meteringDeviceOptions = [
+        "TXV",
+        "Piston",
+        "EEV",
+        "Capillary Tube",
+        "Fixed Orifice",
+        "Unknown"
+    ]
+
+    private static let conditionOptions = [
+        "Normal",
+        "Monitor",
+        "Needs Cleaning",
+        "Needs Repair",
+        "Failed",
+        "Not Tested",
+        "Not Applicable"
+    ]
+
+    private static let blowerTypeOptions = [
+        "PSC",
+        "ECM Constant Torque",
+        "ECM Variable Speed",
+        "Belt Drive",
+        "Direct Drive",
+        "Unknown"
+    ]
+
+    private static let gasFuelOptions = [
+        "Natural Gas",
+        "Propane",
+        "Oil",
+        "Electric",
+        "Other"
+    ]
+
+    private static let ignitionOptions = [
+        "Hot Surface Ignition",
+        "Spark Ignition",
+        "Intermittent Pilot",
+        "Standing Pilot",
+        "Not Applicable"
+    ]
+
+    private static let ventingOptions = [
+        "Natural Draft",
+        "Induced Draft",
+        "Direct Vent",
+        "Power Vent",
+        "Condensing",
+        "Not Applicable"
+    ]
+
+    private static let tankConditionOptions = [
+        "Normal",
+        "Sediment Present",
+        "Flushed",
+        "Leaking",
+        "Corroded",
+        "Replacement Recommended",
+        "Not Accessible"
+    ]
+
     var readingDefinitions: [HVACTechnicalReadingDefinition] {
         let common = [
             HVACTechnicalReadingDefinition(key: "return_air_temp", label: "Return Air Temp", unit: "F"),
@@ -88,54 +151,128 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         ]
 
         switch self {
-        case .splitSystemAC, .heatPump, .packageUnit, .miniSplit:
-            return common + [
-                HVACTechnicalReadingDefinition(key: "refrigerant_type", label: "Refrigerant Type", unit: nil, options: Self.refrigerantOptions),
-                HVACTechnicalReadingDefinition(key: "suction_pressure", label: "Suction Pressure", unit: "psig"),
-                HVACTechnicalReadingDefinition(key: "liquid_pressure", label: "Liquid Pressure", unit: "psig"),
-                HVACTechnicalReadingDefinition(key: "superheat", label: "Superheat", unit: "F"),
-                HVACTechnicalReadingDefinition(key: "subcooling", label: "Subcooling", unit: "F"),
-                HVACTechnicalReadingDefinition(key: "compressor_amps", label: "Compressor Amps", unit: "A"),
-                HVACTechnicalReadingDefinition(key: "outdoor_fan_amps", label: "Outdoor Fan Amps", unit: "A"),
-                HVACTechnicalReadingDefinition(key: "capacitor_rating", label: "Capacitor Rating", unit: "uF"),
-                HVACTechnicalReadingDefinition(key: "capacitor_actual", label: "Capacitor Actual", unit: "uF")
+        case .splitSystemAC:
+            return common + coolingCircuitDefinitions + [
+                HVACTechnicalReadingDefinition(key: "condenser_condition", label: "Condenser Condition", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "evaporator_condition", label: "Evaporator Condition", unit: nil, options: Self.conditionOptions)
+            ]
+        case .heatPump:
+            return common + coolingCircuitDefinitions + [
+                HVACTechnicalReadingDefinition(key: "mode_tested", label: "Mode Tested", unit: nil, options: ["Cooling", "Heating", "Both"]),
+                HVACTechnicalReadingDefinition(key: "reversing_valve_operation", label: "Reversing Valve", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "defrost_control_status", label: "Defrost Control", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "aux_heat_amps", label: "Aux Heat Amps", unit: "A")
+            ]
+        case .packageUnit:
+            return common + coolingCircuitDefinitions + [
+                HVACTechnicalReadingDefinition(key: "economizer_operation", label: "Economizer", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "gas_pressure_inlet", label: "Gas Pressure Inlet", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "gas_pressure_manifold", label: "Gas Pressure Manifold", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "heat_exchanger_condition", label: "Heat Exchanger", unit: nil, options: Self.conditionOptions)
+            ]
+        case .miniSplit:
+            return common + coolingCircuitDefinitions + [
+                HVACTechnicalReadingDefinition(key: "indoor_head_delta_t", label: "Indoor Head Delta T", unit: "F"),
+                HVACTechnicalReadingDefinition(key: "communication_voltage", label: "Communication Voltage", unit: "V"),
+                HVACTechnicalReadingDefinition(key: "condensate_pump_status", label: "Condensate Pump", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "remote_operation", label: "Remote Operation", unit: nil, options: Self.conditionOptions)
             ]
         case .gasFurnace:
             return common + [
+                HVACTechnicalReadingDefinition(key: "fuel_type", label: "Fuel Type", unit: nil, options: Self.gasFuelOptions),
+                HVACTechnicalReadingDefinition(key: "ignition_type", label: "Ignition Type", unit: nil, options: Self.ignitionOptions),
+                HVACTechnicalReadingDefinition(key: "venting_type", label: "Venting Type", unit: nil, options: Self.ventingOptions),
                 HVACTechnicalReadingDefinition(key: "gas_pressure_inlet", label: "Gas Pressure Inlet", unit: "in. w.c."),
                 HVACTechnicalReadingDefinition(key: "gas_pressure_manifold", label: "Gas Pressure Manifold", unit: "in. w.c."),
                 HVACTechnicalReadingDefinition(key: "flame_sensor_microamps", label: "Flame Sensor", unit: "uA"),
                 HVACTechnicalReadingDefinition(key: "inducer_amps", label: "Inducer Amps", unit: "A"),
                 HVACTechnicalReadingDefinition(key: "blower_amps", label: "Blower Amps", unit: "A"),
                 HVACTechnicalReadingDefinition(key: "temperature_rise", label: "Temperature Rise", unit: "F"),
-                HVACTechnicalReadingDefinition(key: "co_ppm", label: "CO Reading", unit: "ppm")
+                HVACTechnicalReadingDefinition(key: "draft_pressure", label: "Draft Pressure", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "flue_temp", label: "Flue Temp", unit: "F"),
+                HVACTechnicalReadingDefinition(key: "o2_percent", label: "O2", unit: "%"),
+                HVACTechnicalReadingDefinition(key: "co2_percent", label: "CO2", unit: "%"),
+                HVACTechnicalReadingDefinition(key: "co_ppm", label: "CO Reading", unit: "ppm"),
+                HVACTechnicalReadingDefinition(key: "heat_exchanger_condition", label: "Heat Exchanger", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "limit_switch_operation", label: "Limit Switch", unit: nil, options: Self.conditionOptions)
             ]
         case .airHandler:
             return common + [
+                HVACTechnicalReadingDefinition(key: "blower_type", label: "Blower Type", unit: nil, options: Self.blowerTypeOptions),
                 HVACTechnicalReadingDefinition(key: "blower_amps", label: "Blower Amps", unit: "A"),
                 HVACTechnicalReadingDefinition(key: "heat_strip_amps", label: "Heat Strip Amps", unit: "A"),
                 HVACTechnicalReadingDefinition(key: "static_pressure_return", label: "Return Static", unit: "in. w.c."),
-                HVACTechnicalReadingDefinition(key: "static_pressure_supply", label: "Supply Static", unit: "in. w.c.")
+                HVACTechnicalReadingDefinition(key: "static_pressure_supply", label: "Supply Static", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "total_external_static", label: "Total External Static", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "blower_wheel_condition", label: "Blower Wheel", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "duct_condition", label: "Duct Condition", unit: nil, options: Self.conditionOptions)
             ]
-        case .boiler, .waterHeater:
+        case .boiler:
             return [
-                HVACTechnicalReadingDefinition(key: "water_temp_in", label: "Water Temp In", unit: "F"),
-                HVACTechnicalReadingDefinition(key: "water_temp_out", label: "Water Temp Out", unit: "F"),
+                HVACTechnicalReadingDefinition(key: "fuel_type", label: "Fuel Type", unit: nil, options: Self.gasFuelOptions),
+                HVACTechnicalReadingDefinition(key: "water_temp_supply", label: "Supply Water Temp", unit: "F"),
+                HVACTechnicalReadingDefinition(key: "water_temp_return", label: "Return Water Temp", unit: "F"),
                 HVACTechnicalReadingDefinition(key: "system_pressure", label: "System Pressure", unit: "psi"),
+                HVACTechnicalReadingDefinition(key: "expansion_tank_pressure", label: "Expansion Tank Pressure", unit: "psi"),
                 HVACTechnicalReadingDefinition(key: "gas_pressure_inlet", label: "Gas Pressure Inlet", unit: "in. w.c."),
                 HVACTechnicalReadingDefinition(key: "gas_pressure_manifold", label: "Gas Pressure Manifold", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "circulator_amps", label: "Circulator Amps", unit: "A"),
+                HVACTechnicalReadingDefinition(key: "relief_valve_status", label: "Relief Valve", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "backflow_preventer_status", label: "Backflow Preventer", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "flue_temp", label: "Flue Temp", unit: "F"),
+                HVACTechnicalReadingDefinition(key: "co_ppm", label: "CO Reading", unit: "ppm")
+            ]
+        case .waterHeater:
+            return [
+                HVACTechnicalReadingDefinition(key: "fuel_type", label: "Fuel Type", unit: nil, options: Self.gasFuelOptions),
+                HVACTechnicalReadingDefinition(key: "water_temp_out", label: "Outlet Water Temp", unit: "F"),
+                HVACTechnicalReadingDefinition(key: "incoming_water_temp", label: "Incoming Water Temp", unit: "F"),
+                HVACTechnicalReadingDefinition(key: "gas_pressure_inlet", label: "Gas Pressure Inlet", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "gas_pressure_manifold", label: "Gas Pressure Manifold", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "draft_pressure", label: "Draft Pressure", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "venting_type", label: "Venting Type", unit: nil, options: Self.ventingOptions),
+                HVACTechnicalReadingDefinition(key: "tank_condition", label: "Tank Condition", unit: nil, options: Self.tankConditionOptions),
+                HVACTechnicalReadingDefinition(key: "anode_rod_condition", label: "Anode Rod", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "relief_valve_status", label: "T&P Relief Valve", unit: nil, options: Self.conditionOptions),
                 HVACTechnicalReadingDefinition(key: "co_ppm", label: "CO Reading", unit: "ppm")
             ]
         case .ventilation:
             return [
                 HVACTechnicalReadingDefinition(key: "airflow", label: "Airflow", unit: "CFM"),
+                HVACTechnicalReadingDefinition(key: "outside_air_cfm", label: "Outside Air", unit: "CFM"),
+                HVACTechnicalReadingDefinition(key: "exhaust_air_cfm", label: "Exhaust Air", unit: "CFM"),
                 HVACTechnicalReadingDefinition(key: "motor_amps", label: "Motor Amps", unit: "A"),
                 HVACTechnicalReadingDefinition(key: "line_voltage", label: "Line Voltage", unit: "V"),
-                HVACTechnicalReadingDefinition(key: "static_pressure", label: "Static Pressure", unit: "in. w.c.")
+                HVACTechnicalReadingDefinition(key: "static_pressure", label: "Static Pressure", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "belt_condition", label: "Belt Condition", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "damper_operation", label: "Damper Operation", unit: nil, options: Self.conditionOptions)
             ]
         case .other:
             return common
         }
+    }
+
+    private var coolingCircuitDefinitions: [HVACTechnicalReadingDefinition] {
+        [
+            HVACTechnicalReadingDefinition(key: "refrigerant_type", label: "Refrigerant Type", unit: nil, options: Self.refrigerantOptions),
+            HVACTechnicalReadingDefinition(key: "metering_device", label: "Metering Device", unit: nil, options: Self.meteringDeviceOptions),
+            HVACTechnicalReadingDefinition(key: "outdoor_ambient_temp", label: "Outdoor Ambient", unit: "F"),
+            HVACTechnicalReadingDefinition(key: "indoor_wet_bulb", label: "Indoor Wet Bulb", unit: "F"),
+            HVACTechnicalReadingDefinition(key: "indoor_dry_bulb", label: "Indoor Dry Bulb", unit: "F"),
+            HVACTechnicalReadingDefinition(key: "suction_pressure", label: "Suction Pressure", unit: "psig"),
+            HVACTechnicalReadingDefinition(key: "liquid_pressure", label: "Liquid Pressure", unit: "psig"),
+            HVACTechnicalReadingDefinition(key: "suction_line_temp", label: "Suction Line Temp", unit: "F"),
+            HVACTechnicalReadingDefinition(key: "liquid_line_temp", label: "Liquid Line Temp", unit: "F"),
+            HVACTechnicalReadingDefinition(key: "target_superheat", label: "Target Superheat", unit: "F"),
+            HVACTechnicalReadingDefinition(key: "superheat", label: "Superheat", unit: "F"),
+            HVACTechnicalReadingDefinition(key: "target_subcooling", label: "Target Subcooling", unit: "F"),
+            HVACTechnicalReadingDefinition(key: "subcooling", label: "Subcooling", unit: "F"),
+            HVACTechnicalReadingDefinition(key: "compressor_amps", label: "Compressor Amps", unit: "A"),
+            HVACTechnicalReadingDefinition(key: "outdoor_fan_amps", label: "Outdoor Fan Amps", unit: "A"),
+            HVACTechnicalReadingDefinition(key: "capacitor_rating", label: "Capacitor Rating", unit: "uF"),
+            HVACTechnicalReadingDefinition(key: "capacitor_actual", label: "Capacitor Actual", unit: "uF"),
+            HVACTechnicalReadingDefinition(key: "contactor_condition", label: "Contactor Condition", unit: nil, options: Self.conditionOptions)
+        ]
     }
 }
 

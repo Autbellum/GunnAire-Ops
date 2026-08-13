@@ -66,13 +66,38 @@ struct GunnAire_OpsTests {
         let refrigerantDefinition = HVACEquipmentType.splitSystemAC.readingDefinitions.first {
             $0.key == "refrigerant_type"
         }
+        let meteringDeviceDefinition = HVACEquipmentType.splitSystemAC.readingDefinitions.first {
+            $0.key == "metering_device"
+        }
         let superheatDefinition = HVACEquipmentType.splitSystemAC.readingDefinitions.first {
             $0.key == "superheat"
         }
 
         #expect(refrigerantDefinition?.options.contains("R-410A") == true)
         #expect(refrigerantDefinition?.options.contains("R-454B") == true)
+        #expect(meteringDeviceDefinition?.options.contains("TXV") == true)
         #expect(superheatDefinition?.options.isEmpty == true)
+    }
+
+    @Test func equipmentSpecificReportDefinitionsIncludeFieldServiceControls() async throws {
+        let heatPumpKeys = Set(HVACEquipmentType.heatPump.readingDefinitions.map(\.key))
+        let furnaceDefinitions = HVACEquipmentType.gasFurnace.readingDefinitions
+        let waterHeaterDefinitions = HVACEquipmentType.waterHeater.readingDefinitions
+        let airHandlerDefinitions = HVACEquipmentType.airHandler.readingDefinitions
+
+        #expect(heatPumpKeys.contains("reversing_valve_operation"))
+        #expect(heatPumpKeys.contains("defrost_control_status"))
+        #expect(furnaceDefinitions.first { $0.key == "ignition_type" }?.options.contains("Hot Surface Ignition") == true)
+        #expect(furnaceDefinitions.first { $0.key == "heat_exchanger_condition" }?.options.contains("Needs Repair") == true)
+        #expect(waterHeaterDefinitions.first { $0.key == "tank_condition" }?.options.contains("Replacement Recommended") == true)
+        #expect(airHandlerDefinitions.first { $0.key == "blower_type" }?.options.contains("ECM Variable Speed") == true)
+    }
+
+    @Test func hvacEquipmentReadingDefinitionKeysAreUniquePerEquipmentType() async throws {
+        for equipmentType in HVACEquipmentType.allCases {
+            let keys = equipmentType.readingDefinitions.map(\.key)
+            #expect(Set(keys).count == keys.count, "\(equipmentType.displayName) has duplicate technical reading keys")
+        }
     }
 
     @Test func quickBooksMimeTypeDetection() async throws {
