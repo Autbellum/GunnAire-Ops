@@ -4323,6 +4323,7 @@ GunnAire
             )
             modelContext.insert(estimate)
             activeServiceCall?.linkedEstimateID = estimate.id
+            linkExistingEstimateAttachments(to: estimate, serviceCallID: activeServiceCall?.id)
             actionMessage = isQuickBooksConnected ? "Estimate created locally. Syncing to QuickBooks..." : "Estimate created locally."
             guard saveBillingContext(failureMessage: "Could not save estimate locally") else {
                 isCreatingDocument = false
