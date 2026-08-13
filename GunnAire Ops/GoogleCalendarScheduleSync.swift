@@ -5,14 +5,6 @@ import SwiftData
 enum GoogleCalendarScheduleSync {
     private static let deletedCalendarEventKeysStorageKey = "GunnAireDeletedGoogleCalendarEventKeys"
     private static let locallyEditedCalendarCallIDsStorageKey = "GunnAireLocallyEditedGoogleCalendarCallIDs"
-    private static let managedCalendarEventProperties = GoogleCalendarExtendedProperties(
-        privateProperties: [
-            "gunnaireManaged": "true",
-            "gunnaireManagedVersion": "3",
-            "gunnaireOrigin": "ios-app"
-        ]
-    )
-
     static func markCalendarEventDeleted(calendarID: String?, eventID: String?) {
         guard let eventID, !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         var deletedKeys = Set(UserDefaults.standard.stringArray(forKey: deletedCalendarEventKeysStorageKey) ?? [])
@@ -642,7 +634,7 @@ enum GoogleCalendarScheduleSync {
         ) {
             call.googleCalendarID = remote.calendarID
             call.googleEventID = remote.event.id
-            call.googleEventManagedByApp = remote.event.isManagedByGunnAire
+            call.googleEventManagedByApp = false
             clearCalendarCallLocallyEdited(call)
             exportNext(
                 index: index + 1,
@@ -662,7 +654,7 @@ enum GoogleCalendarScheduleSync {
             let event = makeCalendarCreateEvent(for: call)
             auth.createCalendarEvent(calendarID: targetCalendarID, event: event) { result in
                 if case .success = result {
-                    call.googleEventManagedByApp = true
+                    call.googleEventManagedByApp = false
                 }
                 finish(targetCalendarID, result)
             }
@@ -756,7 +748,7 @@ enum GoogleCalendarScheduleSync {
                 timeZone: timeZone
             ),
             attendees: attendees,
-            extendedProperties: preserveExternalDetails ? nil : managedCalendarEventProperties
+            extendedProperties: nil
         )
     }
 
@@ -871,8 +863,7 @@ enum GoogleCalendarScheduleSync {
         for calendarEvent in calendarEvents {
             let eventKey = calendarEventStorageKey(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id)
             guard !isCalendarEventDeleted(calendarID: calendarEvent.calendarID, eventID: calendarEvent.event.id),
-                  indexedEventKeys.insert(eventKey).inserted,
-                  calendarEvent.event.isManagedByGunnAire else {
+                  indexedEventKeys.insert(eventKey).inserted else {
                 continue
             }
             guard let startDate = parseEventDate(calendarEvent.event.start),

@@ -367,7 +367,7 @@ struct GunnAire_OpsTests {
         #expect(object["location"] == nil)
         #expect(object["start"] != nil)
         #expect(object["end"] != nil)
-        #expect(object["extendedProperties"] != nil)
+        #expect(object["extendedProperties"] == nil)
     }
 
     @Test func googleCalendarCreatePayloadKeepsUserEnteredLocationAndDetailsVisible() async throws {
@@ -5733,28 +5733,26 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent) == false)
     }
 
-    @Test func googleCalendarManagedMarkerUsesVersionedGooglePrivateExtendedProperties() async throws {
-        let event = GoogleWritableCalendarEvent(
-            summary: "App-created service call",
-            description: nil,
-            location: nil,
-            start: GoogleWritableCalendarEventDate(dateTime: "2027-01-15T13:00:00Z", timeZone: "America/New_York"),
-            end: GoogleWritableCalendarEventDate(dateTime: "2027-01-15T14:00:00Z", timeZone: "America/New_York"),
-            attendees: nil,
-            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
-                "gunnaireManaged": "true",
-                "gunnaireManagedVersion": "3",
-                "gunnaireOrigin": "ios-app"
-            ])
+    @Test func googleCalendarCreatePayloadDoesNotClaimExternalEventOwnership() async throws {
+        let customer = Customer(name: "Calendar Customer", address: "123 Main St")
+        let call = ServiceCall(
+            eventTitle: "App-created service call",
+            siteAddress: "456 Field Rd",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3_600,
+            customer: customer,
+            notes: "Visible job details."
         )
+        let event = GoogleCalendarScheduleSync.makeCalendarCreateEvent(for: call)
         let encoded = try JSONEncoder().encode(event)
         let payload = String(data: encoded, encoding: .utf8) ?? ""
 
-        #expect(payload.contains("\"extendedProperties\""))
-        #expect(payload.contains("\"private\""))
-        #expect(payload.contains("\"gunnaireManaged\":\"true\""))
-        #expect(payload.contains("\"gunnaireManagedVersion\":\"3\""))
-        #expect(payload.contains("\"gunnaireOrigin\":\"ios-app\""))
+        #expect(payload.contains("\"summary\""))
+        #expect(payload.contains("\"description\""))
+        #expect(payload.contains("\"location\""))
+        #expect(payload.contains("\"extendedProperties\"") == false)
+        #expect(payload.contains("gunnaireManaged") == false)
     }
 
     @MainActor
