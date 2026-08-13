@@ -185,23 +185,26 @@ enum GunnAireAppIntentRouter {
         return id
     }
 
-    nonisolated static func storeMailDraftRoute(to: String, subject: String, body: String) {
+    nonisolated static func storeMailDraftRoute(to: String, subject: String, body: String, attachmentPaths: [String] = []) {
         UserDefaults.standard.set(to, forKey: "GunnAirePendingMailTo")
         UserDefaults.standard.set(subject, forKey: "GunnAirePendingMailSubject")
         UserDefaults.standard.set(body, forKey: "GunnAirePendingMailBody")
+        UserDefaults.standard.set(attachmentPaths, forKey: "GunnAirePendingMailAttachmentPaths")
         store(.mail)
     }
 
-    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String)? {
+    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String, attachmentPaths: [String])? {
         guard let to = UserDefaults.standard.string(forKey: "GunnAirePendingMailTo"),
               let subject = UserDefaults.standard.string(forKey: "GunnAirePendingMailSubject"),
               let body = UserDefaults.standard.string(forKey: "GunnAirePendingMailBody") else {
             return nil
         }
+        let attachmentPaths = UserDefaults.standard.stringArray(forKey: "GunnAirePendingMailAttachmentPaths") ?? []
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailTo")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailSubject")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailBody")
-        return (to, subject, body)
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailAttachmentPaths")
+        return (to, subject, body, attachmentPaths)
     }
 }
 

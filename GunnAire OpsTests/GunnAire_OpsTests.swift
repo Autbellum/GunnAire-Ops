@@ -767,6 +767,48 @@ struct GunnAire_OpsTests {
         #expect(payload.contains("\"gunnaireManaged\":\"true\""))
     }
 
+    @Test func gmailRawMessageIncludesPdfAttachment() async throws {
+        let attachment = GmailAttachment(
+            fileName: "GunnAire-Estimate.pdf",
+            mimeType: "application/pdf",
+            data: Data("pdf-data".utf8)
+        )
+
+        let message = GoogleAuthManager.makeGmailRawMessage(
+            to: "customer@example.com",
+            subject: "Estimate",
+            body: "Attached is your estimate.",
+            attachments: [attachment]
+        )
+
+        #expect(message.contains("Content-Type: multipart/mixed"))
+        #expect(message.contains("Content-Type: text/plain; charset=utf-8"))
+        #expect(message.contains("Content-Type: application/pdf; name=\"GunnAire-Estimate.pdf\""))
+        #expect(message.contains("Content-Disposition: attachment; filename=\"GunnAire-Estimate.pdf\""))
+        #expect(message.contains(Data("pdf-data".utf8).base64EncodedString()))
+    }
+
+    @Test func mailDraftRoutePersistsAttachmentPaths() async throws {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: "GunnAirePendingMailTo")
+        defaults.removeObject(forKey: "GunnAirePendingMailSubject")
+        defaults.removeObject(forKey: "GunnAirePendingMailBody")
+        defaults.removeObject(forKey: "GunnAirePendingMailAttachmentPaths")
+
+        GunnAireAppIntentRouter.storeMailDraftRoute(
+            to: "customer@example.com",
+            subject: "Service Report",
+            body: "Attached.",
+            attachmentPaths: ["/tmp/report.pdf"]
+        )
+        let draft = GunnAireAppIntentRouter.consumePendingMailDraft()
+
+        #expect(draft?.to == "customer@example.com")
+        #expect(draft?.subject == "Service Report")
+        #expect(draft?.body == "Attached.")
+        #expect(draft?.attachmentPaths == ["/tmp/report.pdf"])
+    }
+
     @MainActor
     @Test func googleCalendarRoutingOnlyChangesBeforeEventExists() async throws {
         let customer = Customer(name: "Calendar Customer")

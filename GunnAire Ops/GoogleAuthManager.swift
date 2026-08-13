@@ -188,6 +188,13 @@ struct GmailSendRequest: Codable {
     let threadId: String?
 }
 
+struct GmailAttachment: Identifiable {
+    let id = UUID()
+    let fileName: String
+    let mimeType: String
+    let data: Data
+}
+
 struct GmailThreadResponse: Codable {
     let id: String
     let messages: [GmailMessageDetail]
@@ -627,14 +634,20 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         }
     }
 
-    func sendGmailMessage(to: String, subject: String, body: String, threadID: String? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
-        let message = [
-            "To: \(to)",
-            "Subject: \(subject)",
-            "Content-Type: text/plain; charset=utf-8",
-            "",
-            body
-        ].joined(separator: "\r\n")
+    func sendGmailMessage(
+        to: String,
+        subject: String,
+        body: String,
+        threadID: String? = nil,
+        attachments: [GmailAttachment] = [],
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let message = Self.makeGmailRawMessage(
+            to: to,
+            subject: subject,
+            body: body,
+            attachments: attachments
+        )
 
         guard let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send") else {
             completion(.failure(GoogleAuthError.invalidEndpoint))
@@ -650,6 +663,56 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                 completion(.failure(error))
             }
         }
+    }
+
+    static func makeGmailRawMessage(
+        to: String,
+        subject: String,
+        body: String,
+        attachments: [GmailAttachment] = []
+    ) -> String {
+        let escapedSubject = subject.replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\n", with: " ")
+        guard !attachments.isEmpty else {
+            return [
+                "To: \(to)",
+                "Subject: \(escapedSubject)",
+                "Content-Type: text/plain; charset=utf-8",
+                "",
+                body
+            ].joined(separator: "\r\n")
+        }
+
+        let boundary = "gunnaire-\(UUID().uuidString)"
+        var lines: [String] = [
+            "To: \(to)",
+            "Subject: \(escapedSubject)",
+            "MIME-Version: 1.0",
+            "Content-Type: multipart/mixed; boundary=\"\(boundary)\"",
+            "",
+            "--\(boundary)",
+            "Content-Type: text/plain; charset=utf-8",
+            "Content-Transfer-Encoding: 7bit",
+            "",
+            body
+        ]
+
+        for attachment in attachments {
+            let safeFileName = attachment.fileName
+                .replacingOccurrences(of: "\"", with: "")
+                .replacingOccurrences(of: "\r", with: " ")
+                .replacingOccurrences(of: "\n", with: " ")
+            lines.append(contentsOf: [
+                "--\(boundary)",
+                "Content-Type: \(attachment.mimeType); name=\"\(safeFileName)\"",
+                "Content-Disposition: attachment; filename=\"\(safeFileName)\"",
+                "Content-Transfer-Encoding: base64",
+                "",
+                attachment.data.base64EncodedString(options: [.lineLength76Characters])
+            ])
+        }
+
+        lines.append("--\(boundary)--")
+        return lines.joined(separator: "\r\n")
     }
 
     private func authorizedGET<T: Decodable>(_ absoluteURL: String, completion: @escaping (Result<T, Error>) -> Void) {

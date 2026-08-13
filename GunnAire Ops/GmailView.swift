@@ -109,14 +109,15 @@ struct GmailView: View {
                 GmailComposeView(
                     initialTo: draft.to,
                     initialSubject: draft.subject,
-                    initialMessageBody: draft.body
+                    initialMessageBody: draft.body,
+                    attachments: draft.attachments
                 ) { to, subject, body in
-                    sendMessage(to: to, subject: subject, body: body, threadID: draft.threadID)
+                    sendMessage(to: to, subject: subject, body: body, threadID: draft.threadID, attachments: draft.attachments)
                 }
             }
             .sheet(isPresented: $showingComposeSheet) {
                 GmailComposeView { to, subject, body in
-                    sendMessage(to: to, subject: subject, body: body, threadID: nil)
+                    sendMessage(to: to, subject: subject, body: body, threadID: nil, attachments: [])
                 }
             }
         }
@@ -145,9 +146,9 @@ struct GmailView: View {
         }
     }
 
-    private func sendMessage(to: String, subject: String, body: String, threadID: String?) {
+    private func sendMessage(to: String, subject: String, body: String, threadID: String?, attachments: [GmailAttachment]) {
         statusMessage = "Sending message..."
-        googleAuth.sendGmailMessage(to: to, subject: subject, body: body, threadID: threadID) { result in
+        googleAuth.sendGmailMessage(to: to, subject: subject, body: body, threadID: threadID, attachments: attachments) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success:
@@ -168,8 +169,21 @@ struct GmailView: View {
             to: draft.to,
             subject: draft.subject,
             body: draft.body,
-            threadID: nil
+            threadID: nil,
+            attachments: attachments(from: draft.attachmentPaths)
         )
+    }
+
+    private func attachments(from paths: [String]) -> [GmailAttachment] {
+        paths.compactMap { path in
+            let url = URL(fileURLWithPath: path)
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return GmailAttachment(
+                fileName: url.lastPathComponent,
+                mimeType: QuickBooksDataAPI.mimeType(for: url),
+                data: data
+            )
+        }
     }
 
     private func headerValue(named name: String, in message: GmailMessageDetail) -> String? {
@@ -343,7 +357,8 @@ private struct GmailMessageDetailView: View {
             to: extractedEmail,
             subject: replySubject,
             body: quoted,
-            threadID: activeMessage.threadId
+            threadID: activeMessage.threadId,
+            attachments: []
         )
     }
 
@@ -362,7 +377,8 @@ private struct GmailMessageDetailView: View {
             to: uniqueRecipients.joined(separator: ", "),
             subject: replySubject,
             body: quoted,
-            threadID: activeMessage.threadId
+            threadID: activeMessage.threadId,
+            attachments: []
         )
     }
 
@@ -387,7 +403,8 @@ private struct GmailMessageDetailView: View {
             to: "",
             subject: forwardSubject,
             body: quoted,
-            threadID: nil
+            threadID: nil,
+            attachments: []
         )
     }
 
@@ -428,6 +445,7 @@ private struct GmailComposeView: View {
     @Environment(\.dismiss) private var dismiss
 
     let onSend: (String, String, String) -> Void
+    let attachments: [GmailAttachment]
 
     @State private var to: String
     @State private var subject: String
@@ -437,9 +455,11 @@ private struct GmailComposeView: View {
         initialTo: String = "",
         initialSubject: String = "",
         initialMessageBody: String = "",
+        attachments: [GmailAttachment] = [],
         onSend: @escaping (String, String, String) -> Void
     ) {
         self.onSend = onSend
+        self.attachments = attachments
         _to = State(initialValue: initialTo)
         _subject = State(initialValue: initialSubject)
         _messageBody = State(initialValue: initialMessageBody)
@@ -454,6 +474,21 @@ private struct GmailComposeView: View {
                 TextField("Subject", text: $subject)
                 TextField("Message", text: $messageBody, axis: .vertical)
                     .lineLimit(8...16)
+                if !attachments.isEmpty {
+                    Section("Attachments") {
+                        ForEach(attachments) { attachment in
+                            HStack {
+                                Image(systemName: "paperclip")
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(attachment.fileName)
+                                    Text(ByteCountFormatter.string(fromByteCount: Int64(attachment.data.count), countStyle: .file))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             .navigationTitle("Compose")
             .toolbar {
@@ -478,6 +513,7 @@ private struct GmailDraft: Identifiable {
     let subject: String
     let body: String
     let threadID: String?
+    let attachments: [GmailAttachment]
 }
 
 private extension String {

@@ -63,6 +63,8 @@ struct BillingDocumentsView: View {
     @State private var showingItemCreator = false
     @State private var selectedInvoiceForCloseout: Invoice?
     @State private var generatedCustomerDocumentURL: URL?
+    @State private var generatedCustomerDocumentRecipientID: UUID?
+    @State private var generatedCustomerDocumentKind = "document"
     @State private var showingDocumentationFileImporter = false
     @State private var showingDocumentationCamera = false
     @State private var attachmentKind: ServiceDocumentAttachmentKind = .diagnosticPhoto
@@ -106,6 +108,11 @@ struct BillingDocumentsView: View {
     private var selectedCustomer: Customer? {
         guard let selectedCustomerID else { return nil }
         return customers.first { $0.id == selectedCustomerID }
+    }
+
+    private var generatedCustomerDocumentRecipient: Customer? {
+        guard let generatedCustomerDocumentRecipientID else { return activeServiceCall?.customer ?? selectedCustomer }
+        return customers.first { $0.id == generatedCustomerDocumentRecipientID } ?? activeServiceCall?.customer ?? selectedCustomer
     }
 
     private var filteredCustomers: [Customer] {
@@ -405,6 +412,45 @@ GunnAire
         }
     }
 
+    private var canEmailGeneratedCustomerDocument: Bool {
+        guard googleAuth.isAuthenticated,
+              generatedCustomerDocumentURL != nil,
+              let email = generatedCustomerDocumentRecipient?.email?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        return !email.isEmpty
+    }
+
+    private func emailGeneratedCustomerDocument(_ url: URL) {
+        guard googleAuth.isAuthenticated else {
+            actionMessage = "Connect Google before emailing generated PDFs from the app."
+            return
+        }
+        guard let recipient = generatedCustomerDocumentRecipient,
+              let email = recipient.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else {
+            actionMessage = "Add a customer email before sending this generated document."
+            return
+        }
+        let subject = "GunnAire \(generatedCustomerDocumentKind.capitalized) - \(recipient.name)"
+        let body = """
+Hello \(recipient.name),
+
+Attached is your GunnAire \(generatedCustomerDocumentKind).
+
+Please reply with any questions.
+
+Thank you,
+GunnAire
+"""
+        GunnAireAppIntentRouter.storeMailDraftRoute(
+            to: email,
+            subject: subject,
+            body: body,
+            attachmentPaths: [url.path]
+        )
+    }
+
     private var isJobDocumentationMode: Bool {
         activeServiceCall != nil
     }
@@ -643,6 +689,14 @@ GunnAire
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
+
+                            Button {
+                                emailGeneratedCustomerDocument(generatedCustomerDocumentURL)
+                            } label: {
+                                Label("Email Last Generated Document", systemImage: "paperplane")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!canEmailGeneratedCustomerDocument)
                         }
                     }
 
@@ -727,6 +781,14 @@ GunnAire
                         .buttonStyle(.borderedProminent)
                         .tint(Color.brandGold)
                         .foregroundStyle(Color.primaryBlack)
+
+                        Button {
+                            emailGeneratedCustomerDocument(generatedCustomerDocumentURL)
+                        } label: {
+                            Label("Email Last Generated Document", systemImage: "paperplane")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!canEmailGeneratedCustomerDocument)
                     }
                 }
 
@@ -2529,6 +2591,8 @@ GunnAire
                 attachments: activeJobAttachments
             )
             generatedCustomerDocumentURL = url
+            generatedCustomerDocumentRecipientID = serviceCall.customer.id
+            generatedCustomerDocumentKind = "\(serviceCall.type.displayName.lowercased()) report"
             serviceCall.documentationChecklist = true
             serviceCall.documentationCompletedAt = serviceCall.documentationCompletedAt ?? Date()
             persistGeneratedOnsiteReport(url, for: serviceCall)
@@ -2592,6 +2656,8 @@ GunnAire
         do {
             let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: serviceCall(for: estimate))
             generatedCustomerDocumentURL = url
+            generatedCustomerDocumentRecipientID = estimate.customer.id
+            generatedCustomerDocumentKind = "estimate"
             actionMessage = "Estimate PDF generated."
         } catch {
             actionMessage = "Could not generate estimate PDF: \(error.localizedDescription)"
@@ -2607,6 +2673,8 @@ GunnAire
                 payments: invoicePayments
             )
             generatedCustomerDocumentURL = url
+            generatedCustomerDocumentRecipientID = invoice.customer.id
+            generatedCustomerDocumentKind = "paid invoice"
             actionMessage = "Paid invoice PDF generated."
         } catch {
             actionMessage = "Could not generate paid invoice PDF: \(error.localizedDescription)"
