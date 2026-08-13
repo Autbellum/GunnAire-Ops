@@ -1908,6 +1908,9 @@ final class ServiceCall {
 
     var serviceReportMissingRequiredItemLabels: [String] {
         var missing: [String] = []
+        if requiresTechnicalServiceReportCompletion && equipmentType == nil {
+            missing.append("Equipment Type")
+        }
         if equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             missing.append("Equipment Name")
         }
@@ -1928,7 +1931,8 @@ final class ServiceCall {
     }
 
     var serviceReportRequiredItemCount: Int {
-        4 + requiredTechnicalReadingDefinitions.count + (type == .maintenance ? requiredServiceActionDefinitions.count : 0)
+        let baseRequiredFields = requiresTechnicalServiceReportCompletion ? 5 : 4
+        return baseRequiredFields + requiredTechnicalReadingDefinitions.count + (type == .maintenance ? requiredServiceActionDefinitions.count : 0)
     }
 
     var serviceReportCompletedRequiredItemCount: Int {

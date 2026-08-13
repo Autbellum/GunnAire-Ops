@@ -1560,6 +1560,34 @@ struct GunnAire_OpsTests {
         #expect(call.serviceReportReadinessSummary == "\(call.serviceReportRequiredItemCount)/\(call.serviceReportRequiredItemCount) required items")
     }
 
+    @Test func technicalReportRequiresEquipmentTypeBeforeInvoiceCreation() async throws {
+        let customer = Customer(name: "Equipment Type Required Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs System",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            serviceReportSummary: "System checked and operating.",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+
+        #expect(call.serviceReportMissingRequiredItemLabels.contains("Equipment Type"))
+        #expect(call.canCreateInvoiceDocument == false)
+        #expect(call.invoiceCreationBlockedMessage?.contains("Equipment Type") == true)
+
+        call.equipmentType = .splitSystemAC
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+
+        #expect(call.serviceReportMissingRequiredItemLabels.contains("Equipment Type") == false)
+        #expect(call.canCreateInvoiceDocument)
+    }
+
     @Test func changingEquipmentTypePrunesIncompatibleTechnicalReadings() async throws {
         let customer = Customer(name: "Equipment Type Customer")
         let call = ServiceCall(
