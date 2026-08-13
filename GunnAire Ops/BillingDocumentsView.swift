@@ -528,7 +528,8 @@ GunnAire
             generatedCustomerDocumentEstimateID = nil
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
             generatedCustomerDocumentKind = documentLabel
-            persistGeneratedBillingDocument(
+            var emailAttachments = attachments
+            if let invoiceAttachment = persistGeneratedBillingDocument(
                 url,
                 customer: invoice.customer,
                 serviceCallID: serviceCall?.id,
@@ -537,12 +538,29 @@ GunnAire
                 kind: .invoiceSupport,
                 caption: CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments),
                 successMessage: "\(CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)) PDF generated for email."
-            )
+            ) {
+                emailAttachments.append(invoiceAttachment)
+            }
+            if let serviceCall {
+                let linkedEstimate = currentJobEstimate ?? estimates.first { estimate in
+                    estimate.id == serviceCall.linkedEstimateID || estimate.serviceCallID == serviceCall.id
+                }
+                let report = try generateAndPersistOnsiteReportAttachment(
+                    for: serviceCall,
+                    estimate: linkedEstimate,
+                    invoice: invoice,
+                    payments: invoicePayments,
+                    attachments: emailAttachments.filter { $0.serviceCallID == serviceCall.id }
+                )
+                report.attachment.linkToInvoiceIfNeeded(invoice)
+                syncAttachmentIfPossible(report.attachment, data: report.data)
+                emailAttachments.append(report.attachment)
+            }
             return CustomerDocumentExporter.customerEmailAttachmentURLs(
                 primaryDocumentURL: url,
                 serviceCallID: serviceCall?.id,
                 invoiceID: invoice.id,
-                attachments: attachments
+                attachments: emailAttachments
             ).map(\.path)
         } catch {
             actionMessage = "Could not prepare invoice attachment for email: \(error.localizedDescription)"
