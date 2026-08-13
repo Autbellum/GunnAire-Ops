@@ -666,6 +666,7 @@ struct SyncIntegrationsView: View {
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
@@ -703,6 +704,7 @@ struct SyncIntegrationsView: View {
             estimates: estimates,
             invoices: invoices,
             payments: payments,
+            attachments: documentAttachments,
             timeEntries: timeEntries,
             items: items,
             vendors: vendors,

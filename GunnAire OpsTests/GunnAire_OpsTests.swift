@@ -6761,6 +6761,49 @@ struct GunnAire_OpsTests {
         #expect(snapshot.actions.contains { $0.title == "Tighten sync coverage" })
     }
 
+    @Test func businessSuiteFlagsPendingQuickBooksDocumentAttachments() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let customer = Customer(name: "Document Sync Customer", address: "520 Integration Ave")
+        let invoice = Invoice(
+            customer: customer,
+            quickBooksID: "INV-520",
+            amount: 500,
+            status: "paid"
+        )
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            invoiceID: invoice.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let snapshot = BusinessSuiteIntelligence.snapshot(
+            customers: [customer],
+            serviceCalls: [],
+            technicians: [],
+            contracts: [],
+            estimates: [],
+            invoices: [invoice],
+            payments: [],
+            attachments: [report],
+            timeEntries: [],
+            googleConnected: true,
+            quickBooksConnected: true,
+            onsitePaymentsReady: true,
+            now: now
+        )
+
+        let integrations = try #require(snapshot.workstreams.first { $0.id == .integrations })
+
+        #expect(snapshot.syncAttentionCount == 1)
+        #expect(integrations.detail.contains("1 QuickBooks"))
+        #expect(snapshot.actions.contains { $0.title == "Tighten sync coverage" })
+    }
+
     @Test func businessSuiteFlagsPricebookMarginAndCostGaps() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let unpricedItem = Item(name: "Emergency Diagnostic", unitPrice: 0)

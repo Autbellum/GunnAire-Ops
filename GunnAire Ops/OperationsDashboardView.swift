@@ -206,6 +206,7 @@ struct OperationsDashboardView: View {
             estimates: estimates,
             invoices: invoices,
             payments: payments,
+            attachments: attachments,
             timeEntries: timeEntries,
             items: items,
             vendors: vendors,

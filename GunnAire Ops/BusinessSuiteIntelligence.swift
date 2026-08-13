@@ -89,6 +89,7 @@ enum BusinessSuiteIntelligence {
         estimates: [Estimate],
         invoices: [Invoice],
         payments: [Payment],
+        attachments: [ServiceDocumentAttachment] = [],
         timeEntries: [TimeEntry],
         items: [Item] = [],
         vendors: [Vendor] = [],
@@ -175,7 +176,7 @@ enum BusinessSuiteIntelligence {
                 technician: call.assignedTechnician
             )
         }.count : 0
-        let quickBooksDocumentGaps = quickBooksConnected ? quickBooksGapCount(estimates: estimates, invoices: invoices) : 0
+        let quickBooksDocumentGaps = quickBooksConnected ? quickBooksGapCount(estimates: estimates, invoices: invoices, attachments: attachments) : 0
         let catalogItems = items.filter {
             !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
@@ -636,11 +637,19 @@ enum BusinessSuiteIntelligence {
             .map { $0 }
     }
 
-    private static func quickBooksGapCount(estimates: [Estimate], invoices: [Invoice]) -> Int {
-        estimates.filter { isOpenEstimate($0) && $0.quickBooksID?.isEmpty != false }.count +
-        invoices.filter {
+    private static func quickBooksGapCount(estimates: [Estimate], invoices: [Invoice], attachments: [ServiceDocumentAttachment]) -> Int {
+        let billingDocumentGaps = estimates.filter { isOpenEstimate($0) && $0.quickBooksID?.isEmpty != false }.count +
+            invoices.filter {
             CustomerIntelligence.outstandingBalance(for: $0, payments: []) > 0 && $0.quickBooksID?.isEmpty != false
         }.count
+        let attachmentGaps = attachments.filter { attachment in
+            guard attachment.quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
+                return false
+            }
+            return invoices.contains(where: attachment.canUploadToQuickBooksInvoice) ||
+                estimates.contains(where: attachment.canUploadToQuickBooksEstimate)
+        }.count
+        return billingDocumentGaps + attachmentGaps
     }
 
     private nonisolated static func isOpenEstimate(_ estimate: Estimate) -> Bool {
