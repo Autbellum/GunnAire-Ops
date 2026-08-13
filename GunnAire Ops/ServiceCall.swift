@@ -1661,6 +1661,17 @@ final class ServiceCall {
         diagnosticsCaptured = true
     }
 
+    @discardableResult
+    func markUncheckedServiceActions(_ status: HVACServiceActionStatus, in group: HVACServiceActionGroup) -> Int {
+        guard status != .notChecked else { return 0 }
+        var markedCount = 0
+        for definition in group.definitions where serviceActionStatus(for: definition.key) == .notChecked {
+            setServiceActionStatus(status, for: definition.key)
+            markedCount += 1
+        }
+        return markedCount
+    }
+
     var requiredServiceActionDefinitions: [HVACServiceActionDefinition] {
         serviceActionDefinitions.filter(\.required)
     }

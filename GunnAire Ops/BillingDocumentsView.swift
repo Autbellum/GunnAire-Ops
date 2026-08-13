@@ -2450,9 +2450,23 @@ GunnAire
             DisclosureGroup("Equipment Service Actions") {
                 ForEach(call.groupedServiceActionDefinitions) { group in
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(group.title)
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(.secondary)
+                        HStack {
+                            Text(group.title)
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Menu {
+                                Button("Mark Unchecked Completed") {
+                                    call.markUncheckedServiceActions(.completed, in: group)
+                                }
+                                Button("Mark Unchecked N/A") {
+                                    call.markUncheckedServiceActions(.notApplicable, in: group)
+                                }
+                            } label: {
+                                Label("Group Actions", systemImage: "ellipsis.circle")
+                                    .font(.caption)
+                            }
+                        }
                         ForEach(group.definitions) { definition in
                             serviceActionStatusPicker(definition, call: call)
                         }

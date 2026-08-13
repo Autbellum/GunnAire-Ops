@@ -1078,6 +1078,27 @@ struct GunnAire_OpsTests {
         #expect(call.populatedServiceActionRows.contains { $0.label == "Heat exchanger inspected" && $0.value == "Needs Service" })
     }
 
+    @Test func serviceActionGroupBulkStatusOnlyUpdatesUncheckedItems() async throws {
+        let customer = Customer(name: "Bulk Action Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let coolingGroup = try #require(call.groupedServiceActionDefinitions.first { $0.title == "Cooling" })
+        call.setServiceActionStatus(.needsService, for: "condenser_coil_serviced")
+
+        let markedCount = call.markUncheckedServiceActions(.completed, in: coolingGroup)
+
+        #expect(markedCount == coolingGroup.definitions.count - 1)
+        #expect(call.serviceActionStatus(for: "condenser_coil_serviced") == .needsService)
+        for definition in coolingGroup.definitions where definition.key != "condenser_coil_serviced" {
+            #expect(call.serviceActionStatus(for: definition.key) == .completed)
+        }
+        #expect(call.diagnosticsCaptured)
+    }
+
     @Test func maintenanceReportRequiresEquipmentServiceActions() async throws {
         let customer = Customer(name: "Maintenance Action Customer")
         let call = ServiceCall(
