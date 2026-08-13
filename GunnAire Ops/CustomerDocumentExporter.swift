@@ -774,6 +774,11 @@ enum CustomerDocumentExporter {
         if !technicalRows.isEmpty {
             summaries.append(("Technical Snapshot", Array(technicalRows.prefix(12))))
         }
+
+        let serviceActionRows = serviceCall.populatedServiceActionRows
+        if !serviceActionRows.isEmpty {
+            summaries.append(("Service Actions", Array(serviceActionRows.prefix(12))))
+        }
         return summaries
     }
 

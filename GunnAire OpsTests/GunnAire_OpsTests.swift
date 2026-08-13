@@ -4349,6 +4349,8 @@ struct GunnAire_OpsTests {
         call.setTechnicalReading("76", for: "return_air_temp")
         call.setTechnicalReading("56", for: "supply_air_temp")
         call.setTechnicalReading("12", for: "superheat")
+        call.setServiceActionStatus(.needsService, for: "condenser_coil_inspected_washed")
+        call.setServiceActionStatus(.completed, for: "electrical_connections_checked")
 
         let summaries = CustomerDocumentExporter.billingDocumentationSummaries(for: call)
         let hasOnsiteDocumentation = summaries.contains { summary in
@@ -4366,10 +4368,20 @@ struct GunnAire_OpsTests {
                     row.label == "Superheat (F)" && row.value == "12"
                 }
         }
+        let hasServiceActions = summaries.contains { summary in
+            summary.title == "Service Actions" &&
+                summary.rows.contains { row in
+                    row.label == "Condenser coil inspected/washed" && row.value == "Needs Service"
+                } &&
+                summary.rows.contains { row in
+                    row.label == "Electrical connections checked" && row.value == "Completed"
+                }
+        }
 
         #expect(hasOnsiteDocumentation)
         #expect(hasFindingsSummary)
         #expect(hasTechnicalSnapshot)
+        #expect(hasServiceActions)
     }
 
     @Test func onsiteReportJobRowsIncludeStructuredCustomerContactContext() async throws {
