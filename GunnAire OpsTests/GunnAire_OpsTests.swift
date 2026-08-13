@@ -775,6 +775,37 @@ struct GunnAire_OpsTests {
         #expect(progress.summary.contains("invalid"))
     }
 
+    @Test func targetSuperheatAndSubcoolingDeviationBlocksReportCompletion() async throws {
+        let customer = Customer(name: "Target Deviation Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        call.setTechnicalReading("10", for: "target_superheat")
+        call.setTechnicalReading("18", for: "superheat")
+        call.setTechnicalReading("9", for: "target_subcooling")
+        call.setTechnicalReading("14", for: "subcooling")
+
+        #expect(call.serviceReportMissingRequiredItemLabels.isEmpty)
+        #expect(call.serviceReportReadingValidationIssueLabels.contains { $0.contains("Superheat differs from Target Superheat") })
+        #expect(call.serviceReportReadingValidationIssueLabels.contains { $0.contains("Subcooling differs from Target Subcooling") })
+        #expect(call.canCompleteDocumentation == false)
+
+        let superheatDefinition = try #require(call.technicalReadingDefinitions.first { $0.key == "superheat" })
+        let subcoolingDefinition = try #require(call.technicalReadingDefinitions.first { $0.key == "subcooling" })
+        #expect(call.technicalReadingValidationIssue(for: superheatDefinition)?.contains("more than 5.0 F") == true)
+        #expect(call.technicalReadingValidationIssue(for: subcoolingDefinition)?.contains("more than 3.0 F") == true)
+    }
+
     @Test func equipmentSpecificReportReadinessTracksMissingRequiredItems() async throws {
         let customer = Customer(name: "Readiness Customer")
         let call = ServiceCall(
@@ -1330,6 +1361,27 @@ struct GunnAire_OpsTests {
         #expect(rows.contains { $0.label == "Completion" && $0.value == "Needs details" })
         #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("CO Reading") })
         #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("100 ppm") })
+    }
+
+    @Test func onsiteReportTechnicalRowsExposeCrossReadingValidation() async throws {
+        let customer = Customer(name: "Technical Export Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("10", for: "target_superheat")
+        call.setTechnicalReading("18", for: "superheat")
+
+        let summaries = CustomerDocumentExporter.technicalReportSectionSummaries(for: call)
+        let refrigerantRows = try #require(summaries.first { $0.title == "Technical Readings - Refrigerant Circuit" }?.rows)
+
+        #expect(refrigerantRows.contains { $0.label == "Superheat (F) Validation" && $0.value.contains("Target Superheat") })
     }
 
     @Test func onsiteReportCloseoutRowsExposeIntegratedJobReadiness() async throws {

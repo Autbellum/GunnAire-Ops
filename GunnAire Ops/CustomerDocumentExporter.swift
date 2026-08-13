@@ -311,7 +311,7 @@ enum CustomerDocumentExporter {
                 }
                 var rows: [(label: String, value: String)] = [(definition.displayLabel, value)]
                 if isRequired { rows.append(("\(definition.displayLabel) Requirement", "Required")) }
-                if let issue = definition.validationIssue(for: value) {
+                if let issue = serviceCall.technicalReadingValidationIssue(for: definition) {
                     rows.append(("\(definition.displayLabel) Validation", issue))
                 }
                 return rows

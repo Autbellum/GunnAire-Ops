@@ -1114,7 +1114,7 @@ final class ServiceCall {
             technicalReading(for: $0.key).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         let validationIssueCount = group.definitions.filter {
-            $0.validationIssue(for: technicalReading(for: $0.key)) != nil
+            technicalReadingValidationIssue(for: $0) != nil
         }.count
 
         return HVACTechnicalReadingGroupProgress(
@@ -1154,6 +1154,20 @@ final class ServiceCall {
                 ratingLabel: "Outdoor Fan FLA",
                 toleranceMultiplier: 1.15
             ),
+            targetDeviationValidationIssue(
+                measuredKey: "superheat",
+                targetKey: "target_superheat",
+                measuredLabel: "Superheat",
+                targetLabel: "Target Superheat",
+                tolerance: 5
+            ),
+            targetDeviationValidationIssue(
+                measuredKey: "subcooling",
+                targetKey: "target_subcooling",
+                measuredLabel: "Subcooling",
+                targetLabel: "Target Subcooling",
+                tolerance: 3
+            ),
             combustionSafetyValidationIssue()
         ].compactMap { $0 }
     }
@@ -1176,6 +1190,22 @@ final class ServiceCall {
                 ratingLabel: "Outdoor Fan FLA",
                 toleranceMultiplier: 1.15
             )
+        case "superheat":
+            return targetDeviationValidationIssue(
+                measuredKey: "superheat",
+                targetKey: "target_superheat",
+                measuredLabel: "Superheat",
+                targetLabel: "Target Superheat",
+                tolerance: 5
+            )
+        case "subcooling":
+            return targetDeviationValidationIssue(
+                measuredKey: "subcooling",
+                targetKey: "target_subcooling",
+                measuredLabel: "Subcooling",
+                targetLabel: "Target Subcooling",
+                tolerance: 3
+            )
         case "co_ppm":
             return combustionSafetyValidationIssue()
         default:
@@ -1197,6 +1227,21 @@ final class ServiceCall {
             return nil
         }
         return "\(measuredLabel) exceeds \(ratingLabel) by more than \(Int((toleranceMultiplier - 1) * 100))%"
+    }
+
+    private func targetDeviationValidationIssue(
+        measuredKey: String,
+        targetKey: String,
+        measuredLabel: String,
+        targetLabel: String,
+        tolerance: Double
+    ) -> String? {
+        guard let measured = numericTechnicalReading(for: measuredKey),
+              let target = numericTechnicalReading(for: targetKey),
+              abs(measured - target) > tolerance else {
+            return nil
+        }
+        return "\(measuredLabel) differs from \(targetLabel) by more than \(ServiceCall.formattedTechnicalReading(tolerance)) F"
     }
 
     private func combustionSafetyValidationIssue() -> String? {
