@@ -183,10 +183,11 @@ enum CustomerDocumentExporter {
     }
 
     static func serviceReportReadinessRows(for serviceCall: ServiceCall) -> [(label: String, value: String)] {
-        let missing = serviceCall.serviceReportMissingRequirementLabels
+        let completionIssues = serviceCall.serviceReportMissingRequirementLabels
+        let missing = serviceCall.serviceReportMissingRequiredItemLabels
         let validationIssues = serviceCall.serviceReportReadingValidationIssueLabels
         var rows: [(label: String, value: String)] = [
-            ("Completion", missing.isEmpty ? "Ready" : "Needs details"),
+            ("Completion", completionIssues.isEmpty ? "Ready" : "Needs details"),
             ("Required Items", serviceCall.serviceReportReadinessSummary)
         ]
         if !missing.isEmpty {

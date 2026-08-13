@@ -1166,6 +1166,10 @@ final class ServiceCall {
     }
 
     var serviceReportMissingRequirementLabels: [String] {
+        serviceReportMissingRequiredItemLabels + serviceReportReadingValidationIssueLabels
+    }
+
+    var serviceReportMissingRequiredItemLabels: [String] {
         var missing: [String] = []
         if equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             missing.append("Equipment Name")
@@ -1180,7 +1184,6 @@ final class ServiceCall {
         if serviceReportSummary?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             missing.append("Service Report Summary")
         }
-        missing.append(contentsOf: serviceReportReadingValidationIssueLabels)
         return missing
     }
 
@@ -1189,11 +1192,14 @@ final class ServiceCall {
     }
 
     var serviceReportCompletedRequiredItemCount: Int {
-        max(0, serviceReportRequiredItemCount - serviceReportMissingRequirementLabels.count)
+        max(0, serviceReportRequiredItemCount - serviceReportMissingRequiredItemLabels.count)
     }
 
     var serviceReportReadinessSummary: String {
-        "\(serviceReportCompletedRequiredItemCount)/\(serviceReportRequiredItemCount) required items"
+        let base = "\(serviceReportCompletedRequiredItemCount)/\(serviceReportRequiredItemCount) required items"
+        let invalidCount = serviceReportReadingValidationIssueLabels.count
+        guard invalidCount > 0 else { return base }
+        return "\(base) • \(invalidCount) invalid"
     }
 
     var requiresTechnicalServiceReportCompletion: Bool {
@@ -1222,7 +1228,7 @@ final class ServiceCall {
 
     var documentationCompletionBlockedMessage: String? {
         guard !canCompleteDocumentation else { return nil }
-        return "Documentation is not complete. Missing: \(serviceReportMissingRequirementLabels.joined(separator: ", "))."
+        return "Documentation is not complete. Missing or invalid: \(serviceReportMissingRequirementLabels.joined(separator: ", "))."
     }
 
     func closeoutReadiness(

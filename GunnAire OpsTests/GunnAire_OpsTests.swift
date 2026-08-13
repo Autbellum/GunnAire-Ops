@@ -775,9 +775,12 @@ struct GunnAire_OpsTests {
         }
         call.setTechnicalReading("12", for: "line_voltage")
 
+        #expect(call.serviceReportMissingRequiredItemLabels.isEmpty)
         #expect(call.serviceReportReadingValidationIssueLabels.contains { $0.contains("Line Voltage") })
+        #expect(call.serviceReportReadinessSummary == "\(call.serviceReportRequiredItemCount)/\(call.serviceReportRequiredItemCount) required items • 1 invalid")
         #expect(call.canCompleteDocumentation == false)
         #expect(call.markDocumentationCompleteIfReady() == false)
+        #expect(call.documentationCompletionBlockedMessage?.contains("Missing or invalid") == true)
         #expect(call.documentationCompletionBlockedMessage?.contains("Line Voltage") == true)
     }
 
@@ -1202,6 +1205,9 @@ struct GunnAire_OpsTests {
         let rows = CustomerDocumentExporter.serviceReportReadinessRows(for: call)
 
         #expect(rows.contains { $0.label == "Completion" && $0.value == "Needs details" })
+        #expect(rows.contains { $0.label == "Required Items" && $0.value == call.serviceReportReadinessSummary })
+        #expect(rows.contains { $0.label == "Required Items" && $0.value.contains("1 invalid") })
+        #expect(rows.contains { $0.label == "Missing Required Items" } == false)
         #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("Line Voltage") })
         #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("90-600 V") })
     }
