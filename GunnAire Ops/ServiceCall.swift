@@ -789,7 +789,9 @@ final class ServiceCall {
             indoorCoilCondition.map { "Indoor coil: \($0)" },
             outdoorCoilCondition.map { "Outdoor coil: \($0)" },
             drainLineCondition.map { "Drain: \($0)" },
-            thermostatOperation.map { "Thermostat: \($0)" }
+            thermostatOperation.map { "Thermostat: \($0)" },
+            linkedEstimateID.map { "Estimate: \(Self.shortHistoryID($0))" },
+            linkedInvoiceID.map { "Invoice: \(Self.shortHistoryID($0))" }
         ]
             .compactMap { value -> String? in
                 let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -798,6 +800,10 @@ final class ServiceCall {
 
         guard !details.isEmpty else { return nil }
         return ([title] + details).joined(separator: " - ")
+    }
+
+    private static func shortHistoryID(_ id: UUID) -> String {
+        String(id.uuidString.prefix(8)).uppercased()
     }
 
     var technicalReadingServiceHistorySummary: String? {

@@ -435,6 +435,8 @@ struct GunnAire_OpsTests {
 
     @Test func serviceReportCanAppendEquipmentProfileHistoryWithoutDuplicates() async throws {
         let customer = Customer(name: "Equipment Customer")
+        let estimateID = UUID()
+        let invoiceID = UUID()
         let call = ServiceCall(
             equipmentName: "Main Furnace",
             equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
@@ -445,7 +447,9 @@ struct GunnAire_OpsTests {
             scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
             customer: customer,
             findingsSummary: "No faults found.",
-            recommendedWorkSummary: "Return in six months."
+            recommendedWorkSummary: "Return in six months.",
+            linkedEstimateID: estimateID,
+            linkedInvoiceID: invoiceID
         )
         let note = try #require(call.equipmentProfileServiceHistoryNote)
         let merged = CustomerEquipment.mergedNotes(existing: "Existing equipment note.", serviceHistoryNote: note)
@@ -454,6 +458,8 @@ struct GunnAire_OpsTests {
         #expect(note.contains("Maintenance"))
         #expect(note.contains("Heating maintenance completed."))
         #expect(note.contains("Filter: Replaced"))
+        #expect(note.contains("Estimate: \(String(estimateID.uuidString.prefix(8)).uppercased())"))
+        #expect(note.contains("Invoice: \(String(invoiceID.uuidString.prefix(8)).uppercased())"))
         #expect(merged?.contains("Existing equipment note.") == true)
         #expect(merged?.contains("Return in six months.") == true)
         #expect(mergedAgain == merged)
