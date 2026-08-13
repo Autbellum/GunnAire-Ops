@@ -3138,7 +3138,12 @@ GunnAire
 
     @discardableResult
     private func prepareInvoiceDocumentationForQuickBooksSend(_ invoice: Invoice) -> Bool {
-        guard let serviceCall = serviceCall(for: invoice) else {
+        let linkedServiceCall = serviceCall(for: invoice)
+        guard prepareInvoicePDFForQuickBooksSend(invoice, serviceCall: linkedServiceCall) else {
+            return false
+        }
+
+        guard let serviceCall = linkedServiceCall else {
             syncLinkedInvoiceAttachmentsToQuickBooks(invoice)
             return true
         }
@@ -3213,6 +3218,39 @@ GunnAire
             return true
         } catch {
             actionMessage = "Could not prepare the onsite report before sending this invoice: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    @discardableResult
+    private func prepareInvoicePDFForQuickBooksSend(_ invoice: Invoice, serviceCall: ServiceCall?) -> Bool {
+        do {
+            let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
+            let url = try CustomerDocumentExporter.exportInvoice(
+                invoice,
+                serviceCall: serviceCall,
+                payments: invoicePayments
+            )
+            generatedCustomerDocumentURL = url
+            generatedCustomerDocumentRecipientID = invoice.customer.id
+            generatedCustomerDocumentServiceCallID = serviceCall?.id
+            let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)
+            generatedCustomerDocumentKind = documentLabel.lowercased()
+            guard persistGeneratedBillingDocument(
+                url,
+                customer: invoice.customer,
+                serviceCallID: serviceCall?.id,
+                invoiceID: invoice.id,
+                estimateID: nil,
+                kind: .invoiceSupport,
+                caption: CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments),
+                successMessage: "\(documentLabel) PDF prepared for QuickBooks send."
+            ) != nil else {
+                return false
+            }
+            return true
+        } catch {
+            actionMessage = "Could not prepare the invoice PDF before sending: \(error.localizedDescription)"
             return false
         }
     }
@@ -3661,6 +3699,7 @@ GunnAire
         }
     }
 
+    @discardableResult
     private func persistGeneratedBillingDocument(
         _ url: URL,
         customer: Customer,
@@ -3670,7 +3709,7 @@ GunnAire
         kind: ServiceDocumentAttachmentKind,
         caption: String,
         successMessage: String
-    ) {
+    ) -> ServiceDocumentAttachment? {
         do {
             let data = try Data(contentsOf: url)
             let attachment: ServiceDocumentAttachment
@@ -3717,8 +3756,10 @@ GunnAire
             try? modelContext.save()
             syncAttachmentIfPossible(attachment, data: data)
             actionMessage = successMessage
+            return attachment
         } catch {
             actionMessage = "\(successMessage) Company document history was not updated: \(error.localizedDescription)"
+            return nil
         }
     }
 
