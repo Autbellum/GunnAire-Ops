@@ -2345,7 +2345,7 @@ GunnAire
                 )
             }
 
-            if let issue = definition.validationIssue(for: call.technicalReading(for: definition.key)) {
+            if let issue = call.technicalReadingValidationIssue(for: definition) {
                 Label(issue, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption2)
                     .foregroundColor(.orange)

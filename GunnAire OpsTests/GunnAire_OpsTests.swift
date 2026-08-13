@@ -114,6 +114,10 @@ struct GunnAire_OpsTests {
         #expect(call.serviceReportCrossReadingValidationIssueLabels.contains { $0.contains("Compressor Amps exceeds Compressor RLA") })
         #expect(call.serviceReportCrossReadingValidationIssueLabels.contains { $0.contains("Outdoor Fan Amps exceeds Outdoor Fan FLA") })
         #expect(call.serviceReportReadingValidationIssueLabels.contains { $0.contains("Compressor Amps exceeds Compressor RLA") })
+        let compressorDefinition = try #require(call.technicalReadingDefinitions.first { $0.key == "compressor_amps" })
+        let outdoorFanDefinition = try #require(call.technicalReadingDefinitions.first { $0.key == "outdoor_fan_amps" })
+        #expect(call.technicalReadingValidationIssue(for: compressorDefinition)?.contains("Compressor RLA") == true)
+        #expect(call.technicalReadingValidationIssue(for: outdoorFanDefinition)?.contains("Outdoor Fan FLA") == true)
     }
 
     @Test func technicalReportExporterIncludesHeadPressureAndAmpValidation() async throws {
@@ -804,6 +808,8 @@ struct GunnAire_OpsTests {
         #expect(call.serviceReportMissingRequiredItemLabels.isEmpty)
         #expect(call.serviceReportReadingValidationIssueLabels.contains { $0.contains("CO Reading") })
         #expect(call.serviceReportReadingValidationIssueLabels.contains { $0.contains("100 ppm") })
+        let coDefinition = try #require(call.technicalReadingDefinitions.first { $0.key == "co_ppm" })
+        #expect(call.technicalReadingValidationIssue(for: coDefinition)?.contains("100 ppm") == true)
         #expect(call.canCompleteDocumentation == false)
         #expect(call.markDocumentationCompleteIfReady() == false)
     }

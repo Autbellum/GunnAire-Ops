@@ -1133,6 +1133,11 @@ final class ServiceCall {
         return rangeIssues + serviceReportCrossReadingValidationIssueLabels
     }
 
+    func technicalReadingValidationIssue(for definition: HVACTechnicalReadingDefinition) -> String? {
+        definition.validationIssue(for: technicalReading(for: definition.key)) ??
+            serviceReportCrossReadingValidationIssue(for: definition.key)
+    }
+
     var serviceReportCrossReadingValidationIssueLabels: [String] {
         [
             ampLoadValidationIssue(
@@ -1151,6 +1156,31 @@ final class ServiceCall {
             ),
             combustionSafetyValidationIssue()
         ].compactMap { $0 }
+    }
+
+    private func serviceReportCrossReadingValidationIssue(for key: String) -> String? {
+        switch key {
+        case "compressor_amps":
+            return ampLoadValidationIssue(
+                measuredKey: "compressor_amps",
+                ratingKey: "compressor_rla",
+                measuredLabel: "Compressor Amps",
+                ratingLabel: "Compressor RLA",
+                toleranceMultiplier: 1.15
+            )
+        case "outdoor_fan_amps":
+            return ampLoadValidationIssue(
+                measuredKey: "outdoor_fan_amps",
+                ratingKey: "outdoor_fan_fla",
+                measuredLabel: "Outdoor Fan Amps",
+                ratingLabel: "Outdoor Fan FLA",
+                toleranceMultiplier: 1.15
+            )
+        case "co_ppm":
+            return combustionSafetyValidationIssue()
+        default:
+            return nil
+        }
     }
 
     private func ampLoadValidationIssue(
