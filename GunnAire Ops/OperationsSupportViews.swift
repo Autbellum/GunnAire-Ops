@@ -1604,6 +1604,26 @@ private struct CustomerEditorView: View {
         documentAttachments.filter { $0.customer?.id == customer.id }
     }
 
+    private var generatedServiceReportAttachments: [ServiceDocumentAttachment] {
+        customerAttachments.filter { $0.kind == .serviceReport }
+    }
+
+    private var customerPhotoAttachments: [ServiceDocumentAttachment] {
+        customerAttachments.filter { $0.kind.isPhoto }
+    }
+
+    private var billingSupportAttachments: [ServiceDocumentAttachment] {
+        customerAttachments.filter { [.invoiceSupport, .estimateSupport, .receipt].contains($0.kind) }
+    }
+
+    private var generalCustomerAttachments: [ServiceDocumentAttachment] {
+        customerAttachments.filter { attachment in
+            attachment.kind != .serviceReport &&
+                !attachment.kind.isPhoto &&
+                ![.invoiceSupport, .estimateSupport, .receipt].contains(attachment.kind)
+        }
+    }
+
     private var customerEquipmentProfiles: [CustomerEquipment] {
         equipmentProfiles.filter { $0.customer?.id == customer.id }
     }
@@ -1889,45 +1909,10 @@ private struct CustomerEditorView: View {
                         Text("No customer documents or photos saved yet.")
                             .foregroundColor(.secondary)
                     } else {
-                        ForEach(customerAttachments.prefix(12)) { attachment in
-                            HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: attachment.isImage ? "photo" : "doc")
-                                    .foregroundColor(Color.brandGold)
-                                    .frame(width: 24)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(attachment.displayName)
-                                        .font(.subheadline.weight(.semibold))
-                                        .lineLimit(1)
-                                    Text(attachment.kind.label)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    if let caption = attachment.caption, !caption.isEmpty {
-                                        Text(caption)
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(2)
-                                    }
-                                    if attachment.backendDocumentID != nil {
-                                        Text("Synced to company storage")
-                                            .font(.caption2)
-                                            .foregroundColor(.green)
-                                    }
-                                    ShareLink(item: attachment.localFileURL) {
-                                        Label("Open Attachment", systemImage: attachment.isImage ? "photo.on.rectangle" : "doc.text.magnifyingglass")
-                                    }
-                                    .font(.caption)
-                                }
-                                Spacer()
-                                Button(role: .destructive) {
-                                    removeCustomerAttachment(attachment)
-                                } label: {
-                                    Image(systemName: "trash")
-                                }
-                                .buttonStyle(.borderless)
-                                .accessibilityLabel("Delete attachment")
-                            }
-                            .padding(.vertical, 3)
-                        }
+                        customerAttachmentGroup("Service Reports", attachments: generatedServiceReportAttachments, limit: 8)
+                        customerAttachmentGroup("Billing Support", attachments: billingSupportAttachments, limit: 8)
+                        customerAttachmentGroup("Photos", attachments: customerPhotoAttachments, limit: 8)
+                        customerAttachmentGroup("Customer Files", attachments: generalCustomerAttachments, limit: 8)
                     }
                 }
 
@@ -2244,6 +2229,68 @@ private struct CustomerEditorView: View {
             return mimeType
         }
         return "application/octet-stream"
+    }
+
+    @ViewBuilder
+    private func customerAttachmentGroup(_ title: String, attachments: [ServiceDocumentAttachment], limit: Int) -> some View {
+        if !attachments.isEmpty {
+            DisclosureGroup("\(title) (\(attachments.count))") {
+                ForEach(attachments.prefix(limit)) { attachment in
+                    customerAttachmentRow(attachment)
+                }
+                if attachments.count > limit {
+                    Text("\(attachments.count - limit) more saved in this category.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
+
+    private func customerAttachmentRow(_ attachment: ServiceDocumentAttachment) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: attachment.isImage ? "photo" : "doc")
+                .foregroundColor(Color.brandGold)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(attachment.displayName)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(attachment.kind.label)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                ForEach(attachment.customerProfileDetailLines(
+                    serviceCalls: serviceCalls,
+                    invoices: invoices,
+                    estimates: estimates,
+                    canViewFinancials: canViewFinancials
+                ), id: \.self) { line in
+                    Text(line)
+                        .font(.caption2)
+                        .foregroundColor(line.localizedCaseInsensitiveContains("failed") ? .orange : .secondary)
+                        .lineLimit(2)
+                }
+                if let caption = attachment.caption, !caption.isEmpty {
+                    Text(caption)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+                ShareLink(item: attachment.localFileURL) {
+                    Label("Open Attachment", systemImage: attachment.isImage ? "photo.on.rectangle" : "doc.text.magnifyingglass")
+                }
+                .font(.caption)
+            }
+            Spacer()
+            Button(role: .destructive) {
+                removeCustomerAttachment(attachment)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Delete attachment")
+        }
+        .padding(.vertical, 3)
     }
 
     private func addCustomerEquipmentProfile() {

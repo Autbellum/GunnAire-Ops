@@ -423,6 +423,65 @@ struct GunnAire_OpsTests {
         #expect(attachment.isImage == true)
     }
 
+    @Test func customerProfileAttachmentDetailLinksJobBillingAndStorageContext() async throws {
+        let customer = Customer(name: "Report Customer")
+        let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer, status: .completed)
+        let invoice = Invoice(customer: customer, quickBooksID: "123", amount: 250, status: "paid")
+        let estimate = Estimate(customer: customer, quickBooksID: "456", amount: 250, status: "accepted")
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            estimateID: estimate.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            backendDocumentID: "backend-1",
+            quickBooksAttachableID: "attach-1"
+        )
+
+        let lines = attachment.customerProfileDetailLines(
+            serviceCalls: [call],
+            invoices: [invoice],
+            estimates: [estimate],
+            canViewFinancials: true
+        )
+
+        #expect(lines.contains("Job: Maintenance - Completed"))
+        #expect(lines.contains("Invoice: Paid - QuickBooks synced"))
+        #expect(lines.contains("Estimate: Accepted - QuickBooks synced"))
+        #expect(lines.contains("Attached to QuickBooks invoice"))
+        #expect(lines.contains("Synced to company storage"))
+    }
+
+    @Test func customerProfileAttachmentDetailHidesBillingContextForStandardUsers() async throws {
+        let customer = Customer(name: "Report Customer")
+        let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer, status: .completed)
+        let invoice = Invoice(customer: customer, quickBooksID: "123", amount: 250, status: "paid")
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksSyncError: "403"
+        )
+
+        let lines = attachment.customerProfileDetailLines(
+            serviceCalls: [call],
+            invoices: [invoice],
+            estimates: [],
+            canViewFinancials: false
+        )
+
+        #expect(lines == ["Job: Maintenance - Completed"])
+    }
+
     @Test func onsiteReportAttachmentManifestIncludesSupportFilesAndExcludesGeneratedReports() async throws {
         let customer = Customer(name: "Report Customer")
         let serviceCallID = UUID()

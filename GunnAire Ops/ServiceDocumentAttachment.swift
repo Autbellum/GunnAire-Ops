@@ -120,6 +120,56 @@ final class ServiceDocumentAttachment {
         }
     }
 
+    func linkedServiceCall(in serviceCalls: [ServiceCall]) -> ServiceCall? {
+        guard let serviceCallID else { return nil }
+        return serviceCalls.first { $0.id == serviceCallID }
+    }
+
+    func linkedInvoice(in invoices: [Invoice]) -> Invoice? {
+        guard let invoiceID else { return nil }
+        return invoices.first { $0.id == invoiceID }
+    }
+
+    func linkedEstimate(in estimates: [Estimate]) -> Estimate? {
+        guard let estimateID else { return nil }
+        return estimates.first { $0.id == estimateID }
+    }
+
+    func customerProfileDetailLines(
+        serviceCalls: [ServiceCall],
+        invoices: [Invoice],
+        estimates: [Estimate],
+        canViewFinancials: Bool
+    ) -> [String] {
+        var lines: [String] = []
+        if let call = linkedServiceCall(in: serviceCalls) {
+            lines.append("Job: \(call.type.displayName) - \(call.status.rawValue.capitalized)")
+        }
+        if canViewFinancials, let invoice = linkedInvoice(in: invoices) {
+            let quickBooksStatus = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? " - QuickBooks synced"
+                : ""
+            lines.append("Invoice: \(invoice.status.capitalized)\(quickBooksStatus)")
+        }
+        if canViewFinancials, let estimate = linkedEstimate(in: estimates) {
+            let quickBooksStatus = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? " - QuickBooks synced"
+                : ""
+            lines.append("Estimate: \(estimate.status.capitalized)\(quickBooksStatus)")
+        }
+        if quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            lines.append("Attached to QuickBooks invoice")
+        } else if canViewFinancials,
+                  let quickBooksSyncError,
+                  !quickBooksSyncError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            lines.append("QuickBooks attachment failed: \(quickBooksSyncError)")
+        }
+        if backendDocumentID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            lines.append("Synced to company storage")
+        }
+        return lines
+    }
+
     static func reusableGeneratedServiceReport(
         in attachments: [ServiceDocumentAttachment],
         serviceCallID: UUID,
