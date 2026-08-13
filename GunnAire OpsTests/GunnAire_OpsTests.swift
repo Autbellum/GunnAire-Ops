@@ -320,15 +320,15 @@ struct GunnAire_OpsTests {
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         #expect(object["summary"] == nil)
-        #expect(object["description"] == nil)
+        #expect(object["description"] as? String == "Customer: Calendar Customer\nService Address: 123 Main St\nCall Type: Service\n\nRepair body")
         #expect(object["location"] == nil)
         #expect(object["start"] != nil)
         #expect(object["end"] != nil)
         #expect(object["extendedProperties"] == nil)
-        #expect(Set(object.keys) == ["start", "end"])
+        #expect(Set(object.keys) == ["description", "start", "end"])
     }
 
-    @Test func googleCalendarCreatePayloadOmitsBlankLocationAndDetails() async throws {
+    @Test func googleCalendarCreatePayloadIncludesStructuredVisibleDetails() async throws {
         let customer = Customer(name: "Calendar Customer", address: "")
         let call = ServiceCall(
             eventTitle: "Site reminder",
@@ -345,7 +345,7 @@ struct GunnAire_OpsTests {
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         #expect(object["summary"] as? String == "Site reminder")
-        #expect(object["description"] == nil)
+        #expect(object["description"] as? String == "Customer: Calendar Customer\nCall Type: Reminder")
         #expect(object["location"] == nil)
         #expect(object["start"] != nil)
         #expect(object["end"] != nil)

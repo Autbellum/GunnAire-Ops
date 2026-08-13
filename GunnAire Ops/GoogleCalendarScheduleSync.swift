@@ -704,13 +704,13 @@ enum GoogleCalendarScheduleSync {
         )
     }
 
-    static func makeManagedEventPatch(for call: ServiceCall, remoteEvent _: GoogleCalendarEvent?) -> GoogleCalendarEventPatch {
+    static func makeManagedEventPatch(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> GoogleCalendarEventPatch {
         let timeZone = TimeZone.current.identifier
         let endDate = call.scheduledDate.addingTimeInterval(call.duration)
         return GoogleCalendarEventPatch(
-            summary: nil,
-            description: nil,
-            location: nil,
+            summary: shouldBackfillGoogleCalendarText(remoteEvent?.summary) ? calendarEventTitle(for: call, existingSummary: remoteEvent?.summary) : nil,
+            description: shouldBackfillGoogleCalendarText(remoteEvent?.description) ? calendarEventDescription(for: call) : nil,
+            location: shouldBackfillGoogleCalendarText(remoteEvent?.location) ? calendarEventLocation(for: call) : nil,
             start: GoogleWritableCalendarEventDate(
                 dateTime: ISO8601DateFormatter().string(from: call.scheduledDate),
                 timeZone: timeZone
@@ -739,7 +739,7 @@ enum GoogleCalendarScheduleSync {
         let attendees = !preserveExternalDetails && customerEmail?.isEmpty == false
             ? [GoogleWritableCalendarAttendee(email: customerEmail!, displayName: call.customer.name)]
             : nil
-        let eventDescription = preserveExternalDetails ? nil : normalizedOptional(call.notes)
+        let eventDescription = preserveExternalDetails ? nil : calendarEventDescription(for: call)
         let eventLocation = preserveExternalDetails ? nil : calendarEventLocation(for: call)
         return GoogleWritableCalendarEvent(
             summary: summary,
@@ -781,6 +781,52 @@ enum GoogleCalendarScheduleSync {
 
     private static func calendarEventLocation(for call: ServiceCall) -> String? {
         normalizedOptional(call.siteAddress) ?? normalizedOptional(call.customer.address)
+    }
+
+    private static func calendarEventDescription(for call: ServiceCall) -> String? {
+        var lines: [String] = []
+        if !CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
+            lines.append("Customer: \(call.customer.name)")
+            if let phone = normalizedOptional(call.customer.phone) {
+                lines.append("Phone: \(phone)")
+            }
+            if let email = normalizedOptional(call.customer.email) {
+                lines.append("Email: \(email)")
+            }
+        }
+        if let address = calendarEventLocation(for: call) {
+            lines.append("Service Address: \(address)")
+        }
+        lines.append("Call Type: \(call.type.displayName)")
+        if let technician = call.assignedTechnician {
+            lines.append("Technician: \(technician.name)")
+        }
+        let equipment = [
+            call.equipmentName,
+            call.equipmentManufacturer,
+            call.equipmentModel,
+            call.equipmentSerialNumber
+        ]
+            .compactMap(normalizedOptional)
+            .joined(separator: " ")
+        if !equipment.isEmpty {
+            lines.append("Equipment: \(equipment)")
+        }
+        if let equipmentLocation = normalizedOptional(call.equipmentLocation) {
+            lines.append("Equipment Location: \(equipmentLocation)")
+        }
+        if let notes = normalizedOptional(call.notes) {
+            if !lines.isEmpty {
+                lines.append("")
+            }
+            lines.append(notes)
+        }
+        let description = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return description.isEmpty ? nil : description
+    }
+
+    private static func shouldBackfillGoogleCalendarText(_ value: String?) -> Bool {
+        normalizedOptional(value) == nil
     }
 
     static func isGeneratedCalendarTitle(_ title: String) -> Bool {
