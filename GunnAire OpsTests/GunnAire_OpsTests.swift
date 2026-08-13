@@ -46,23 +46,34 @@ struct GunnAire_OpsTests {
         #expect(call.isUpcomingThisWeek == false)
     }
 
-    @Test func standardUsersKeepFieldAccessButNotAdminScreens() async throws {
-        let standard = AppUser(email: "tech@gunnaire.com", role: .standard)
+    @Test func userRolesSeparateStandardFieldAndAdminAccess() async throws {
+        let standard = AppUser(email: "standard@gunnaire.com", role: .standard)
+        let technician = AppUser(email: "tech@gunnaire.com", role: .fieldTechnician)
         let admin = AppUser(email: "admin@gunnaire.com", role: .admin)
-        let users = [standard, admin]
+        let users = [standard, technician, admin]
 
         #expect(AppAccess.canAccessSidebarItem(.scheduleAndJobs, email: standard.email, users: users) == true)
         #expect(AppAccess.canAccessSidebarItem(.onsiteDocumentation, email: standard.email, users: users) == true)
-        #expect(AppAccess.canAccessSidebarItem(.invoices, email: standard.email, users: users) == true)
-        #expect(AppAccess.canAccessSidebarItem(.payments, email: standard.email, users: users) == true)
-        #expect(AppAccess.canAccessSidebarItem(.receiptsBills, email: standard.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.invoices, email: standard.email, users: users) == false)
+        #expect(AppAccess.canAccessSidebarItem(.payments, email: standard.email, users: users) == false)
+        #expect(AppAccess.canAccessSidebarItem(.receiptsBills, email: standard.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.quickBooksManagement, email: standard.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.syncIntegrations, email: standard.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.estimates, email: standard.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.mail, email: standard.email, users: users) == false)
         #expect(AppAccess.canViewFinancialManagement(email: standard.email, users: users) == false)
         #expect(AppAccess.canViewBillingFinancialDetails(email: standard.email, users: users) == false)
-        #expect(AppAccess.canCollectFieldPayments(email: standard.email, users: users) == true)
+        #expect(AppAccess.canCollectFieldPayments(email: standard.email, users: users) == false)
+
+        #expect(AppAccess.canAccessSidebarItem(.scheduleAndJobs, email: technician.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.onsiteDocumentation, email: technician.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.invoices, email: technician.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.payments, email: technician.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.receiptsBills, email: technician.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.quickBooksManagement, email: technician.email, users: users) == false)
+        #expect(AppAccess.canViewFinancialManagement(email: technician.email, users: users) == false)
+        #expect(AppAccess.canViewBillingFinancialDetails(email: technician.email, users: users) == false)
+        #expect(AppAccess.canCollectFieldPayments(email: technician.email, users: users) == true)
 
         #expect(AppAccess.canAccessSidebarItem(.quickBooksManagement, email: admin.email, users: users) == true)
         #expect(AppAccess.canAccessSidebarItem(.syncIntegrations, email: admin.email, users: users) == true)

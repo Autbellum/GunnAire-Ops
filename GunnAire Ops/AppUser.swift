@@ -3,6 +3,7 @@ import SwiftData
 
 enum AppUserRole: String, Codable, CaseIterable, Identifiable {
     case standard = "Standard"
+    case fieldTechnician = "Field Technician"
     case admin = "Admin"
 
     var id: String { rawValue }
@@ -57,6 +58,14 @@ enum AppAccess {
         return users.contains { $0.isActive && $0.email == email && $0.role == .admin }
     }
 
+    static func activeRole(email: String?, users: [AppUser]) -> AppUserRole? {
+        let email = normalizedEmail(email)
+        if email == primaryAdminEmail {
+            return .admin
+        }
+        return users.first { $0.isActive && $0.email == email }?.role
+    }
+
     static func isAuthorized(email: String?, users: [AppUser]) -> Bool {
         let email = normalizedEmail(email)
         if email == primaryAdminEmail {
@@ -66,12 +75,14 @@ enum AppAccess {
     }
 
     static func canAccessSidebarItem(_ item: SidebarItem, email: String?, users: [AppUser]) -> Bool {
-        let admin = isAdmin(email: email, users: users)
+        guard let role = activeRole(email: email, users: users) else { return false }
         switch item {
-        case .commandCenter, .timeClock, .scheduleAndJobs, .customers, .onsiteDocumentation, .invoices, .payments, .receiptsBills:
+        case .commandCenter, .timeClock, .scheduleAndJobs, .customers, .onsiteDocumentation:
             return true
+        case .invoices, .payments, .receiptsBills:
+            return role == .fieldTechnician || role == .admin
         case .mail, .estimates, .syncIntegrations, .quickBooksManagement:
-            return admin
+            return role == .admin
         }
     }
 
@@ -84,7 +95,8 @@ enum AppAccess {
     }
 
     static func canCollectFieldPayments(email: String?, users: [AppUser]) -> Bool {
-        isAuthorized(email: email, users: users)
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .fieldTechnician || role == .admin
     }
 
     @discardableResult
@@ -111,9 +123,13 @@ enum AppAccess {
         technicians: [Technician],
         modelContext: ModelContext
     ) {
-        for user in users where user.isActive {
+        for user in users where user.isActive && shouldProvisionTechnicianRecord(for: user.role) {
             ensureTechnicianRecord(for: user.email, technicians: technicians, modelContext: modelContext)
         }
+    }
+
+    static func shouldProvisionTechnicianRecord(for role: AppUserRole) -> Bool {
+        role == .fieldTechnician || role == .admin
     }
 
     static func schedulableTechnicians(_ technicians: [Technician], users: [AppUser]) -> [Technician] {

@@ -19,7 +19,7 @@ struct SettingsView: View {
     let dismiss: () -> Void
 
     @State private var newUserEmail = ""
-    @State private var newUserRole: AppUserRole = .standard
+    @State private var newUserRole: AppUserRole = .fieldTechnician
     @State private var userAdminMessage: String?
     @State private var selectedSettingsPage: SettingsPage = .company
     @State private var showingSplashVideoImporter = false
@@ -345,7 +345,7 @@ struct SettingsView: View {
                         Section("Active Users") {
                             ForEach(users) { user in
                                 HStack {
-                                    Image(systemName: user.role == .admin ? "person.crop.circle.badge.checkmark" : "person.crop.circle")
+                                    Image(systemName: user.role == .admin ? "person.crop.circle.badge.checkmark" : (user.role == .fieldTechnician ? "wrench.and.screwdriver" : "person.crop.circle"))
                                         .foregroundColor(user.role == .admin ? Color.brandGold : .secondary)
                                     VStack(alignment: .leading) {
                                         Text(user.email)
@@ -358,7 +358,7 @@ struct SettingsView: View {
                                         get: { user.isActive },
                                         set: { isActive in
                                             user.isActive = isActive
-                                            if isActive {
+                                            if isActive && AppAccess.shouldProvisionTechnicianRecord(for: user.role) {
                                                 AppAccess.ensureTechnicianRecord(for: user.email, technicians: technicians, modelContext: modelContext)
                                             }
                                             syncSharedUser(email: user.email, role: user.role, isActive: isActive)
@@ -374,7 +374,7 @@ struct SettingsView: View {
                 } else {
                     Section("Account") {
                         Text(currentUserEmail ?? "Signed in")
-                        Text("Standard users can use field operations, onsite documentation, invoices, payment collection, receipts, schedule, customers, and mail. Admin controls and sync settings are managed by office leadership.")
+                        Text("Standard users can use non-financial operations, schedule, customers, and onsite documentation. Field Technicians can also view assigned invoices, collect payments, and upload receipts. Admin controls and sync settings are managed by office leadership.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -425,18 +425,12 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var integrationsSections: some View {
-        if isAdminUser {
-            Section("Administrator Sync Accounts") {
-                Text("QuickBooks and Google sync are configured from this screen.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        } else {
-            Section("Sync Accounts") {
-                Text("These connection settings are editable regardless of app role because the underlying Google and QuickBooks access is granted by the connected account.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+        Section(isAdminUser ? "Administrator Sync Accounts" : "Sync Accounts") {
+            Text(isAdminUser
+                 ? "QuickBooks and Google sync are configured from this screen."
+                 : "Shared integrations are managed by an administrator. Your login uses the company sync connection.")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
 
         Section("QuickBooks") {
@@ -445,30 +439,32 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
 
-            if isQuickBooksAuthenticated {
-                Button("Disconnect QuickBooks", role: .destructive) {
-                    disconnectQuickBooks()
-                    isQuickBooksAuthenticated = false
+            if isAdminUser {
+                if isQuickBooksAuthenticated {
+                    Button("Disconnect QuickBooks", role: .destructive) {
+                        disconnectQuickBooks()
+                        isQuickBooksAuthenticated = false
+                    }
+                } else {
+                    Button {
+                        authenticateQuickBooks()
+                    } label: {
+                        Label("Connect QuickBooks", systemImage: "link")
+                    }
                 }
-            } else {
+
                 Button {
-                    authenticateQuickBooks()
+                    resetAndReconnectQuickBooks()
                 } label: {
-                    Label("Connect QuickBooks", systemImage: "link")
+                    Label(resettingQuickBooksConnection ? "Resetting..." : "Reset and Reconnect QuickBooks", systemImage: "arrow.clockwise.circle")
                 }
-            }
+                .disabled(resettingQuickBooksConnection)
 
-            Button {
-                resetAndReconnectQuickBooks()
-            } label: {
-                Label(resettingQuickBooksConnection ? "Resetting..." : "Reset and Reconnect QuickBooks", systemImage: "arrow.clockwise.circle")
+                Button("Validate QuickBooks Access") {
+                    validateQuickBooksAccess()
+                }
+                .disabled(!QuickBooksDataAPI.shared.isAuthenticated)
             }
-            .disabled(resettingQuickBooksConnection)
-
-            Button("Validate QuickBooks Access") {
-                validateQuickBooksAccess()
-            }
-            .disabled(!QuickBooksDataAPI.shared.isAuthenticated)
 
             if let refreshDetail = QuickBooksDataAPI.shared.lastRefreshFailureDetail {
                 Text(refreshDetail)
@@ -504,16 +500,18 @@ struct SettingsView: View {
         Section("Google") {
             connectionStatusRow(title: "Status", isConnected: isGoogleAuthenticated)
 
-            if isGoogleAuthenticated {
-                Button("Disconnect Google", role: .destructive) {
-                    disconnectGoogle()
-                    isGoogleAuthenticated = false
-                }
-            } else {
-                Button {
-                    authenticateGoogle()
-                } label: {
-                    Label("Connect Google", systemImage: "link")
+            if isAdminUser {
+                if isGoogleAuthenticated {
+                    Button("Disconnect Google", role: .destructive) {
+                        disconnectGoogle()
+                        isGoogleAuthenticated = false
+                    }
+                } else {
+                    Button {
+                        authenticateGoogle()
+                    } label: {
+                        Label("Connect Google", systemImage: "link")
+                    }
                 }
             }
         }
@@ -557,12 +555,17 @@ struct SettingsView: View {
             userAdminMessage = "\(email) is already added."
             return
         }
-        modelContext.insert(AppUser(email: email, role: newUserRole))
-        AppAccess.ensureTechnicianRecord(for: email, technicians: technicians, modelContext: modelContext)
+        let user = AppUser(email: email, role: newUserRole)
+        modelContext.insert(user)
+        if AppAccess.shouldProvisionTechnicianRecord(for: newUserRole) {
+            AppAccess.ensureTechnicianRecord(for: email, technicians: technicians, modelContext: modelContext)
+        }
         syncSharedUser(email: email, role: newUserRole, isActive: true)
-        userAdminMessage = "Added \(email) as \(newUserRole.rawValue) and provisioned the technician calendar record."
+        userAdminMessage = AppAccess.shouldProvisionTechnicianRecord(for: newUserRole)
+            ? "Added \(email) as \(newUserRole.rawValue) and provisioned the technician calendar record."
+            : "Added \(email) as \(newUserRole.rawValue)."
         newUserEmail = ""
-        newUserRole = .standard
+        newUserRole = .fieldTechnician
     }
 
     private func syncUserTechnicians() {
