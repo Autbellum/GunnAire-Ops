@@ -240,6 +240,7 @@ struct GunnAire_OpsTests {
         #expect(object["description"] == nil)
         #expect(object["location"] == nil)
         #expect(object["attendees"] == nil)
+        #expect(GoogleCalendarEventPatch.unsafeDetailKeys(in: data).isEmpty)
     }
 
     @Test func googleCalendarManagedPatchOmitsExistingGoogleDetails() async throws {
@@ -284,6 +285,22 @@ struct GunnAire_OpsTests {
         #expect(object["location"] == nil)
         #expect(object["extendedProperties"] == nil)
         #expect(Set(object.keys) == ["start", "end"])
+        #expect(GoogleCalendarEventPatch.unsafeDetailKeys(in: data).isEmpty)
+    }
+
+    @Test func googleCalendarPatchGuardDetectsDetailScrubbingFields() async throws {
+        let unsafePayload = Data("""
+        {
+          "start": { "dateTime": "2027-01-15T13:00:00Z", "timeZone": "America/New_York" },
+          "end": { "dateTime": "2027-01-15T14:00:00Z", "timeZone": "America/New_York" },
+          "summary": "",
+          "description": "",
+          "location": ""
+        }
+        """.utf8)
+
+        #expect(GoogleCalendarEventPatch.unsafeDetailKeys(in: unsafePayload) == ["description", "location", "summary"])
+        #expect(GoogleAuthError.unsafeCalendarPatch("description, location, summary").errorDescription?.contains("Blocked unsafe Google Calendar update") == true)
     }
 
     @Test func googleCalendarManagedPatchNeverWritesLocalDetailsOverGoogleFields() async throws {
@@ -351,6 +368,30 @@ struct GunnAire_OpsTests {
         #expect(object["start"] != nil)
         #expect(object["end"] != nil)
         #expect(object["extendedProperties"] != nil)
+    }
+
+    @Test func googleCalendarCreatePayloadKeepsUserEnteredLocationAndDetailsVisible() async throws {
+        let customer = Customer(name: "Calendar Customer", address: "")
+        let call = ServiceCall(
+            eventTitle: "Bid due reminder",
+            siteAddress: "789 Customer Site Rd",
+            type: .reminder,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3_600,
+            customer: customer,
+            notes: "Submit bid package before noon."
+        )
+
+        let event = GoogleCalendarScheduleSync.makeCalendarCreateEvent(for: call)
+        let data = try JSONEncoder().encode(event)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let description = try #require(object["description"] as? String)
+
+        #expect(object["summary"] as? String == "Bid due reminder")
+        #expect(object["location"] as? String == "789 Customer Site Rd")
+        #expect(description.contains("Service Address: 789 Customer Site Rd"))
+        #expect(description.contains("Call Type: Reminder"))
+        #expect(description.contains("Submit bid package before noon."))
     }
 
     @Test func olderGoogleCalendarManagedMarkersAreTreatedAsExternal() async throws {

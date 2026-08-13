@@ -135,6 +135,16 @@ struct GoogleCalendarEventPatch: Codable {
         case start
         case end
     }
+
+    static func unsafeDetailKeys(in encodedPatch: Data) -> [String] {
+        guard let object = try? JSONSerialization.jsonObject(with: encodedPatch) as? [String: Any] else {
+            return []
+        }
+        let unsafeKeys = Set(["summary", "description", "location", "attendees", "extendedProperties"])
+        return object.keys
+            .filter { unsafeKeys.contains($0) }
+            .sorted()
+    }
 }
 
 struct GoogleCalendarExtendedProperties: Codable {
@@ -581,6 +591,15 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         let encodedEventID = eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID
         guard let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events/\(encodedEventID)") else {
             completion(.failure(GoogleAuthError.invalidEndpoint))
+            return
+        }
+        guard let encodedPatch = try? JSONEncoder().encode(patch) else {
+            completion(.failure(GoogleAuthError.decoding))
+            return
+        }
+        let unsafeKeys = GoogleCalendarEventPatch.unsafeDetailKeys(in: encodedPatch)
+        guard unsafeKeys.isEmpty else {
+            completion(.failure(GoogleAuthError.unsafeCalendarPatch(unsafeKeys.joined(separator: ", "))))
             return
         }
         authorizedJSONRequest(url: url, method: "PATCH", body: patch, completion: completion)
@@ -1032,6 +1051,7 @@ enum GoogleAuthError: Error, LocalizedError {
     case http(statusCode: Int)
     case providerError(String, String?)
     case domainNotAllowed(String)
+    case unsafeCalendarPatch(String)
     case unknown
 
     var errorDescription: String? {
@@ -1052,6 +1072,7 @@ enum GoogleAuthError: Error, LocalizedError {
         case .http(let statusCode): return "Google request failed (HTTP \(statusCode))."
         case .providerError(let code, let description): return "Google OAuth/API error: \(code)\(description.map { " - \($0)" } ?? "")"
         case .domainNotAllowed(let domain): return "Access is restricted to \(domain) Google accounts."
+        case .unsafeCalendarPatch(let keys): return "Blocked unsafe Google Calendar update that would overwrite event details: \(keys)."
         case .unknown: return "An unknown error occurred."
         }
     }
