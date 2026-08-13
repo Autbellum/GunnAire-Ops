@@ -424,10 +424,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldExportDuringCalendarSync(_ call: ServiceCall) -> Bool {
-        guard shouldConsiderForGoogleCalendarExport(call) else {
-            return false
-        }
-        return isCalendarCallLocallyEdited(call)
+        false
     }
 
     private static func shouldExportSystemCalendarCall(_ call: ServiceCall) -> Bool {

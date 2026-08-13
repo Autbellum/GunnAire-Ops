@@ -6314,7 +6314,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func googleCalendarSyncOnlyPublishesExplicitlyMarkedLocalCalendarEdits() async throws {
+    @Test func googleCalendarSyncNeverPublishesLocalCalendarEdits() async throws {
         let customer = Customer(name: "Calendar Customer")
         let localCall = ServiceCall(
             googleCalendarID: "primary",
@@ -6328,7 +6328,8 @@ struct GunnAire_OpsTests {
 
         GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(localCall)
 
-        #expect(GoogleCalendarScheduleSync.shouldExportDuringCalendarSync(localCall))
+        #expect(GoogleCalendarScheduleSync.shouldExportDuringCalendarSync(localCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: localCall))
     }
 
     @MainActor
