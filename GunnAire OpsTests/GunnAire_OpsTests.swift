@@ -4923,6 +4923,40 @@ struct GunnAire_OpsTests {
         #expect(evidence.contains { $0.detail.contains("generated-report.pdf") } == false)
     }
 
+    @Test func embeddedPhotoEvidenceIncludesEveryCapturedJobImage() async throws {
+        let customer = Customer(name: "Complete Photo Customer")
+        let serviceCallID = UUID()
+        let photos = (0..<15).map { index in
+            ServiceDocumentAttachment(
+                customer: customer,
+                serviceCallID: serviceCallID,
+                kind: index.isMultiple(of: 2) ? .beforePhoto : .diagnosticPhoto,
+                displayName: String(format: "field-photo-%02d.jpg", index),
+                localFilePath: "/tmp/field-photo-\(index).jpg",
+                contentType: "image/jpeg",
+                fileSizeBytes: 2048,
+                createdAt: Date(timeIntervalSince1970: Double(index))
+            )
+        }
+        let generatedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .serviceReport,
+            displayName: "generated-report.pdf",
+            localFilePath: "/tmp/generated-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 8192,
+            createdAt: Date(timeIntervalSince1970: 99)
+        )
+
+        let embedded = CustomerDocumentExporter.embeddedPhotoEvidenceAttachments(for: photos + [generatedReport])
+
+        #expect(embedded.count == 15)
+        #expect(embedded.map(\.displayName).first == "field-photo-00.jpg")
+        #expect(embedded.map(\.displayName).last == "field-photo-14.jpg")
+        #expect(embedded.contains { $0.kind == .serviceReport } == false)
+    }
+
     @Test func onsiteReportPhotoEvidenceIncludesLinkedBillingTrace() async throws {
         let customer = Customer(name: "Photo Evidence Customer")
         let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer)

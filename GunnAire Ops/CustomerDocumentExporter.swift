@@ -493,6 +493,10 @@ enum CustomerDocumentExporter {
             }
     }
 
+    static func embeddedPhotoEvidenceAttachments(for attachments: [ServiceDocumentAttachment]) -> [ServiceDocumentAttachment] {
+        photoEvidenceAttachments(for: attachments)
+    }
+
     static func billingPhotoAttachments(
         for attachments: [ServiceDocumentAttachment],
         serviceCall: ServiceCall?,
@@ -967,8 +971,7 @@ enum CustomerDocumentExporter {
         title: String,
         customer: Customer
     ) -> CGFloat {
-        let images = photoEvidenceAttachments(for: attachments)
-            .prefix(12)
+        let images = embeddedPhotoEvidenceAttachments(for: attachments)
             .compactMap { attachment -> (attachment: ServiceDocumentAttachment, image: UIImage)? in
                 guard let image = UIImage(contentsOfFile: attachment.localFilePath) else { return nil }
                 return (attachment, image)
