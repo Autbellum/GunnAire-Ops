@@ -803,12 +803,12 @@ enum CustomerDocumentExporter {
 
         let technicalRows = serviceCall.populatedTechnicalReadingRows
         if !technicalRows.isEmpty {
-            summaries.append(("Technical Snapshot", Array(technicalRows.prefix(12))))
+            summaries.append(("Technical Snapshot", technicalRows))
         }
 
         let serviceActionRows = serviceCall.populatedServiceActionRows
         if !serviceActionRows.isEmpty {
-            summaries.append(("Service Actions", Array(serviceActionRows.prefix(12))))
+            summaries.append(("Service Actions", serviceActionRows))
         }
         return summaries
     }

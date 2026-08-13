@@ -4602,6 +4602,35 @@ struct GunnAire_OpsTests {
         #expect(hasServiceActions)
     }
 
+    @Test func billingDocumentationSummariesIncludeAllCapturedTechnicalRowsAndActions() async throws {
+        let customer = Customer(name: "Complete Billing Report Customer")
+        let call = ServiceCall(
+            equipmentName: "Packaged RTU",
+            equipmentTypeRaw: HVACEquipmentType.packageUnit.rawValue,
+            serviceReportSummary: "Full maintenance report captured.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let readingDefinitions = Array(call.technicalReadingDefinitions.prefix(16))
+        for (index, definition) in readingDefinitions.enumerated() {
+            call.setTechnicalReading("\(index + 1)", for: definition.key)
+        }
+        let actionDefinitions = Array(call.serviceActionDefinitions.prefix(14))
+        for definition in actionDefinitions {
+            call.setServiceActionStatus(.completed, for: definition.key)
+        }
+
+        let summaries = CustomerDocumentExporter.billingDocumentationSummaries(for: call)
+        let technicalRows = try #require(summaries.first { $0.title == "Technical Snapshot" }?.rows)
+        let actionRows = try #require(summaries.first { $0.title == "Service Actions" }?.rows)
+
+        #expect(technicalRows.count >= readingDefinitions.count)
+        #expect(actionRows.count >= actionDefinitions.count)
+        #expect(technicalRows.contains { $0.label == readingDefinitions.last?.displayLabel })
+        #expect(actionRows.contains { $0.label == actionDefinitions.last?.label })
+    }
+
     @Test func onsiteReportJobRowsIncludeStructuredCustomerContactContext() async throws {
         let customer = Customer(
             name: "Standalone Report Customer",
