@@ -139,8 +139,18 @@ enum CustomerDocumentExporter {
         ]
 
         sections.append(contentsOf: technicalReportSections(for: serviceCall))
-        sections.append(contentsOf: photoEvidenceSections(for: attachments))
-        sections.append(contentsOf: attachmentSections(for: attachments))
+        sections.append(contentsOf: photoEvidenceSections(
+            for: attachments,
+            serviceCall: serviceCall,
+            estimate: estimate,
+            invoice: invoice
+        ))
+        sections.append(contentsOf: attachmentSections(
+            for: attachments,
+            serviceCall: serviceCall,
+            estimate: estimate,
+            invoice: invoice
+        ))
 
         if let estimate {
             sections.append(DocumentSection(
@@ -328,29 +338,55 @@ enum CustomerDocumentExporter {
         }
     }
 
-    private static func attachmentSections(for attachments: [ServiceDocumentAttachment]) -> [DocumentSection] {
-        let rows = attachmentManifestSummaries(for: attachments).map { summary in
+    private static func attachmentSections(
+        for attachments: [ServiceDocumentAttachment],
+        serviceCall: ServiceCall?,
+        estimate: Estimate?,
+        invoice: Invoice?
+    ) -> [DocumentSection] {
+        let rows = attachmentManifestSummaries(
+            for: attachments,
+            serviceCall: serviceCall,
+            estimate: estimate,
+            invoice: invoice
+        ).map { summary in
             row(summary.label, summary.detail)
         }
         guard !rows.isEmpty else { return [] }
         return [DocumentSection(title: "Attached Job Files", rows: rows)]
     }
 
-    private static func photoEvidenceSections(for attachments: [ServiceDocumentAttachment]) -> [DocumentSection] {
-        let rows = photoEvidenceSummaries(for: attachments).map { summary in
+    private static func photoEvidenceSections(
+        for attachments: [ServiceDocumentAttachment],
+        serviceCall: ServiceCall?,
+        estimate: Estimate?,
+        invoice: Invoice?
+    ) -> [DocumentSection] {
+        let rows = photoEvidenceSummaries(
+            for: attachments,
+            serviceCall: serviceCall,
+            estimate: estimate,
+            invoice: invoice
+        ).map { summary in
             row(summary.label, summary.detail)
         }
         guard !rows.isEmpty else { return [] }
         return [DocumentSection(title: "Photo Evidence", rows: rows)]
     }
 
-    static func photoEvidenceSummaries(for attachments: [ServiceDocumentAttachment]) -> [(label: String, detail: String)] {
+    static func photoEvidenceSummaries(
+        for attachments: [ServiceDocumentAttachment],
+        serviceCall: ServiceCall? = nil,
+        estimate: Estimate? = nil,
+        invoice: Invoice? = nil
+    ) -> [(label: String, detail: String)] {
         photoEvidenceAttachments(for: attachments)
             .map { attachment in
                 let details = [
                     attachment.caption,
                     attachment.displayName,
-                    formattedDateTime(attachment.createdAt)
+                    formattedDateTime(attachment.createdAt),
+                    attachmentRecordTrace(attachment, serviceCall: serviceCall, estimate: estimate, invoice: invoice)
                 ]
                     .compactMap { value -> String? in
                         guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -389,7 +425,12 @@ enum CustomerDocumentExporter {
             .joined(separator: " - ")
     }
 
-    static func attachmentManifestSummaries(for attachments: [ServiceDocumentAttachment]) -> [(label: String, detail: String)] {
+    static func attachmentManifestSummaries(
+        for attachments: [ServiceDocumentAttachment],
+        serviceCall: ServiceCall? = nil,
+        estimate: Estimate? = nil,
+        invoice: Invoice? = nil
+    ) -> [(label: String, detail: String)] {
         attachments
             .filter { $0.kind != .serviceReport }
             .sorted { lhs, rhs in
@@ -402,7 +443,9 @@ enum CustomerDocumentExporter {
                 let details = [
                     attachment.displayName,
                     attachment.caption,
-                    attachment.fileSizeBytes > 0 ? formattedFileSize(attachment.fileSizeBytes) : nil
+                    attachment.fileSizeBytes > 0 ? formattedFileSize(attachment.fileSizeBytes) : nil,
+                    attachmentRecordTrace(attachment, serviceCall: serviceCall, estimate: estimate, invoice: invoice),
+                    attachmentQuickBooksTrace(attachment)
                 ]
                     .compactMap { value -> String? in
                         guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -413,6 +456,38 @@ enum CustomerDocumentExporter {
                     .joined(separator: " - ")
                 return (attachment.kind.label, details)
             }
+    }
+
+    private static func attachmentRecordTrace(
+        _ attachment: ServiceDocumentAttachment,
+        serviceCall: ServiceCall?,
+        estimate: Estimate?,
+        invoice: Invoice?
+    ) -> String? {
+        var details: [String] = []
+        let serviceCallID = attachment.serviceCallID ?? serviceCall?.id
+        if let serviceCallID {
+            details.append("Job ID: \(shortID(serviceCallID))")
+        }
+        let estimateID = attachment.estimateID ?? estimate?.id
+        if let estimateID {
+            details.append("Estimate ID: \(shortID(estimateID))")
+        }
+        let invoiceID = attachment.invoiceID ?? invoice?.id
+        if let invoiceID {
+            details.append("Invoice ID: \(shortID(invoiceID))")
+        }
+        return details.isEmpty ? nil : details.joined(separator: " | ")
+    }
+
+    private static func attachmentQuickBooksTrace(_ attachment: ServiceDocumentAttachment) -> String? {
+        if let attachableID = normalizedValue(attachment.quickBooksAttachableID) {
+            return "QuickBooks Attachment ID: \(attachableID)"
+        }
+        if let error = normalizedValue(attachment.quickBooksSyncError) {
+            return "QuickBooks Attachment Error: \(error)"
+        }
+        return nil
     }
 
     private static func estimateSections(estimate: Estimate, serviceCall: ServiceCall?) -> [DocumentSection] {

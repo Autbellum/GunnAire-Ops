@@ -2909,6 +2909,41 @@ struct GunnAire_OpsTests {
         #expect(summaries.contains { $0.detail.contains("generated-report.pdf") } == false)
     }
 
+    @Test func onsiteReportAttachmentManifestIncludesLinkedBillingTrace() async throws {
+        let customer = Customer(name: "Report Customer")
+        let call = ServiceCall(type: .service, scheduledDate: Date(), customer: customer)
+        let estimate = Estimate(serviceCallID: call.id, customer: customer, amount: 250, status: "accepted")
+        let invoice = Invoice(serviceCallID: call.id, customer: customer, amount: 250, status: "open")
+        call.linkedEstimateID = estimate.id
+        call.linkedInvoiceID = invoice.id
+        let diagnosticPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            estimateID: estimate.id,
+            kind: .diagnosticPhoto,
+            displayName: "failed-capacitor.jpg",
+            caption: "Failed capacitor",
+            localFilePath: "/tmp/failed-capacitor.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            quickBooksAttachableID: "QBO-Attach-123"
+        )
+
+        let summaries = CustomerDocumentExporter.attachmentManifestSummaries(
+            for: [diagnosticPhoto],
+            serviceCall: call,
+            estimate: estimate,
+            invoice: invoice
+        )
+
+        let detail = try #require(summaries.first?.detail)
+        #expect(detail.contains("Job ID:"))
+        #expect(detail.contains("Estimate ID:"))
+        #expect(detail.contains("Invoice ID:"))
+        #expect(detail.contains("QuickBooks Attachment ID: QBO-Attach-123"))
+    }
+
     @Test func onsiteReportPhotoCaptionIncludesTimestampForFieldEvidence() async throws {
         let customer = Customer(name: "Photo Evidence Customer")
         let photo = ServiceDocumentAttachment(
@@ -2987,6 +3022,35 @@ struct GunnAire_OpsTests {
         #expect(evidence[1].detail.contains("Failed capacitor"))
         #expect(evidence[2].detail.contains("Equipment data plate"))
         #expect(evidence.contains { $0.detail.contains("generated-report.pdf") } == false)
+    }
+
+    @Test func onsiteReportPhotoEvidenceIncludesLinkedBillingTrace() async throws {
+        let customer = Customer(name: "Photo Evidence Customer")
+        let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer)
+        let invoice = Invoice(serviceCallID: call.id, customer: customer, amount: 400, status: "open")
+        let photo = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .afterPhoto,
+            displayName: "after-repair.jpg",
+            caption: "After repair",
+            localFilePath: "/tmp/after-repair.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+
+        let evidence = CustomerDocumentExporter.photoEvidenceSummaries(
+            for: [photo],
+            serviceCall: call,
+            invoice: invoice
+        )
+
+        let detail = try #require(evidence.first?.detail)
+        #expect(detail.contains("After repair"))
+        #expect(detail.contains("Job ID:"))
+        #expect(detail.contains("Invoice ID:"))
     }
 
     @Test func generatedServiceReportAttachmentCanBeReusedForSameJobBillingLink() async throws {
