@@ -1787,7 +1787,34 @@ GunnAire
                                 .foregroundColor(.secondary)
                         } else {
                             ForEach(displayedEstimates) { estimate in
-                                VStack(alignment: .leading, spacing: 6) {
+                                DisclosureGroup {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text(estimate.lineItemSummary)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        if let quickBooksID = estimate.quickBooksID, !quickBooksID.isEmpty {
+                                            Text("QuickBooks ID: \(quickBooksID)")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Button("Create Invoice") {
+                                            createInvoiceFromEstimate(estimate)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(estimate.status == "invoiced" || !canCreateOrOpenInvoice(from: estimate))
+                                        if let message = invoiceCreationBlockedMessage(for: estimate) {
+                                            Text(message)
+                                                .font(.caption2)
+                                                .foregroundColor(.orange)
+                                        }
+
+                                        Button("Generate Estimate PDF") {
+                                            generateEstimateDocument(estimate)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                    .padding(.top, 6)
+                                } label: {
                                     HStack {
                                         VStack(alignment: .leading) {
                                             Text(estimate.customer.name)
@@ -1799,29 +1826,6 @@ GunnAire
                                         Spacer()
                                         Text(estimate.amount, format: .currency(code: "USD"))
                                     }
-                                    Text(estimate.lineItemSummary)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    if let quickBooksID = estimate.quickBooksID, !quickBooksID.isEmpty {
-                                        Text("QuickBooks ID: \(quickBooksID)")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Button("Create Invoice") {
-                                        createInvoiceFromEstimate(estimate)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .disabled(estimate.status == "invoiced" || !canCreateOrOpenInvoice(from: estimate))
-                                    if let message = invoiceCreationBlockedMessage(for: estimate) {
-                                        Text(message)
-                                            .font(.caption2)
-                                            .foregroundColor(.orange)
-                                    }
-
-                                    Button("Generate Estimate PDF") {
-                                        generateEstimateDocument(estimate)
-                                    }
-                                    .buttonStyle(.bordered)
                                 }
                                 .padding(.vertical, 4)
                             }
@@ -1836,7 +1840,41 @@ GunnAire
                                 .foregroundColor(.secondary)
                         } else {
                             ForEach(displayedInvoices) { invoice in
-                                VStack(alignment: .leading, spacing: 6) {
+                                DisclosureGroup {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text(invoice.lineItemSummary)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        if let signatureName = invoice.customerSignatureName, !signatureName.isEmpty {
+                                            Text("Signed by \(signatureName)")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        if invoice.finalizedAt != nil {
+                                            Text("Finalized")
+                                                .font(.caption2)
+                                                .foregroundColor(.green)
+                                        }
+                                        Button("Open Invoice") {
+                                            openInvoiceCloseout(invoice)
+                                        }
+                                        .buttonStyle(.bordered)
+
+                                        Button(isInvoicePaid(invoice) ? "Paid" : "Collect Payment") {
+                                            openInvoiceCloseout(invoice)
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .tint(Color.brandGold)
+                                        .foregroundStyle(Color.primaryBlack)
+                                        .disabled(isInvoicePaid(invoice))
+
+                                        Button("Generate Invoice PDF") {
+                                            generateInvoiceDocument(invoice)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                    .padding(.top, 6)
+                                } label: {
                                     HStack {
                                         VStack(alignment: .leading) {
                                             Text(invoice.customer.name)
@@ -1850,36 +1888,6 @@ GunnAire
                                             Text(invoice.amount, format: .currency(code: "USD"))
                                         }
                                     }
-                                    Text(invoice.lineItemSummary)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    if let signatureName = invoice.customerSignatureName, !signatureName.isEmpty {
-                                        Text("Signed by \(signatureName)")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    if invoice.finalizedAt != nil {
-                                        Text("Finalized")
-                                            .font(.caption2)
-                                            .foregroundColor(.green)
-                                    }
-                                    Button("Open Invoice") {
-                                        openInvoiceCloseout(invoice)
-                                    }
-                                    .buttonStyle(.bordered)
-
-                                    Button(isInvoicePaid(invoice) ? "Paid" : "Collect Payment") {
-                                        openInvoiceCloseout(invoice)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .tint(Color.brandGold)
-                                    .foregroundStyle(Color.primaryBlack)
-                                    .disabled(isInvoicePaid(invoice))
-
-                                    Button("Generate Invoice PDF") {
-                                        generateInvoiceDocument(invoice)
-                                    }
-                                    .buttonStyle(.bordered)
                                 }
                                 .padding(.vertical, 4)
                             }
