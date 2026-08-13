@@ -746,6 +746,13 @@ GunnAire
                                 }
                                 .buttonStyle(.bordered)
 
+                                Button("Send Estimate Through QuickBooks") {
+                                    sendEstimateThroughQuickBooks(estimate)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.blue)
+                                .disabled(!QuickBooksDataAPI.shared.isAuthenticated || estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
+
                                 HStack {
                                     Button("Mark Accepted") {
                                         estimate.status = "accepted"
@@ -842,6 +849,13 @@ GunnAire
                                     openInvoiceCloseout(invoice)
                                 }
                                 .buttonStyle(.bordered)
+
+                                Button("Send Invoice Through QuickBooks") {
+                                    sendInvoiceThroughQuickBooks(invoice)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.blue)
+                                .disabled(!QuickBooksDataAPI.shared.isAuthenticated || invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
 
                                 if isInvoicePaid(invoice) || (currentJobBalanceDue ?? invoiceBalanceDue(for: invoice)) <= 0.009 {
                                     Button("Generate Paid Invoice PDF") {
@@ -2332,6 +2346,68 @@ GunnAire
             actionMessage = "Paid invoice PDF generated."
         } catch {
             actionMessage = "Could not generate paid invoice PDF: \(error.localizedDescription)"
+        }
+    }
+
+    private func sendEstimateThroughQuickBooks(_ estimate: Estimate) {
+        guard QuickBooksDataAPI.shared.isAuthenticated else {
+            actionMessage = "Connect QuickBooks before sending the estimate."
+            return
+        }
+        guard let quickBooksID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !quickBooksID.isEmpty else {
+            actionMessage = "Create or sync this estimate to QuickBooks before sending it."
+            return
+        }
+        let email = estimate.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        actionMessage = "Sending estimate through QuickBooks..."
+        QuickBooksDataAPI.shared.sendEstimate(id: quickBooksID, to: email?.isEmpty == false ? email : nil) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    if estimate.status.caseInsensitiveCompare("accepted") != .orderedSame &&
+                        estimate.status.caseInsensitiveCompare("rejected") != .orderedSame {
+                        estimate.status = "sent"
+                    }
+                    try? modelContext.save()
+                    actionMessage = email?.isEmpty == false
+                        ? "Estimate sent through QuickBooks to \(email!)."
+                        : "Estimate sent through QuickBooks."
+                case .failure(let error):
+                    actionMessage = "QuickBooks estimate send failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func sendInvoiceThroughQuickBooks(_ invoice: Invoice) {
+        guard QuickBooksDataAPI.shared.isAuthenticated else {
+            actionMessage = "Connect QuickBooks before sending the invoice."
+            return
+        }
+        guard let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !quickBooksID.isEmpty else {
+            actionMessage = "Create or sync this invoice to QuickBooks before sending it."
+            return
+        }
+        let email = invoice.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        actionMessage = "Sending invoice through QuickBooks..."
+        QuickBooksDataAPI.shared.sendInvoice(id: quickBooksID, to: email?.isEmpty == false ? email : nil) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    if invoice.status.caseInsensitiveCompare("paid") != .orderedSame &&
+                        invoice.status.caseInsensitiveCompare("partial") != .orderedSame {
+                        invoice.status = "sent"
+                    }
+                    try? modelContext.save()
+                    actionMessage = email?.isEmpty == false
+                        ? "Invoice sent through QuickBooks to \(email!)."
+                        : "Invoice sent through QuickBooks."
+                case .failure(let error):
+                    actionMessage = "QuickBooks invoice send failed: \(error.localizedDescription)"
+                }
+            }
         }
     }
 
