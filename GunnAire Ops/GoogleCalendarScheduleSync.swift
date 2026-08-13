@@ -5,6 +5,11 @@ import SwiftData
 enum GoogleCalendarScheduleSync {
     private static let deletedCalendarEventKeysStorageKey = "GunnAireDeletedGoogleCalendarEventKeys"
     private static let locallyEditedCalendarCallIDsStorageKey = "GunnAireLocallyEditedGoogleCalendarCallIDs"
+    private static let managedEventProperties = [
+        "gunnaireManaged": "true",
+        "gunnaireManagedVersion": "3",
+        "gunnaireOrigin": "ios-app"
+    ]
     static func markCalendarEventDeleted(calendarID: String?, eventID: String?) {
         guard let eventID, !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         var deletedKeys = Set(UserDefaults.standard.stringArray(forKey: deletedCalendarEventKeysStorageKey) ?? [])
@@ -654,7 +659,7 @@ enum GoogleCalendarScheduleSync {
             let event = makeCalendarCreateEvent(for: call)
             auth.createCalendarEvent(calendarID: targetCalendarID, event: event) { result in
                 if case .success = result {
-                    call.googleEventManagedByApp = false
+                    call.googleEventManagedByApp = true
                 }
                 finish(targetCalendarID, result)
             }
@@ -665,7 +670,7 @@ enum GoogleCalendarScheduleSync {
         guard call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             return true
         }
-        return false
+        return call.googleEventManagedByApp
     }
 
     static func isExternalGoogleCalendarEvent(_ call: ServiceCall) -> Bool {
@@ -686,11 +691,11 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldPatchExistingGoogleCalendarEvent(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> Bool {
-        false
+        call.googleEventManagedByApp && remoteEvent?.isManagedByGunnAire == true
     }
 
     static func isImportedEventManagedByApp(_ event: GoogleCalendarEvent) -> Bool {
-        false
+        event.isManagedByGunnAire
     }
 
     static func shouldSelectGoogleCalendarBeforeCreate(for call: ServiceCall) -> Bool {
@@ -748,7 +753,7 @@ enum GoogleCalendarScheduleSync {
                 timeZone: timeZone
             ),
             attendees: attendees,
-            extendedProperties: nil
+            extendedProperties: preserveExternalDetails ? nil : GoogleCalendarExtendedProperties(privateProperties: managedEventProperties)
         )
     }
 
