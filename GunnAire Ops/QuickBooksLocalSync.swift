@@ -172,6 +172,7 @@ enum QuickBooksLocalSync {
             }
         }
 
+        var refreshedInvoiceQuickBooksIDs: Set<String> = []
         for quickBooksInvoice in invoices {
             let customer = resolveCustomer(ref: quickBooksInvoice.CustomerRef, cacheByQBID: &customersByQBID, cacheByName: &customersByName, modelContext: modelContext)
             let invoice = invoicesByQBID[quickBooksInvoice.Id]
@@ -214,6 +215,7 @@ enum QuickBooksLocalSync {
                 }
             }
             invoicesByQBID[quickBooksInvoice.Id] = invoice
+            refreshedInvoiceQuickBooksIDs.insert(quickBooksInvoice.Id)
             for duplicate in existingInvoices where duplicate !== invoice && isDuplicateInvoice(duplicate, of: quickBooksInvoice, customer: customer) {
                 mergeInvoice(invoice, withDuplicate: duplicate, payments: existingPayments, serviceCalls: existingServiceCalls, attachments: existingAttachments, modelContext: modelContext)
             }
@@ -256,8 +258,13 @@ enum QuickBooksLocalSync {
             invoicesAffectedByImportedPayments[invoice.id] = invoice
         }
 
-        for invoice in invoicesAffectedByImportedPayments.values where !invoice.hasQuickBooksBalance {
+        for invoice in invoicesAffectedByImportedPayments.values {
+            guard let quickBooksID = invoice.quickBooksID?.nilIfEmpty,
+                  !refreshedInvoiceQuickBooksIDs.contains(quickBooksID) else {
+                continue
+            }
             let invoicePayments = paymentsByQBID.values.filter { $0.invoice.id == invoice.id }
+            invoice.quickBooksBalanceDue = localOutstandingBalance(for: invoice, payments: invoicePayments)
             invoice.status = Invoice.resolvedStatus(for: invoice, payments: invoicePayments)
         }
 
@@ -497,6 +504,15 @@ enum QuickBooksLocalSync {
 
     private static func amountsMatch(_ lhs: Double, _ rhs: Double) -> Bool {
         abs(lhs - rhs) <= 0.01
+    }
+
+    private static func localOutstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
+        let netPaid = payments
+            .filter { $0.invoice.id == invoice.id }
+            .reduce(0) { partial, payment in
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
+            }
+        return max(invoice.amount - netPaid, 0)
     }
 
     private static func documentReferenceMatches(
