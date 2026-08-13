@@ -103,7 +103,8 @@ final class CustomerEquipment {
 
     @discardableResult
     func applyTechnicalBaselines(to serviceCall: ServiceCall, overwriteExisting: Bool = false) -> Int {
-        let allowedKeys = Set((equipmentType ?? serviceCall.equipmentType ?? .splitSystemAC).equipmentProfileBaselineReadingKeys)
+        guard let equipmentType = equipmentType ?? serviceCall.equipmentType else { return 0 }
+        let allowedKeys = Set(equipmentType.equipmentProfileBaselineReadingKeys)
         var appliedCount = 0
         for key in allowedKeys.sorted() {
             guard let value = technicalBaselineReadings[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -122,7 +123,8 @@ final class CustomerEquipment {
 
     @discardableResult
     func updateTechnicalBaselines(from serviceCall: ServiceCall) -> Int {
-        let allowedKeys = Set((serviceCall.equipmentType ?? equipmentType ?? .splitSystemAC).equipmentProfileBaselineReadingKeys)
+        guard let equipmentType = serviceCall.equipmentType ?? equipmentType else { return 0 }
+        let allowedKeys = Set(equipmentType.equipmentProfileBaselineReadingKeys)
         var baselines = technicalBaselineReadings
         var updatedCount = 0
 

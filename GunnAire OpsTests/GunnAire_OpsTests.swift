@@ -294,6 +294,36 @@ struct GunnAire_OpsTests {
         #expect(equipment.technicalBaselineReadings["superheat"] == nil)
     }
 
+    @Test func customerEquipmentBaselinesDoNotDefaultBeforeEquipmentTypeSelection() async throws {
+        let customer = Customer(name: "Untyped Equipment Customer")
+        let baselineJSON = try #require(String(
+            data: JSONEncoder().encode([
+                "refrigerant_type": "R-410A",
+                "metering_device": "TXV"
+            ]),
+            encoding: .utf8
+        ))
+        let equipment = CustomerEquipment(
+            customer: customer,
+            name: "Unclassified System",
+            technicalBaselineReadingsJSON: baselineJSON
+        )
+        let call = ServiceCall(
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        let appliedCount = equipment.applyTechnicalBaselines(to: call)
+        call.setTechnicalReading("R-454B", for: "refrigerant_type")
+        let capturedCount = equipment.updateTechnicalBaselines(from: call)
+
+        #expect(appliedCount == 0)
+        #expect(capturedCount == 0)
+        #expect(call.technicalReading(for: "metering_device").isEmpty)
+        #expect(equipment.technicalBaselineReadings["refrigerant_type"] == "R-410A")
+    }
+
     @Test func serviceCallAttachmentProgressRecalculatesPhotoCounts() async throws {
         let customer = Customer(name: "Attachment Customer")
         let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer)
