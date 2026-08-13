@@ -237,7 +237,7 @@ struct GunnAire_OpsTests {
         #expect(object["attendees"] == nil)
     }
 
-    @Test func googleCalendarManagedPatchEchoesExistingGoogleDetails() async throws {
+    @Test func googleCalendarManagedPatchOmitsExistingGoogleDetails() async throws {
         let customer = Customer(name: "Calendar Customer", address: "123 Main St")
         let call = ServiceCall(
             googleCalendarID: "primary",
@@ -274,14 +274,14 @@ struct GunnAire_OpsTests {
 
         #expect(object["start"] != nil)
         #expect(object["end"] != nil)
-        #expect(object["summary"] as? String == "Google title stays")
-        #expect(object["description"] as? String == "Google body stays")
-        #expect(object["location"] as? String == "Google location stays")
+        #expect(object["summary"] == nil)
+        #expect(object["description"] == nil)
+        #expect(object["location"] == nil)
         #expect(object["extendedProperties"] == nil)
-        #expect(Set(object.keys) == ["summary", "description", "location", "start", "end"])
+        #expect(Set(object.keys) == ["start", "end"])
     }
 
-    @Test func googleCalendarManagedPatchDoesNotRepairMissingGoogleDetails() async throws {
+    @Test func googleCalendarManagedPatchDoesNotWriteLocalDetailsOverGoogleFields() async throws {
         let customer = Customer(name: "Calendar Customer", address: "123 Main St")
         let call = ServiceCall(
             googleCalendarID: "primary",
@@ -317,11 +317,11 @@ struct GunnAire_OpsTests {
 
         #expect(object["summary"] == nil)
         #expect(object["description"] == nil)
-        #expect(object["location"] as? String == "Google location stays")
+        #expect(object["location"] == nil)
         #expect(object["start"] != nil)
         #expect(object["end"] != nil)
         #expect(object["extendedProperties"] == nil)
-        #expect(Set(object.keys) == ["location", "start", "end"])
+        #expect(Set(object.keys) == ["start", "end"])
     }
 
     @Test func googleCalendarCreatePayloadOmitsBlankLocationAndDetails() async throws {
