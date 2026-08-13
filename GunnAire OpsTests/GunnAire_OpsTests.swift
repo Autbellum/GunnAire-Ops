@@ -4337,7 +4337,7 @@ struct GunnAire_OpsTests {
         )
 
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: importedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: newAppCall) == true)
     }
 
@@ -4415,7 +4415,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func googleCalendarAppOwnedEventsDoNotPublishLocalEditsBackToGoogle() async throws {
+    @Test func googleCalendarAppOwnedEventsAreReadOnlyAfterGoogleCreation() async throws {
         let customer = Customer(name: "Calendar Customer")
         let appOwnedCall = ServiceCall(
             googleCalendarID: "primary",
@@ -4430,10 +4430,10 @@ struct GunnAire_OpsTests {
             notes: "App details"
         )
 
-        #expect(GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(appOwnedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall) == true)
+        #expect(GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(appOwnedCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: appOwnedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: appOwnedCall) == true)
     }
 
     @MainActor
@@ -4560,7 +4560,7 @@ struct GunnAire_OpsTests {
 
         #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(externallyManagedEvent) == false)
         #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(legacyMarkedEvent) == false)
-        #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(appManagedEvent) == true)
+        #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(appManagedEvent) == false)
     }
 
     @Test func gmailRawMessageIncludesPdfAttachment() async throws {

@@ -656,12 +656,11 @@ enum GoogleCalendarScheduleSync {
         guard call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
             return true
         }
-        return call.googleEventManagedByApp
+        return false
     }
 
     static func isExternalGoogleCalendarEvent(_ call: ServiceCall) -> Bool {
-        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            !call.googleEventManagedByApp
+        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     static func shouldPreserveExternalGoogleCalendarDetails(for call: ServiceCall) -> Bool {
@@ -680,7 +679,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func isImportedEventManagedByApp(_ event: GoogleCalendarEvent) -> Bool {
-        event.isManagedByGunnAire
+        false
     }
 
     static func shouldSelectGoogleCalendarBeforeCreate(for call: ServiceCall) -> Bool {
