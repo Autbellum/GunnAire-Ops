@@ -658,7 +658,11 @@ GunnAire
 
     private var activeEquipmentHistoryAttachments: [ServiceDocumentAttachment] {
         guard let call = activeServiceCall else { return [] }
-        return ServiceDocumentAttachment.equipmentHistoryAttachments(for: call, in: attachments)
+        return ServiceDocumentAttachment.equipmentHistoryAttachments(
+            for: call,
+            in: attachments,
+            serviceCalls: serviceCalls
+        )
     }
 
     private var isAttachmentPreviewPresented: Binding<Bool> {

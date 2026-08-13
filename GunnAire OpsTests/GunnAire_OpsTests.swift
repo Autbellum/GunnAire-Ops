@@ -2552,6 +2552,53 @@ struct GunnAire_OpsTests {
         #expect(history.map(\.displayName) == ["nameplate.jpg", "prior-report.pdf"])
     }
 
+    @Test func equipmentHistoryAttachmentsInferPriorEquipmentFromLinkedServiceCall() async throws {
+        let customer = Customer(name: "Equipment History Customer")
+        let linkedEquipmentID = UUID()
+        let currentCall = ServiceCall(
+            customerEquipmentID: linkedEquipmentID,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let previousCall = ServiceCall(
+            customerEquipmentID: linkedEquipmentID,
+            type: .service,
+            scheduledDate: Date().addingTimeInterval(-86_400),
+            customer: customer
+        )
+        let legacyPriorReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: previousCall.id,
+            customerEquipmentID: nil,
+            kind: .serviceReport,
+            displayName: "legacy-prior-report.pdf",
+            localFilePath: "/tmp/legacy-prior-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date().addingTimeInterval(-100)
+        )
+        let currentJobAttachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: currentCall.id,
+            customerEquipmentID: nil,
+            kind: .diagnosticPhoto,
+            displayName: "current-job.jpg",
+            localFilePath: "/tmp/current-job.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date()
+        )
+
+        let history = ServiceDocumentAttachment.equipmentHistoryAttachments(
+            for: currentCall,
+            in: [legacyPriorReport, currentJobAttachment],
+            serviceCalls: [previousCall, currentCall]
+        )
+
+        #expect(history.map(\.displayName) == ["legacy-prior-report.pdf"])
+    }
+
     @Test func customerEquipmentAttachmentGroupsFilesByLinkedEquipment() async throws {
         let customer = Customer(name: "Equipment File Customer")
         let downstairs = CustomerEquipment(customer: customer, name: "Downstairs AC", modelNumber: "24ABC6")

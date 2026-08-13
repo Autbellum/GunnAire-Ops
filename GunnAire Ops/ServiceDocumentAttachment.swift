@@ -410,12 +410,15 @@ final class ServiceDocumentAttachment {
 
     static func equipmentHistoryAttachments(
         for serviceCall: ServiceCall,
-        in attachments: [ServiceDocumentAttachment]
+        in attachments: [ServiceDocumentAttachment],
+        serviceCalls: [ServiceCall] = []
     ) -> [ServiceDocumentAttachment] {
         guard let equipmentID = serviceCall.customerEquipmentID else { return [] }
         return attachments
             .filter { attachment in
-                attachment.customerEquipmentID == equipmentID &&
+                let resolvedEquipmentID = attachment.customerEquipmentID ??
+                    attachment.linkedServiceCall(in: serviceCalls)?.customerEquipmentID
+                return resolvedEquipmentID == equipmentID &&
                     attachment.serviceCallID != serviceCall.id &&
                     attachment.canShowInActiveEquipmentHistory
             }
