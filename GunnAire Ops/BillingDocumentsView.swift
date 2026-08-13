@@ -3152,17 +3152,7 @@ GunnAire
             }
         }
 
-        let resolvedInvoiceID = attachment.invoiceID ?? activeServiceCall?.linkedInvoiceID
-        if let invoiceID = resolvedInvoiceID,
-           let invoice = invoices.first(where: { $0.id == invoiceID }) {
-            syncAttachmentToQuickBooksInvoiceIfPossible(attachment, invoice: invoice)
-        }
-
-        let resolvedEstimateID = attachment.estimateID ?? activeServiceCall?.linkedEstimateID
-        if let estimateID = resolvedEstimateID,
-           let estimate = estimates.first(where: { $0.id == estimateID }) {
-            syncAttachmentToQuickBooksEstimateIfPossible(attachment, estimate: estimate)
-        }
+        syncAttachmentToQuickBooksIfPossible(attachment)
     }
 
     private func linkExistingServiceReports(to invoice: Invoice, serviceCallID: UUID?) {
@@ -3210,7 +3200,7 @@ GunnAire
             $0.invoiceID == invoice.id && $0.canLinkToQuickBooksInvoiceDocument
         }
         for attachment in invoiceAttachments {
-            syncAttachmentToQuickBooksInvoiceIfPossible(attachment, invoice: invoice)
+            syncAttachmentToQuickBooksIfPossible(attachment)
         }
     }
 
@@ -3219,7 +3209,7 @@ GunnAire
             $0.estimateID == estimate.id && $0.canLinkToQuickBooksEstimateDocument
         }
         for attachment in estimateAttachments {
-            syncAttachmentToQuickBooksEstimateIfPossible(attachment, estimate: estimate)
+            syncAttachmentToQuickBooksIfPossible(attachment)
         }
     }
 
@@ -3449,46 +3439,23 @@ GunnAire
         }
     }
 
-    private func syncAttachmentToQuickBooksInvoiceIfPossible(_ attachment: ServiceDocumentAttachment, invoice: Invoice) {
+    private func syncAttachmentToQuickBooksIfPossible(_ attachment: ServiceDocumentAttachment) {
         guard attachment.quickBooksAttachableID == nil,
-              let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !quickBooksID.isEmpty,
               QuickBooksDataAPI.shared.isAuthenticated else {
             return
         }
 
-        QuickBooksDataAPI.shared.uploadDocument(
-            fileURL: attachment.localFileURL,
-            note: attachment.caption,
-            attachToEntityType: .invoice,
-            attachToEntityID: quickBooksID
-        ) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let attachableID):
-                    attachment.quickBooksAttachableID = attachableID
-                    try? modelContext.save()
-                case .failure(let error):
-                    attachment.quickBooksSyncError = error.localizedDescription
-                    try? modelContext.save()
-                }
-            }
-        }
-    }
-
-    private func syncAttachmentToQuickBooksEstimateIfPossible(_ attachment: ServiceDocumentAttachment, estimate: Estimate) {
-        guard attachment.quickBooksAttachableID == nil,
-              let quickBooksID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !quickBooksID.isEmpty,
-              QuickBooksDataAPI.shared.isAuthenticated else {
-            return
-        }
+        let references = QuickBooksInvoiceAttachmentSync.quickBooksAttachableReferences(
+            for: attachment,
+            estimates: estimates,
+            invoices: invoices
+        )
+        guard !references.isEmpty else { return }
 
         QuickBooksDataAPI.shared.uploadDocument(
             fileURL: attachment.localFileURL,
             note: attachment.caption,
-            attachToEntityType: .estimate,
-            attachToEntityID: quickBooksID
+            attachableReferences: references
         ) { result in
             DispatchQueue.main.async {
                 switch result {
