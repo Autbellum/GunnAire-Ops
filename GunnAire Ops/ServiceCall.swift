@@ -422,6 +422,26 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    var equipmentProfileBaselineReadingKeys: [String] {
+        let baselineKeys = [
+            "refrigerant_type",
+            "metering_device",
+            "target_superheat",
+            "target_subcooling",
+            "compressor_rla",
+            "outdoor_fan_fla",
+            "capacitor_rating",
+            "blower_type",
+            "fuel_type",
+            "ignition_type",
+            "venting_type",
+            "package_heat_type",
+            "accessory_type"
+        ]
+        let availableKeys = Set(readingDefinitions.map(\.key))
+        return baselineKeys.filter { availableKeys.contains($0) }
+    }
+
     var serviceActionDefinitions: [HVACServiceActionDefinition] {
         let airflow = [
             HVACServiceActionDefinition(key: "filter_checked", label: "Filter checked/replaced", group: "Airflow", required: true),

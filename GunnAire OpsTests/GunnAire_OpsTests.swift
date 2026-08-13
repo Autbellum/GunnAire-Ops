@@ -231,6 +231,69 @@ struct GunnAire_OpsTests {
         #expect(call.equipmentNotes == "Variable speed")
     }
 
+    @Test func customerEquipmentBaselineReadingsPrefillBlankServiceReportFields() async throws {
+        let customer = Customer(name: "Equipment Customer")
+        let baselineJSON = try #require(String(
+            data: JSONEncoder().encode([
+                "refrigerant_type": "R-410A",
+                "metering_device": "TXV",
+                "compressor_rla": "14.2",
+                "suction_pressure": "118"
+            ]),
+            encoding: .utf8
+        ))
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            technicalBaselineReadingsJSON: baselineJSON
+        )
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("Existing", for: "metering_device")
+
+        let appliedCount = equipment.applyTechnicalBaselines(to: call)
+
+        #expect(appliedCount == 2)
+        #expect(call.technicalReading(for: "refrigerant_type") == "R-410A")
+        #expect(call.technicalReading(for: "compressor_rla") == "14.2")
+        #expect(call.technicalReading(for: "metering_device") == "Existing")
+        #expect(call.technicalReading(for: "suction_pressure").isEmpty)
+    }
+
+    @Test func customerEquipmentBaselineReadingsCaptureOnlyProfileSafeValues() async throws {
+        let customer = Customer(name: "Equipment Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC"
+        )
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("R-454B", for: "refrigerant_type")
+        call.setTechnicalReading("TXV", for: "metering_device")
+        call.setTechnicalReading("17.5", for: "compressor_rla")
+        call.setTechnicalReading("118", for: "suction_pressure")
+        call.setTechnicalReading("10", for: "superheat")
+
+        let capturedCount = equipment.updateTechnicalBaselines(from: call)
+
+        #expect(capturedCount == 3)
+        #expect(equipment.technicalBaselineReadings["refrigerant_type"] == "R-454B")
+        #expect(equipment.technicalBaselineReadings["metering_device"] == "TXV")
+        #expect(equipment.technicalBaselineReadings["compressor_rla"] == "17.5")
+        #expect(equipment.technicalBaselineReadings["suction_pressure"] == nil)
+        #expect(equipment.technicalBaselineReadings["superheat"] == nil)
+    }
+
     @Test func serviceCallAttachmentProgressRecalculatesPhotoCounts() async throws {
         let customer = Customer(name: "Attachment Customer")
         let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer)

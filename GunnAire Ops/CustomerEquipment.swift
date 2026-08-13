@@ -15,6 +15,7 @@ final class CustomerEquipment {
     var warrantyExpiration: Date?
     var filterSize: String?
     var notes: String?
+    var technicalBaselineReadingsJSON: String?
     var isActive: Bool
     var createdAt: Date
 
@@ -31,6 +32,7 @@ final class CustomerEquipment {
         warrantyExpiration: Date? = nil,
         filterSize: String? = nil,
         notes: String? = nil,
+        technicalBaselineReadingsJSON: String? = nil,
         isActive: Bool = true,
         createdAt: Date = Date()
     ) {
@@ -46,6 +48,7 @@ final class CustomerEquipment {
         self.warrantyExpiration = warrantyExpiration
         self.filterSize = filterSize
         self.notes = notes
+        self.technicalBaselineReadingsJSON = technicalBaselineReadingsJSON
         self.isActive = isActive
         self.createdAt = createdAt
     }
@@ -87,6 +90,61 @@ final class CustomerEquipment {
         serviceCall.equipmentWarrantyExpiration = warrantyExpiration
         serviceCall.filterSize = filterSize
         serviceCall.equipmentNotes = notes
+    }
+
+    var technicalBaselineReadings: [String: String] {
+        guard let technicalBaselineReadingsJSON,
+              let data = technicalBaselineReadingsJSON.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        return decoded
+    }
+
+    @discardableResult
+    func applyTechnicalBaselines(to serviceCall: ServiceCall, overwriteExisting: Bool = false) -> Int {
+        let allowedKeys = Set((equipmentType ?? serviceCall.equipmentType ?? .splitSystemAC).equipmentProfileBaselineReadingKeys)
+        var appliedCount = 0
+        for key in allowedKeys.sorted() {
+            guard let value = technicalBaselineReadings[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else {
+                continue
+            }
+            if !overwriteExisting,
+               !serviceCall.technicalReading(for: key).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                continue
+            }
+            serviceCall.setTechnicalReading(value, for: key)
+            appliedCount += 1
+        }
+        return appliedCount
+    }
+
+    @discardableResult
+    func updateTechnicalBaselines(from serviceCall: ServiceCall) -> Int {
+        let allowedKeys = Set((serviceCall.equipmentType ?? equipmentType ?? .splitSystemAC).equipmentProfileBaselineReadingKeys)
+        var baselines = technicalBaselineReadings
+        var updatedCount = 0
+
+        for key in allowedKeys.sorted() {
+            let value = serviceCall.technicalReading(for: key).trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.isEmpty {
+                continue
+            }
+            if baselines[key] != value {
+                baselines[key] = value
+                updatedCount += 1
+            }
+        }
+
+        baselines = baselines.filter { allowedKeys.contains($0.key) }
+        if baselines.isEmpty {
+            technicalBaselineReadingsJSON = nil
+        } else if let data = try? JSONEncoder().encode(baselines),
+                  let encoded = String(data: data, encoding: .utf8) {
+            technicalBaselineReadingsJSON = encoded
+        }
+        return updatedCount
     }
 
     func matches(_ serviceCall: ServiceCall) -> Bool {

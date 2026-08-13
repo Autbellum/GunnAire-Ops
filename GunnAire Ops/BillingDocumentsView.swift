@@ -2822,9 +2822,13 @@ GunnAire
         call.equipmentVerifiedChecklist = true
         call.diagnosticsCaptured = true
         let linkedCount = ServiceDocumentAttachment.backfillMissingEquipmentLinks(for: call, in: attachments)
+        let baselineCount = equipment.applyTechnicalBaselines(to: call)
+        let baselineMessage = baselineCount > 0
+            ? " Pre-filled \(baselineCount) equipment baseline reading\(baselineCount == 1 ? "" : "s")."
+            : ""
         actionMessage = linkedCount > 0
-            ? "Loaded equipment profile and linked \(linkedCount) existing job file\(linkedCount == 1 ? "" : "s") to this equipment."
-            : "Loaded equipment profile for this job."
+            ? "Loaded equipment profile and linked \(linkedCount) existing job file\(linkedCount == 1 ? "" : "s") to this equipment.\(baselineMessage)"
+            : "Loaded equipment profile for this job.\(baselineMessage)"
     }
 
     private func saveCurrentEquipmentProfile(for call: ServiceCall, announce: Bool = true) {
@@ -2871,13 +2875,17 @@ GunnAire
             ),
             isActive: true
         )
+        let baselineCount = equipment.updateTechnicalBaselines(from: call)
         call.equipmentVerifiedChecklist = true
         let linkedCount = ServiceDocumentAttachment.backfillMissingEquipmentLinks(for: call, in: attachments)
         try? modelContext.save()
         if announce {
+            let baselineMessage = baselineCount > 0
+                ? " Saved \(baselineCount) equipment baseline reading\(baselineCount == 1 ? "" : "s")."
+                : ""
             actionMessage = linkedCount > 0
-                ? "Saved equipment profile to \(call.customer.name) and linked \(linkedCount) existing job file\(linkedCount == 1 ? "" : "s")."
-                : "Saved equipment profile to \(call.customer.name)."
+                ? "Saved equipment profile to \(call.customer.name) and linked \(linkedCount) existing job file\(linkedCount == 1 ? "" : "s").\(baselineMessage)"
+                : "Saved equipment profile to \(call.customer.name).\(baselineMessage)"
         }
     }
 
