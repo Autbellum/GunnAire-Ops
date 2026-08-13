@@ -771,6 +771,8 @@ struct JobCloseoutReadiness: Equatable {
 
 struct InvoiceDocumentationStatus: Equatable {
     let linkedReportCount: Int
+    let linkedPhotoEvidenceCount: Int
+    let linkedBillingDocumentCount: Int
     let pendingQuickBooksAttachmentCount: Int
     let syncedQuickBooksAttachmentCount: Int
     let requiresQuickBooksAttachmentSync: Bool
@@ -793,6 +795,12 @@ struct InvoiceDocumentationStatus: Equatable {
         var parts = [
             "\(linkedReportCount) onsite report\(linkedReportCount == 1 ? "" : "s")"
         ]
+        if linkedPhotoEvidenceCount > 0 {
+            parts.append("\(linkedPhotoEvidenceCount) photo\(linkedPhotoEvidenceCount == 1 ? "" : "s")")
+        }
+        if linkedBillingDocumentCount > 0 {
+            parts.append("\(linkedBillingDocumentCount) billing PDF\(linkedBillingDocumentCount == 1 ? "" : "s")")
+        }
         if requiresQuickBooksAttachmentSync {
             parts.append("\(syncedQuickBooksAttachmentCount) synced")
             if pendingQuickBooksAttachmentCount > 0 {
@@ -805,6 +813,8 @@ struct InvoiceDocumentationStatus: Equatable {
 
 struct EstimateDocumentationStatus: Equatable {
     let linkedReportCount: Int
+    let linkedPhotoEvidenceCount: Int
+    let linkedBillingDocumentCount: Int
     let pendingQuickBooksAttachmentCount: Int
     let syncedQuickBooksAttachmentCount: Int
     let requiresQuickBooksAttachmentSync: Bool
@@ -827,6 +837,12 @@ struct EstimateDocumentationStatus: Equatable {
         var parts = [
             "\(linkedReportCount) onsite report\(linkedReportCount == 1 ? "" : "s")"
         ]
+        if linkedPhotoEvidenceCount > 0 {
+            parts.append("\(linkedPhotoEvidenceCount) photo\(linkedPhotoEvidenceCount == 1 ? "" : "s")")
+        }
+        if linkedBillingDocumentCount > 0 {
+            parts.append("\(linkedBillingDocumentCount) billing PDF\(linkedBillingDocumentCount == 1 ? "" : "s")")
+        }
         if requiresQuickBooksAttachmentSync {
             parts.append("\(syncedQuickBooksAttachmentCount) synced")
             if pendingQuickBooksAttachmentCount > 0 {
@@ -1902,6 +1918,12 @@ final class ServiceCall {
         let linkedReports = jobAttachments.filter {
             $0.kind == .serviceReport && $0.invoiceID == invoice.id
         }
+        let linkedPhotoEvidence = jobAttachments.filter {
+            ($0.kind.isPhoto || $0.isImage) && $0.invoiceID == invoice.id
+        }
+        let linkedBillingDocuments = jobAttachments.filter {
+            $0.kind == .invoiceSupport && $0.invoiceID == invoice.id
+        }
         let hasQuickBooksInvoice = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let pendingQuickBooksAttachments = hasQuickBooksInvoice
             ? jobAttachments.filter { $0.canBePendingQuickBooksInvoiceAttachment(for: invoice) }
@@ -1913,6 +1935,8 @@ final class ServiceCall {
 
         return InvoiceDocumentationStatus(
             linkedReportCount: linkedReports.count,
+            linkedPhotoEvidenceCount: linkedPhotoEvidence.count,
+            linkedBillingDocumentCount: linkedBillingDocuments.count,
             pendingQuickBooksAttachmentCount: pendingQuickBooksAttachments.count,
             syncedQuickBooksAttachmentCount: syncedQuickBooksAttachments.count,
             requiresQuickBooksAttachmentSync: hasQuickBooksInvoice
@@ -1927,6 +1951,12 @@ final class ServiceCall {
         let linkedReports = jobAttachments.filter {
             $0.kind == .serviceReport && $0.estimateID == estimate.id
         }
+        let linkedPhotoEvidence = jobAttachments.filter {
+            ($0.kind.isPhoto || $0.isImage) && $0.estimateID == estimate.id && $0.invoiceID == nil
+        }
+        let linkedBillingDocuments = jobAttachments.filter {
+            $0.kind == .estimateSupport && $0.estimateID == estimate.id
+        }
         let hasQuickBooksEstimate = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let pendingQuickBooksAttachments = hasQuickBooksEstimate
             ? jobAttachments.filter { $0.canUploadToQuickBooksEstimate(estimate) }
@@ -1938,6 +1968,8 @@ final class ServiceCall {
 
         return EstimateDocumentationStatus(
             linkedReportCount: linkedReports.count,
+            linkedPhotoEvidenceCount: linkedPhotoEvidence.count,
+            linkedBillingDocumentCount: linkedBillingDocuments.count,
             pendingQuickBooksAttachmentCount: pendingQuickBooksAttachments.count,
             syncedQuickBooksAttachmentCount: syncedQuickBooksAttachments.count,
             requiresQuickBooksAttachmentSync: hasQuickBooksEstimate

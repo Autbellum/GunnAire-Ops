@@ -1610,16 +1610,42 @@ struct GunnAire_OpsTests {
             contentType: "application/pdf",
             fileSizeBytes: 1024
         )
-        let pending = call.invoiceDocumentationStatus(invoice: invoice, attachments: [pendingReport])
+        let linkedPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .afterPhoto,
+            displayName: "after-repair.jpg",
+            localFilePath: "/tmp/after-repair.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048
+        )
+        let linkedInvoicePDF = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .invoiceSupport,
+            displayName: "invoice.pdf",
+            localFilePath: "/tmp/invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 2048
+        )
+        let pending = call.invoiceDocumentationStatus(invoice: invoice, attachments: [pendingReport, linkedPhoto, linkedInvoicePDF])
         #expect(pending.isReady == false)
         #expect(pending.statusLabel == "QuickBooks attachments pending")
-        #expect(pending.pendingQuickBooksAttachmentCount == 1)
+        #expect(pending.linkedPhotoEvidenceCount == 1)
+        #expect(pending.linkedBillingDocumentCount == 1)
+        #expect(pending.pendingQuickBooksAttachmentCount == 3)
+        #expect(pending.summary.contains("1 photo"))
+        #expect(pending.summary.contains("1 billing PDF"))
 
         pendingReport.quickBooksAttachableID = "ATTACH-1"
-        let synced = call.invoiceDocumentationStatus(invoice: invoice, attachments: [pendingReport])
+        linkedPhoto.quickBooksAttachableID = "ATTACH-2"
+        linkedInvoicePDF.quickBooksAttachableID = "ATTACH-3"
+        let synced = call.invoiceDocumentationStatus(invoice: invoice, attachments: [pendingReport, linkedPhoto, linkedInvoicePDF])
         #expect(synced.isReady)
         #expect(synced.statusLabel == "Invoice documentation ready")
-        #expect(synced.syncedQuickBooksAttachmentCount == 1)
+        #expect(synced.syncedQuickBooksAttachmentCount == 3)
     }
 
     @Test func estimateDocumentationStatusTracksMissingPendingAndSyncedReports() async throws {
@@ -1653,16 +1679,42 @@ struct GunnAire_OpsTests {
             contentType: "application/pdf",
             fileSizeBytes: 1024
         )
-        let pending = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport])
+        let linkedPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            estimateID: estimate.id,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048
+        )
+        let linkedEstimatePDF = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            estimateID: estimate.id,
+            kind: .estimateSupport,
+            displayName: "estimate.pdf",
+            localFilePath: "/tmp/estimate.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 2048
+        )
+        let pending = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport, linkedPhoto, linkedEstimatePDF])
         #expect(pending.isReady == false)
         #expect(pending.statusLabel == "QuickBooks attachments pending")
-        #expect(pending.pendingQuickBooksAttachmentCount == 1)
+        #expect(pending.linkedPhotoEvidenceCount == 1)
+        #expect(pending.linkedBillingDocumentCount == 1)
+        #expect(pending.pendingQuickBooksAttachmentCount == 3)
+        #expect(pending.summary.contains("1 photo"))
+        #expect(pending.summary.contains("1 billing PDF"))
 
         pendingReport.quickBooksAttachableID = "ATTACH-EST-1"
-        let synced = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport])
+        linkedPhoto.quickBooksAttachableID = "ATTACH-EST-2"
+        linkedEstimatePDF.quickBooksAttachableID = "ATTACH-EST-3"
+        let synced = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport, linkedPhoto, linkedEstimatePDF])
         #expect(synced.isReady)
         #expect(synced.statusLabel == "Estimate documentation ready")
-        #expect(synced.syncedQuickBooksAttachmentCount == 1)
+        #expect(synced.syncedQuickBooksAttachmentCount == 3)
     }
 
     @Test func jobCloseoutReadinessRequiresQuickBooksInvoiceSync() async throws {
@@ -3877,6 +3929,8 @@ struct GunnAire_OpsTests {
         )
         let documentationStatus = InvoiceDocumentationStatus(
             linkedReportCount: 1,
+            linkedPhotoEvidenceCount: 0,
+            linkedBillingDocumentCount: 0,
             pendingQuickBooksAttachmentCount: 1,
             syncedQuickBooksAttachmentCount: 0,
             requiresQuickBooksAttachmentSync: true
