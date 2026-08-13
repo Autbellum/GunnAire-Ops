@@ -831,6 +831,61 @@ struct GunnAire_OpsTests {
         #expect(call.serviceReportReadinessSummary == "\(call.serviceReportRequiredItemCount)/\(call.serviceReportRequiredItemCount) required items")
     }
 
+    @Test func changingEquipmentTypePrunesIncompatibleTechnicalReadings() async throws {
+        let customer = Customer(name: "Equipment Type Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("R-410A", for: "refrigerant_type")
+        call.setTechnicalReading("12", for: "superheat")
+        call.setTechnicalReading("240", for: "line_voltage")
+
+        call.equipmentType = .gasFurnace
+
+        #expect(call.technicalReading(for: "refrigerant_type").isEmpty)
+        #expect(call.technicalReading(for: "superheat").isEmpty)
+        #expect(call.technicalReading(for: "line_voltage") == "240")
+        #expect(call.technicalReadings.keys.contains("refrigerant_type") == false)
+    }
+
+    @Test func applyingEquipmentProfilePrunesPriorEquipmentTypeReadings() async throws {
+        let customer = Customer(name: "Equipment Profile Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("R-410A", for: "refrigerant_type")
+        call.setTechnicalReading("10", for: "subcooling")
+        call.setTechnicalReading("240", for: "line_voltage")
+        let furnace = CustomerEquipment(
+            customer: customer,
+            equipmentType: .gasFurnace,
+            name: "Gas Furnace",
+            modelNumber: "GM9C",
+            serialNumber: "FURN123"
+        )
+
+        furnace.apply(to: call)
+
+        #expect(call.equipmentType == .gasFurnace)
+        #expect(call.technicalReading(for: "refrigerant_type").isEmpty)
+        #expect(call.technicalReading(for: "subcooling").isEmpty)
+        #expect(call.technicalReading(for: "line_voltage") == "240")
+    }
+
     @Test func technicalReadingDefinitionsValidateExpectedFieldRanges() async throws {
         let voltage = HVACTechnicalReadingDefinition(key: "line_voltage", label: "Line Voltage", unit: "V")
         let superheat = HVACTechnicalReadingDefinition(key: "superheat", label: "Superheat", unit: "F")

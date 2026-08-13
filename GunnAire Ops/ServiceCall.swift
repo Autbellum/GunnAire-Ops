@@ -851,7 +851,11 @@ final class ServiceCall {
             return HVACEquipmentType(rawValue: equipmentTypeRaw)
         }
         set {
+            let previousValue = equipmentTypeRaw
             equipmentTypeRaw = newValue?.rawValue
+            if previousValue != equipmentTypeRaw {
+                pruneTechnicalReadingsToCurrentEquipmentType()
+            }
         }
     }
 
@@ -966,6 +970,18 @@ final class ServiceCall {
 
     func technicalReading(for key: String) -> String {
         technicalReadings[key] ?? ""
+    }
+
+    func pruneTechnicalReadingsToCurrentEquipmentType() {
+        let allowedKeys = Set(technicalReadingDefinitions.map(\.key))
+        let prunedReadings = technicalReadings.filter { allowedKeys.contains($0.key) }
+        guard prunedReadings.count != technicalReadings.count else { return }
+        if prunedReadings.isEmpty {
+            serviceReportReadingsJSON = nil
+        } else if let data = try? JSONEncoder().encode(prunedReadings),
+                  let encoded = String(data: data, encoding: .utf8) {
+            serviceReportReadingsJSON = encoded
+        }
     }
 
     func setTechnicalReading(_ value: String, for key: String) {
