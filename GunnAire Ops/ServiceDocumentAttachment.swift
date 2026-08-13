@@ -569,6 +569,19 @@ final class ServiceDocumentAttachment {
             return exactMatch
         }
 
+        if invoiceID != nil, let estimateID {
+            let estimateOnlyMatch = matchingJobReports
+                .filter { attachment in
+                    attachment.invoiceID == nil &&
+                        attachment.estimateID == estimateID
+                }
+                .sorted { $0.createdAt > $1.createdAt }
+                .first
+            if let estimateOnlyMatch {
+                return estimateOnlyMatch
+            }
+        }
+
         return matchingJobReports
             .filter { attachment in
                 attachment.invoiceID == nil &&

@@ -6576,6 +6576,68 @@ struct GunnAire_OpsTests {
         #expect(reusable.invoiceID == invoiceID)
     }
 
+    @Test func generatedServiceReportReusesEstimateReportWhenInvoiceIsCreatedLater() async throws {
+        let customer = Customer(name: "Converted Report Customer")
+        let serviceCallID = UUID()
+        let estimateID = UUID()
+        let invoiceID = UUID()
+        let estimateReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            estimateID: estimateID,
+            kind: .serviceReport,
+            displayName: "estimate-report.pdf",
+            localFilePath: "/tmp/estimate-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "ATTACH-EST",
+            quickBooksAttachedEntityKeysRaw: ServiceDocumentAttachment.quickBooksAttachedEntityKey(
+                type: QuickBooksAttachableEntityType.estimate.rawValue,
+                value: "EST-123"
+            ),
+            createdAt: Date(timeIntervalSince1970: 20)
+        )
+        let unlinkedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .serviceReport,
+            displayName: "unlinked-report.pdf",
+            localFilePath: "/tmp/unlinked-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 30)
+        )
+        let invoice = Invoice(
+            id: invoiceID,
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "INV-123",
+            amount: 250,
+            status: "unpaid"
+        )
+
+        let reusable = try #require(ServiceDocumentAttachment.reusableGeneratedServiceReport(
+            in: [unlinkedReport, estimateReport],
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            estimateID: estimateID
+        ))
+        reusable.linkToInvoiceIfNeeded(invoice)
+
+        #expect(reusable.id == estimateReport.id)
+        #expect(reusable.invoiceID == invoiceID)
+        #expect(reusable.estimateID == estimateID)
+        #expect(reusable.quickBooksAttachableID == "ATTACH-EST")
+        #expect(reusable.quickBooksAttachedEntityKeys == [
+            ServiceDocumentAttachment.quickBooksAttachedEntityKey(
+                type: QuickBooksAttachableEntityType.estimate.rawValue,
+                value: "EST-123"
+            )
+        ])
+        let invoiceReference = try #require(reusable.quickBooksInvoiceReference(for: invoice))
+        #expect(reusable.isQuickBooksAttached(to: [invoiceReference]) == false)
+    }
+
     @Test func reusedGeneratedReportRefreshesBillingAndEquipmentContext() async throws {
         let oldCustomer = Customer(name: "Old Customer")
         let currentCustomer = Customer(name: "Current Customer")
