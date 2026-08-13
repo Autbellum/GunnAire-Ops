@@ -233,6 +233,14 @@ final class ServiceDocumentAttachment {
                 } else {
                     lines.append("Report: Ready")
                 }
+                if let summary = call.serviceReportSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !summary.isEmpty {
+                    lines.append("Summary: \(summary)")
+                }
+                if let readings = call.technicalReadingServiceHistorySummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !readings.isEmpty {
+                    lines.append("Readings: \(readings)")
+                }
             }
         }
         if canViewFinancials, let invoice = linkedInvoice(in: invoices) {

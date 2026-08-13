@@ -1989,6 +1989,48 @@ struct GunnAire_OpsTests {
         #expect(lines.contains { $0.contains("AC123") })
     }
 
+    @Test func customerProfileServiceReportDetailsIncludeSummaryAndTechnicalSnapshot() async throws {
+        let customer = Customer(name: "Technical Report Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked and cooling normally.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .completed
+        )
+        call.setTechnicalReading("76", for: "return_air_temp")
+        call.setTechnicalReading("56", for: "supply_air_temp")
+        call.setTechnicalReading("12", for: "superheat")
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let lines = attachment.customerProfileDetailLines(
+            serviceCalls: [call],
+            invoices: [],
+            estimates: [],
+            equipmentProfiles: [],
+            canViewFinancials: false
+        )
+
+        #expect(lines.contains("Summary: System checked and cooling normally."))
+        #expect(lines.contains { $0.hasPrefix("Readings:") && $0.contains("Return Air Temp") })
+        #expect(lines.contains { $0.hasPrefix("Readings:") && $0.contains("Supply Air Temp") })
+        #expect(lines.contains { $0.hasPrefix("Readings:") && $0.contains("Superheat") })
+        #expect(lines.contains { $0.contains("Invoice") } == false)
+        #expect(lines.contains { $0.contains("QuickBooks") } == false)
+    }
+
     @Test func equipmentHistoryAttachmentsExcludeCurrentJobAndUnrelatedEquipment() async throws {
         let customer = Customer(name: "Equipment History Customer")
         let linkedEquipmentID = UUID()
