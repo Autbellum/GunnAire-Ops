@@ -1818,22 +1818,28 @@ private struct CustomerEditorView: View {
     }
 
     private var generatedServiceReportAttachments: [ServiceDocumentAttachment] {
-        customerLevelFilteredAttachments.filter { $0.kind == .serviceReport }
+        customerLevelFilteredAttachments.filter { $0.kind.customerProfileGroupTitle == "Service Reports" }
     }
 
     private var customerPhotoAttachments: [ServiceDocumentAttachment] {
-        customerLevelFilteredAttachments.filter { $0.kind.isPhoto }
+        customerLevelFilteredAttachments.filter { $0.kind.customerProfileGroupTitle == "Photos" }
     }
 
-    private var billingSupportAttachments: [ServiceDocumentAttachment] {
-        customerLevelFilteredAttachments.filter { [.invoiceSupport, .estimateSupport, .receipt].contains($0.kind) }
+    private var estimateDocumentAttachments: [ServiceDocumentAttachment] {
+        customerLevelFilteredAttachments.filter { $0.kind.customerProfileGroupTitle == "Estimate Documents" }
+    }
+
+    private var invoiceDocumentAttachments: [ServiceDocumentAttachment] {
+        customerLevelFilteredAttachments.filter { $0.kind.customerProfileGroupTitle == "Invoice Documents" }
+    }
+
+    private var receiptDocumentAttachments: [ServiceDocumentAttachment] {
+        customerLevelFilteredAttachments.filter { $0.kind.customerProfileGroupTitle == "Receipts & Bills" }
     }
 
     private var generalCustomerAttachments: [ServiceDocumentAttachment] {
         customerLevelFilteredAttachments.filter { attachment in
-            attachment.kind != .serviceReport &&
-                !attachment.kind.isPhoto &&
-                ![.invoiceSupport, .estimateSupport, .receipt].contains(attachment.kind)
+            attachment.kind.customerProfileGroupTitle == "Customer Files"
         }
     }
 
@@ -2246,7 +2252,9 @@ private struct CustomerEditorView: View {
                             customerEquipmentAttachmentHistory()
                             customerAttachmentGroup("Service Reports", attachments: generatedServiceReportAttachments)
                             if canViewFinancials {
-                                customerAttachmentGroup("Billing Support", attachments: billingSupportAttachments)
+                                customerAttachmentGroup("Estimate Documents", attachments: estimateDocumentAttachments)
+                                customerAttachmentGroup("Invoice Documents", attachments: invoiceDocumentAttachments)
+                                customerAttachmentGroup("Receipts & Bills", attachments: receiptDocumentAttachments)
                             }
                             customerAttachmentGroup("Photos", attachments: customerPhotoAttachments)
                             customerAttachmentGroup("Customer Files", attachments: generalCustomerAttachments)

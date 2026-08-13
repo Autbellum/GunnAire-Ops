@@ -45,6 +45,23 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
             return false
         }
     }
+
+    var customerProfileGroupTitle: String {
+        switch self {
+        case .serviceReport:
+            return "Service Reports"
+        case .estimateSupport:
+            return "Estimate Documents"
+        case .invoiceSupport:
+            return "Invoice Documents"
+        case .receipt:
+            return "Receipts & Bills"
+        case .beforePhoto, .afterPhoto, .diagnosticPhoto:
+            return "Photos"
+        case .customerDocument, .other:
+            return "Customer Files"
+        }
+    }
 }
 
 struct EquipmentAttachmentGroup: Identifiable {

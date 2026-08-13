@@ -2836,6 +2836,15 @@ struct GunnAire_OpsTests {
         #expect(receipt.isFinancialCustomerProfileAttachment)
     }
 
+    @Test func customerProfileAttachmentKindsUseSeparateBusinessRecordGroups() async throws {
+        #expect(ServiceDocumentAttachmentKind.serviceReport.customerProfileGroupTitle == "Service Reports")
+        #expect(ServiceDocumentAttachmentKind.estimateSupport.customerProfileGroupTitle == "Estimate Documents")
+        #expect(ServiceDocumentAttachmentKind.invoiceSupport.customerProfileGroupTitle == "Invoice Documents")
+        #expect(ServiceDocumentAttachmentKind.receipt.customerProfileGroupTitle == "Receipts & Bills")
+        #expect(ServiceDocumentAttachmentKind.diagnosticPhoto.customerProfileGroupTitle == "Photos")
+        #expect(ServiceDocumentAttachmentKind.customerDocument.customerProfileGroupTitle == "Customer Files")
+    }
+
     @Test func customerProfileAttachmentDetailLinksJobBillingAndStorageContext() async throws {
         let customer = Customer(name: "Report Customer")
         let call = ServiceCall(
