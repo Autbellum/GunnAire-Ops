@@ -183,6 +183,23 @@ enum QuickBooksLocalSync {
             } else {
                 invoice.status = "unpaid"
             }
+            if invoice.serviceCallID == nil,
+               let serviceCall = matchingServiceCall(
+                   for: quickBooksInvoice,
+                   importedInvoice: invoice,
+                   customer: customer,
+                   serviceCalls: existingServiceCalls,
+                   estimates: existingEstimates,
+                   invoices: existingInvoices
+               ) {
+                invoice.serviceCallID = serviceCall.id
+                if serviceCall.linkedInvoiceID == nil {
+                    serviceCall.linkedInvoiceID = invoice.id
+                }
+                if serviceCall.status != .cancelled {
+                    serviceCall.status = .invoiced
+                }
+            }
             invoicesByQBID[quickBooksInvoice.Id] = invoice
             for duplicate in existingInvoices where duplicate !== invoice && isDuplicateInvoice(duplicate, of: quickBooksInvoice, customer: customer) {
                 mergeInvoice(invoice, withDuplicate: duplicate, payments: existingPayments, serviceCalls: existingServiceCalls, attachments: existingAttachments, modelContext: modelContext)
@@ -302,6 +319,55 @@ enum QuickBooksLocalSync {
         return sameCustomer(invoice.customer, customer) &&
             amountsMatch(invoice.amount, quickBooksInvoice.TotalAmt) &&
             documentReferenceMatches(localSummary: invoice.lineItemSummary, localNotes: invoice.notes, quickBooksDocumentNumber: quickBooksInvoice.DocNumber, localDate: invoice.createdAt, quickBooksDate: quickBooksInvoice.TxnDate)
+    }
+
+    private static func matchingServiceCall(
+        for quickBooksInvoice: QuickBooksInvoice,
+        importedInvoice: Invoice,
+        customer: Customer,
+        serviceCalls: [ServiceCall],
+        estimates: [Estimate],
+        invoices: [Invoice]
+    ) -> ServiceCall? {
+        guard let invoiceDate = parseQuickBooksDate(quickBooksInvoice.TxnDate) else { return nil }
+        let eligibleCalls = serviceCalls.filter { call in
+            sameCustomer(call.customer, customer) &&
+                (call.linkedInvoiceID == nil || call.linkedInvoiceID == importedInvoice.id) &&
+                abs(call.scheduledDate.timeIntervalSince(invoiceDate)) <= 3 * 24 * 60 * 60
+        }
+        let scored = eligibleCalls.compactMap { call -> (call: ServiceCall, score: Int)? in
+            var score = 0
+            if Calendar.current.isDate(call.scheduledDate, inSameDayAs: invoiceDate) {
+                score += 3
+            } else {
+                score += 1
+            }
+            if let linkedEstimateID = call.linkedEstimateID,
+               let estimate = estimates.first(where: { $0.id == linkedEstimateID }),
+               amountsMatch(estimate.amount, quickBooksInvoice.TotalAmt) {
+                score += 3
+            }
+            if invoices.contains(where: { invoice in
+                invoice.serviceCallID == call.id && amountsMatch(invoice.amount, quickBooksInvoice.TotalAmt)
+            }) {
+                score += 2
+            }
+            if call.linkedInvoiceID == nil {
+                score += 1
+            }
+            return score >= 4 ? (call, score) : nil
+        }
+        let ranked = scored.sorted { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            let lhsDistance = abs(lhs.call.scheduledDate.timeIntervalSince(invoiceDate))
+            let rhsDistance = abs(rhs.call.scheduledDate.timeIntervalSince(invoiceDate))
+            return lhsDistance < rhsDistance
+        }
+        guard let best = ranked.first else { return nil }
+        if ranked.dropFirst().first?.score == best.score {
+            return nil
+        }
+        return best.call
     }
 
     private static func mergeEstimate(_ estimate: Estimate, withDuplicate duplicate: Estimate, serviceCalls: [ServiceCall], modelContext: ModelContext) {

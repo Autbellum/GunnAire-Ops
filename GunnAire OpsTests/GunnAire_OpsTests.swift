@@ -6474,6 +6474,72 @@ struct GunnAire_OpsTests {
         #expect(vendors.first?.quickBooksID == "QB-VENDOR-1")
     }
 
+    @MainActor
+    @Test func quickBooksLocalSyncLinksImportedInvoiceToMatchingServiceCall() async throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(quickBooksID: "QB-CUST-1", name: "Linked QBO Customer")
+        let scheduled = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 8, day: 13, hour: 10)))
+        let call = ServiceCall(
+            type: .service,
+            scheduledDate: scheduled,
+            customer: customer
+        )
+        let estimate = Estimate(
+            serviceCallID: call.id,
+            customer: customer,
+            amount: 500,
+            status: "accepted",
+            createdAt: scheduled
+        )
+        call.linkedEstimateID = estimate.id
+        context.insert(customer)
+        context.insert(call)
+        context.insert(estimate)
+        try context.save()
+
+        let quickBooksCustomer = QuickBooksCustomer(
+            Id: "QB-CUST-1",
+            DisplayName: "Linked QBO Customer",
+            PrimaryPhone: nil,
+            PrimaryEmailAddr: nil,
+            BillAddr: nil
+        )
+        let quickBooksInvoice = try JSONDecoder().decode(QuickBooksInvoice.self, from: Data("""
+        {
+          "Id": "QB-INV-1",
+          "DocNumber": "1042",
+          "CustomerRef": { "value": "QB-CUST-1", "name": "Linked QBO Customer" },
+          "TotalAmt": 500,
+          "Balance": 0,
+          "TxnDate": "2026-08-13"
+        }
+        """.utf8))
+
+        try QuickBooksLocalSync.importSnapshot(
+            customers: [quickBooksCustomer],
+            items: [],
+            estimates: [],
+            invoices: [quickBooksInvoice],
+            payments: [],
+            vendors: [],
+            into: context
+        )
+
+        let invoices = try context.fetch(FetchDescriptor<Invoice>())
+        let importedInvoice = try #require(invoices.first { $0.quickBooksID == "QB-INV-1" })
+
+        #expect(importedInvoice.serviceCallID == call.id)
+        #expect(call.linkedInvoiceID == importedInvoice.id)
+        #expect(call.status == .invoiced)
+        #expect(importedInvoice.quickBooksBalanceDue == 0)
+        #expect(importedInvoice.status == "paid")
+    }
+
     @Test func technicianCalendarAssessmentDetectsWritableCalendar() async throws {
         let calendars = [
             GoogleCalendar(id: "tech@example.com", summary: "Tech Schedule", timeZone: "America/New_York", accessRole: "writer")
