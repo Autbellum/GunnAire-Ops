@@ -3550,6 +3550,72 @@ struct GunnAire_OpsTests {
         #expect(urls.map(\.lastPathComponent) == ["gunnaire-invoice.pdf", "estimate-onsite-report.pdf"])
     }
 
+    @Test func customerEmailAttachmentsUseSingleConvertedEstimateReportWhenEstimateLinkMissing() async throws {
+        let customer = Customer(name: "Email Report Customer")
+        let serviceCallID = UUID()
+        let invoiceID = UUID()
+        let estimateID = UUID()
+        let invoiceURL = URL(fileURLWithPath: "/tmp/gunnaire-invoice.pdf")
+        let estimateReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            estimateID: estimateID,
+            kind: .serviceReport,
+            displayName: "only-estimate-onsite-report.pdf",
+            localFilePath: "/tmp/only-estimate-onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let urls = CustomerDocumentExporter.customerEmailAttachmentURLs(
+            primaryDocumentURL: invoiceURL,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            attachments: [estimateReport]
+        )
+
+        #expect(urls.map(\.lastPathComponent) == ["gunnaire-invoice.pdf", "only-estimate-onsite-report.pdf"])
+    }
+
+    @Test func customerEmailAttachmentsDoNotGuessConvertedEstimateReportWhenMultipleEstimateReportsExist() async throws {
+        let customer = Customer(name: "Email Report Customer")
+        let serviceCallID = UUID()
+        let invoiceID = UUID()
+        let invoiceURL = URL(fileURLWithPath: "/tmp/gunnaire-invoice.pdf")
+        let firstEstimateReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            estimateID: UUID(),
+            kind: .serviceReport,
+            displayName: "first-estimate-report.pdf",
+            localFilePath: "/tmp/first-estimate-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+        let secondEstimateReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            estimateID: UUID(),
+            kind: .serviceReport,
+            displayName: "second-estimate-report.pdf",
+            localFilePath: "/tmp/second-estimate-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 300)
+        )
+
+        let urls = CustomerDocumentExporter.customerEmailAttachmentURLs(
+            primaryDocumentURL: invoiceURL,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            attachments: [secondEstimateReport, firstEstimateReport]
+        )
+
+        #expect(urls.map(\.lastPathComponent) == ["gunnaire-invoice.pdf"])
+    }
+
     @Test func customerEmailAttachmentsPreferInvoiceReportOverConvertedEstimateReport() async throws {
         let customer = Customer(name: "Email Report Customer")
         let serviceCallID = UUID()

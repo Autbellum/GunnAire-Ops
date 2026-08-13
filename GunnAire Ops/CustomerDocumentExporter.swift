@@ -43,7 +43,8 @@ enum CustomerDocumentExporter {
                 onsiteReports.first { report in
                     guard let estimateID else { return false }
                     return report.invoiceID == nil && report.estimateID == estimateID
-                }
+                } ??
+                singleConvertedEstimateReport(in: onsiteReports)
         } else if let estimateID {
             latestOnsiteReport = onsiteReports.first { $0.estimateID == estimateID }
         } else {
@@ -59,6 +60,15 @@ enum CustomerDocumentExporter {
             urls.append(onsiteReportURL)
         }
         return urls
+    }
+
+    private static func singleConvertedEstimateReport(in onsiteReports: [ServiceDocumentAttachment]) -> ServiceDocumentAttachment? {
+        let convertedReports = onsiteReports.filter { report in
+            report.invoiceID == nil && report.estimateID != nil
+        }
+        let estimateIDs = Set(convertedReports.compactMap(\.estimateID))
+        guard estimateIDs.count == 1 else { return nil }
+        return convertedReports.first
     }
 
     static func exportOnsiteReport(
