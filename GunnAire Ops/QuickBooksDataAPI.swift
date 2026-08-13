@@ -3154,6 +3154,7 @@ struct QuickBooksUploadMetadata: Codable {
 }
 
 enum QuickBooksAttachableEntityType: String, CaseIterable {
+    case estimate = "Estimate"
     case invoice = "Invoice"
     case bill = "Bill"
     case payment = "Payment"

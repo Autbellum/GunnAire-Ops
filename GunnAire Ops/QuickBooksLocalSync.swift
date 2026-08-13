@@ -224,9 +224,11 @@ enum QuickBooksLocalSync {
         }
 
         try? modelContext.save()
+        let syncedEstimates = try modelContext.fetch(FetchDescriptor<Estimate>())
         let syncedInvoices = try modelContext.fetch(FetchDescriptor<Invoice>())
         let serviceAttachments = try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())
         QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
+            estimates: syncedEstimates,
             invoices: syncedInvoices,
             attachments: serviceAttachments,
             modelContext: modelContext
@@ -334,6 +336,7 @@ enum QuickBooksLocalSync {
         if invoice.lineItemSummary.nilIfEmpty == nil {
             invoice.lineItemSummary = duplicate.lineItemSummary
         }
+        invoice.status = Invoice.mostResolvedStatus(invoice.status, duplicate.status)
         invoice.customerSignatureName = invoice.customerSignatureName ?? duplicate.customerSignatureName
         invoice.customerSignatureImageBase64 = invoice.customerSignatureImageBase64 ?? duplicate.customerSignatureImageBase64
         invoice.customerSignedAt = invoice.customerSignedAt ?? duplicate.customerSignedAt

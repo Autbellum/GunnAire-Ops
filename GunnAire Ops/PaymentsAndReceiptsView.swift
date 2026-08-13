@@ -16,6 +16,7 @@ struct PaymentsAndReceiptsView: View {
     @Environment(\.openURL) private var openURL
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
+    @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
@@ -35,6 +36,9 @@ struct PaymentsAndReceiptsView: View {
     @State private var tapToPayMessage = ""
     @State private var actionMessage = ""
     @State private var backendUploadMessage = ""
+    @State private var sharedPaymentCollections: [BackendPaymentCollectionRecord] = []
+    @State private var sharedPaymentCollectionMessage = ""
+    @State private var isLoadingSharedPaymentCollections = false
     @State private var syncingPaymentID: UUID?
     @State private var isProcessingQuickBooksPayment = false
     @State private var isProcessingQuickBooksRefund = false
@@ -70,10 +74,37 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private var isAdminUser: Bool {
-        AppAccess.isAdmin(
-            email: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
-            users: users
-        )
+        AppAccess.canViewFinancialManagement(email: signedInEmail, users: users)
+    }
+
+    private var visibleInvoiceIDsForFieldUser: Set<UUID> {
+        guard !isAdminUser else { return Set(invoices.map(\.id)) }
+        let currentEmail = AppAccess.normalizedEmail(signedInEmail)
+        guard !currentEmail.isEmpty else { return [] }
+        let assignedCallIDs = Set(serviceCalls.compactMap { call -> UUID? in
+            AppAccess.normalizedEmail(call.assignedTechnician?.contactInfo) == currentEmail ? call.id : nil
+        })
+        return Set(invoices.compactMap { invoice in
+            guard let serviceCallID = invoice.serviceCallID,
+                  assignedCallIDs.contains(serviceCallID) else { return nil }
+            return invoice.id
+        })
+    }
+
+    private var visibleInvoices: [Invoice] {
+        guard !isAdminUser else { return invoices }
+        let visibleIDs = visibleInvoiceIDsForFieldUser
+        return invoices.filter { visibleIDs.contains($0.id) }
+    }
+
+    private var visiblePayments: [Payment] {
+        guard !isAdminUser else { return payments }
+        let visibleIDs = visibleInvoiceIDsForFieldUser
+        return payments.filter { visibleIDs.contains($0.invoice.id) }
+    }
+
+    private var companyQueueRetryPayments: [Payment] {
+        visiblePayments.filter(\.needsSharedCompanyQueueUpload)
     }
 
     private var processorIsReady: Bool {
@@ -98,7 +129,7 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private var outstandingInvoices: [(invoice: Invoice, balanceDue: Double)] {
-        invoices
+        visibleInvoices
             .compactMap { invoice in
                 let balance = outstandingBalance(for: invoice)
                 return balance > 0 && invoice.status.caseInsensitiveCompare("paid") != .orderedSame ? (invoice, balance) : nil
@@ -121,7 +152,7 @@ struct PaymentsAndReceiptsView: View {
 
     private var collectedToday: Double {
         let calendar = Calendar.current
-        return payments
+        return visiblePayments
             .filter { calendar.isDateInToday($0.date) }
             .reduce(0) { $0 + $1.amount }
     }
@@ -132,9 +163,14 @@ struct PaymentsAndReceiptsView: View {
             NavigationStack {
                 List {
                     Section("Collections Dashboard") {
-                        metricRow(title: "Outstanding Balance", value: totalOutstandingBalance.formatted(.currency(code: "USD")))
-                        metricRow(title: "Overdue Invoices", value: "\(overdueInvoiceCount)")
-                        metricRow(title: "Collected Today", value: collectedToday.formatted(.currency(code: "USD")))
+                        metricRow(title: isAdminUser ? "Outstanding Balance" : "Assigned Balance", value: totalOutstandingBalance.formatted(.currency(code: "USD")))
+                        metricRow(title: isAdminUser ? "Overdue Invoices" : "Assigned Overdue", value: "\(overdueInvoiceCount)")
+                        metricRow(title: isAdminUser ? "Collected Today" : "Your Collections Today", value: collectedToday.formatted(.currency(code: "USD")))
+                        if !isAdminUser {
+                            Text("Field users only see invoice collection records linked to assigned jobs.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     Section("Payment Status") {
@@ -269,14 +305,88 @@ struct PaymentsAndReceiptsView: View {
                                 .font(.caption)
                                 .foregroundColor(backendUploadMessage.localizedCaseInsensitiveContains("failed") ? .orange : .secondary)
                         }
+                        if !companyQueueRetryPayments.isEmpty {
+                            Button(syncingPaymentID == nil ? "Retry Company Queue Uploads" : "Retrying Company Queue...") {
+                                Task {
+                                    await retryCompanyQueueUploads(companyQueueRetryPayments)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(syncingPaymentID != nil || !GunnAireBackendService.isConfigured)
+
+                            Text("\(companyQueueRetryPayments.count) payment\(companyQueueRetryPayments.count == 1 ? "" : "s") still need shared company storage upload.")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                    }
+
+                    if isAdminUser {
+                        Section("Shared Field Collections") {
+                            HStack {
+                                Button(isLoadingSharedPaymentCollections ? "Refreshing..." : "Refresh Shared Collections") {
+                                    Task {
+                                        await refreshSharedPaymentCollections()
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(isLoadingSharedPaymentCollections || !GunnAireBackendService.isConfigured)
+
+                                Spacer()
+
+                                Text("\(sharedPaymentCollections.count)")
+                                    .font(.headline)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            if !GunnAireBackendService.isConfigured {
+                                Text("Shared company storage is not configured for this build.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else if sharedPaymentCollections.isEmpty {
+                                Text(sharedPaymentCollectionMessage.isEmpty ? "No shared field payment collections loaded." : sharedPaymentCollectionMessage)
+                                    .font(.caption)
+                                    .foregroundColor(sharedPaymentCollectionMessage.localizedCaseInsensitiveContains("failed") ? .orange : .secondary)
+                            } else {
+                                ForEach(sharedPaymentCollections.prefix(12)) { collection in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack {
+                                            Text(collection.customerName)
+                                                .font(.headline)
+                                            Spacer()
+                                            Text(collection.amount, format: .currency(code: "USD"))
+                                                .font(.headline)
+                                        }
+                                        Text(sharedCollectionDetail(for: collection))
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        if let invoiceQuickBooksID = collection.invoiceQuickBooksID, !invoiceQuickBooksID.isEmpty {
+                                            Text("QBO Invoice: \(invoiceQuickBooksID)")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        if let notes = collection.notes, !notes.isEmpty {
+                                            Text(notes)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                                if !sharedPaymentCollectionMessage.isEmpty {
+                                    Text(sharedPaymentCollectionMessage)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
                     }
 
                     Section("Payments") {
-                        if payments.isEmpty {
+                        if visiblePayments.isEmpty {
                             Text("No payments recorded yet.")
                                 .foregroundColor(.secondary)
                         } else {
-                            ForEach(payments) { payment in
+                            ForEach(visiblePayments) { payment in
                                 VStack(alignment: .leading, spacing: 6) {
                                     HStack {
                                         VStack(alignment: .leading, spacing: 2) {
@@ -336,6 +446,11 @@ struct PaymentsAndReceiptsView: View {
                                         Text("Processor: \(processorDisplayName)")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
+                                    }
+                                    if payment.needsSharedCompanyQueueUpload {
+                                        Text(payment.processorSyncDetail ?? "Shared company payment queue upload needs attention.")
+                                            .font(.caption2)
+                                            .foregroundColor(.orange)
                                     }
                                     if isAdminUser,
                                        payment.needsQuickBooksAttention,
@@ -418,6 +533,16 @@ struct PaymentsAndReceiptsView: View {
                                             .buttonStyle(.bordered)
                                             .disabled(syncingPaymentID != nil || !quickBooksPaymentsEnabled)
                                         }
+
+                                        if payment.needsSharedCompanyQueueUpload {
+                                            Button(syncingPaymentID == payment.id ? "Queueing..." : "Retry Queue") {
+                                                Task {
+                                                    await retryCompanyQueueUploads([payment])
+                                                }
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .disabled(syncingPaymentID != nil || !GunnAireBackendService.isConfigured)
+                                        }
                                     }
                                 }
                                 .padding(.vertical, 4)
@@ -434,7 +559,14 @@ struct PaymentsAndReceiptsView: View {
         .sheet(isPresented: $showingRefundSheet) {
             refundSheet
         }
-        .onAppear(perform: applyPendingIntentInvoiceIfNeeded)
+        .onAppear {
+            applyPendingIntentInvoiceIfNeeded()
+            if isAdminUser, GunnAireBackendService.isConfigured, sharedPaymentCollections.isEmpty {
+                Task {
+                    await refreshSharedPaymentCollections()
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
             applyPendingIntentInvoiceIfNeeded()
         }
@@ -754,6 +886,68 @@ struct PaymentsAndReceiptsView: View {
         }
     }
 
+    private func retryCompanyQueueUploads(_ retryPayments: [Payment]) async {
+        guard GunnAireBackendService.isConfigured else {
+            backendUploadMessage = "Shared company storage is not configured."
+            return
+        }
+
+        var queuedCount = 0
+        var failedCount = 0
+        for payment in retryPayments where payment.needsSharedCompanyQueueUpload {
+            syncingPaymentID = payment.id
+            await queueFieldPaymentWithBackend(payment)
+            if payment.needsSharedCompanyQueueUpload {
+                failedCount += 1
+            } else {
+                queuedCount += 1
+            }
+        }
+        syncingPaymentID = nil
+
+        if failedCount > 0 {
+            backendUploadMessage = "Company queue retry uploaded \(queuedCount) payment\(queuedCount == 1 ? "" : "s"); \(failedCount) still need attention."
+        } else {
+            backendUploadMessage = "Company queue retry uploaded \(queuedCount) payment\(queuedCount == 1 ? "" : "s")."
+        }
+    }
+
+    private func refreshSharedPaymentCollections() async {
+        guard GunnAireBackendService.isConfigured else {
+            sharedPaymentCollectionMessage = "Shared company storage is not configured."
+            return
+        }
+
+        isLoadingSharedPaymentCollections = true
+        defer { isLoadingSharedPaymentCollections = false }
+        do {
+            sharedPaymentCollections = try await GunnAireBackendService.fetchPaymentCollections()
+            sharedPaymentCollectionMessage = "Loaded \(sharedPaymentCollections.count) shared field collection\(sharedPaymentCollections.count == 1 ? "" : "s")."
+        } catch {
+            sharedPaymentCollectionMessage = "Shared field collection refresh failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func sharedCollectionDetail(for collection: BackendPaymentCollectionRecord) -> String {
+        let method = collection.method.capitalized
+        let collector = collection.collectedBy?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? collection.collectedBy!
+            : "unknown collector"
+        let collectedAt = Self.sharedCollectionDateFormatter.string(from: Self.sharedCollectionDate(from: collection.collectedAt))
+        return "\(method) by \(collector) on \(collectedAt)"
+    }
+
+    private static let sharedCollectionDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private static func sharedCollectionDate(from value: String) -> Date {
+        ISO8601DateFormatter().date(from: value) ?? Date(timeIntervalSince1970: 0)
+    }
+
     private func updateInvoiceStatusAfterPayment(_ invoice: Invoice) {
         let updatedBalance = max(outstandingBalance(for: invoice), 0)
         invoice.status = updatedBalance == 0 ? "paid" : "partial"
@@ -908,7 +1102,9 @@ struct PaymentsAndReceiptsView: View {
         }
         let paid = payments
             .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { $0 + $1.amount }
+            .reduce(0) { partial, payment in
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
+            }
         return max(invoice.amount - paid, 0)
     }
 

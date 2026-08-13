@@ -112,6 +112,39 @@ def user_record(row: sqlite3.Row) -> dict[str, object]:
     }
 
 
+def payment_collection_record(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "id": row["id"],
+        "paymentID": row["payment_id"],
+        "invoiceID": row["invoice_id"],
+        "invoiceQuickBooksID": row["invoice_quickbooks_id"],
+        "customerName": row["customer_name"],
+        "customerEmail": row["customer_email"],
+        "amount": row["amount"],
+        "method": row["method"],
+        "cardLast4": row["card_last4"],
+        "authorizationReference": row["authorization_reference"],
+        "processor": row["processor"],
+        "notes": row["notes"],
+        "collectedBy": row["collected_by"],
+        "collectedAt": row["collected_at"],
+        "createdAt": row["created_at"],
+    }
+
+
+def document_record(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "id": row["id"],
+        "filename": row["filename"],
+        "contentType": row["content_type"],
+        "kind": row["kind"],
+        "serviceCallID": row["service_call_id"],
+        "customerName": row["customer_name"],
+        "storedPath": row["stored_path"],
+        "createdAt": row["created_at"],
+    }
+
+
 class GunnAireBackendHandler(BaseHTTPRequestHandler):
     server_version = "GunnAireBackend/1.0"
 
@@ -132,6 +165,24 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             with db() as connection:
                 rows = connection.execute("SELECT * FROM users ORDER BY email").fetchall()
             self.write_json({"users": [user_record(row) for row in rows]})
+            return
+        if parsed.path == "/api/payments":
+            with db() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM payment_collections ORDER BY collected_at DESC, created_at DESC LIMIT 500"
+                ).fetchall()
+            self.write_json({"payments": [payment_collection_record(row) for row in rows]})
+            return
+        if parsed.path == "/api/documents":
+            with db() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM documents ORDER BY created_at DESC LIMIT 500"
+                ).fetchall()
+            self.write_json({"documents": [document_record(row) for row in rows]})
+            return
+        if parsed.path.startswith("/api/documents/") and parsed.path.endswith("/download"):
+            document_id = unquote(parsed.path.removeprefix("/api/documents/").removesuffix("/download")).strip()
+            self.download_document(document_id)
             return
         self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -371,6 +422,44 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             },
             status=HTTPStatus.CREATED,
         )
+
+    def download_document(self, document_id: str) -> None:
+        if not document_id:
+            self.write_json({"error": "Missing document id"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        with db() as connection:
+            row = connection.execute(
+                "SELECT * FROM documents WHERE id = ?",
+                (document_id,),
+            ).fetchone()
+        if row is None:
+            self.write_json({"error": "Document not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        stored_path = Path(row["stored_path"]).expanduser()
+        try:
+            resolved_storage = STORAGE_ROOT.resolve()
+            resolved_file = stored_path.resolve()
+        except OSError:
+            self.write_json({"error": "Document path is invalid"}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        if resolved_storage not in resolved_file.parents:
+            self.write_json({"error": "Document path is outside storage"}, status=HTTPStatus.FORBIDDEN)
+            return
+        if not resolved_file.is_file():
+            self.write_json({"error": "Document file is missing"}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        data = resolved_file.read_bytes()
+        filename = safe_filename(row["filename"])
+        self.send_response(HTTPStatus.OK)
+        self.send_cors_headers()
+        self.send_header("Content-Type", row["content_type"] or "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.end_headers()
+        self.wfile.write(data)
 
     def write_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK, require_auth: bool = True) -> None:
         data = json.dumps(payload, separators=(",", ":")).encode("utf-8")

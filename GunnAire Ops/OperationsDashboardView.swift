@@ -10,6 +10,7 @@ struct OperationsDashboardView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
     @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
@@ -1335,7 +1336,7 @@ struct OperationsDashboardView: View {
         let netPaid = payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
-                partial + payment.amount
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
             }
         return max(invoice.amount - netPaid, 0)
     }
@@ -1407,11 +1408,28 @@ struct OperationsDashboardView: View {
             (call.workCompletedChecklist || call.documentationChecklist || call.status == .completed) {
             reasons.append("Ready to bill")
         }
+        if let invoice = invoice(for: call) {
+            let readiness = closeoutReadiness(for: call, invoice: invoice)
+            if !readiness.isReady, let missing = readiness.missingItems.first {
+                reasons.append(missing)
+            }
+        }
         if call.followUpRequired {
             reasons.append("Follow-up")
         }
 
         return reasons
+    }
+
+    private func closeoutReadiness(for call: ServiceCall, invoice: Invoice?) -> JobCloseoutReadiness {
+        call.closeoutReadiness(
+            invoice: invoice,
+            payments: payments.filter { payment in
+                guard let invoice else { return false }
+                return payment.invoice.id == invoice.id
+            },
+            attachments: attachments.filter { $0.serviceCallID == call.id }
+        )
     }
 
     @ViewBuilder
@@ -1452,9 +1470,15 @@ struct OperationsDashboardView: View {
 
         if let nextStart, nextStart > originalStart {
             call.scheduledDate = nextStart
-            dispatchMessage = "\(call.customer.name) assigned to \(technician.name) and moved to \(nextStart.formatted(date: .abbreviated, time: .shortened)). Publishing calendar update..."
+            dispatchMessage = "\(call.customer.name) assigned to \(technician.name) and moved to \(nextStart.formatted(date: .abbreviated, time: .shortened))."
         } else {
-            dispatchMessage = "\(call.customer.name) assigned to \(technician.name). Publishing calendar update..."
+            dispatchMessage = "\(call.customer.name) assigned to \(technician.name)."
+        }
+
+        guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else {
+            try? modelContext.save()
+            dispatchMessage = "\(dispatchMessage ?? "") Google-owned calendar event left unchanged."
+            return
         }
         publishToGoogleCalendar(call)
     }

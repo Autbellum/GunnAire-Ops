@@ -65,6 +65,28 @@ enum AppAccess {
         return users.contains { $0.isActive && $0.email == email }
     }
 
+    static func canAccessSidebarItem(_ item: SidebarItem, email: String?, users: [AppUser]) -> Bool {
+        let admin = isAdmin(email: email, users: users)
+        switch item {
+        case .commandCenter, .timeClock, .scheduleAndJobs, .customers, .onsiteDocumentation, .invoices, .payments, .receiptsBills:
+            return true
+        case .mail, .estimates, .syncIntegrations, .quickBooksManagement:
+            return admin
+        }
+    }
+
+    static func canViewFinancialManagement(email: String?, users: [AppUser]) -> Bool {
+        isAdmin(email: email, users: users)
+    }
+
+    static func canViewBillingFinancialDetails(email: String?, users: [AppUser]) -> Bool {
+        canViewFinancialManagement(email: email, users: users)
+    }
+
+    static func canCollectFieldPayments(email: String?, users: [AppUser]) -> Bool {
+        isAuthorized(email: email, users: users)
+    }
+
     @discardableResult
     static func ensureTechnicianRecord(
         for email: String,

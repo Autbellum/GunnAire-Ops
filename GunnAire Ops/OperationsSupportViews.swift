@@ -275,74 +275,78 @@ struct CustomersView: View {
                                 selectedCustomer = customer
                             } label: {
                                 let snapshot = customerSnapshotsByID[customer.id]
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Text(customer.name)
-                                            .font(.headline)
-                                        Spacer()
-                                        if canViewFinancials, let snapshot {
-                                            Label("\(snapshot.healthScore)", systemImage: accountHealthIcon(for: snapshot))
-                                                .font(.caption2.weight(.semibold))
-                                                .foregroundColor(accountHealthTint(for: snapshot))
+                                HStack(alignment: .top, spacing: 12) {
+                                    customerProfileThumbnail(for: customer, size: 54)
+
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        HStack {
+                                            Text(customer.name)
+                                                .font(.headline)
+                                            Spacer()
+                                            if canViewFinancials, let snapshot {
+                                                Label("\(snapshot.healthScore)", systemImage: accountHealthIcon(for: snapshot))
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundColor(accountHealthTint(for: snapshot))
+                                            }
+                                            if canViewFinancials, let quickBooksID = customer.quickBooksID, !quickBooksID.isEmpty {
+                                                Label("QuickBooks", systemImage: "link")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                            }
                                         }
-                                        if canViewFinancials, let quickBooksID = customer.quickBooksID, !quickBooksID.isEmpty {
-                                            Label("QuickBooks", systemImage: "link")
+                                        if let address = customer.address, !address.isEmpty {
+                                            Text(address)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        if let email = customer.email, !email.isEmpty {
+                                            Text(email)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        if let phone = customer.phone, !phone.isEmpty {
+                                            Text(phone)
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
                                         }
-                                    }
-                                    if let address = customer.address, !address.isEmpty {
-                                        Text(address)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    if let email = customer.email, !email.isEmpty {
-                                        Text(email)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    if let phone = customer.phone, !phone.isEmpty {
-                                        Text(phone)
+                                        Text(canViewFinancials
+                                             ? "\(serviceCallCount(for: customer)) jobs • \(invoiceCount(for: customer)) invoices • \(activeContractCount(for: customer)) agreements"
+                                             : "\(serviceCallCount(for: customer)) jobs • \(activeContractCount(for: customer)) agreements")
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
-                                    }
-                                    Text(canViewFinancials
-                                         ? "\(serviceCallCount(for: customer)) jobs • \(invoiceCount(for: customer)) invoices • \(activeContractCount(for: customer)) agreements"
-                                         : "\(serviceCallCount(for: customer)) jobs • \(activeContractCount(for: customer)) agreements")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                    if canViewFinancials, let snapshot {
-                                        Text(accountPulseLine(for: snapshot))
-                                            .font(.caption2.weight(.semibold))
-                                            .foregroundColor(accountHealthTint(for: snapshot))
-                                            .lineLimit(1)
-                                            .minimumScaleFactor(0.78)
-                                    }
-                                    if let nextContract = nextActiveContract(for: customer) {
-                                        Text("Next maintenance: \(nextContract.nextDate.formatted(date: .abbreviated, time: .omitted))")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-
-                                    HStack {
-                                        Button("Open Record") {
-                                            selectedCustomer = customer
+                                        if canViewFinancials, let snapshot {
+                                            Text(accountPulseLine(for: snapshot))
+                                                .font(.caption2.weight(.semibold))
+                                                .foregroundColor(accountHealthTint(for: snapshot))
+                                                .lineLimit(1)
+                                                .minimumScaleFactor(0.78)
                                         }
-                                        .buttonStyle(.bordered)
+                                        if let nextContract = nextActiveContract(for: customer) {
+                                            Text("Next maintenance: \(nextContract.nextDate.formatted(date: .abbreviated, time: .omitted))")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
 
-                                        if let nextCall = nextActiveServiceCall(for: customer) {
-                                            Button("Open Job") {
-                                                GunnAireAppIntentRouter.storeScheduleCallRoute(nextCall.id)
+                                        HStack {
+                                            Button("Open Record") {
+                                                selectedCustomer = customer
                                             }
                                             .buttonStyle(.bordered)
-                                        }
 
-                                        if canViewFinancials, let openInvoice = nextOpenInvoice(for: customer) {
-                                            Button("Collect Payment") {
-                                                GunnAireAppIntentRouter.storePaymentCollectionRoute(openInvoice.id)
+                                            if let nextCall = nextActiveServiceCall(for: customer) {
+                                                Button("Open Job") {
+                                                    GunnAireAppIntentRouter.storeScheduleCallRoute(nextCall.id)
+                                                }
+                                                .buttonStyle(.bordered)
                                             }
-                                            .buttonStyle(.borderedProminent)
-                                            .tint(.green)
+
+                                            if canViewFinancials, let openInvoice = nextOpenInvoice(for: customer) {
+                                                Button("Collect Payment") {
+                                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(openInvoice.id)
+                                                }
+                                                .buttonStyle(.borderedProminent)
+                                                .tint(.green)
+                                            }
                                         }
                                     }
                                 }
@@ -482,6 +486,29 @@ struct CustomersView: View {
             return "arrow.uturn.forward.circle"
         }
         return snapshot.healthScore >= 70 ? "checkmark.seal" : "exclamationmark.triangle"
+    }
+
+    @ViewBuilder
+    private func customerProfileThumbnail(for customer: Customer, size: CGFloat) -> some View {
+        if let attachment = ServiceDocumentAttachment.primaryCustomerPhoto(for: customer, in: documentAttachments),
+           let image = UIImage(contentsOfFile: attachment.localFilePath) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: size, height: size)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .accessibilityLabel("Customer photo")
+        } else {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.brandGold.opacity(0.16))
+                Text(customer.name.prefix(1).uppercased())
+                    .font(.headline.weight(.semibold))
+                    .foregroundColor(Color.brandGold)
+            }
+            .frame(width: size, height: size)
+            .accessibilityLabel("Customer initials")
+        }
     }
 
     private func cleanupCalendarCreatedCustomers() {
@@ -1167,7 +1194,12 @@ struct OnsiteDocumentationView: View {
     }
 
     private var invoicesAwaitingCloseout: [Invoice] {
-        invoices.filter { invoiceBalanceDue(for: $0) > 0 || $0.finalizedAt == nil }
+        invoices.filter { invoice in
+            if let call = serviceCall(for: invoice) {
+                return !closeoutReadiness(for: call, invoice: invoice).isReady
+            }
+            return invoiceBalanceDue(for: invoice) > 0 || invoice.finalizedAt == nil
+        }
     }
 
     private var selectedServiceCall: ServiceCall? {
@@ -1206,13 +1238,24 @@ struct OnsiteDocumentationView: View {
             return 0
         }
         return max(invoice.amount - payments(for: invoice).reduce(0) { partial, payment in
-            partial + payment.amount
+            partial + (payment.isRefund ? -payment.amount : payment.amount)
         }, 0)
     }
 
-    private func canGeneratePaidInvoice(_ invoice: Invoice?) -> Bool {
-        guard let invoice else { return false }
-        return invoice.status.caseInsensitiveCompare("paid") == .orderedSame || invoiceBalanceDue(for: invoice) <= 0.009
+    private func closeoutReadiness(for call: ServiceCall, invoice: Invoice?) -> JobCloseoutReadiness {
+        call.closeoutReadiness(
+            invoice: invoice,
+            payments: payments(for: invoice),
+            attachments: attachments(for: call)
+        )
+    }
+
+    private func closeoutSummary(for call: ServiceCall, invoice: Invoice?) -> String {
+        let readiness = closeoutReadiness(for: call, invoice: invoice)
+        if readiness.isReady {
+            return readiness.statusLabel
+        }
+        return readiness.missingItems.prefix(3).joined(separator: ", ")
     }
 
     private func documentationQueueLabel(for call: ServiceCall) -> String {
@@ -1273,8 +1316,13 @@ struct OnsiteDocumentationView: View {
                                         Text("\(invoice.amount, format: .currency(code: "USD")) • \(invoice.status.capitalized)")
                                             .font(.caption)
                                             .foregroundColor(.secondary)
-                                        if invoice.finalizedAt == nil {
-                                            Text("Missing final signature or closeout details.")
+                                        if let linkedCall = serviceCall(for: invoice) {
+                                            let readiness = closeoutReadiness(for: linkedCall, invoice: invoice)
+                                            Text(closeoutSummary(for: linkedCall, invoice: invoice))
+                                                .font(.caption2)
+                                                .foregroundColor(readiness.isReady ? .green : .orange)
+                                        } else if invoice.finalizedAt == nil {
+                                            Text("Invoice finalization missing.")
                                                 .font(.caption2)
                                                 .foregroundColor(.orange)
                                         }
@@ -1299,16 +1347,14 @@ struct OnsiteDocumentationView: View {
                                                 .tint(.green)
                                             }
 
-                                            if canGeneratePaidInvoice(invoice) {
-                                                Menu {
-                                                    Button("Generate Paid Invoice PDF") {
-                                                        generatePaidInvoiceDocument(invoice)
-                                                    }
-                                                } label: {
-                                                    Label("Documents", systemImage: "doc.on.doc")
+                                            Menu {
+                                                Button("Generate Invoice PDF") {
+                                                    generateInvoiceDocument(invoice)
                                                 }
-                                                .buttonStyle(.bordered)
+                                            } label: {
+                                                Label("Documents", systemImage: "doc.on.doc")
                                             }
+                                            .buttonStyle(.bordered)
                                         }
                                     }
                                     .padding(.vertical, 2)
@@ -1371,6 +1417,11 @@ struct OnsiteDocumentationView: View {
                                     Text("Checklist \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                    if call.linkedInvoiceID != nil {
+                                        Text(closeoutSummary(for: call, invoice: invoice(for: call)))
+                                            .font(.caption2)
+                                            .foregroundColor(closeoutReadiness(for: call, invoice: invoice(for: call)).isReady ? .green : .orange)
+                                    }
                                 }
                                 Spacer()
                                 Text(documentationQueueLabel(for: call))
@@ -1402,9 +1453,9 @@ struct OnsiteDocumentationView: View {
                                     }
                                 }
 
-                                if let invoice = invoice(for: call), canGeneratePaidInvoice(invoice) {
-                                    Button("Generate Paid Invoice PDF") {
-                                        generatePaidInvoiceDocument(invoice)
+                                if let invoice = invoice(for: call) {
+                                    Button("Generate Invoice PDF") {
+                                        generateInvoiceDocument(invoice)
                                     }
                                 }
                             } label: {
@@ -1447,8 +1498,9 @@ struct OnsiteDocumentationView: View {
                 attachments: attachments(for: call)
             )
             generatedCustomerDocumentURL = url
-            call.documentationChecklist = true
-            call.documentationCompletedAt = call.documentationCompletedAt ?? Date()
+            if !call.markDocumentationCompleteIfReady() {
+                call.documentationChecklist = false
+            }
             persistGeneratedOnsiteReport(url, for: call, invoice: linkedInvoice, estimate: estimate(for: call))
         } catch {
             documentExportMessage = "Could not generate onsite report: \(error.localizedDescription)"
@@ -1460,7 +1512,11 @@ struct OnsiteDocumentationView: View {
             let data = try Data(contentsOf: url)
             let invoiceID = invoice?.id ?? call.linkedInvoiceID
             let estimateID = estimate?.id ?? call.linkedEstimateID
-            let caption = "Generated onsite \(call.type.displayName.lowercased()) report"
+            let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
+                serviceCall: call,
+                estimate: estimate,
+                invoice: invoice
+            )
             let attachment: ServiceDocumentAttachment
             if let reusable = ServiceDocumentAttachment.reusableGeneratedServiceReport(
                 in: documentAttachments,
@@ -1475,11 +1531,13 @@ struct OnsiteDocumentationView: View {
                     fileSizeBytes: data.count,
                     caption: caption
                 )
+                reusable.customerEquipmentID = call.customerEquipmentID
                 attachment = reusable
             } else {
                 let generated = ServiceDocumentAttachment(
                     customer: call.customer,
                     serviceCallID: call.id,
+                    customerEquipmentID: call.customerEquipmentID,
                     invoiceID: invoiceID,
                     estimateID: estimateID,
                     kind: .serviceReport,
@@ -1494,18 +1552,41 @@ struct OnsiteDocumentationView: View {
             }
 
             try? modelContext.save()
+            syncGeneratedOnsiteReportToCompanyStorage(attachment, data: data)
             QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
+                estimates: estimates,
                 invoices: invoices,
                 attachments: documentAttachments + [attachment],
                 modelContext: modelContext
             )
+            let completionNote = call.documentationCompletionBlockedMessage.map { " \($0)" } ?? ""
             if invoice?.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-                documentExportMessage = "Onsite report generated and queued for QuickBooks invoice attachment."
+                documentExportMessage = "Onsite report generated and queued for QuickBooks invoice attachment.\(completionNote)"
             } else {
-                documentExportMessage = "Onsite report generated and saved to this job."
+                documentExportMessage = "Onsite report generated and saved to this job.\(completionNote)"
             }
         } catch {
             documentExportMessage = "Onsite report generated, but could not save it as a job attachment: \(error.localizedDescription)"
+        }
+    }
+
+    private func syncGeneratedOnsiteReportToCompanyStorage(_ attachment: ServiceDocumentAttachment, data: Data) {
+        guard GunnAireBackendService.isConfigured else { return }
+        Task {
+            do {
+                let response = try await GunnAireBackendService.uploadDocument(
+                    data: data,
+                    filename: attachment.displayName,
+                    contentType: attachment.contentType,
+                    kind: attachment.kindRaw,
+                    serviceCallID: attachment.serviceCallID,
+                    customerName: attachment.customer?.name
+                )
+                attachment.backendDocumentID = response.id
+                try? modelContext.save()
+            } catch {
+                documentExportMessage = "Onsite report saved locally, but company storage upload failed: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -1521,23 +1602,125 @@ struct OnsiteDocumentationView: View {
         do {
             let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: call)
             generatedCustomerDocumentURL = url
-            documentExportMessage = "Estimate PDF generated for \(estimate.customer.name)."
+            persistGeneratedBillingDocument(
+                url,
+                customer: estimate.customer,
+                serviceCallID: call.id,
+                invoiceID: nil,
+                estimateID: estimate.id,
+                kind: .estimateSupport,
+                caption: "Generated estimate PDF",
+                successMessage: "Estimate PDF generated and saved to this job."
+            )
         } catch {
             documentExportMessage = "Could not generate estimate PDF: \(error.localizedDescription)"
         }
     }
 
-    private func generatePaidInvoiceDocument(_ invoice: Invoice) {
+    private func generateInvoiceDocument(_ invoice: Invoice) {
         do {
-            let url = try CustomerDocumentExporter.exportPaidInvoice(
+            let linkedCall = serviceCall(for: invoice)
+            let invoicePayments = payments(for: invoice)
+            let url = try CustomerDocumentExporter.exportInvoice(
                 invoice,
-                serviceCall: serviceCall(for: invoice),
-                payments: payments(for: invoice)
+                serviceCall: linkedCall,
+                payments: invoicePayments
             )
             generatedCustomerDocumentURL = url
-            documentExportMessage = "Paid invoice PDF generated for \(invoice.customer.name)."
+            let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)
+            persistGeneratedBillingDocument(
+                url,
+                customer: invoice.customer,
+                serviceCallID: linkedCall?.id,
+                invoiceID: invoice.id,
+                estimateID: nil,
+                kind: .invoiceSupport,
+                caption: CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments),
+                successMessage: "\(documentLabel) PDF generated and saved to this job."
+            )
         } catch {
-            documentExportMessage = "Could not generate paid invoice PDF: \(error.localizedDescription)"
+            documentExportMessage = "Could not generate invoice PDF: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistGeneratedBillingDocument(
+        _ url: URL,
+        customer: Customer,
+        serviceCallID: UUID?,
+        invoiceID: UUID?,
+        estimateID: UUID?,
+        kind: ServiceDocumentAttachmentKind,
+        caption: String,
+        successMessage: String
+    ) {
+        do {
+            let data = try Data(contentsOf: url)
+            let equipmentID = serviceCallID.flatMap { id in serviceCalls.first { $0.id == id }?.customerEquipmentID }
+            let attachment: ServiceDocumentAttachment
+            if let reusable = ServiceDocumentAttachment.reusableGeneratedBillingDocument(
+                in: documentAttachments,
+                kind: kind,
+                serviceCallID: serviceCallID,
+                invoiceID: invoiceID,
+                estimateID: estimateID
+            ) {
+                reusable.replaceGeneratedFile(
+                    displayName: url.lastPathComponent,
+                    localFilePath: url.path,
+                    contentType: "application/pdf",
+                    fileSizeBytes: data.count,
+                    caption: caption
+                )
+                reusable.customerEquipmentID = equipmentID
+                attachment = reusable
+            } else {
+                let generated = ServiceDocumentAttachment(
+                    customer: customer,
+                    serviceCallID: serviceCallID,
+                    customerEquipmentID: equipmentID,
+                    invoiceID: invoiceID,
+                    estimateID: estimateID,
+                    kind: kind,
+                    displayName: url.lastPathComponent,
+                    caption: caption,
+                    localFilePath: url.path,
+                    contentType: "application/pdf",
+                    fileSizeBytes: data.count
+                )
+                modelContext.insert(generated)
+                attachment = generated
+            }
+            try? modelContext.save()
+            syncGeneratedBillingDocumentToCompanyStorage(attachment, data: data)
+            QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
+                estimates: estimates,
+                invoices: invoices,
+                attachments: documentAttachments + [attachment],
+                modelContext: modelContext
+            )
+            documentExportMessage = successMessage
+        } catch {
+            documentExportMessage = "\(successMessage) Company document history was not updated: \(error.localizedDescription)"
+        }
+    }
+
+    private func syncGeneratedBillingDocumentToCompanyStorage(_ attachment: ServiceDocumentAttachment, data: Data) {
+        guard GunnAireBackendService.isConfigured else { return }
+        Task {
+            do {
+                let response = try await GunnAireBackendService.uploadDocument(
+                    data: data,
+                    filename: attachment.displayName,
+                    contentType: attachment.contentType,
+                    kind: attachment.kindRaw,
+                    serviceCallID: attachment.serviceCallID,
+                    customerName: attachment.customer?.name
+                )
+                attachment.backendDocumentID = response.id
+                try? modelContext.save()
+            } catch {
+                documentExportMessage = "Billing PDF saved locally, but company storage upload failed: \(error.localizedDescription)"
+            }
         }
     }
 }
@@ -1577,7 +1760,14 @@ private struct CustomerEditorView: View {
     @State private var showingCustomerCamera = false
     @State private var customerAttachmentKind: ServiceDocumentAttachmentKind = .customerDocument
     @State private var customerAttachmentCaption = ""
+    @State private var selectedCustomerAttachmentEquipmentID: UUID?
     @State private var customerAttachmentMessage: String?
+    @State private var customerAttachmentSearchText = ""
+    @State private var customerAttachmentPreviewURL: URL?
+    @State private var sharedCustomerDocuments: [BackendDocumentRecord] = []
+    @State private var sharedCustomerDocumentsMessage: String?
+    @State private var isLoadingSharedCustomerDocuments = false
+    @State private var downloadingSharedDocumentID: String?
     @State private var editingEquipmentID: UUID?
     @State private var newEquipmentType: HVACEquipmentType = .splitSystemAC
     @State private var newEquipmentName = ""
@@ -1604,28 +1794,100 @@ private struct CustomerEditorView: View {
         documentAttachments.filter { $0.customer?.id == customer.id }
     }
 
+    private var filteredCustomerAttachments: [ServiceDocumentAttachment] {
+        let query = customerAttachmentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return customerAttachments }
+        return customerAttachments.filter { attachment in
+            let detailLines = attachment.customerProfileDetailLines(
+                serviceCalls: serviceCalls,
+                invoices: invoices,
+                estimates: estimates,
+                equipmentProfiles: equipmentProfiles,
+                canViewFinancials: canViewFinancials
+            )
+            let haystack = [
+                attachment.displayName,
+                attachment.caption,
+                attachment.kind.label,
+                attachment.contentType
+            ] + detailLines
+            return haystack
+                .compactMap { $0?.lowercased() }
+                .joined(separator: " ")
+                .contains(query)
+        }
+    }
+
     private var generatedServiceReportAttachments: [ServiceDocumentAttachment] {
-        customerAttachments.filter { $0.kind == .serviceReport }
+        filteredCustomerAttachments.filter { $0.kind == .serviceReport }
     }
 
     private var customerPhotoAttachments: [ServiceDocumentAttachment] {
-        customerAttachments.filter { $0.kind.isPhoto }
+        filteredCustomerAttachments.filter { $0.kind.isPhoto }
     }
 
     private var billingSupportAttachments: [ServiceDocumentAttachment] {
-        customerAttachments.filter { [.invoiceSupport, .estimateSupport, .receipt].contains($0.kind) }
+        filteredCustomerAttachments.filter { [.invoiceSupport, .estimateSupport, .receipt].contains($0.kind) }
     }
 
     private var generalCustomerAttachments: [ServiceDocumentAttachment] {
-        customerAttachments.filter { attachment in
+        filteredCustomerAttachments.filter { attachment in
             attachment.kind != .serviceReport &&
                 !attachment.kind.isPhoto &&
                 ![.invoiceSupport, .estimateSupport, .receipt].contains(attachment.kind)
         }
     }
 
+    private var equipmentAttachmentGroups: [EquipmentAttachmentGroup] {
+        ServiceDocumentAttachment.groupedEquipmentAttachments(
+            equipmentProfiles: customerEquipmentProfiles,
+            attachments: filteredCustomerAttachments
+        )
+    }
+
     private var customerEquipmentProfiles: [CustomerEquipment] {
         equipmentProfiles.filter { $0.customer?.id == customer.id }
+    }
+
+    private var matchingSharedCustomerDocuments: [BackendDocumentRecord] {
+        let customerName = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !customerName.isEmpty else { return [] }
+        let query = customerAttachmentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return sharedCustomerDocuments.filter { document in
+            guard document.customerName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == customerName else {
+                return false
+            }
+            guard !query.isEmpty else { return true }
+            return [
+                document.filename,
+                document.kind,
+                document.contentType,
+                document.serviceCallID,
+                document.createdAt
+            ]
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+            .contains(query)
+        }
+    }
+
+    private var customerEquipmentDropdownOptions: [SearchableDropdownOption] {
+        customerEquipmentProfiles
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+            .map { equipment in
+                SearchableDropdownOption(
+                    id: equipment.id.uuidString,
+                    title: equipment.name,
+                    subtitle: equipment.displayName == equipment.name ? nil : equipment.displayName
+                )
+            }
+    }
+
+    private var selectedCustomerAttachmentEquipmentDropdownID: Binding<String?> {
+        Binding(
+            get: { selectedCustomerAttachmentEquipmentID?.uuidString },
+            set: { selectedCustomerAttachmentEquipmentID = $0.flatMap(UUID.init(uuidString:)) }
+        )
     }
 
     private var openCustomerInvoiceBalances: [(invoice: Invoice, balance: Double)] {
@@ -1647,6 +1909,17 @@ private struct CustomerEditorView: View {
             estimates: estimates,
             payments: payments,
             contracts: recurringContracts
+        )
+    }
+
+    private var isCustomerAttachmentPreviewPresented: Binding<Bool> {
+        Binding(
+            get: { customerAttachmentPreviewURL != nil },
+            set: { isPresented in
+                if !isPresented {
+                    customerAttachmentPreviewURL = nil
+                }
+            }
         )
     }
 
@@ -1706,6 +1979,12 @@ private struct CustomerEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let profilePhoto = ServiceDocumentAttachment.primaryCustomerPhoto(for: customer, in: customerAttachments) {
+                    Section("Profile Photo") {
+                        customerAttachmentRow(profilePhoto)
+                    }
+                }
+
                 TextField("Customer Name", text: $name)
                 TextField("Address", text: $address, axis: .vertical)
                     .lineLimit(2...3)
@@ -1808,6 +2087,17 @@ private struct CustomerEditorView: View {
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
+                                if let history = equipment.serviceHistorySummary(in: customerServiceCalls) {
+                                    Text(history)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                if let readings = equipment.latestTechnicalReadingsSummary(in: customerServiceCalls) {
+                                    Text("Last readings: \(readings)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(3)
+                                }
                                 HStack {
                                     Button("Edit") {
                                         beginEditingEquipment(equipment)
@@ -1881,6 +2171,16 @@ private struct CustomerEditorView: View {
                     TextField("Caption or notes", text: $customerAttachmentCaption, axis: .vertical)
                         .lineLimit(2...4)
 
+                    if !customerEquipmentDropdownOptions.isEmpty {
+                        SearchableDropdownPicker(
+                            title: "Linked Equipment",
+                            options: customerEquipmentDropdownOptions,
+                            selectedID: selectedCustomerAttachmentEquipmentDropdownID,
+                            placeholder: "No linked equipment",
+                            showsClearButton: true
+                        )
+                    }
+
                     HStack {
                         if UIImagePickerController.isSourceTypeAvailable(.camera) {
                             Button {
@@ -1909,45 +2209,62 @@ private struct CustomerEditorView: View {
                         Text("No customer documents or photos saved yet.")
                             .foregroundColor(.secondary)
                     } else {
-                        customerAttachmentGroup("Service Reports", attachments: generatedServiceReportAttachments, limit: 8)
-                        customerAttachmentGroup("Billing Support", attachments: billingSupportAttachments, limit: 8)
-                        customerAttachmentGroup("Photos", attachments: customerPhotoAttachments, limit: 8)
-                        customerAttachmentGroup("Customer Files", attachments: generalCustomerAttachments, limit: 8)
+                        TextField("Search documents and photos", text: $customerAttachmentSearchText)
+                            .textInputAutocapitalization(.never)
+
+                        if filteredCustomerAttachments.isEmpty {
+                            Text("No saved customer documents or photos match that search.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            customerEquipmentAttachmentHistory()
+                            customerAttachmentGroup("Service Reports", attachments: generatedServiceReportAttachments)
+                            customerAttachmentGroup("Billing Support", attachments: billingSupportAttachments)
+                            customerAttachmentGroup("Photos", attachments: customerPhotoAttachments)
+                            customerAttachmentGroup("Customer Files", attachments: generalCustomerAttachments)
+                        }
+                    }
+
+                    if canViewFinancials {
+                        Divider()
+                        HStack {
+                            Text("Shared Company Storage")
+                                .font(.headline)
+                            Spacer()
+                            Button(isLoadingSharedCustomerDocuments ? "Refreshing..." : "Refresh") {
+                                Task {
+                                    await refreshSharedCustomerDocuments()
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isLoadingSharedCustomerDocuments || !GunnAireBackendService.isConfigured)
+                        }
+
+                        if !GunnAireBackendService.isConfigured {
+                            Text("Shared company storage is not configured for this build.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else if matchingSharedCustomerDocuments.isEmpty {
+                            Text(sharedCustomerDocumentsMessage ?? "No shared company documents loaded for this customer.")
+                                .font(.caption)
+                                .foregroundColor((sharedCustomerDocumentsMessage ?? "").localizedCaseInsensitiveContains("failed") ? .orange : .secondary)
+                        } else {
+                            ForEach(matchingSharedCustomerDocuments.prefix(8)) { document in
+                                sharedCustomerDocumentRow(document)
+                            }
+                            if let sharedCustomerDocumentsMessage {
+                                Text(sharedCustomerDocumentsMessage)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
                     }
                 }
 
                 if !recentCustomerServiceCalls.isEmpty {
                     Section("Recent Jobs") {
                         ForEach(recentCustomerServiceCalls) { call in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("\(call.type.displayName) • \(call.status.rawValue.capitalized)")
-                                    .font(.headline)
-                                Text(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                if let notes = call.notes, !notes.isEmpty {
-                                    Text(notes)
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(2)
-                                }
-                                HStack {
-                                    if canViewFinancials {
-                                        Button("Open Job") {
-                                            GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
-                                            dismiss()
-                                        }
-                                        .buttonStyle(.bordered)
-                                    }
-
-                                    Button("Open Schedule") {
-                                        GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
-                                        dismiss()
-                                    }
-                                    .buttonStyle(.bordered)
-                                }
-                            }
-                            .padding(.vertical, 2)
+                            recentCustomerJobRow(for: call)
                         }
                     }
                 }
@@ -1955,35 +2272,7 @@ private struct CustomerEditorView: View {
                 if canViewFinancials && !openCustomerInvoiceBalances.isEmpty {
                     Section("Open Invoices") {
                         ForEach(openCustomerInvoiceBalances.prefix(5), id: \.invoice.id) { entry in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.balance.formatted(.currency(code: "USD")))
-                                    .font(.headline)
-                                Text("\(entry.invoice.status.capitalized) • \(entry.invoice.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text(entry.invoice.lineItemSummary.isEmpty ? "Invoice \(entry.invoice.id.uuidString.prefix(8))" : entry.invoice.lineItemSummary)
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(2)
-                                HStack {
-                                    Button("Collect Payment") {
-                                        GunnAireAppIntentRouter.storePaymentCollectionRoute(entry.invoice.id)
-                                        dismiss()
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .tint(.green)
-
-                                    if let serviceCallID = entry.invoice.serviceCallID,
-                                       let call = customerServiceCalls.first(where: { $0.id == serviceCallID }) {
-                                        Button("Open Job") {
-                                            GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
-                                            dismiss()
-                                        }
-                                        .buttonStyle(.bordered)
-                                    }
-                                }
-                            }
-                            .padding(.vertical, 2)
+                            openInvoiceBalanceRow(for: entry)
                         }
                     }
                 }
@@ -2056,6 +2345,13 @@ private struct CustomerEditorView: View {
                 }
             }
             .navigationTitle("Edit Customer")
+            .onAppear {
+                if canViewFinancials, GunnAireBackendService.isConfigured, sharedCustomerDocuments.isEmpty {
+                    Task {
+                        await refreshSharedCustomerDocuments()
+                    }
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -2091,6 +2387,12 @@ private struct CustomerEditorView: View {
             ) { result in
                 handleImportedCustomerFiles(result)
             }
+            .fullScreenCover(isPresented: isCustomerAttachmentPreviewPresented) {
+                if let customerAttachmentPreviewURL {
+                    AttachmentPreviewScreen(url: customerAttachmentPreviewURL)
+                        .tint(Color.brandGold)
+                }
+            }
         }
         .tint(Color.brandGold)
     }
@@ -2108,6 +2410,81 @@ private struct CustomerEditorView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func recentCustomerJobRow(for call: ServiceCall) -> some View {
+        let title = "\(call.type.displayName) • \(call.status.rawValue.capitalized)"
+        let scheduled = call.scheduledDate.formatted(date: .abbreviated, time: .shortened)
+        let trimmedNotes = call.notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.headline)
+            Text(scheduled)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if let trimmedNotes, !trimmedNotes.isEmpty {
+                Text(trimmedNotes)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+            }
+            HStack {
+                if canViewFinancials {
+                    Button("Open Job") {
+                        GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button("Open Schedule") {
+                    GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func openInvoiceBalanceRow(for entry: (invoice: Invoice, balance: Double)) -> some View {
+        let invoice = entry.invoice
+        let summary = invoice.lineItemSummary.isEmpty
+            ? "Invoice \(String(invoice.id.uuidString.prefix(8)))"
+            : invoice.lineItemSummary
+        let serviceCall = invoice.serviceCallID.flatMap { serviceCallID in
+            customerServiceCalls.first { $0.id == serviceCallID }
+        }
+
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(entry.balance.formatted(.currency(code: "USD")))
+                .font(.headline)
+            Text("\(invoice.status.capitalized) • \(invoice.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Text(summary)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+            HStack {
+                Button("Collect Payment") {
+                    GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+
+                if let serviceCall {
+                    Button("Open Job") {
+                        GunnAireAppIntentRouter.storeDocumentationRoute(serviceCall.id)
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+        .padding(.vertical, 2)
     }
 
     private func handleCapturedCustomerImage(_ image: UIImage) {
@@ -2155,6 +2532,7 @@ private struct CustomerEditorView: View {
             let attachment = ServiceDocumentAttachment(
                 customer: customer,
                 serviceCallID: nil,
+                customerEquipmentID: selectedCustomerAttachmentEquipmentID,
                 invoiceID: nil,
                 estimateID: nil,
                 kind: customerAttachmentKind,
@@ -2167,6 +2545,7 @@ private struct CustomerEditorView: View {
             modelContext.insert(attachment)
             try modelContext.save()
             customerAttachmentCaption = ""
+            selectedCustomerAttachmentEquipmentID = nil
             customerAttachmentMessage = "Saved \(filename) to \(customer.name)."
             syncCustomerAttachmentIfPossible(attachment, data: data)
         } catch {
@@ -2215,6 +2594,21 @@ private struct CustomerEditorView: View {
         }
     }
 
+    private func refreshSharedCustomerDocuments() async {
+        guard GunnAireBackendService.isConfigured else {
+            sharedCustomerDocumentsMessage = "Shared company storage is not configured."
+            return
+        }
+        isLoadingSharedCustomerDocuments = true
+        defer { isLoadingSharedCustomerDocuments = false }
+        do {
+            sharedCustomerDocuments = try await GunnAireBackendService.fetchDocuments()
+            sharedCustomerDocumentsMessage = "Loaded \(matchingSharedCustomerDocuments.count) shared company document\(matchingSharedCustomerDocuments.count == 1 ? "" : "s") for this customer."
+        } catch {
+            sharedCustomerDocumentsMessage = "Shared document refresh failed: \(error.localizedDescription)"
+        }
+    }
+
     private func removeCustomerAttachment(_ attachment: ServiceDocumentAttachment) {
         let fileURL = attachment.localFileURL
         modelContext.delete(attachment)
@@ -2232,26 +2626,134 @@ private struct CustomerEditorView: View {
     }
 
     @ViewBuilder
-    private func customerAttachmentGroup(_ title: String, attachments: [ServiceDocumentAttachment], limit: Int) -> some View {
+    private func customerAttachmentGroup(_ title: String, attachments: [ServiceDocumentAttachment]) -> some View {
         if !attachments.isEmpty {
             DisclosureGroup("\(title) (\(attachments.count))") {
-                ForEach(attachments.prefix(limit)) { attachment in
+                ForEach(attachments) { attachment in
                     customerAttachmentRow(attachment)
-                }
-                if attachments.count > limit {
-                    Text("\(attachments.count - limit) more saved in this category.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
                 }
             }
         }
     }
 
+    @ViewBuilder
+    private func customerEquipmentAttachmentHistory() -> some View {
+        if !equipmentAttachmentGroups.isEmpty {
+            DisclosureGroup("Equipment File History (\(equipmentAttachmentGroups.count))") {
+                ForEach(equipmentAttachmentGroups) { group in
+                    DisclosureGroup {
+                        Text(group.summary)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        if let latestDate = group.latestAttachmentDate {
+                            Text("Latest file: \(latestDate.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        ForEach(group.attachments) { attachment in
+                            customerAttachmentRow(attachment)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(group.equipment.displayName) (\(group.attachments.count))")
+                            Text(group.summary)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func sharedCustomerDocumentRow(_ document: BackendDocumentRecord) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: document.contentType.lowercased().hasPrefix("image/") ? "photo" : "externaldrive.badge.checkmark")
+                .foregroundColor(Color.brandGold)
+                .frame(width: 42, height: 42)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(document.filename)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(sharedDocumentKindLabel(document.kind))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if let createdAt = document.createdAt, !createdAt.isEmpty {
+                    Text("Uploaded: \(sharedDocumentDisplayDate(createdAt))")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                if let serviceCallID = document.serviceCallID, !serviceCallID.isEmpty {
+                    Text("Job file: \(serviceCallID.prefix(8))")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                Text("Synced to company storage")
+                    .font(.caption2)
+                    .foregroundColor(.green)
+                Button(downloadingSharedDocumentID == document.id ? "Downloading..." : "Download & Open") {
+                    Task {
+                        await downloadSharedCustomerDocument(document)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .font(.caption)
+                .disabled(downloadingSharedDocumentID != nil)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func downloadSharedCustomerDocument(_ document: BackendDocumentRecord) async {
+        downloadingSharedDocumentID = document.id
+        defer { downloadingSharedDocumentID = nil }
+        do {
+            let data = try await GunnAireBackendService.downloadDocument(id: document.id)
+            let cachedURL = try persistSharedCustomerDocument(data, document: document)
+            customerAttachmentPreviewURL = cachedURL
+            sharedCustomerDocumentsMessage = "Downloaded \(document.filename)."
+        } catch {
+            sharedCustomerDocumentsMessage = "Shared document download failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistSharedCustomerDocument(_ data: Data, document: BackendDocumentRecord) throws -> URL {
+        let documentsURL = try FileManager.default.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let folderURL = documentsURL.appendingPathComponent("GunnAire Shared Documents", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        let fileURL = folderURL.appendingPathComponent("\(document.id)-\(sanitizeAttachmentFilename(document.filename))")
+        try data.write(to: fileURL, options: .atomic)
+        return fileURL
+    }
+
+    private func sharedDocumentKindLabel(_ kind: String) -> String {
+        ServiceDocumentAttachmentKind(rawValue: kind)?.label ??
+            kind.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private func sharedDocumentDisplayDate(_ value: String) -> String {
+        let date = ISO8601DateFormatter().date(from: value) ?? Date(timeIntervalSince1970: 0)
+        return Self.sharedDocumentDateFormatter.string(from: date)
+    }
+
+    private static let sharedDocumentDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
     private func customerAttachmentRow(_ attachment: ServiceDocumentAttachment) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: attachment.isImage ? "photo" : "doc")
-                .foregroundColor(Color.brandGold)
-                .frame(width: 24)
+            customerAttachmentThumbnail(for: attachment)
             VStack(alignment: .leading, spacing: 3) {
                 Text(attachment.displayName)
                     .font(.subheadline.weight(.semibold))
@@ -2263,6 +2765,7 @@ private struct CustomerEditorView: View {
                     serviceCalls: serviceCalls,
                     invoices: invoices,
                     estimates: estimates,
+                    equipmentProfiles: equipmentProfiles,
                     canViewFinancials: canViewFinancials
                 ), id: \.self) { line in
                     Text(line)
@@ -2276,8 +2779,16 @@ private struct CustomerEditorView: View {
                         .foregroundColor(.secondary)
                         .lineLimit(2)
                 }
-                ShareLink(item: attachment.localFileURL) {
-                    Label("Open Attachment", systemImage: attachment.isImage ? "photo.on.rectangle" : "doc.text.magnifyingglass")
+                HStack(spacing: 12) {
+                    Button {
+                        previewCustomerAttachment(attachment)
+                    } label: {
+                        Label("Preview", systemImage: attachment.isImage ? "photo" : "doc.text.magnifyingglass")
+                    }
+
+                    ShareLink(item: attachment.localFileURL) {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
                 }
                 .font(.caption)
             }
@@ -2291,6 +2802,38 @@ private struct CustomerEditorView: View {
             .accessibilityLabel("Delete attachment")
         }
         .padding(.vertical, 3)
+    }
+
+    private func previewCustomerAttachment(_ attachment: ServiceDocumentAttachment) {
+        let url = attachment.localFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            customerAttachmentMessage = "\(attachment.displayName) is no longer available on this device."
+            return
+        }
+        customerAttachmentPreviewURL = url
+    }
+
+    @ViewBuilder
+    private func customerAttachmentThumbnail(for attachment: ServiceDocumentAttachment) -> some View {
+        if attachment.isImage,
+           let image = UIImage(contentsOfFile: attachment.localFilePath) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color(.separator), lineWidth: 0.5)
+                )
+                .accessibilityLabel("Attachment preview")
+        } else {
+            Image(systemName: attachment.isImage ? "photo" : "doc")
+                .foregroundColor(Color.brandGold)
+                .frame(width: 56, height: 56)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .accessibilityLabel(attachment.isImage ? "Photo attachment" : "Document attachment")
+        }
     }
 
     private func addCustomerEquipmentProfile() {

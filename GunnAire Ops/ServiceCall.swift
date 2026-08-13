@@ -131,6 +131,15 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         "Not Applicable"
     ]
 
+    private static let packageHeatTypeOptions = [
+        "Gas Heat",
+        "Electric Heat",
+        "Heat Pump",
+        "Dual Fuel",
+        "Cooling Only",
+        "Unknown"
+    ]
+
     private static let tankConditionOptions = [
         "Normal",
         "Sediment Present",
@@ -166,14 +175,24 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         case .packageUnit:
             return common + coolingCircuitDefinitions + [
                 HVACTechnicalReadingDefinition(key: "economizer_operation", label: "Economizer", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "package_heat_type", label: "Package Heat Type", unit: nil, options: Self.packageHeatTypeOptions),
+                HVACTechnicalReadingDefinition(key: "ignition_type", label: "Ignition Type", unit: nil, options: Self.ignitionOptions),
                 HVACTechnicalReadingDefinition(key: "gas_pressure_inlet", label: "Gas Pressure Inlet", unit: "in. w.c."),
                 HVACTechnicalReadingDefinition(key: "gas_pressure_manifold", label: "Gas Pressure Manifold", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "blower_amps", label: "Blower Amps", unit: "A"),
+                HVACTechnicalReadingDefinition(key: "heat_strip_amps", label: "Heat Strip Amps", unit: "A"),
+                HVACTechnicalReadingDefinition(key: "condenser_condition", label: "Condenser Condition", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "evaporator_condition", label: "Evaporator Condition", unit: nil, options: Self.conditionOptions),
                 HVACTechnicalReadingDefinition(key: "heat_exchanger_condition", label: "Heat Exchanger", unit: nil, options: Self.conditionOptions)
             ]
         case .miniSplit:
             return common + coolingCircuitDefinitions + [
                 HVACTechnicalReadingDefinition(key: "indoor_head_delta_t", label: "Indoor Head Delta T", unit: "F"),
                 HVACTechnicalReadingDefinition(key: "communication_voltage", label: "Communication Voltage", unit: "V"),
+                HVACTechnicalReadingDefinition(key: "inverter_frequency", label: "Inverter Frequency", unit: "Hz"),
+                HVACTechnicalReadingDefinition(key: "indoor_fan_operation", label: "Indoor Fan", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "indoor_filter_condition", label: "Indoor Filter", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "indoor_coil_condition", label: "Indoor Coil", unit: nil, options: Self.conditionOptions),
                 HVACTechnicalReadingDefinition(key: "condensate_pump_status", label: "Condensate Pump", unit: nil, options: Self.conditionOptions),
                 HVACTechnicalReadingDefinition(key: "remote_operation", label: "Remote Operation", unit: nil, options: Self.conditionOptions)
             ]
@@ -261,6 +280,7 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
             HVACTechnicalReadingDefinition(key: "indoor_dry_bulb", label: "Indoor Dry Bulb", unit: "F"),
             HVACTechnicalReadingDefinition(key: "suction_pressure", label: "Suction Pressure", unit: "psig"),
             HVACTechnicalReadingDefinition(key: "liquid_pressure", label: "Liquid Pressure", unit: "psig"),
+            HVACTechnicalReadingDefinition(key: "head_pressure", label: "Head Pressure", unit: "psig"),
             HVACTechnicalReadingDefinition(key: "suction_saturation_temp", label: "Suction Saturation Temp", unit: "F"),
             HVACTechnicalReadingDefinition(key: "liquid_saturation_temp", label: "Liquid Saturation Temp", unit: "F"),
             HVACTechnicalReadingDefinition(key: "suction_line_temp", label: "Suction Line Temp", unit: "F"),
@@ -269,12 +289,85 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
             HVACTechnicalReadingDefinition(key: "superheat", label: "Superheat", unit: "F"),
             HVACTechnicalReadingDefinition(key: "target_subcooling", label: "Target Subcooling", unit: "F"),
             HVACTechnicalReadingDefinition(key: "subcooling", label: "Subcooling", unit: "F"),
+            HVACTechnicalReadingDefinition(key: "compressor_rla", label: "Compressor RLA", unit: "A"),
             HVACTechnicalReadingDefinition(key: "compressor_amps", label: "Compressor Amps", unit: "A"),
+            HVACTechnicalReadingDefinition(key: "outdoor_fan_fla", label: "Outdoor Fan FLA", unit: "A"),
             HVACTechnicalReadingDefinition(key: "outdoor_fan_amps", label: "Outdoor Fan Amps", unit: "A"),
             HVACTechnicalReadingDefinition(key: "capacitor_rating", label: "Capacitor Rating", unit: "uF"),
             HVACTechnicalReadingDefinition(key: "capacitor_actual", label: "Capacitor Actual", unit: "uF"),
             HVACTechnicalReadingDefinition(key: "contactor_condition", label: "Contactor Condition", unit: nil, options: Self.conditionOptions)
         ]
+    }
+
+    var requiredReadingKeysForCompleteServiceReport: [String] {
+        switch self {
+        case .splitSystemAC:
+            return [
+                "return_air_temp", "supply_air_temp", "temperature_split",
+                "refrigerant_type", "metering_device", "suction_pressure", "liquid_pressure", "head_pressure",
+                "suction_line_temp", "liquid_line_temp", "superheat", "subcooling",
+                "line_voltage", "compressor_rla", "compressor_amps"
+            ]
+        case .heatPump:
+            return [
+                "return_air_temp", "supply_air_temp", "temperature_split",
+                "refrigerant_type", "mode_tested", "suction_pressure", "liquid_pressure", "head_pressure",
+                "superheat", "subcooling", "reversing_valve_operation", "defrost_control_status",
+                "line_voltage", "compressor_rla", "compressor_amps"
+            ]
+        case .packageUnit:
+            return [
+                "return_air_temp", "supply_air_temp", "temperature_split",
+                "refrigerant_type", "suction_pressure", "liquid_pressure", "head_pressure",
+                "superheat", "subcooling", "line_voltage", "compressor_rla", "compressor_amps",
+                "economizer_operation", "package_heat_type", "blower_amps",
+                "condenser_condition", "evaporator_condition", "heat_exchanger_condition"
+            ]
+        case .miniSplit:
+            return [
+                "return_air_temp", "supply_air_temp", "temperature_split",
+                "refrigerant_type", "suction_pressure", "liquid_pressure",
+                "line_voltage", "communication_voltage", "indoor_head_delta_t",
+                "indoor_fan_operation", "indoor_filter_condition", "indoor_coil_condition",
+                "condensate_pump_status", "remote_operation"
+            ]
+        case .gasFurnace:
+            return [
+                "return_air_temp", "supply_air_temp", "temperature_rise",
+                "fuel_type", "ignition_type", "venting_type",
+                "gas_pressure_inlet", "gas_pressure_manifold", "flame_sensor_microamps",
+                "inducer_amps", "blower_amps", "draft_pressure",
+                "co_ppm", "heat_exchanger_condition", "limit_switch_operation"
+            ]
+        case .airHandler:
+            return [
+                "return_air_temp", "supply_air_temp", "temperature_split",
+                "blower_type", "blower_amps", "static_pressure_return",
+                "static_pressure_supply", "total_external_static",
+                "blower_wheel_condition", "duct_condition"
+            ]
+        case .boiler:
+            return [
+                "fuel_type", "water_temp_supply", "water_temp_return",
+                "system_pressure", "expansion_tank_pressure",
+                "gas_pressure_inlet", "gas_pressure_manifold",
+                "circulator_amps", "relief_valve_status", "co_ppm"
+            ]
+        case .waterHeater:
+            return [
+                "fuel_type", "water_temp_out", "incoming_water_temp",
+                "gas_pressure_inlet", "gas_pressure_manifold",
+                "venting_type", "tank_condition", "relief_valve_status", "co_ppm"
+            ]
+        case .ventilation:
+            return [
+                "airflow", "outside_air_cfm", "exhaust_air_cfm",
+                "motor_amps", "line_voltage", "static_pressure",
+                "belt_condition", "damper_operation"
+            ]
+        case .other:
+            return ["return_air_temp", "supply_air_temp", "line_voltage"]
+        }
     }
 }
 
@@ -292,11 +385,128 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
     }
 
     var id: String { key }
+
     var displayLabel: String {
         if let unit, !unit.isEmpty {
             return "\(label) (\(unit))"
         }
         return label
+    }
+
+    var expectedRange: ClosedRange<Double>? {
+        switch key {
+        case "return_air_temp", "supply_air_temp", "outdoor_ambient_temp", "indoor_dry_bulb", "indoor_wet_bulb":
+            return 30...130
+        case "temperature_split", "indoor_head_delta_t", "target_superheat", "superheat", "target_subcooling", "subcooling", "temperature_rise":
+            return 0...80
+        case "suction_pressure", "liquid_pressure", "head_pressure":
+            return 0...700
+        case "suction_saturation_temp", "liquid_saturation_temp", "suction_line_temp", "liquid_line_temp", "water_temp_supply", "water_temp_return", "water_temp_out", "incoming_water_temp", "flue_temp":
+            return 0...450
+        case "line_voltage":
+            return 90...600
+        case "control_voltage", "communication_voltage":
+            return 0...60
+        case "compressor_rla", "compressor_amps", "outdoor_fan_fla", "outdoor_fan_amps", "aux_heat_amps", "blower_amps", "heat_strip_amps", "inducer_amps", "circulator_amps", "motor_amps":
+            return 0...200
+        case "capacitor_rating", "capacitor_actual":
+            return 0...120
+        case "gas_pressure_inlet", "gas_pressure_manifold", "draft_pressure", "static_pressure_return", "static_pressure_supply", "total_external_static", "static_pressure":
+            return -10...10
+        case "flame_sensor_microamps":
+            return 0...20
+        case "o2_percent", "co2_percent":
+            return 0...25
+        case "co_ppm":
+            return 0...2000
+        case "system_pressure", "expansion_tank_pressure":
+            return 0...100
+        case "airflow", "outside_air_cfm", "exhaust_air_cfm":
+            return 0...10000
+        case "inverter_frequency":
+            return 0...250
+        default:
+            return nil
+        }
+    }
+
+    var expectedRangeLabel: String? {
+        guard let expectedRange else { return nil }
+        let lower = Self.formatRangeBound(expectedRange.lowerBound)
+        let upper = Self.formatRangeBound(expectedRange.upperBound)
+        if let unit, !unit.isEmpty {
+            return "\(lower)-\(upper) \(unit)"
+        }
+        return "\(lower)-\(upper)"
+    }
+
+    var inputHint: String? {
+        switch key {
+        case "return_air_temp":
+            return "Measure at return before coil/heat exchanger."
+        case "supply_air_temp":
+            return "Measure at nearest representative supply."
+        case "temperature_split":
+            return "Use calculated supply/return difference when possible."
+        case "refrigerant_type":
+            return "Match equipment nameplate or known retrofit refrigerant."
+        case "metering_device":
+            return "Select installed metering device."
+        case "suction_pressure", "liquid_pressure", "head_pressure":
+            return "Gauge pressure measured at service ports."
+        case "suction_saturation_temp", "liquid_saturation_temp":
+            return "Use refrigerant PT chart or manifold saturation reading."
+        case "suction_line_temp", "liquid_line_temp":
+            return "Clamp temperature at service valve/line."
+        case "target_superheat", "target_subcooling":
+            return "Manufacturer target or calculated target."
+        case "superheat", "subcooling":
+            return "Use Calculate button when supporting readings are entered."
+        case "line_voltage":
+            return "Measured line voltage under operating load."
+        case "control_voltage", "communication_voltage":
+            return "Low-voltage/control circuit measurement."
+        case "compressor_rla", "outdoor_fan_fla":
+            return "Nameplate running-load/full-load amp rating."
+        case "compressor_amps", "outdoor_fan_amps", "aux_heat_amps", "blower_amps", "heat_strip_amps", "inducer_amps", "circulator_amps", "motor_amps":
+            return "Compare measured amps to nameplate/RLA where applicable."
+        case "capacitor_rating", "capacitor_actual":
+            return "Rated and measured microfarads."
+        case "gas_pressure_inlet", "gas_pressure_manifold":
+            return "Measure with calibrated manometer."
+        case "draft_pressure", "static_pressure_return", "static_pressure_supply", "total_external_static", "static_pressure":
+            return "Record pressure in inches water column."
+        case "flame_sensor_microamps":
+            return "Measure flame rectification signal."
+        case "co_ppm":
+            return "Record carbon monoxide reading; investigate unsafe readings."
+        case "o2_percent", "co2_percent", "flue_temp":
+            return "Combustion analyzer reading."
+        case "system_pressure", "expansion_tank_pressure":
+            return "Hydronic pressure reading."
+        case "airflow", "outside_air_cfm", "exhaust_air_cfm":
+            return "Measured or balanced airflow."
+        case "inverter_frequency":
+            return "Inverter operating frequency when available."
+        default:
+            return nil
+        }
+    }
+
+    func validationIssue(for rawValue: String) -> String? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let expectedRange else { return nil }
+        guard let value = Double(trimmed.replacingOccurrences(of: ",", with: ".")) else {
+            return "\(displayLabel) must be numeric"
+        }
+        guard expectedRange.contains(value) else {
+            return "\(displayLabel) outside expected range\(expectedRangeLabel.map { " (\($0))" } ?? "")"
+        }
+        return nil
+    }
+
+    private static func formatRangeBound(_ value: Double) -> String {
+        value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
     }
 }
 
@@ -305,6 +515,64 @@ struct HVACTechnicalReadingGroup: Identifiable, Hashable {
     let definitions: [HVACTechnicalReadingDefinition]
 
     var id: String { title }
+}
+
+struct HVACTechnicalReadingGroupProgress: Equatable {
+    let totalCount: Int
+    let capturedCount: Int
+    let requiredCount: Int
+    let missingRequiredCount: Int
+    let validationIssueCount: Int
+
+    var isComplete: Bool {
+        missingRequiredCount == 0 && validationIssueCount == 0
+    }
+
+    var needsAttention: Bool {
+        missingRequiredCount > 0 || validationIssueCount > 0
+    }
+
+    var summary: String {
+        var parts = ["\(capturedCount)/\(totalCount) captured"]
+        if requiredCount > 0 {
+            parts.append("\(max(0, requiredCount - missingRequiredCount))/\(requiredCount) required")
+        }
+        if validationIssueCount > 0 {
+            parts.append("\(validationIssueCount) invalid")
+        } else if missingRequiredCount > 0 {
+            parts.append("\(missingRequiredCount) missing")
+        }
+        return parts.joined(separator: " - ")
+    }
+}
+
+struct JobCloseoutReadiness: Equatable {
+    let requiredItems: [String]
+    let missingItems: [String]
+
+    var completedItems: [String] {
+        requiredItems.filter { !missingItems.contains($0) }
+    }
+
+    var completedCount: Int {
+        completedItems.count
+    }
+
+    var totalCount: Int {
+        requiredItems.count
+    }
+
+    var isReady: Bool {
+        missingItems.isEmpty
+    }
+
+    var statusLabel: String {
+        isReady ? "Ready for closeout" : "Needs closeout details"
+    }
+
+    var summary: String {
+        "\(completedCount)/\(totalCount) complete"
+    }
 }
 
 @Model
@@ -507,6 +775,73 @@ final class ServiceCall {
         return decoratedParts.joined(separator: " • ")
     }
 
+    var equipmentProfileServiceHistoryNote: String? {
+        let title = "\(scheduledDate.formatted(date: .abbreviated, time: .omitted)) \(type.displayName)"
+        let details = [
+            serviceReportSummary.map { "Report: \($0)" },
+            findingsSummary.map { "Findings: \($0)" },
+            recommendedWorkSummary.map { "Recommended: \($0)" },
+            technicalReadingServiceHistorySummary.map { "Readings: \($0)" },
+            filterCondition.map { "Filter: \($0)" },
+            indoorCoilCondition.map { "Indoor coil: \($0)" },
+            outdoorCoilCondition.map { "Outdoor coil: \($0)" },
+            drainLineCondition.map { "Drain: \($0)" },
+            thermostatOperation.map { "Thermostat: \($0)" }
+        ]
+            .compactMap { value -> String? in
+                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed?.isEmpty == false ? trimmed : nil
+            }
+
+        guard !details.isEmpty else { return nil }
+        return ([title] + details).joined(separator: " - ")
+    }
+
+    var technicalReadingServiceHistorySummary: String? {
+        let priorityKeys = [
+            "return_air_temp",
+            "supply_air_temp",
+            "temperature_split",
+            "refrigerant_type",
+            "suction_pressure",
+            "head_pressure",
+            "superheat",
+            "subcooling",
+            "line_voltage",
+            "compressor_amps",
+            "outdoor_fan_amps",
+            "blower_amps",
+            "static_pressure_return",
+            "static_pressure_supply",
+            "total_external_static",
+            "gas_pressure_inlet",
+            "gas_pressure_manifold",
+            "flame_sensor_microamps",
+            "co_ppm"
+        ]
+        let definitionsByKey = Dictionary(uniqueKeysWithValues: technicalReadingDefinitions.map { ($0.key, $0) })
+        let captured = technicalReadings
+            .compactMap { key, rawValue -> (key: String, label: String, value: String)? in
+                let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !value.isEmpty else { return nil }
+                let label = definitionsByKey[key]?.displayLabel ?? key.replacingOccurrences(of: "_", with: " ").capitalized
+                return (key, label, value)
+            }
+        let ordered = captured.sorted { lhs, rhs in
+            let lhsIndex = priorityKeys.firstIndex(of: lhs.key) ?? Int.max
+            let rhsIndex = priorityKeys.firstIndex(of: rhs.key) ?? Int.max
+            if lhsIndex == rhsIndex {
+                return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+            }
+            return lhsIndex < rhsIndex
+        }
+        guard !ordered.isEmpty else { return nil }
+        return ordered
+            .prefix(12)
+            .map { "\($0.label): \($0.value)" }
+            .joined(separator: "; ")
+    }
+
     var equipmentType: HVACEquipmentType? {
         get {
             guard let equipmentTypeRaw else { return nil }
@@ -639,6 +974,7 @@ final class ServiceCall {
             readings[key] = trimmed
             diagnosticsCaptured = true
         }
+        Self.applyDerivedTechnicalReadings(to: &readings, afterChanging: key)
         if readings.isEmpty {
             serviceReportReadingsJSON = nil
         } else if let data = try? JSONEncoder().encode(readings),
@@ -655,6 +991,16 @@ final class ServiceCall {
         let split = abs(returnTemp - supplyTemp)
         setTechnicalReading(Self.formattedTechnicalReading(split), for: "temperature_split")
         return split
+    }
+
+    func calculateTemperatureRiseReading() -> Double? {
+        guard let returnTemp = numericTechnicalReading(for: "return_air_temp"),
+              let supplyTemp = numericTechnicalReading(for: "supply_air_temp") else {
+            return nil
+        }
+        let rise = supplyTemp - returnTemp
+        setTechnicalReading(Self.formattedTechnicalReading(rise), for: "temperature_rise")
+        return rise
     }
 
     func calculateSuperheatReading() -> Double? {
@@ -691,6 +1037,47 @@ final class ServiceCall {
         Double(technicalReading(for: key).replacingOccurrences(of: ",", with: "."))
     }
 
+    private static func applyDerivedTechnicalReadings(to readings: inout [String: String], afterChanging changedKey: String) {
+        let derivedTargets: Set<String> = [
+            "temperature_split",
+            "temperature_rise",
+            "superheat",
+            "subcooling",
+            "total_external_static"
+        ]
+        guard !derivedTargets.contains(changedKey) else { return }
+
+        if changedKey == "return_air_temp" || changedKey == "supply_air_temp",
+           let returnTemp = numericTechnicalReading("return_air_temp", in: readings),
+           let supplyTemp = numericTechnicalReading("supply_air_temp", in: readings) {
+            readings["temperature_split"] = formattedTechnicalReading(abs(returnTemp - supplyTemp))
+            readings["temperature_rise"] = formattedTechnicalReading(supplyTemp - returnTemp)
+        }
+
+        if changedKey == "suction_line_temp" || changedKey == "suction_saturation_temp",
+           let suctionLineTemp = numericTechnicalReading("suction_line_temp", in: readings),
+           let suctionSaturationTemp = numericTechnicalReading("suction_saturation_temp", in: readings) {
+            readings["superheat"] = formattedTechnicalReading(suctionLineTemp - suctionSaturationTemp)
+        }
+
+        if changedKey == "liquid_line_temp" || changedKey == "liquid_saturation_temp",
+           let liquidLineTemp = numericTechnicalReading("liquid_line_temp", in: readings),
+           let liquidSaturationTemp = numericTechnicalReading("liquid_saturation_temp", in: readings) {
+            readings["subcooling"] = formattedTechnicalReading(liquidSaturationTemp - liquidLineTemp)
+        }
+
+        if changedKey == "static_pressure_return" || changedKey == "static_pressure_supply",
+           let returnStatic = numericTechnicalReading("static_pressure_return", in: readings),
+           let supplyStatic = numericTechnicalReading("static_pressure_supply", in: readings) {
+            readings["total_external_static"] = formattedTechnicalReading(abs(returnStatic) + abs(supplyStatic))
+        }
+    }
+
+    private static func numericTechnicalReading(_ key: String, in readings: [String: String]) -> Double? {
+        guard let value = readings[key] else { return nil }
+        return Double(value.replacingOccurrences(of: ",", with: "."))
+    }
+
     private static func formattedTechnicalReading(_ value: Double) -> String {
         String(format: "%.1f", value)
     }
@@ -700,6 +1087,230 @@ final class ServiceCall {
             let value = technicalReading(for: definition.key).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !value.isEmpty else { return nil }
             return (definition.displayLabel, value)
+        }
+    }
+
+    var requiredTechnicalReadingDefinitions: [HVACTechnicalReadingDefinition] {
+        let requiredKeys = Set((equipmentType ?? .splitSystemAC).requiredReadingKeysForCompleteServiceReport)
+        return technicalReadingDefinitions.filter { requiredKeys.contains($0.key) }
+    }
+
+    var missingRequiredTechnicalReadingDefinitions: [HVACTechnicalReadingDefinition] {
+        requiredTechnicalReadingDefinitions.filter {
+            technicalReading(for: $0.key).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    func technicalReadingProgress(in group: HVACTechnicalReadingGroup) -> HVACTechnicalReadingGroupProgress {
+        let requiredKeys = Set(requiredTechnicalReadingDefinitions.map(\.key))
+        let capturedDefinitions = group.definitions.filter {
+            !technicalReading(for: $0.key).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let requiredInGroup = group.definitions.filter { requiredKeys.contains($0.key) }
+        let missingRequiredInGroup = requiredInGroup.filter {
+            technicalReading(for: $0.key).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let validationIssueCount = group.definitions.filter {
+            $0.validationIssue(for: technicalReading(for: $0.key)) != nil
+        }.count
+
+        return HVACTechnicalReadingGroupProgress(
+            totalCount: group.definitions.count,
+            capturedCount: capturedDefinitions.count,
+            requiredCount: requiredInGroup.count,
+            missingRequiredCount: missingRequiredInGroup.count,
+            validationIssueCount: validationIssueCount
+        )
+    }
+
+    var serviceReportReadingValidationIssueLabels: [String] {
+        let rangeIssues = technicalReadingDefinitions.compactMap { definition in
+            definition.validationIssue(for: technicalReading(for: definition.key))
+        }
+        return rangeIssues + serviceReportCrossReadingValidationIssueLabels
+    }
+
+    var serviceReportCrossReadingValidationIssueLabels: [String] {
+        [
+            ampLoadValidationIssue(
+                measuredKey: "compressor_amps",
+                ratingKey: "compressor_rla",
+                measuredLabel: "Compressor Amps",
+                ratingLabel: "Compressor RLA",
+                toleranceMultiplier: 1.15
+            ),
+            ampLoadValidationIssue(
+                measuredKey: "outdoor_fan_amps",
+                ratingKey: "outdoor_fan_fla",
+                measuredLabel: "Outdoor Fan Amps",
+                ratingLabel: "Outdoor Fan FLA",
+                toleranceMultiplier: 1.15
+            )
+        ].compactMap { $0 }
+    }
+
+    private func ampLoadValidationIssue(
+        measuredKey: String,
+        ratingKey: String,
+        measuredLabel: String,
+        ratingLabel: String,
+        toleranceMultiplier: Double
+    ) -> String? {
+        guard let measured = numericTechnicalReading(for: measuredKey),
+              let rating = numericTechnicalReading(for: ratingKey),
+              rating > 0,
+              measured > rating * toleranceMultiplier else {
+            return nil
+        }
+        return "\(measuredLabel) exceeds \(ratingLabel) by more than \(Int((toleranceMultiplier - 1) * 100))%"
+    }
+
+    var serviceReportMissingRequirementLabels: [String] {
+        var missing: [String] = []
+        if equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            missing.append("Equipment Name")
+        }
+        if equipmentModel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            missing.append("Model")
+        }
+        if equipmentSerialNumber?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            missing.append("Serial Number")
+        }
+        missing.append(contentsOf: missingRequiredTechnicalReadingDefinitions.map(\.displayLabel))
+        if serviceReportSummary?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            missing.append("Service Report Summary")
+        }
+        missing.append(contentsOf: serviceReportReadingValidationIssueLabels)
+        return missing
+    }
+
+    var serviceReportRequiredItemCount: Int {
+        4 + requiredTechnicalReadingDefinitions.count
+    }
+
+    var serviceReportCompletedRequiredItemCount: Int {
+        max(0, serviceReportRequiredItemCount - serviceReportMissingRequirementLabels.count)
+    }
+
+    var serviceReportReadinessSummary: String {
+        "\(serviceReportCompletedRequiredItemCount)/\(serviceReportRequiredItemCount) required items"
+    }
+
+    var requiresTechnicalServiceReportCompletion: Bool {
+        switch type {
+        case .service, .install, .maintenance:
+            return true
+        case .estimate, .meeting, .reminder, .siteVisit, .other:
+            return false
+        }
+    }
+
+    var canCompleteDocumentation: Bool {
+        !requiresTechnicalServiceReportCompletion || serviceReportMissingRequirementLabels.isEmpty
+    }
+
+    @discardableResult
+    func markDocumentationCompleteIfReady(at date: Date = Date()) -> Bool {
+        guard canCompleteDocumentation else {
+            documentationCompletedAt = nil
+            return false
+        }
+        documentationChecklist = true
+        documentationCompletedAt = documentationCompletedAt ?? date
+        return true
+    }
+
+    var documentationCompletionBlockedMessage: String? {
+        guard !canCompleteDocumentation else { return nil }
+        return "Documentation is not complete. Missing: \(serviceReportMissingRequirementLabels.joined(separator: ", "))."
+    }
+
+    func closeoutReadiness(
+        invoice: Invoice?,
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment]
+    ) -> JobCloseoutReadiness {
+        var requiredItems = [
+            "Work completed",
+            "Technical report complete",
+            "Onsite report generated"
+        ]
+        if type != .estimate {
+            requiredItems.append("Invoice created")
+        }
+        if let invoice {
+            requiredItems.append("Invoice finalized")
+            requiredItems.append("Customer signed")
+            requiredItems.append("Payment resolved")
+            requiredItems.append("QuickBooks invoice synced")
+            if invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                requiredItems.append("QuickBooks attachments synced")
+            }
+        }
+
+        var missing: [String] = []
+        if !workCompletedChecklist && status != .completed && status != .invoiced {
+            missing.append("Work completed")
+        }
+        if !canCompleteDocumentation {
+            missing.append("Technical report complete")
+        }
+        let hasGeneratedReport = attachments.contains {
+            $0.serviceCallID == id &&
+                $0.kind == .serviceReport &&
+                (invoice == nil || $0.invoiceID == invoice?.id) &&
+                $0.localFilePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+        if !hasGeneratedReport {
+            missing.append("Onsite report generated")
+        }
+        if type != .estimate && invoice == nil {
+            missing.append("Invoice created")
+        }
+        if let invoice {
+            if invoice.finalizedAt == nil {
+                missing.append("Invoice finalized")
+            }
+            if invoice.customerSignedAt == nil {
+                missing.append("Customer signed")
+            }
+            let paidTotal = payments
+                .filter { $0.invoice.id == invoice.id && !$0.isRefund }
+                .reduce(0) { $0 + $1.amount }
+            let refundTotal = payments
+                .filter { $0.invoice.id == invoice.id && $0.isRefund }
+                .reduce(0) { $0 + $1.amount }
+            let balanceDue = max(invoice.amount - paidTotal + refundTotal, 0)
+            let paymentResolved = paymentCollectedChecklist ||
+                invoice.status.caseInsensitiveCompare("paid") == .orderedSame ||
+                balanceDue <= 0.009
+            if !paymentResolved {
+                missing.append("Payment resolved")
+            }
+            if invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                missing.append("QuickBooks invoice synced")
+            } else {
+                let pendingQBAttachments = attachments.contains {
+                    $0.serviceCallID == id &&
+                        $0.canUploadToQuickBooksInvoice(invoice)
+                }
+                if pendingQBAttachments {
+                    missing.append("QuickBooks attachments synced")
+                }
+            }
+        }
+
+        return JobCloseoutReadiness(requiredItems: requiredItems, missingItems: missing)
+    }
+
+    func refreshAttachmentProgress(from attachments: [ServiceDocumentAttachment]) {
+        let jobAttachments = attachments.filter { $0.serviceCallID == id }
+        beforePhotoCount = jobAttachments.filter { $0.kind == .beforePhoto }.count
+        afterPhotoCount = jobAttachments.filter { $0.kind == .afterPhoto }.count
+        if !jobAttachments.isEmpty {
+            documentationStartedAt = documentationStartedAt ?? Date()
+        } else if documentationCompletedAt == nil {
+            documentationChecklist = false
         }
     }
 

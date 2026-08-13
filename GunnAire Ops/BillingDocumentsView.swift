@@ -16,6 +16,7 @@ struct BillingDocumentsView: View {
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
 
     private let initialServiceCall: ServiceCall?
     private let showsDismissButton: Bool
@@ -65,11 +66,18 @@ struct BillingDocumentsView: View {
     @State private var generatedCustomerDocumentURL: URL?
     @State private var generatedCustomerDocumentRecipientID: UUID?
     @State private var generatedCustomerDocumentKind = "document"
+    @State private var isEmailingGeneratedDocument = false
     @State private var showingDocumentationFileImporter = false
     @State private var showingDocumentationCamera = false
     @State private var attachmentKind: ServiceDocumentAttachmentKind = .diagnosticPhoto
     @State private var attachmentCaption = ""
+    @State private var attachmentSearchText = ""
     @State private var attachmentMessage: String?
+    @State private var attachmentPreviewURL: URL?
+    @State private var sharedJobDocuments: [BackendDocumentRecord] = []
+    @State private var sharedJobDocumentsMessage: String?
+    @State private var isLoadingSharedJobDocuments = false
+    @State private var downloadingSharedJobDocumentID: String?
     private let workspaceMode: BillingWorkspaceMode
 
     init(
@@ -124,6 +132,35 @@ struct BillingDocumentsView: View {
             (customer.email?.lowercased().contains(query) ?? false) ||
             (customer.address?.lowercased().contains(query) ?? false)
         }
+    }
+
+    private var customerDropdownOptions: [SearchableDropdownOption] {
+        customers
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map { customer in
+                let subtitle = [
+                    customer.phone,
+                    customer.email,
+                    customer.address
+                ]
+                .compactMap { value in
+                    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed?.isEmpty == false ? trimmed : nil
+                }
+                .joined(separator: " • ")
+                return SearchableDropdownOption(
+                    id: customer.id.uuidString,
+                    title: customer.name,
+                    subtitle: subtitle.isEmpty ? nil : subtitle
+                )
+            }
+    }
+
+    private var selectedCustomerDropdownID: Binding<String?> {
+        Binding(
+            get: { selectedCustomerID?.uuidString },
+            set: { selectedCustomerID = $0.flatMap(UUID.init(uuidString:)) }
+        )
     }
 
     private var selectedLineItems: [Item] {
@@ -198,19 +235,22 @@ struct BillingDocumentsView: View {
 
     private var currentJobBalanceDue: Double? {
         guard let invoice = currentJobInvoice else { return nil }
-        let paid = currentJobPayments.reduce(0) { $0 + $1.amount }
+        let paid = currentJobPayments.reduce(0) { partial, payment in
+            partial + (payment.isRefund ? -payment.amount : payment.amount)
+        }
         return max(invoice.amount - paid, 0)
     }
 
     private var estimateMetrics: (pending: Int, accepted: Int, followUp: Int) {
-        let pending = estimates.filter { $0.status == "pending" }.count
-        let accepted = estimates.filter { $0.status == "accepted" }.count
-        let followUp = estimates.filter { $0.status == "follow-up" }.count
+        let displayEstimates = Estimate.displayDeduplicated(estimates)
+        let pending = displayEstimates.filter { $0.status == "pending" }.count
+        let accepted = displayEstimates.filter { $0.status == "accepted" }.count
+        let followUp = displayEstimates.filter { $0.status == "follow-up" }.count
         return (pending, accepted, followUp)
     }
 
     private var invoiceMetrics: (open: Int, overdue: Int, outstandingBalance: Double) {
-        let openInvoices = invoices.filter { invoice in
+        let openInvoices = Invoice.displayDeduplicated(invoices).filter { invoice in
             invoiceBalanceDue(for: invoice) > 0.009
         }
         let overdueInvoices = openInvoices.filter(isInvoiceOverdue)
@@ -221,23 +261,31 @@ struct BillingDocumentsView: View {
     }
 
     private var estimatesNeedingFollowUp: [Estimate] {
-        estimates.filter { estimate in
+        Estimate.displayDeduplicated(estimates).filter { estimate in
             estimate.status == "pending" || estimate.status == "follow-up"
         }
     }
 
     private var acceptedEstimatesReadyToSchedule: [Estimate] {
-        estimates.filter { $0.status == "accepted" }
+        Estimate.displayDeduplicated(estimates).filter { $0.status == "accepted" }
     }
 
     private var collectibleInvoices: [Invoice] {
-        invoices.filter { invoice in
+        Invoice.displayDeduplicated(invoices).filter { invoice in
             invoiceBalanceDue(for: invoice) > 0.009
         }
     }
 
     private var overdueInvoices: [Invoice] {
         collectibleInvoices.filter(isInvoiceOverdue)
+    }
+
+    private var displayedEstimates: [Estimate] {
+        Estimate.displayDeduplicated(estimates)
+    }
+
+    private var displayedInvoices: [Invoice] {
+        Invoice.displayDeduplicated(invoices)
     }
 
     private var contextCustomer: Customer? {
@@ -302,6 +350,14 @@ struct BillingDocumentsView: View {
 
     private var isQuickBooksConnected: Bool {
         liveAPI.isAuthenticated
+    }
+
+    private var currentUserEmail: String? {
+        GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+    }
+
+    private var canViewFinancials: Bool {
+        AppAccess.canViewBillingFinancialDetails(email: currentUserEmail, users: users)
     }
 
     private var mapsURL: URL? {
@@ -414,6 +470,7 @@ GunnAire
 
     private var canEmailGeneratedCustomerDocument: Bool {
         guard googleAuth.isAuthenticated,
+              !isEmailingGeneratedDocument,
               generatedCustomerDocumentURL != nil,
               let email = generatedCustomerDocumentRecipient?.email?.trimmingCharacters(in: .whitespacesAndNewlines) else {
             return false
@@ -443,12 +500,33 @@ Please reply with any questions.
 Thank you,
 GunnAire
 """
-        GunnAireAppIntentRouter.storeMailDraftRoute(
+        guard let data = try? Data(contentsOf: url) else {
+            actionMessage = "Could not read the generated PDF attachment."
+            return
+        }
+        let attachment = GmailAttachment(
+            fileName: url.lastPathComponent,
+            mimeType: QuickBooksDataAPI.mimeType(for: url),
+            data: data
+        )
+        isEmailingGeneratedDocument = true
+        actionMessage = "Emailing \(generatedCustomerDocumentKind)..."
+        googleAuth.sendGmailMessage(
             to: email,
             subject: subject,
             body: body,
-            attachmentPaths: [url.path]
-        )
+            attachments: [attachment]
+        ) { result in
+            DispatchQueue.main.async {
+                isEmailingGeneratedDocument = false
+                switch result {
+                case .success:
+                    actionMessage = "\(generatedCustomerDocumentKind.capitalized) emailed to \(email)."
+                case .failure(let error):
+                    actionMessage = "Generated document email failed: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     private var isJobDocumentationMode: Bool {
@@ -471,9 +549,96 @@ GunnAire
         return attachments.filter { $0.serviceCallID == call.id }
     }
 
+    private var filteredActiveJobAttachments: [ServiceDocumentAttachment] {
+        let query = attachmentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return activeJobAttachments }
+        return activeJobAttachments.filter { attachment in
+            [
+                attachment.displayName,
+                attachment.caption,
+                attachment.kind.label,
+                attachment.contentType,
+                attachment.backendDocumentID == nil ? nil : "company storage",
+                attachment.quickBooksAttachableID == nil ? nil : "quickbooks",
+                attachment.quickBooksSyncError == nil ? nil : "sync error"
+            ]
+                .compactMap { $0?.lowercased() }
+                .contains { $0.contains(query) }
+        }
+    }
+
+    private var groupedActiveJobAttachments: [(kind: ServiceDocumentAttachmentKind, attachments: [ServiceDocumentAttachment])] {
+        ServiceDocumentAttachmentKind.allCases.compactMap { kind in
+            let group = filteredActiveJobAttachments
+                .filter { $0.kind == kind }
+                .sorted { $0.createdAt > $1.createdAt }
+            return group.isEmpty ? nil : (kind, group)
+        }
+    }
+
+    private var activeSharedJobDocuments: [BackendDocumentRecord] {
+        guard let call = activeServiceCall else { return [] }
+        let query = attachmentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return sharedJobDocuments.filter { document in
+            guard document.serviceCallID == call.id.uuidString else {
+                return false
+            }
+            guard !query.isEmpty else { return true }
+            return [
+                document.filename,
+                document.kind,
+                document.contentType,
+                document.customerName,
+                document.createdAt
+            ]
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+            .contains(query)
+        }
+    }
+
     private var activeCustomerEquipmentProfiles: [CustomerEquipment] {
         guard let call = activeServiceCall else { return [] }
         return equipmentProfiles.filter { $0.customer?.id == call.customer.id && $0.isActive }
+    }
+
+    private var activeEquipmentHistoryAttachments: [ServiceDocumentAttachment] {
+        guard let call = activeServiceCall else { return [] }
+        return ServiceDocumentAttachment.equipmentHistoryAttachments(for: call, in: attachments)
+    }
+
+    private var isAttachmentPreviewPresented: Binding<Bool> {
+        Binding(
+            get: { attachmentPreviewURL != nil },
+            set: { isPresented in
+                if !isPresented {
+                    attachmentPreviewURL = nil
+                }
+            }
+        )
+    }
+
+    private var customerEquipmentDropdownOptions: [SearchableDropdownOption] {
+        activeCustomerEquipmentProfiles
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+            .map { equipment in
+                let subtitle = [
+                    equipment.location,
+                    equipment.manufacturer,
+                    equipment.modelNumber,
+                    equipment.serialNumber.map { "Serial \($0)" }
+                ]
+                .compactMap { value in
+                    let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed?.isEmpty == false ? trimmed : nil
+                }
+                .joined(separator: " • ")
+                return SearchableDropdownOption(
+                    id: equipment.id.uuidString,
+                    title: equipment.displayName,
+                    subtitle: subtitle.isEmpty ? nil : subtitle
+                )
+            }
     }
 
     var body: some View {
@@ -544,7 +709,9 @@ GunnAire
                         }
                     }
 
+                    closeoutReadinessSection(for: call)
                     technicalServiceReportSection(for: call)
+                    equipmentAttachmentHistorySection(for: call)
                     attachmentSection(for: call)
 
                     Section("Documentation Builder") {
@@ -673,11 +840,11 @@ GunnAire
                             .buttonStyle(.bordered)
                         }
 
-                        if let invoice = currentJobInvoice, isInvoicePaid(invoice) || (currentJobBalanceDue ?? invoiceBalanceDue(for: invoice)) <= 0.009 {
+                        if let invoice = currentJobInvoice {
                             Button {
-                                generatePaidInvoiceDocument(invoice)
+                                generateInvoiceDocument(invoice)
                             } label: {
-                                Label("Generate Paid Invoice PDF", systemImage: "doc.text.fill")
+                                Label("Generate Invoice PDF", systemImage: "doc.text.fill")
                             }
                             .buttonStyle(.bordered)
                         }
@@ -693,7 +860,7 @@ GunnAire
                             Button {
                                 emailGeneratedCustomerDocument(generatedCustomerDocumentURL)
                             } label: {
-                                Label("Email Last Generated Document", systemImage: "paperplane")
+                                Label(isEmailingGeneratedDocument ? "Emailing..." : "Email Last Generated Document", systemImage: "paperplane")
                             }
                             .buttonStyle(.bordered)
                             .disabled(!canEmailGeneratedCustomerDocument)
@@ -724,8 +891,12 @@ GunnAire
                                     call.status = .inProgress
                                     call.documentationStartedAt = call.documentationStartedAt ?? Date()
                                 } else {
-                                    call.status = call.linkedInvoiceID == nil ? .completed : .invoiced
-                                    call.documentationCompletedAt = Date()
+                                    if call.markDocumentationCompleteIfReady() {
+                                        call.status = call.linkedInvoiceID == nil ? .completed : .invoiced
+                                    } else {
+                                        call.status = .inProgress
+                                        actionMessage = call.documentationCompletionBlockedMessage ?? "Complete required report fields before closing this job."
+                                    }
                                 }
                             }
                             .buttonStyle(.bordered)
@@ -735,7 +906,7 @@ GunnAire
                     workflowSection(for: call)
                 }
 
-                if !isJobDocumentationMode {
+                if !isJobDocumentationMode && canViewFinancials {
                     Section("Workspace Snapshot") {
                         switch workspaceMode {
                         case .all:
@@ -785,7 +956,7 @@ GunnAire
                         Button {
                             emailGeneratedCustomerDocument(generatedCustomerDocumentURL)
                         } label: {
-                            Label("Email Last Generated Document", systemImage: "paperplane")
+                            Label(isEmailingGeneratedDocument ? "Emailing..." : "Email Last Generated Document", systemImage: "paperplane")
                         }
                         .buttonStyle(.bordered)
                         .disabled(!canEmailGeneratedCustomerDocument)
@@ -798,9 +969,15 @@ GunnAire
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Estimate")
                                     .font(.headline)
-                                Text("\(estimate.amount, format: .currency(code: "USD")) • \(estimate.status.capitalized)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                                if canViewFinancials {
+                                    Text("\(estimate.amount, format: .currency(code: "USD")) • \(estimate.status.capitalized)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Text(estimate.status.capitalized)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
                                 Text(estimate.lineItemSummary)
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
@@ -875,15 +1052,21 @@ GunnAire
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Invoice")
                                     .font(.headline)
-                                Text("\(invoice.amount, format: .currency(code: "USD")) • \(invoiceDisplayStatus(for: invoice))")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                if let currentJobBalanceDue {
+                                if canViewFinancials {
+                                    Text("\(invoice.amount, format: .currency(code: "USD")) • \(invoiceDisplayStatus(for: invoice))")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Text(invoiceDisplayStatus(for: invoice))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                if canViewFinancials, let currentJobBalanceDue {
                                     Text("Balance due: \(currentJobBalanceDue, format: .currency(code: "USD"))")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
-                                if !currentJobPayments.isEmpty {
+                                if canViewFinancials && !currentJobPayments.isEmpty {
                                     Text("Payments recorded: \(currentJobPayments.count)")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
@@ -900,7 +1083,7 @@ GunnAire
                                         }
                                     }
                                 }
-                                if let quickBooksID = invoice.quickBooksID, !quickBooksID.isEmpty {
+                                if canViewFinancials, let quickBooksID = invoice.quickBooksID, !quickBooksID.isEmpty {
                                     Text("QuickBooks ID: \(quickBooksID)")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
@@ -925,12 +1108,10 @@ GunnAire
                                 .tint(.blue)
                                 .disabled(!QuickBooksDataAPI.shared.isAuthenticated || invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
 
-                                if isInvoicePaid(invoice) || (currentJobBalanceDue ?? invoiceBalanceDue(for: invoice)) <= 0.009 {
-                                    Button("Generate Paid Invoice PDF") {
-                                        generatePaidInvoiceDocument(invoice)
-                                    }
-                                    .buttonStyle(.bordered)
+                                Button("Generate Invoice PDF") {
+                                    generateInvoiceDocument(invoice)
                                 }
+                                .buttonStyle(.bordered)
 
                                 if !isInvoicePaid(invoice) {
                                     Button("Record Additional Payment") {
@@ -966,10 +1147,10 @@ GunnAire
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Customer History")
                                 .font(.headline)
-                            Text("\(customer.serviceCalls.count) jobs • \(customer.invoices.count) invoices • \(customer.activeContractsCount) active agreements")
+                            Text(canViewFinancials ? "\(customer.serviceCalls.count) jobs - \(customer.invoices.count) invoices - \(customer.activeContractsCount) active agreements" : "\(customer.serviceCalls.count) jobs - \(customer.activeContractsCount) active agreements")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            if customerLifetimeInvoiceTotal > 0 {
+                            if canViewFinancials && customerLifetimeInvoiceTotal > 0 {
                                 Text("Lifetime invoiced: \(customerLifetimeInvoiceTotal, format: .currency(code: "USD"))")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
@@ -1095,7 +1276,7 @@ GunnAire
                     }
                 }
 
-                if !isJobDocumentationMode && workspaceMode.showsInvoices && !collectibleInvoices.isEmpty {
+                if canViewFinancials && !isJobDocumentationMode && workspaceMode.showsInvoices && !collectibleInvoices.isEmpty {
                     Section("Collections Queue") {
                         ForEach(collectibleInvoices.prefix(8)) { invoice in
                             let linkedCall = serviceCall(for: invoice)
@@ -1148,7 +1329,7 @@ GunnAire
                     }
                 }
 
-                if !isJobDocumentationMode && workspaceMode.showsInvoices && !overdueInvoices.isEmpty {
+                if canViewFinancials && !isJobDocumentationMode && workspaceMode.showsInvoices && !overdueInvoices.isEmpty {
                     Section("Overdue Invoices") {
                         ForEach(overdueInvoices.prefix(6)) { invoice in
                             let linkedCall = serviceCall(for: invoice)
@@ -1225,22 +1406,13 @@ GunnAire
                     }
                     .pickerStyle(.segmented)
 
-                    TextField("Search customers", text: $customerSearchText)
-                        .textInputAutocapitalization(.never)
-
-                    Picker("Customer", selection: $selectedCustomerID) {
-                        Text("Select Customer").tag(UUID?.none)
-                        ForEach(filteredCustomers) { customer in
-                            Text(customer.name).tag(UUID?.some(customer.id))
-                        }
-                    }
-
-                    if !customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                       filteredCustomers.isEmpty {
-                        Text("No customers match that search. Fill in the customer fields below to create one.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                    SearchableDropdownPicker(
+                        title: "Customer",
+                        options: customerDropdownOptions,
+                        selectedID: selectedCustomerDropdownID,
+                        placeholder: "Select Customer",
+                        showsClearButton: true
+                    )
 
                     if let call = activeServiceCall {
                         Button(selectedCustomerID == call.customer.id ? "Using Job Customer" : "Use Job Customer") {
@@ -1515,13 +1687,13 @@ GunnAire
                     }
                 }
 
-                if !isJobDocumentationMode && workspaceMode.showsEstimates {
+                if canViewFinancials && !isJobDocumentationMode && workspaceMode.showsEstimates {
                     Section("Estimates") {
-                        if estimates.isEmpty {
+                        if displayedEstimates.isEmpty {
                             Text("No estimates yet.")
                                 .foregroundColor(.secondary)
                         } else {
-                            ForEach(estimates) { estimate in
+                            ForEach(displayedEstimates) { estimate in
                                 VStack(alignment: .leading, spacing: 6) {
                                     HStack {
                                         VStack(alignment: .leading) {
@@ -1561,11 +1733,11 @@ GunnAire
 
                 if !isJobDocumentationMode && workspaceMode.showsInvoices {
                     Section("Invoices") {
-                        if invoices.isEmpty {
+                        if displayedInvoices.isEmpty {
                             Text("No invoices yet.")
                                 .foregroundColor(.secondary)
                         } else {
-                            ForEach(invoices) { invoice in
+                            ForEach(displayedInvoices) { invoice in
                                 VStack(alignment: .leading, spacing: 6) {
                                     HStack {
                                         VStack(alignment: .leading) {
@@ -1576,7 +1748,9 @@ GunnAire
                                                 .foregroundColor(.secondary)
                                         }
                                         Spacer()
-                                        Text(invoice.amount, format: .currency(code: "USD"))
+                                        if canViewFinancials {
+                                            Text(invoice.amount, format: .currency(code: "USD"))
+                                        }
                                     }
                                     Text(invoice.lineItemSummary)
                                         .font(.caption)
@@ -1604,12 +1778,10 @@ GunnAire
                                     .foregroundStyle(Color.primaryBlack)
                                     .disabled(isInvoicePaid(invoice))
 
-                                    if isInvoicePaid(invoice) || invoiceBalanceDue(for: invoice) <= 0.009 {
-                                        Button("Generate Paid Invoice PDF") {
-                                            generatePaidInvoiceDocument(invoice)
-                                        }
-                                        .buttonStyle(.bordered)
+                                    Button("Generate Invoice PDF") {
+                                        generateInvoiceDocument(invoice)
                                     }
+                                    .buttonStyle(.bordered)
                                 }
                                 .padding(.vertical, 4)
                             }
@@ -1617,7 +1789,7 @@ GunnAire
                     }
                 }
 
-                if !isJobDocumentationMode && workspaceMode.showsPayments {
+                if canViewFinancials && !isJobDocumentationMode && workspaceMode.showsPayments {
                     Section("Payments") {
                         if payments.isEmpty {
                             Text("No payments recorded yet.")
@@ -1680,6 +1852,12 @@ GunnAire
             ) { result in
                 handleImportedDocumentationFiles(result)
             }
+            .fullScreenCover(isPresented: isAttachmentPreviewPresented) {
+                if let attachmentPreviewURL {
+                    AttachmentPreviewScreen(url: attachmentPreviewURL)
+                        .tint(Color.brandGold)
+                }
+            }
             .onAppear(perform: loadInitialContextIfNeeded)
             .onChange(of: selectedCustomerID) { _, newValue in
                 guard let newValue, let customer = customers.first(where: { $0.id == newValue }) else { return }
@@ -1712,6 +1890,11 @@ GunnAire
                 loadLinkedDocumentContextIfNeeded()
             }
             openInvoiceAfterEstimateCreation = true
+            if GunnAireBackendService.isConfigured, sharedJobDocuments.isEmpty {
+                Task {
+                    await refreshSharedJobDocuments()
+                }
+            }
         }
 
         importQuickBooksItemsIfNeeded()
@@ -1812,38 +1995,74 @@ GunnAire
     }
 
     @ViewBuilder
+    private func closeoutReadinessSection(for call: ServiceCall) -> some View {
+        let readiness = call.closeoutReadiness(
+            invoice: currentJobInvoice,
+            payments: currentJobPayments,
+            attachments: activeJobAttachments
+        )
+        Section("Closeout Readiness") {
+            HStack {
+                Label(
+                    readiness.statusLabel,
+                    systemImage: readiness.isReady ? "checkmark.seal.fill" : "exclamationmark.triangle.fill"
+                )
+                .foregroundColor(readiness.isReady ? .green : .orange)
+                Spacer()
+                Text(readiness.summary)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+            }
+
+            if readiness.missingItems.isEmpty {
+                Text("Required report, billing, signature, payment, and QuickBooks attachment evidence is complete.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                DisclosureGroup("Missing closeout items") {
+                    ForEach(readiness.missingItems, id: \.self) { item in
+                        Label(item, systemImage: "circle")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
     private func technicalServiceReportSection(for call: ServiceCall) -> some View {
         Section("Technical HVAC Report") {
             if !activeCustomerEquipmentProfiles.isEmpty {
-                Picker("Customer Equipment", selection: Binding(
-                    get: { call.customerEquipmentID },
-                    set: { selectedID in
-                        call.customerEquipmentID = selectedID
-                        if let selectedID,
-                           let equipment = activeCustomerEquipmentProfiles.first(where: { $0.id == selectedID }) {
-                            applyEquipmentProfile(equipment, to: call)
+                SearchableDropdownPicker(
+                    title: "Customer Equipment",
+                    options: customerEquipmentDropdownOptions,
+                    selectedID: Binding(
+                        get: { call.customerEquipmentID?.uuidString },
+                        set: { selectedValue in
+                            let selectedID = selectedValue.flatMap(UUID.init(uuidString:))
+                            call.customerEquipmentID = selectedID
+                            if let selectedID,
+                               let equipment = activeCustomerEquipmentProfiles.first(where: { $0.id == selectedID }) {
+                                applyEquipmentProfile(equipment, to: call)
+                            }
                         }
-                    }
-                )) {
-                    Text("No linked equipment").tag(UUID?.none)
-                    ForEach(activeCustomerEquipmentProfiles) { equipment in
-                        Text(equipment.displayName).tag(UUID?.some(equipment.id))
-                    }
-                }
+                    ),
+                    placeholder: "No linked equipment",
+                    showsClearButton: true
+                )
             }
 
-            Picker("Equipment Type", selection: Binding(
-                get: { call.equipmentType ?? .splitSystemAC },
-                set: { newValue in
-                    call.equipmentType = newValue
-                    call.diagnosticsCaptured = true
-                }
-            )) {
-                ForEach(HVACEquipmentType.allCases) { type in
-                    Text(type.displayName).tag(type)
-                }
-            }
-            .pickerStyle(.menu)
+            SearchableDropdownPicker(
+                title: "Equipment Type",
+                options: HVACEquipmentType.allCases.map {
+                    SearchableDropdownOption(id: $0.rawValue, title: $0.displayName)
+                },
+                selectedID: equipmentTypeSelection(for: call),
+                placeholder: "Select Equipment Type"
+            )
+
+            reportReadinessView(for: call)
 
             TextField("Equipment Name", text: optionalServiceCallTextBinding(call, \.equipmentName))
             TextField("Manufacturer", text: optionalServiceCallTextBinding(call, \.equipmentManufacturer))
@@ -1880,15 +2099,13 @@ GunnAire
                         technicalReadingInput(for: call, definition: definition)
                     }
                 } label: {
+                    let progress = call.technicalReadingProgress(in: group)
                     HStack {
                         Text(group.title)
                         Spacer()
-                        let capturedCount = capturedTechnicalReadingCount(for: call, in: group)
-                        if capturedCount > 0 {
-                            Text("\(capturedCount)/\(group.definitions.count)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
+                        Text(progress.summary)
+                            .font(.caption)
+                            .foregroundColor(progress.needsAttention ? .orange : .secondary)
                     }
                 }
             }
@@ -1906,6 +2123,24 @@ GunnAire
                     Text("\(split) F")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                }
+            }
+
+            if call.technicalReadingDefinitions.contains(where: { $0.key == "temperature_rise" }) {
+                HStack {
+                    Button("Calculate Temp Rise") {
+                        calculateTemperatureRise(for: call)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+
+                    let rise = call.technicalReading(for: "temperature_rise")
+                    if !rise.isEmpty {
+                        Text("\(rise) F")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
 
@@ -2001,27 +2236,93 @@ GunnAire
     }
 
     @ViewBuilder
+    private func reportReadinessView(for call: ServiceCall) -> some View {
+        let missingLabels = call.serviceReportMissingRequirementLabels
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(
+                    missingLabels.isEmpty ? "Report Ready" : "Report Needs Details",
+                    systemImage: missingLabels.isEmpty ? "checkmark.seal.fill" : "exclamationmark.triangle.fill"
+                )
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(missingLabels.isEmpty ? .green : .orange)
+                Spacer()
+                Text(call.serviceReportReadinessSummary)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+            }
+
+            if !missingLabels.isEmpty {
+                DisclosureGroup("Missing required report items") {
+                    ForEach(missingLabels, id: \.self) { label in
+                        Label(label, systemImage: "circle")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
     private func technicalReadingInput(for call: ServiceCall, definition: HVACTechnicalReadingDefinition) -> some View {
-        if definition.options.isEmpty {
-            TextField(definition.displayLabel, text: technicalReadingBinding(for: call, key: definition.key))
-                .keyboardType(.numbersAndPunctuation)
-        } else {
-            serviceReportOptionPicker(
-                definition.displayLabel,
-                selection: technicalReadingBinding(for: call, key: definition.key),
-                options: definition.options
-            )
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                if call.requiredTechnicalReadingDefinitions.contains(definition) {
+                    Text("Required")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(.orange)
+                }
+                if let hint = definition.inputHint {
+                    Text(hint)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            if definition.options.isEmpty {
+                TextField(definition.displayLabel, text: technicalReadingBinding(for: call, key: definition.key))
+                    .keyboardType(.numbersAndPunctuation)
+            } else {
+                serviceReportOptionPicker(
+                    definition.displayLabel,
+                    selection: technicalReadingBinding(for: call, key: definition.key),
+                    options: definition.options
+                )
+            }
+
+            if let issue = definition.validationIssue(for: call.technicalReading(for: definition.key)) {
+                Label(issue, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+            } else if let expectedRange = definition.expectedRangeLabel {
+                Text("Expected range: \(expectedRange)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
         }
     }
 
     private func serviceReportOptionPicker(_ title: String, selection: Binding<String>, options: [String]) -> some View {
-        Picker(title, selection: selection) {
-            Text("Not Set").tag("")
-            ForEach(options, id: \.self) { option in
-                Text(option).tag(option)
+        SearchableDropdownPicker(
+            title: title,
+            options: options.map { SearchableDropdownOption(id: $0, title: $0) },
+            selectedID: optionalStringSelection(selection),
+            placeholder: "Not Set",
+            showsClearButton: true
+        )
+    }
+
+    private func optionalStringSelection(_ selection: Binding<String>) -> Binding<String?> {
+        Binding<String?>(
+            get: {
+                let trimmed = selection.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            },
+            set: { newValue in
+                selection.wrappedValue = newValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             }
-        }
-        .pickerStyle(.menu)
+        )
     }
 
     private func optionalServiceCallTextBinding(_ call: ServiceCall, _ keyPath: ReferenceWritableKeyPath<ServiceCall, String?>) -> Binding<String> {
@@ -2054,26 +2355,31 @@ GunnAire
         )
     }
 
-    private func capturedTechnicalReadingCount(for call: ServiceCall, in group: HVACTechnicalReadingGroup) -> Int {
-        group.definitions.filter {
-            !call.technicalReading(for: $0.key).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }.count
+    private func equipmentTypeSelection(for call: ServiceCall) -> Binding<String?> {
+        Binding<String?>(
+            get: { (call.equipmentType ?? .splitSystemAC).rawValue },
+            set: { selectedID in
+                guard let selectedID,
+                      let equipmentType = HVACEquipmentType(rawValue: selectedID) else { return }
+                call.equipmentType = equipmentType
+                call.diagnosticsCaptured = true
+            }
+        )
     }
 
     private func applyEquipmentProfile(_ equipment: CustomerEquipment, to call: ServiceCall) {
         equipment.apply(to: call)
-        if call.filterSize?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-            call.filterSize = equipment.filterSize
-        }
         call.equipmentVerifiedChecklist = true
         call.diagnosticsCaptured = true
         actionMessage = "Loaded equipment profile for this job."
     }
 
-    private func saveCurrentEquipmentProfile(for call: ServiceCall) {
+    private func saveCurrentEquipmentProfile(for call: ServiceCall, announce: Bool = true) {
         let equipmentName = call.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let equipmentName, !equipmentName.isEmpty else {
-            actionMessage = "Enter equipment name before saving a customer equipment profile."
+            if announce {
+                actionMessage = "Enter equipment name before saving a customer equipment profile."
+            }
             return
         }
 
@@ -2105,12 +2411,17 @@ GunnAire
             installDate: call.equipmentInstallDate,
             warrantyExpiration: call.equipmentWarrantyExpiration,
             filterSize: call.filterSize,
-            notes: equipment.notes,
+            notes: CustomerEquipment.mergedNotes(
+                existing: equipment.notes,
+                serviceHistoryNote: call.equipmentProfileServiceHistoryNote
+            ),
             isActive: true
         )
         call.equipmentVerifiedChecklist = true
         try? modelContext.save()
-        actionMessage = "Saved equipment profile to \(call.customer.name)."
+        if announce {
+            actionMessage = "Saved equipment profile to \(call.customer.name)."
+        }
     }
 
     private func calculateTemperatureSplit(for call: ServiceCall) {
@@ -2119,6 +2430,14 @@ GunnAire
             return
         }
         actionMessage = "Temperature split calculated."
+    }
+
+    private func calculateTemperatureRise(for call: ServiceCall) {
+        guard call.calculateTemperatureRiseReading() != nil else {
+            actionMessage = "Enter return and supply air temperatures before calculating temperature rise."
+            return
+        }
+        actionMessage = "Temperature rise calculated."
     }
 
     private func calculateSuperheat(for call: ServiceCall) {
@@ -2182,48 +2501,266 @@ GunnAire
                     .foregroundColor(.secondary)
             }
 
+            if !activeJobAttachments.isEmpty {
+                TextField("Search attachments", text: $attachmentSearchText)
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+            }
+
             if activeJobAttachments.isEmpty {
                 Text("No photos or documents attached to this job yet.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+            } else if filteredActiveJobAttachments.isEmpty {
+                Text("No attachments match that search.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             } else {
-                ForEach(activeJobAttachments.prefix(8)) { attachment in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Image(systemName: attachment.isImage ? "photo" : "doc")
-                                .foregroundStyle(Color.brandGold)
-                            Text(attachment.displayName)
-                                .lineLimit(1)
-                            Spacer()
-                            Text(attachment.kind.label)
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
+                ForEach(groupedActiveJobAttachments, id: \.kind) { group in
+                    DisclosureGroup {
+                        ForEach(group.attachments) { attachment in
+                            jobAttachmentRow(for: attachment)
                         }
-                        if let caption = attachment.caption, !caption.isEmpty {
-                            Text(caption)
+                    } label: {
+                        HStack {
+                            Text(group.kind.label)
+                            Spacer()
+                            Text("\(group.attachments.count)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                                .lineLimit(2)
                         }
-                        HStack {
-                            Text(byteCountFormatter.string(fromByteCount: Int64(attachment.fileSizeBytes)))
-                            if attachment.backendDocumentID != nil {
-                                Text("Company storage")
-                            }
-                            if attachment.quickBooksAttachableID != nil {
-                                Text("QuickBooks")
-                            }
-                        }
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-
-                        ShareLink(item: attachment.localFileURL) {
-                            Label("Open Attachment", systemImage: attachment.isImage ? "photo.on.rectangle" : "doc.text.magnifyingglass")
-                        }
-                        .font(.caption)
                     }
                 }
             }
+
+            Divider()
+
+            HStack {
+                Text("Shared Company Job Files")
+                    .font(.headline)
+                Spacer()
+                Button(isLoadingSharedJobDocuments ? "Refreshing..." : "Refresh") {
+                    Task {
+                        await refreshSharedJobDocuments()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isLoadingSharedJobDocuments || !GunnAireBackendService.isConfigured)
+            }
+
+            if !GunnAireBackendService.isConfigured {
+                Text("Shared company storage is not configured for this build.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if activeSharedJobDocuments.isEmpty {
+                Text(sharedJobDocumentsMessage ?? "No shared company files loaded for this job.")
+                    .font(.caption)
+                    .foregroundColor((sharedJobDocumentsMessage ?? "").localizedCaseInsensitiveContains("failed") ? .orange : .secondary)
+            } else {
+                ForEach(activeSharedJobDocuments.prefix(8)) { document in
+                    sharedJobDocumentRow(document)
+                }
+                if let sharedJobDocumentsMessage {
+                    Text(sharedJobDocumentsMessage)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func equipmentAttachmentHistorySection(for call: ServiceCall) -> some View {
+        if !activeEquipmentHistoryAttachments.isEmpty {
+            Section("Equipment File History") {
+                ForEach(activeEquipmentHistoryAttachments.prefix(8)) { attachment in
+                    jobAttachmentRow(for: attachment, allowsRemoval: false)
+                }
+            }
+        }
+    }
+
+    private func sharedJobDocumentRow(_ document: BackendDocumentRecord) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: document.contentType.lowercased().hasPrefix("image/") ? "photo" : "externaldrive.badge.checkmark")
+                .foregroundColor(Color.brandGold)
+                .frame(width: 42, height: 42)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(document.filename)
+                        .lineLimit(1)
+                    Spacer()
+                    if let createdAt = document.createdAt, !createdAt.isEmpty {
+                        Text(sharedJobDocumentDisplayDate(createdAt))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                HStack {
+                    Text(sharedJobDocumentKindLabel(document.kind))
+                    Text("Company storage")
+                }
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+                Button(downloadingSharedJobDocumentID == document.id ? "Downloading..." : "Download & Open") {
+                    Task {
+                        await downloadSharedJobDocument(document)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .font(.caption)
+                .disabled(downloadingSharedJobDocumentID != nil)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func jobAttachmentRow(for attachment: ServiceDocumentAttachment, allowsRemoval: Bool = true) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            jobAttachmentThumbnail(for: attachment)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(attachment.displayName)
+                        .lineLimit(1)
+                    Spacer()
+                    Text(attachment.createdAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                if let caption = attachment.caption, !caption.isEmpty {
+                    Text(caption)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+                HStack {
+                    Text(byteCountFormatter.string(fromByteCount: Int64(attachment.fileSizeBytes)))
+                    if attachment.backendDocumentID != nil {
+                        Text("Company storage")
+                    }
+                    if attachment.quickBooksAttachableID != nil {
+                        Text("QuickBooks")
+                    }
+                    if attachment.quickBooksSyncError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                        Text("Sync issue")
+                    }
+                }
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+                HStack(spacing: 12) {
+                    Button {
+                        previewJobAttachment(attachment)
+                    } label: {
+                        Label("Preview", systemImage: attachment.isImage ? "photo" : "doc.text.magnifyingglass")
+                    }
+
+                    ShareLink(item: attachment.localFileURL) {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                }
+                .font(.caption)
+
+                if allowsRemoval {
+                    Button(role: .destructive) {
+                        removeJobAttachment(attachment)
+                    } label: {
+                        Label("Remove Attachment", systemImage: "trash")
+                    }
+                    .font(.caption)
+                }
+            }
+        }
+    }
+
+    private func previewJobAttachment(_ attachment: ServiceDocumentAttachment) {
+        let url = attachment.localFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            attachmentMessage = "\(attachment.displayName) is no longer available on this device."
+            return
+        }
+        attachmentPreviewURL = url
+    }
+
+    private func refreshSharedJobDocuments() async {
+        guard GunnAireBackendService.isConfigured else {
+            sharedJobDocumentsMessage = "Shared company storage is not configured."
+            return
+        }
+        isLoadingSharedJobDocuments = true
+        defer { isLoadingSharedJobDocuments = false }
+        do {
+            sharedJobDocuments = try await GunnAireBackendService.fetchDocuments()
+            sharedJobDocumentsMessage = "Loaded \(activeSharedJobDocuments.count) shared company file\(activeSharedJobDocuments.count == 1 ? "" : "s") for this job."
+        } catch {
+            sharedJobDocumentsMessage = "Shared job file refresh failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func downloadSharedJobDocument(_ document: BackendDocumentRecord) async {
+        downloadingSharedJobDocumentID = document.id
+        defer { downloadingSharedJobDocumentID = nil }
+        do {
+            let data = try await GunnAireBackendService.downloadDocument(id: document.id)
+            let cachedURL = try persistSharedJobDocument(data, document: document)
+            attachmentPreviewURL = cachedURL
+            sharedJobDocumentsMessage = "Downloaded \(document.filename)."
+        } catch {
+            sharedJobDocumentsMessage = "Shared job file download failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistSharedJobDocument(_ data: Data, document: BackendDocumentRecord) throws -> URL {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let folder = documents.appendingPathComponent("GunnAire Shared Job Files", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent("\(document.id)-\(sanitizeAttachmentFilename(document.filename))")
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    private func sharedJobDocumentKindLabel(_ kind: String) -> String {
+        ServiceDocumentAttachmentKind(rawValue: kind)?.label ??
+            kind.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private func sharedJobDocumentDisplayDate(_ value: String) -> String {
+        let date = ISO8601DateFormatter().date(from: value) ?? Date(timeIntervalSince1970: 0)
+        return Self.sharedJobDocumentDateFormatter.string(from: date)
+    }
+
+    private static let sharedJobDocumentDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    @ViewBuilder
+    private func jobAttachmentThumbnail(for attachment: ServiceDocumentAttachment) -> some View {
+        if attachment.isImage,
+           let image = UIImage(contentsOfFile: attachment.localFilePath) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color(.separator), lineWidth: 0.5)
+                )
+                .accessibilityLabel("Attachment preview")
+        } else {
+            Image(systemName: attachment.isImage ? "photo" : "doc")
+                .foregroundStyle(Color.brandGold)
+                .frame(width: 56, height: 56)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .accessibilityLabel(attachment.isImage ? "Photo attachment" : "Document attachment")
         }
     }
 
@@ -2281,6 +2818,7 @@ GunnAire
             let attachment = ServiceDocumentAttachment(
                 customer: call.customer,
                 serviceCallID: call.id,
+                customerEquipmentID: call.customerEquipmentID,
                 invoiceID: call.linkedInvoiceID,
                 estimateID: call.linkedEstimateID,
                 kind: attachmentKind,
@@ -2298,6 +2836,28 @@ GunnAire
             syncAttachmentIfPossible(attachment, data: data)
         } catch {
             attachmentMessage = "Could not save attachment: \(error.localizedDescription)"
+        }
+    }
+
+    private func removeJobAttachment(_ attachment: ServiceDocumentAttachment) {
+        let fileURL = attachment.localFileURL
+        let displayName = attachment.displayName
+        let linkedCall = attachment.serviceCallID.flatMap { callID in
+            serviceCalls.first { $0.id == callID }
+        }
+        let remainingAttachments = linkedCall.map { call in
+            attachments.filter { $0.serviceCallID == call.id && $0.id != attachment.id }
+        }
+        modelContext.delete(attachment)
+        do {
+            if let linkedCall, let remainingAttachments {
+                linkedCall.refreshAttachmentProgress(from: remainingAttachments)
+            }
+            try modelContext.save()
+            try? FileManager.default.removeItem(at: fileURL)
+            attachmentMessage = "Removed \(displayName)."
+        } catch {
+            attachmentMessage = "Could not remove attachment: \(error.localizedDescription)"
         }
     }
 
@@ -2320,15 +2880,7 @@ GunnAire
     }
 
     private func applyAttachmentProgress(_ attachment: ServiceDocumentAttachment, to call: ServiceCall) {
-        switch attachment.kind {
-        case .beforePhoto:
-            call.beforePhotoCount += 1
-        case .afterPhoto:
-            call.afterPhotoCount += 1
-        case .serviceReport, .diagnosticPhoto, .customerDocument, .invoiceSupport, .estimateSupport, .receipt, .other:
-            break
-        }
-        call.documentationStartedAt = call.documentationStartedAt ?? Date()
+        call.refreshAttachmentProgress(from: attachments + [attachment])
         call.documentationChecklist = true
     }
 
@@ -2353,34 +2905,205 @@ GunnAire
         }
 
         let resolvedInvoiceID = attachment.invoiceID ?? activeServiceCall?.linkedInvoiceID
-        guard let invoiceID = resolvedInvoiceID,
-              let invoice = invoices.first(where: { $0.id == invoiceID }) else {
-            return
+        if let invoiceID = resolvedInvoiceID,
+           let invoice = invoices.first(where: { $0.id == invoiceID }) {
+            syncAttachmentToQuickBooksInvoiceIfPossible(attachment, invoice: invoice)
         }
 
-        syncAttachmentToQuickBooksInvoiceIfPossible(attachment, invoice: invoice)
+        let resolvedEstimateID = attachment.estimateID ?? activeServiceCall?.linkedEstimateID
+        if let estimateID = resolvedEstimateID,
+           let estimate = estimates.first(where: { $0.id == estimateID }) {
+            syncAttachmentToQuickBooksEstimateIfPossible(attachment, estimate: estimate)
+        }
     }
 
     private func linkExistingServiceReports(to invoice: Invoice, serviceCallID: UUID?) {
-        guard let serviceCallID else { return }
-        let reportAttachments = attachments.filter {
-            $0.serviceCallID == serviceCallID && $0.canLinkToInvoiceReport
-        }
-        guard !reportAttachments.isEmpty else { return }
+        linkExistingInvoiceAttachments(to: invoice, serviceCallID: serviceCallID)
+    }
 
-        for attachment in reportAttachments {
+    private func linkExistingInvoiceAttachments(to invoice: Invoice, serviceCallID: UUID?) {
+        guard let serviceCallID else { return }
+        let invoiceAttachments = attachments.filter {
+            $0.serviceCallID == serviceCallID && $0.canLinkToQuickBooksInvoiceAttachment
+        }
+        guard !invoiceAttachments.isEmpty else { return }
+
+        for attachment in invoiceAttachments {
             attachment.linkToInvoiceIfNeeded(invoice)
         }
         try? modelContext.save()
-        syncLinkedServiceReportsToQuickBooks(invoice)
+        syncLinkedInvoiceAttachmentsToQuickBooks(invoice)
+    }
+
+    private func linkExistingEstimateAttachments(to estimate: Estimate, serviceCallID: UUID?) {
+        guard let serviceCallID else { return }
+        let estimateAttachments = attachments.filter {
+            $0.serviceCallID == serviceCallID &&
+                $0.canLinkToQuickBooksInvoiceAttachment &&
+                $0.customerMatches(estimate.customer)
+        }
+        guard !estimateAttachments.isEmpty else { return }
+
+        for attachment in estimateAttachments {
+            attachment.linkToEstimateIfNeeded(estimate)
+        }
+        try? modelContext.save()
+        syncLinkedEstimateAttachmentsToQuickBooks(estimate)
     }
 
     private func syncLinkedServiceReportsToQuickBooks(_ invoice: Invoice) {
-        let reportAttachments = attachments.filter {
-            $0.invoiceID == invoice.id && $0.canLinkToInvoiceReport
+        syncLinkedInvoiceAttachmentsToQuickBooks(invoice)
+    }
+
+    private func syncLinkedInvoiceAttachmentsToQuickBooks(_ invoice: Invoice) {
+        let invoiceAttachments = attachments.filter {
+            $0.invoiceID == invoice.id && $0.canLinkToQuickBooksInvoiceAttachment
         }
-        for attachment in reportAttachments {
+        for attachment in invoiceAttachments {
             syncAttachmentToQuickBooksInvoiceIfPossible(attachment, invoice: invoice)
+        }
+    }
+
+    private func syncLinkedEstimateAttachmentsToQuickBooks(_ estimate: Estimate) {
+        let estimateAttachments = attachments.filter {
+            $0.estimateID == estimate.id && $0.canLinkToQuickBooksInvoiceAttachment
+        }
+        for attachment in estimateAttachments {
+            syncAttachmentToQuickBooksEstimateIfPossible(attachment, estimate: estimate)
+        }
+    }
+
+    @discardableResult
+    private func prepareEstimateDocumentationForQuickBooksSend(_ estimate: Estimate) -> Bool {
+        do {
+            let linkedCall = serviceCall(for: estimate)
+            if let linkedCall {
+                saveCurrentEquipmentProfile(for: linkedCall, announce: false)
+                linkExistingEstimateAttachments(to: estimate, serviceCallID: linkedCall.id)
+            }
+            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: linkedCall)
+            let data = try Data(contentsOf: url)
+            generatedCustomerDocumentURL = url
+            generatedCustomerDocumentRecipientID = estimate.customer.id
+            generatedCustomerDocumentKind = "estimate"
+
+            let attachment: ServiceDocumentAttachment
+            if let reusable = ServiceDocumentAttachment.reusableGeneratedBillingDocument(
+                in: attachments,
+                kind: .estimateSupport,
+                serviceCallID: linkedCall?.id,
+                invoiceID: nil,
+                estimateID: estimate.id
+            ) {
+                reusable.replaceGeneratedFile(
+                    displayName: url.lastPathComponent,
+                    localFilePath: url.path,
+                    contentType: "application/pdf",
+                    fileSizeBytes: data.count,
+                    caption: "Generated estimate PDF"
+                )
+                reusable.customerEquipmentID = linkedCall?.customerEquipmentID
+                attachment = reusable
+            } else {
+                let generated = ServiceDocumentAttachment(
+                    customer: estimate.customer,
+                    serviceCallID: linkedCall?.id,
+                    customerEquipmentID: linkedCall?.customerEquipmentID,
+                    invoiceID: nil,
+                    estimateID: estimate.id,
+                    kind: .estimateSupport,
+                    displayName: url.lastPathComponent,
+                    caption: "Generated estimate PDF",
+                    localFilePath: url.path,
+                    contentType: "application/pdf",
+                    fileSizeBytes: data.count
+                )
+                modelContext.insert(generated)
+                attachment = generated
+            }
+
+            try? modelContext.save()
+            syncAttachmentIfPossible(attachment, data: data)
+            syncLinkedEstimateAttachmentsToQuickBooks(estimate)
+            return true
+        } catch {
+            actionMessage = "Could not prepare the estimate PDF before sending: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    @discardableResult
+    private func prepareInvoiceDocumentationForQuickBooksSend(_ invoice: Invoice) -> Bool {
+        guard let serviceCall = serviceCall(for: invoice) else {
+            syncLinkedInvoiceAttachmentsToQuickBooks(invoice)
+            return true
+        }
+
+        linkExistingInvoiceAttachments(to: invoice, serviceCallID: serviceCall.id)
+        saveCurrentEquipmentProfile(for: serviceCall, announce: false)
+
+        do {
+            let linkedEstimate = currentJobEstimate ?? estimates.first { estimate in
+                estimate.id == serviceCall.linkedEstimateID || estimate.serviceCallID == serviceCall.id
+            }
+            let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
+            let jobAttachments = attachments.filter { $0.serviceCallID == serviceCall.id }
+            let url = try CustomerDocumentExporter.exportOnsiteReport(
+                serviceCall: serviceCall,
+                estimate: linkedEstimate,
+                invoice: invoice,
+                payments: invoicePayments,
+                attachments: jobAttachments
+            )
+            let data = try Data(contentsOf: url)
+            let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
+                serviceCall: serviceCall,
+                estimate: linkedEstimate,
+                invoice: invoice
+            )
+            let attachment: ServiceDocumentAttachment
+            if let reusable = ServiceDocumentAttachment.reusableGeneratedServiceReport(
+                in: attachments,
+                serviceCallID: serviceCall.id,
+                invoiceID: invoice.id,
+                estimateID: linkedEstimate?.id ?? serviceCall.linkedEstimateID
+            ) {
+                reusable.replaceGeneratedFile(
+                    displayName: url.lastPathComponent,
+                    localFilePath: url.path,
+                    contentType: "application/pdf",
+                    fileSizeBytes: data.count,
+                    caption: caption
+                )
+                reusable.customerEquipmentID = serviceCall.customerEquipmentID
+                attachment = reusable
+            } else {
+                let generated = ServiceDocumentAttachment(
+                    customer: serviceCall.customer,
+                    serviceCallID: serviceCall.id,
+                    customerEquipmentID: serviceCall.customerEquipmentID,
+                    invoiceID: invoice.id,
+                    estimateID: linkedEstimate?.id ?? serviceCall.linkedEstimateID,
+                    kind: .serviceReport,
+                    displayName: url.lastPathComponent,
+                    caption: caption,
+                    localFilePath: url.path,
+                    contentType: "application/pdf",
+                    fileSizeBytes: data.count
+                )
+                modelContext.insert(generated)
+                attachment = generated
+            }
+
+            attachment.linkToInvoiceIfNeeded(invoice)
+            serviceCall.markDocumentationCompleteIfReady()
+            try? modelContext.save()
+            syncAttachmentIfPossible(attachment, data: data)
+            syncLinkedInvoiceAttachmentsToQuickBooks(invoice)
+            return true
+        } catch {
+            actionMessage = "Could not prepare the onsite report before sending this invoice: \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -2402,6 +3125,34 @@ GunnAire
                 switch result {
                 case .success(let attachableID):
                     attachment.quickBooksAttachableID = attachableID
+                    try? modelContext.save()
+                case .failure(let error):
+                    attachment.quickBooksSyncError = error.localizedDescription
+                    try? modelContext.save()
+                }
+            }
+        }
+    }
+
+    private func syncAttachmentToQuickBooksEstimateIfPossible(_ attachment: ServiceDocumentAttachment, estimate: Estimate) {
+        guard attachment.quickBooksAttachableID == nil,
+              let quickBooksID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !quickBooksID.isEmpty,
+              QuickBooksDataAPI.shared.isAuthenticated else {
+            return
+        }
+
+        QuickBooksDataAPI.shared.uploadDocument(
+            fileURL: attachment.localFileURL,
+            note: attachment.caption,
+            attachToEntityType: .estimate,
+            attachToEntityID: quickBooksID
+        ) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let attachableID):
+                    attachment.quickBooksAttachableID = attachableID
+                    attachment.quickBooksSyncError = nil
                     try? modelContext.save()
                 case .failure(let error):
                     attachment.quickBooksSyncError = error.localizedDescription
@@ -2657,6 +3408,7 @@ GunnAire
 
     private func generateOnsiteReport(for serviceCall: ServiceCall) {
         do {
+            saveCurrentEquipmentProfile(for: serviceCall, announce: false)
             let url = try CustomerDocumentExporter.exportOnsiteReport(
                 serviceCall: serviceCall,
                 estimate: currentJobEstimate,
@@ -2667,8 +3419,9 @@ GunnAire
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = serviceCall.customer.id
             generatedCustomerDocumentKind = "\(serviceCall.type.displayName.lowercased()) report"
-            serviceCall.documentationChecklist = true
-            serviceCall.documentationCompletedAt = serviceCall.documentationCompletedAt ?? Date()
+            if !serviceCall.markDocumentationCompleteIfReady() {
+                serviceCall.documentationChecklist = false
+            }
             persistGeneratedOnsiteReport(url, for: serviceCall)
         } catch {
             actionMessage = "Could not generate onsite report: \(error.localizedDescription)"
@@ -2682,7 +3435,11 @@ GunnAire
             let estimate = currentJobEstimate
             let invoiceID = invoice?.id ?? serviceCall.linkedInvoiceID
             let estimateID = estimate?.id ?? serviceCall.linkedEstimateID
-            let caption = "Generated onsite \(serviceCall.type.displayName.lowercased()) report"
+            let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
+                serviceCall: serviceCall,
+                estimate: estimate,
+                invoice: invoice
+            )
             let attachment: ServiceDocumentAttachment
             if let reusable = ServiceDocumentAttachment.reusableGeneratedServiceReport(
                 in: attachments,
@@ -2697,11 +3454,13 @@ GunnAire
                     fileSizeBytes: data.count,
                     caption: caption
                 )
+                reusable.customerEquipmentID = serviceCall.customerEquipmentID
                 attachment = reusable
             } else {
                 let generated = ServiceDocumentAttachment(
                     customer: serviceCall.customer,
                     serviceCallID: serviceCall.id,
+                    customerEquipmentID: serviceCall.customerEquipmentID,
                     invoiceID: invoiceID,
                     estimateID: estimateID,
                     kind: .serviceReport,
@@ -2714,12 +3473,19 @@ GunnAire
                 modelContext.insert(generated)
                 attachment = generated
             }
+            if attachment.invoiceID == nil {
+                attachment.invoiceID = invoiceID
+            }
+            if attachment.estimateID == nil {
+                attachment.estimateID = estimateID
+            }
             try? modelContext.save()
             syncAttachmentIfPossible(attachment, data: data)
+            let completionNote = serviceCall.documentationCompletionBlockedMessage.map { " \($0)" } ?? ""
             if invoice?.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-                actionMessage = "Onsite report generated and queued for QuickBooks invoice attachment."
+                actionMessage = "Onsite report generated and queued for QuickBooks invoice attachment.\(completionNote)"
             } else {
-                actionMessage = "Onsite report generated and saved to this job."
+                actionMessage = "Onsite report generated and saved to this job.\(completionNote)"
             }
         } catch {
             actionMessage = "Onsite report generated, but could not save it as a job attachment: \(error.localizedDescription)"
@@ -2728,30 +3494,105 @@ GunnAire
 
     private func generateEstimateDocument(_ estimate: Estimate) {
         do {
-            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: serviceCall(for: estimate))
+            let serviceCall = serviceCall(for: estimate)
+            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: serviceCall)
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
             generatedCustomerDocumentKind = "estimate"
-            actionMessage = "Estimate PDF generated."
+            persistGeneratedBillingDocument(
+                url,
+                customer: estimate.customer,
+                serviceCallID: serviceCall?.id,
+                invoiceID: nil,
+                estimateID: estimate.id,
+                kind: .estimateSupport,
+                caption: "Generated estimate PDF",
+                successMessage: "Estimate PDF generated and saved to this customer."
+            )
         } catch {
             actionMessage = "Could not generate estimate PDF: \(error.localizedDescription)"
         }
     }
 
-    private func generatePaidInvoiceDocument(_ invoice: Invoice) {
+    private func generateInvoiceDocument(_ invoice: Invoice) {
         do {
             let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
-            let url = try CustomerDocumentExporter.exportPaidInvoice(
+            let serviceCall = serviceCall(for: invoice)
+            let url = try CustomerDocumentExporter.exportInvoice(
                 invoice,
-                serviceCall: serviceCall(for: invoice),
+                serviceCall: serviceCall,
                 payments: invoicePayments
             )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
-            generatedCustomerDocumentKind = "paid invoice"
-            actionMessage = "Paid invoice PDF generated."
+            let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments).lowercased()
+            generatedCustomerDocumentKind = documentLabel
+            persistGeneratedBillingDocument(
+                url,
+                customer: invoice.customer,
+                serviceCallID: serviceCall?.id,
+                invoiceID: invoice.id,
+                estimateID: nil,
+                kind: .invoiceSupport,
+                caption: CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: invoicePayments),
+                successMessage: "\(CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)) PDF generated and saved to this customer."
+            )
         } catch {
-            actionMessage = "Could not generate paid invoice PDF: \(error.localizedDescription)"
+            actionMessage = "Could not generate invoice PDF: \(error.localizedDescription)"
+        }
+    }
+
+    private func persistGeneratedBillingDocument(
+        _ url: URL,
+        customer: Customer,
+        serviceCallID: UUID?,
+        invoiceID: UUID?,
+        estimateID: UUID?,
+        kind: ServiceDocumentAttachmentKind,
+        caption: String,
+        successMessage: String
+    ) {
+        do {
+            let data = try Data(contentsOf: url)
+            let attachment: ServiceDocumentAttachment
+            if let reusable = ServiceDocumentAttachment.reusableGeneratedBillingDocument(
+                in: attachments,
+                kind: kind,
+                serviceCallID: serviceCallID,
+                invoiceID: invoiceID,
+                estimateID: estimateID
+            ) {
+                reusable.replaceGeneratedFile(
+                    displayName: url.lastPathComponent,
+                    localFilePath: url.path,
+                    contentType: "application/pdf",
+                    fileSizeBytes: data.count,
+                    caption: caption
+                )
+                reusable.customerEquipmentID = serviceCallID.flatMap { id in serviceCalls.first { $0.id == id }?.customerEquipmentID }
+                attachment = reusable
+            } else {
+                let generated = ServiceDocumentAttachment(
+                    customer: customer,
+                    serviceCallID: serviceCallID,
+                    customerEquipmentID: serviceCallID.flatMap { id in serviceCalls.first { $0.id == id }?.customerEquipmentID },
+                    invoiceID: invoiceID,
+                    estimateID: estimateID,
+                    kind: kind,
+                    displayName: url.lastPathComponent,
+                    caption: caption,
+                    localFilePath: url.path,
+                    contentType: "application/pdf",
+                    fileSizeBytes: data.count
+                )
+                modelContext.insert(generated)
+                attachment = generated
+            }
+            try? modelContext.save()
+            syncAttachmentIfPossible(attachment, data: data)
+            actionMessage = successMessage
+        } catch {
+            actionMessage = "\(successMessage) Company document history was not updated: \(error.localizedDescription)"
         }
     }
 
@@ -2765,8 +3606,11 @@ GunnAire
             actionMessage = "Create or sync this estimate to QuickBooks before sending it."
             return
         }
+        guard prepareEstimateDocumentationForQuickBooksSend(estimate) else {
+            return
+        }
         let email = estimate.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
-        actionMessage = "Sending estimate through QuickBooks..."
+        actionMessage = "Prepared estimate PDF and attachments. Sending estimate through QuickBooks..."
         QuickBooksDataAPI.shared.sendEstimate(id: quickBooksID, to: email?.isEmpty == false ? email : nil) { result in
             DispatchQueue.main.async {
                 switch result {
@@ -2796,8 +3640,11 @@ GunnAire
             actionMessage = "Create or sync this invoice to QuickBooks before sending it."
             return
         }
+        guard prepareInvoiceDocumentationForQuickBooksSend(invoice) else {
+            return
+        }
         let email = invoice.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
-        actionMessage = "Sending invoice through QuickBooks..."
+        actionMessage = "Prepared service report and invoice attachments. Sending invoice through QuickBooks..."
         QuickBooksDataAPI.shared.sendInvoice(id: quickBooksID, to: email?.isEmpty == false ? email : nil) { result in
             DispatchQueue.main.async {
                 switch result {
@@ -2890,7 +3737,7 @@ GunnAire
         let paid = payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
-                partial + payment.amount
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
             }
         return max(invoice.amount - paid, 0)
     }
@@ -2917,7 +3764,7 @@ GunnAire
         let paid = payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
-                partial + payment.amount
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
             }
         return max(invoice.amount - paid, 0)
     }
@@ -3134,7 +3981,7 @@ GunnAire
             )
             modelContext.insert(invoice)
             activeServiceCall?.linkedInvoiceID = invoice.id
-            activeServiceCall?.documentationCompletedAt = Date()
+            activeServiceCall?.markDocumentationCompleteIfReady()
             activeServiceCall?.status = .invoiced
             linkExistingServiceReports(to: invoice, serviceCallID: activeServiceCall?.id)
             actionMessage = isQuickBooksConnected ? "Invoice created locally. Syncing to QuickBooks..." : "Invoice created locally."
@@ -3185,6 +4032,7 @@ GunnAire
                         case .success(let quickBooksEstimate):
                             estimate.quickBooksID = quickBooksEstimate.Id
                             saveQuickBooksSyncState()
+                            syncLinkedEstimateAttachmentsToQuickBooks(estimate)
                             actionMessage = "Estimate created and synced to QuickBooks."
                         case .failure(let error):
                             actionMessage = "Estimate saved locally. QuickBooks sync failed: \(error.localizedDescription)"
@@ -3418,7 +4266,7 @@ GunnAire
            let call = calls.first(where: { $0.id == serviceCallID }) {
             call.linkedInvoiceID = invoice.id
             call.status = .invoiced
-            call.documentationCompletedAt = Date()
+            call.markDocumentationCompleteIfReady()
         }
         linkExistingServiceReports(to: invoice, serviceCallID: estimate.serviceCallID)
         return invoice
@@ -3656,7 +4504,7 @@ private struct RecordInvoicePaymentView: View {
         return payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
-                partial + payment.amount
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
             }
     }
 
@@ -4043,8 +4891,7 @@ private struct RecordInvoicePaymentView: View {
 
         if let serviceCallID = invoice.serviceCallID,
            let call = serviceCalls.first(where: { $0.id == serviceCallID }) {
-            call.documentationCompletedAt = Date()
-            call.documentationChecklist = true
+            call.markDocumentationCompleteIfReady()
             call.workCompletedChecklist = true
             call.paymentCollectedChecklist = totalPaid > 0
             call.status = invoice.status.caseInsensitiveCompare("paid") == .orderedSame ? .completed : .invoiced
@@ -4080,11 +4927,13 @@ private struct DocumentationItemSelectorView: View {
     @Binding var selectedItems: Set<UUID>
 
     @State private var searchText = ""
+    @State private var expandedItemTypes = Set(CatalogItemType.allCases)
 
     private var filteredItems: [Item] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return items }
-        return items.filter { item in
+        let sortedItems = items.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        guard !query.isEmpty else { return sortedItems }
+        return sortedItems.filter { item in
             [
                 item.name,
                 item.sku,
@@ -4099,74 +4948,116 @@ private struct DocumentationItemSelectorView: View {
         }
     }
 
+    private var groupedItems: [(type: CatalogItemType, items: [Item])] {
+        CatalogItemType.allCases.compactMap { type in
+            let matches = filteredItems.filter { $0.itemType == type }
+            return matches.isEmpty ? nil : (type, matches)
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                TextField("Search items", text: $searchText)
-                    .textInputAutocapitalization(.never)
-
                 if filteredItems.isEmpty {
                     Text("No matching items.")
                         .foregroundColor(.secondary)
                 } else {
-                    ForEach(filteredItems) { item in
-                        Button {
-                            if selectedItems.contains(item.id) {
-                                selectedItems.remove(item.id)
-                            } else {
-                                selectedItems.insert(item.id)
+                    ForEach(groupedItems, id: \.type) { group in
+                        DisclosureGroup(
+                            isExpanded: Binding(
+                                get: { expandedItemTypes.contains(group.type) },
+                                set: { isExpanded in
+                                    if isExpanded {
+                                        expandedItemTypes.insert(group.type)
+                                    } else {
+                                        expandedItemTypes.remove(group.type)
+                                    }
+                                }
+                            )
+                        ) {
+                            ForEach(group.items) { item in
+                                itemRow(item)
                             }
                         } label: {
                             HStack {
-                                Image(systemName: selectedItems.contains(item.id) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundColor(Color.brandGold)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(item.name)
-                                        .font(.headline)
-                                    if let description = item.itemDescription, !description.isEmpty {
-                                        Text(description)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    let meta = [
-                                        item.sku.map { "SKU \($0)" },
-                                        item.preferredVendorName,
-                                        item.vendorPartNumber.map { "Vendor # \($0)" }
-                                    ]
-                                    .compactMap { value in
-                                        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        return trimmed?.isEmpty == false ? trimmed : nil
-                                    }
-                                    if !meta.isEmpty {
-                                        Text(meta.joined(separator: " • "))
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    HStack(spacing: 8) {
-                                        Text(item.itemType.rawValue)
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                        Text(item.isTaxable ? "Taxable" : "Non-taxable")
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
+                                Text(group.type.rawValue)
                                 Spacer()
-                                Text(item.unitPrice, format: .currency(code: "USD"))
+                                Text("\(selectedCount(in: group.items))/\(group.items.count)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                             }
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
             .navigationTitle("Select Items")
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Text("\(selectedItems.count) selected")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
         }
+    }
+
+    private func selectedCount(in groupItems: [Item]) -> Int {
+        groupItems.filter { selectedItems.contains($0.id) }.count
+    }
+
+    private func toggle(_ item: Item) {
+        if selectedItems.contains(item.id) {
+            selectedItems.remove(item.id)
+        } else {
+            selectedItems.insert(item.id)
+        }
+    }
+
+    private func itemRow(_ item: Item) -> some View {
+        Button {
+            toggle(item)
+        } label: {
+            HStack {
+                Image(systemName: selectedItems.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(Color.brandGold)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.name)
+                        .font(.headline)
+                    if let description = item.itemDescription, !description.isEmpty {
+                        Text(description)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                    }
+                    let meta = [
+                        item.sku.map { "SKU \($0)" },
+                        item.preferredVendorName,
+                        item.vendorPartNumber.map { "Vendor # \($0)" }
+                    ]
+                    .compactMap { value in
+                        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        return trimmed?.isEmpty == false ? trimmed : nil
+                    }
+                    if !meta.isEmpty {
+                        Text(meta.joined(separator: " • "))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                    }
+                    Text(item.isTaxable ? "Taxable" : "Non-taxable")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Text(item.unitPrice, format: .currency(code: "USD"))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

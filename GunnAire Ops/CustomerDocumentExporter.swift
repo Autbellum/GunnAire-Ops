@@ -21,7 +21,11 @@ enum CustomerDocumentExporter {
         attachments: [ServiceDocumentAttachment] = []
     ) throws -> URL {
         let title = "\(serviceCall.type.displayName) Report"
-        let fileName = makeFileName(prefix: "GunnAire-Onsite-Report", customerName: serviceCall.customer.name)
+        let fileName = makeFileName(
+            prefix: "GunnAire-Onsite-Report",
+            customerName: serviceCall.customer.name,
+            descriptor: onsiteReportFileDescriptor(serviceCall: serviceCall, estimate: estimate, invoice: invoice)
+        )
         let sections = onsiteReportSections(
             serviceCall: serviceCall,
             estimate: estimate,
@@ -38,10 +42,15 @@ enum CustomerDocumentExporter {
         return try renderPDF(title: "Estimate", customer: estimate.customer, sections: sections, fileName: fileName)
     }
 
-    static func exportPaidInvoice(_ invoice: Invoice, serviceCall: ServiceCall?, payments: [Payment]) throws -> URL {
-        let fileName = makeFileName(prefix: "GunnAire-Paid-Invoice", customerName: invoice.customer.name)
+    static func exportInvoice(_ invoice: Invoice, serviceCall: ServiceCall?, payments: [Payment]) throws -> URL {
+        let paid = isInvoicePaid(invoice, payments: payments)
+        let fileName = makeFileName(prefix: paid ? "GunnAire-Paid-Invoice" : "GunnAire-Invoice", customerName: invoice.customer.name)
         let sections = invoiceSections(invoice: invoice, serviceCall: serviceCall, payments: payments)
-        return try renderPDF(title: "Paid Invoice", customer: invoice.customer, sections: sections, fileName: fileName)
+        return try renderPDF(title: paid ? "Paid Invoice" : "Invoice", customer: invoice.customer, sections: sections, fileName: fileName)
+    }
+
+    static func exportPaidInvoice(_ invoice: Invoice, serviceCall: ServiceCall?, payments: [Payment]) throws -> URL {
+        try exportInvoice(invoice, serviceCall: serviceCall, payments: payments)
     }
 
     private static func onsiteReportSections(
@@ -62,6 +71,14 @@ enum CustomerDocumentExporter {
                     row("Technician", serviceCall.assignedTechnician?.name),
                     row("Site Address", serviceCall.siteAddress ?? serviceCall.customer.address)
                 ]
+            ),
+            linkedRecordSection(serviceCall: serviceCall, estimate: estimate, invoice: invoice),
+            serviceReportReadinessSection(for: serviceCall),
+            closeoutReadinessSection(
+                for: serviceCall,
+                invoice: invoice,
+                payments: payments,
+                attachments: attachments
             ),
             DocumentSection(
                 title: "Equipment",
@@ -90,6 +107,7 @@ enum CustomerDocumentExporter {
         ]
 
         sections.append(contentsOf: technicalReportSections(for: serviceCall))
+        sections.append(contentsOf: photoEvidenceSections(for: attachments))
         sections.append(contentsOf: attachmentSections(for: attachments))
 
         if let estimate {
@@ -109,6 +127,120 @@ enum CustomerDocumentExporter {
         }
 
         return sections
+    }
+
+    static func linkedRecordRows(
+        serviceCall: ServiceCall,
+        estimate: Estimate?,
+        invoice: Invoice?
+    ) -> [(label: String, value: String)] {
+        var rows: [(label: String, value: String)] = [
+            ("Job ID", shortID(serviceCall.id))
+        ]
+        if let estimate {
+            rows.append(("Estimate ID", shortID(estimate.id)))
+            rows.append(("Estimate Status", estimate.status.capitalized))
+            if let quickBooksID = normalizedValue(estimate.quickBooksID) {
+                rows.append(("QuickBooks Estimate ID", quickBooksID))
+            }
+        } else if serviceCall.linkedEstimateID != nil {
+            rows.append(("Estimate ID", shortID(serviceCall.linkedEstimateID)))
+        }
+        if let invoice {
+            rows.append(("Invoice ID", shortID(invoice.id)))
+            rows.append(("Invoice Status", invoice.status.capitalized))
+            if let quickBooksID = normalizedValue(invoice.quickBooksID) {
+                rows.append(("QuickBooks Invoice ID", quickBooksID))
+            }
+        } else if serviceCall.linkedInvoiceID != nil {
+            rows.append(("Invoice ID", shortID(serviceCall.linkedInvoiceID)))
+        }
+        return rows
+    }
+
+    static func onsiteReportAttachmentCaption(
+        serviceCall: ServiceCall,
+        estimate: Estimate?,
+        invoice: Invoice?
+    ) -> String {
+        let details = linkedRecordRows(serviceCall: serviceCall, estimate: estimate, invoice: invoice)
+            .filter { $0.label != "Job ID" || !$0.value.isEmpty }
+            .map { "\($0.label): \($0.value)" }
+            .joined(separator: " - ")
+        let base = "Generated onsite \(serviceCall.type.displayName.lowercased()) report"
+        return details.isEmpty ? base : "\(base) - \(details)"
+    }
+
+    private static func linkedRecordSection(
+        serviceCall: ServiceCall,
+        estimate: Estimate?,
+        invoice: Invoice?
+    ) -> DocumentSection {
+        DocumentSection(
+            title: "Linked Records",
+            rows: linkedRecordRows(serviceCall: serviceCall, estimate: estimate, invoice: invoice).map { row($0.label, $0.value) }
+        )
+    }
+
+    static func serviceReportReadinessRows(for serviceCall: ServiceCall) -> [(label: String, value: String)] {
+        let missing = serviceCall.serviceReportMissingRequirementLabels
+        let validationIssues = serviceCall.serviceReportReadingValidationIssueLabels
+        var rows: [(label: String, value: String)] = [
+            ("Completion", missing.isEmpty ? "Ready" : "Needs details"),
+            ("Required Items", serviceCall.serviceReportReadinessSummary)
+        ]
+        if !missing.isEmpty {
+            rows.append(("Missing Required Items", missing.joined(separator: ", ")))
+        }
+        if !validationIssues.isEmpty {
+            rows.append(("Reading Validation", validationIssues.joined(separator: ", ")))
+        }
+        return rows
+    }
+
+    private static func serviceReportReadinessSection(for serviceCall: ServiceCall) -> DocumentSection {
+        DocumentSection(
+            title: "Report Readiness",
+            rows: serviceReportReadinessRows(for: serviceCall).map { row($0.label, $0.value) }
+        )
+    }
+
+    static func closeoutReadinessRows(
+        for serviceCall: ServiceCall,
+        invoice: Invoice?,
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment]
+    ) -> [(label: String, value: String)] {
+        let readiness = serviceCall.closeoutReadiness(
+            invoice: invoice,
+            payments: payments,
+            attachments: attachments
+        )
+        var rows: [(label: String, value: String)] = [
+            ("Status", readiness.statusLabel),
+            ("Progress", readiness.summary)
+        ]
+        if !readiness.missingItems.isEmpty {
+            rows.append(("Missing Closeout Items", readiness.missingItems.joined(separator: ", ")))
+        }
+        return rows
+    }
+
+    private static func closeoutReadinessSection(
+        for serviceCall: ServiceCall,
+        invoice: Invoice?,
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment]
+    ) -> DocumentSection {
+        DocumentSection(
+            title: "Closeout Readiness",
+            rows: closeoutReadinessRows(
+                for: serviceCall,
+                invoice: invoice,
+                payments: payments,
+                attachments: attachments
+            ).map { row($0.label, $0.value) }
+        )
     }
 
     private static func technicalReportSections(for serviceCall: ServiceCall) -> [DocumentSection] {
@@ -134,11 +266,22 @@ enum CustomerDocumentExporter {
     }
 
     static func technicalReportSectionSummaries(for serviceCall: ServiceCall) -> [(title: String, rows: [(label: String, value: String)])] {
-        serviceCall.groupedTechnicalReadingDefinitions.compactMap { group in
-            let rows = group.definitions.compactMap { definition -> (label: String, value: String)? in
+        let requiredDefinitions = Set(serviceCall.requiredTechnicalReadingDefinitions)
+        return serviceCall.groupedTechnicalReadingDefinitions.compactMap { group -> (title: String, rows: [(label: String, value: String)])? in
+            let rows = group.definitions.flatMap { definition -> [(label: String, value: String)] in
                 let value = serviceCall.technicalReading(for: definition.key).trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !value.isEmpty else { return nil }
-                return (definition.displayLabel, value)
+                let isRequired = requiredDefinitions.contains(definition)
+                if value.isEmpty {
+                    return isRequired
+                        ? [(definition.displayLabel, "Missing Required Reading")]
+                        : []
+                }
+                var rows: [(label: String, value: String)] = [(definition.displayLabel, value)]
+                if isRequired { rows.append(("\(definition.displayLabel) Requirement", "Required")) }
+                if let issue = definition.validationIssue(for: value) {
+                    rows.append(("\(definition.displayLabel) Validation", issue))
+                }
+                return rows
             }
             guard !rows.isEmpty else { return nil }
             return ("Technical Readings - \(group.title)", rows)
@@ -151,6 +294,45 @@ enum CustomerDocumentExporter {
         }
         guard !rows.isEmpty else { return [] }
         return [DocumentSection(title: "Attached Job Files", rows: rows)]
+    }
+
+    private static func photoEvidenceSections(for attachments: [ServiceDocumentAttachment]) -> [DocumentSection] {
+        let rows = photoEvidenceSummaries(for: attachments).map { summary in
+            row(summary.label, summary.detail)
+        }
+        guard !rows.isEmpty else { return [] }
+        return [DocumentSection(title: "Photo Evidence", rows: rows)]
+    }
+
+    static func photoEvidenceSummaries(for attachments: [ServiceDocumentAttachment]) -> [(label: String, detail: String)] {
+        photoEvidenceAttachments(for: attachments)
+            .map { attachment in
+                let details = [
+                    attachment.caption,
+                    attachment.displayName,
+                    formattedDateTime(attachment.createdAt)
+                ]
+                    .compactMap { value -> String? in
+                        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                            return nil
+                        }
+                        return value
+                    }
+                    .joined(separator: " - ")
+                return (attachment.kind.label, details)
+            }
+    }
+
+    static func photoEvidenceAttachments(for attachments: [ServiceDocumentAttachment]) -> [ServiceDocumentAttachment] {
+        attachments
+            .filter { $0.kind != .serviceReport }
+            .filter { $0.kind.isPhoto || $0.isImage }
+            .sorted { lhs, rhs in
+                if lhs.createdAt == rhs.createdAt {
+                    return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                }
+                return lhs.createdAt < rhs.createdAt
+            }
     }
 
     static func attachmentManifestSummaries(for attachments: [ServiceDocumentAttachment]) -> [(label: String, detail: String)] {
@@ -184,13 +366,9 @@ enum CustomerDocumentExporter {
         if let serviceCall {
             sections.append(DocumentSection(
                 title: "Job",
-                rows: [
-                    row("Scheduled", formattedDateTime(serviceCall.scheduledDate)),
-                    row("Job Type", serviceCall.type.displayName),
-                    row("Site Address", serviceCall.siteAddress ?? serviceCall.customer.address),
-                    row("Technician", serviceCall.assignedTechnician?.name)
-                ]
+                rows: billingJobContextRows(for: serviceCall)
             ))
+            sections.append(contentsOf: billingDocumentationSections(for: serviceCall))
         }
 
         sections.append(DocumentSection(
@@ -217,16 +395,14 @@ enum CustomerDocumentExporter {
         if includeCustomerHeader, let serviceCall {
             sections.append(DocumentSection(
                 title: "Job",
-                rows: [
-                    row("Scheduled", formattedDateTime(serviceCall.scheduledDate)),
-                    row("Job Type", serviceCall.type.displayName),
-                    row("Site Address", serviceCall.siteAddress ?? serviceCall.customer.address),
-                    row("Technician", serviceCall.assignedTechnician?.name)
-                ]
+                rows: billingJobContextRows(for: serviceCall)
             ))
+            sections.append(contentsOf: billingDocumentationSections(for: serviceCall))
         }
 
-        let paidTotal = payments.reduce(0) { $0 + $1.amount }
+        let paidTotal = payments.reduce(0) { partial, payment in
+            partial + (payment.isRefund ? -payment.amount : payment.amount)
+        }
         let balance = max(invoice.amount - paidTotal, 0)
         sections.append(DocumentSection(
             title: "Invoice Detail",
@@ -245,11 +421,8 @@ enum CustomerDocumentExporter {
         if !payments.isEmpty {
             sections.append(DocumentSection(
                 title: "Payment History",
-                rows: payments.map { payment in
-                    row(
-                        formattedDateTime(payment.date),
-                        "\(currency(payment.amount)) - \(payment.methodSummary)"
-                    )
+                rows: invoicePaymentHistoryRows(for: payments).map { paymentRow in
+                    row(paymentRow.label, paymentRow.value)
                 }
             ))
         }
@@ -265,6 +438,84 @@ enum CustomerDocumentExporter {
         }
 
         return sections
+    }
+
+    static func billingJobContextSummaries(for serviceCall: ServiceCall) -> [(label: String, value: String)] {
+        billingJobContextRows(for: serviceCall).map { ($0.label, $0.value) }
+    }
+
+    static func invoicePaymentHistoryRows(for payments: [Payment]) -> [(label: String, value: String)] {
+        payments
+            .sorted { $0.date < $1.date }
+            .map { payment in
+                let amount = payment.isRefund ? "-\(currency(abs(payment.amount)))" : currency(payment.amount)
+                let kind = payment.isRefund ? "Refund" : "Payment"
+                return (
+                    label: formattedDateTime(payment.date),
+                    value: "\(kind) \(amount) - \(payment.methodSummary)"
+                )
+            }
+    }
+
+    static func invoiceDocumentLabel(for invoice: Invoice, payments: [Payment]) -> String {
+        isInvoicePaid(invoice, payments: payments) ? "Paid Invoice" : "Invoice"
+    }
+
+    static func invoiceDocumentCaption(for invoice: Invoice, payments: [Payment]) -> String {
+        "Generated \(invoiceDocumentLabel(for: invoice, payments: payments).lowercased()) PDF"
+    }
+
+    private static func isInvoicePaid(_ invoice: Invoice, payments: [Payment]) -> Bool {
+        if invoice.status.caseInsensitiveCompare("paid") == .orderedSame {
+            return true
+        }
+        let paidTotal = payments.reduce(0) { partial, payment in
+            partial + (payment.isRefund ? -payment.amount : payment.amount)
+        }
+        return max(invoice.amount - paidTotal, 0) <= 0.009
+    }
+
+    private static func billingJobContextRows(for serviceCall: ServiceCall) -> [DocumentRow] {
+        [
+            row("Scheduled", formattedDateTime(serviceCall.scheduledDate)),
+            row("Job Type", serviceCall.type.displayName),
+            row("Site Address", serviceCall.siteAddress ?? serviceCall.customer.address),
+            row("Technician", serviceCall.assignedTechnician?.name),
+            row("Equipment", serviceCall.equipmentSummary),
+            row("Equipment Location", serviceCall.equipmentLocation)
+        ]
+    }
+
+    static func billingDocumentationSummaries(for serviceCall: ServiceCall) -> [(title: String, rows: [(label: String, value: String)])] {
+        var summaries: [(title: String, rows: [(label: String, value: String)])] = []
+        let readinessRows = serviceReportReadinessRows(for: serviceCall)
+        if !readinessRows.isEmpty {
+            summaries.append(("Onsite Documentation", readinessRows))
+        }
+
+        let serviceSummaryRows: [(label: String, value: String)] = [
+            ("Findings", serviceCall.findingsSummary ?? ""),
+            ("Recommended Work", serviceCall.recommendedWorkSummary ?? ""),
+            ("Report Summary", serviceCall.serviceReportSummary ?? "")
+        ].filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if !serviceSummaryRows.isEmpty {
+            summaries.append(("Service Summary", serviceSummaryRows))
+        }
+
+        let technicalRows = serviceCall.populatedTechnicalReadingRows
+        if !technicalRows.isEmpty {
+            summaries.append(("Technical Snapshot", Array(technicalRows.prefix(12))))
+        }
+        return summaries
+    }
+
+    private static func billingDocumentationSections(for serviceCall: ServiceCall) -> [DocumentSection] {
+        billingDocumentationSummaries(for: serviceCall).map { summary in
+            DocumentSection(
+                title: summary.title,
+                rows: summary.rows.map { row($0.label, $0.value) }
+            )
+        }
     }
 
     private static func checklistSection(for serviceCall: ServiceCall) -> DocumentSection {
@@ -396,9 +647,7 @@ enum CustomerDocumentExporter {
         title: String,
         customer: Customer
     ) -> CGFloat {
-        let images = attachments
-            .filter { $0.kind != .serviceReport }
-            .filter(\.isImage)
+        let images = photoEvidenceAttachments(for: attachments)
             .prefix(12)
             .compactMap { attachment -> (attachment: ServiceDocumentAttachment, image: UIImage)? in
                 guard let image = UIImage(contentsOfFile: attachment.localFilePath) else { return nil }
@@ -494,10 +743,30 @@ enum CustomerDocumentExporter {
         return folder
     }
 
-    private static func makeFileName(prefix: String, customerName: String) -> String {
+    private static func onsiteReportFileDescriptor(
+        serviceCall: ServiceCall,
+        estimate: Estimate?,
+        invoice: Invoice?
+    ) -> String {
+        let references = [
+            "Job-\(shortID(serviceCall.id))",
+            invoice.map { "Invoice-\(shortID($0.id))" },
+            estimate.map { "Estimate-\(shortID($0.id))" }
+        ]
+            .compactMap { $0 }
+        return references.joined(separator: "-")
+    }
+
+    private static func makeFileName(prefix: String, customerName: String, descriptor: String? = nil) -> String {
         let customer = sanitizeFileComponent(customerName)
+        let cleanDescriptor = descriptor.flatMap { value -> String? in
+            let sanitized = sanitizeFileComponent(value)
+            return sanitized.isEmpty ? nil : sanitized
+        }
         let date = fileDateFormatter.string(from: Date())
-        return "\(prefix)-\(customer)-\(date).pdf"
+        return [prefix, customer, cleanDescriptor, date]
+            .compactMap { $0 }
+            .joined(separator: "-") + ".pdf"
     }
 
     private static func sanitizeFileComponent(_ value: String) -> String {
@@ -514,6 +783,16 @@ enum CustomerDocumentExporter {
 
     private static func row(_ label: String, _ value: String?) -> DocumentRow {
         DocumentRow(label: label, value: value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+    }
+
+    private static func normalizedValue(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private static func shortID(_ id: UUID?) -> String {
+        guard let id else { return "" }
+        return String(id.uuidString.prefix(8)).uppercased()
     }
 
     private static func yesNo(_ value: Bool) -> String {

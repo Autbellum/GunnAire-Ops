@@ -36,4 +36,41 @@ final class Estimate {
         self.notes = notes
         self.createdAt = createdAt
     }
+
+    static func displayDeduplicated(_ estimates: [Estimate]) -> [Estimate] {
+        var selectedByKey: [String: Estimate] = [:]
+        for estimate in estimates {
+            let key = displayDedupeKey(for: estimate)
+            if let existing = selectedByKey[key] {
+                selectedByKey[key] = preferredDisplayEstimate(existing, estimate)
+            } else {
+                selectedByKey[key] = estimate
+            }
+        }
+        return selectedByKey.values.sorted { lhs, rhs in
+            lhs.createdAt > rhs.createdAt
+        }
+    }
+
+    private static func displayDedupeKey(for estimate: Estimate) -> String {
+        if let quickBooksID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !quickBooksID.isEmpty {
+            return "qb:\(quickBooksID.lowercased())"
+        }
+        if let serviceCallID = estimate.serviceCallID {
+            return "call:\(serviceCallID.uuidString.lowercased()):\(String(format: "%.2f", estimate.amount))"
+        }
+        let customerKey = estimate.customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let day = Calendar.current.startOfDay(for: estimate.createdAt).timeIntervalSince1970
+        return "local:\(customerKey):\(String(format: "%.2f", estimate.amount)):\(Int(day))"
+    }
+
+    private static func preferredDisplayEstimate(_ lhs: Estimate, _ rhs: Estimate) -> Estimate {
+        let lhsHasQuickBooks = lhs.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let rhsHasQuickBooks = rhs.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        if lhsHasQuickBooks != rhsHasQuickBooks {
+            return rhsHasQuickBooks ? rhs : lhs
+        }
+        return rhs.createdAt > lhs.createdAt ? rhs : lhs
+    }
 }

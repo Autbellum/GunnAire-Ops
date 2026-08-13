@@ -103,7 +103,17 @@ extension Payment {
     }
 
     var needsQuickBooksAttention: Bool {
-        quickBooksAccountingSyncStatus == "needs_attention" || processorSyncStatus == "needs_attention"
+        quickBooksAccountingSyncStatus == "needs_attention" ||
+            (processorSyncStatus == "needs_attention" && !needsSharedCompanyQueueUpload)
+    }
+
+    var needsSharedCompanyQueueUpload: Bool {
+        let status = processorSyncStatus?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let detail = processorSyncDetail?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if status == "local_only" {
+            return true
+        }
+        return status == "needs_attention" && detail.contains("shared company payment queue")
     }
 
     var hasProcessorCapture: Bool {

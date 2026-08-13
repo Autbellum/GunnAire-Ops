@@ -46,6 +46,30 @@ struct GunnAire_OpsTests {
         #expect(call.isUpcomingThisWeek == false)
     }
 
+    @Test func standardUsersKeepFieldAccessButNotAdminScreens() async throws {
+        let standard = AppUser(email: "tech@gunnaire.com", role: .standard)
+        let admin = AppUser(email: "admin@gunnaire.com", role: .admin)
+        let users = [standard, admin]
+
+        #expect(AppAccess.canAccessSidebarItem(.scheduleAndJobs, email: standard.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.onsiteDocumentation, email: standard.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.invoices, email: standard.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.payments, email: standard.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.receiptsBills, email: standard.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.quickBooksManagement, email: standard.email, users: users) == false)
+        #expect(AppAccess.canAccessSidebarItem(.syncIntegrations, email: standard.email, users: users) == false)
+        #expect(AppAccess.canAccessSidebarItem(.estimates, email: standard.email, users: users) == false)
+        #expect(AppAccess.canAccessSidebarItem(.mail, email: standard.email, users: users) == false)
+        #expect(AppAccess.canViewFinancialManagement(email: standard.email, users: users) == false)
+        #expect(AppAccess.canViewBillingFinancialDetails(email: standard.email, users: users) == false)
+        #expect(AppAccess.canCollectFieldPayments(email: standard.email, users: users) == true)
+
+        #expect(AppAccess.canAccessSidebarItem(.quickBooksManagement, email: admin.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.syncIntegrations, email: admin.email, users: users) == true)
+        #expect(AppAccess.canViewFinancialManagement(email: admin.email, users: users) == true)
+        #expect(AppAccess.canViewBillingFinancialDetails(email: admin.email, users: users) == true)
+    }
+
     @Test func serviceCallEquipmentSummaryIncludesManufacturer() async throws {
         let customer = Customer(name: "Equipment Customer")
         let call = ServiceCall(
@@ -60,6 +84,56 @@ struct GunnAire_OpsTests {
 
         #expect(call.equipmentSummary?.contains("Carrier") == true)
         #expect(call.equipmentSummary?.contains("S/N ABC123") == true)
+    }
+
+    @Test func splitSystemServiceReportRequiresHeadPressureAndCompressorRLA() async throws {
+        let requiredKeys = Set(HVACEquipmentType.splitSystemAC.requiredReadingKeysForCompleteServiceReport)
+        let definitionKeys = Set(HVACEquipmentType.splitSystemAC.readingDefinitions.map(\.key))
+
+        #expect(definitionKeys.contains("head_pressure"))
+        #expect(definitionKeys.contains("compressor_rla"))
+        #expect(definitionKeys.contains("outdoor_fan_fla"))
+        #expect(requiredKeys.contains("head_pressure"))
+        #expect(requiredKeys.contains("compressor_rla"))
+    }
+
+    @Test func technicalServiceReportFlagsCompressorAmpDrawAboveRLA() async throws {
+        let customer = Customer(name: "Amp Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        call.setTechnicalReading("10", for: "compressor_rla")
+        call.setTechnicalReading("12", for: "compressor_amps")
+        call.setTechnicalReading("1.0", for: "outdoor_fan_fla")
+        call.setTechnicalReading("1.2", for: "outdoor_fan_amps")
+
+        #expect(call.serviceReportCrossReadingValidationIssueLabels.contains { $0.contains("Compressor Amps exceeds Compressor RLA") })
+        #expect(call.serviceReportCrossReadingValidationIssueLabels.contains { $0.contains("Outdoor Fan Amps exceeds Outdoor Fan FLA") })
+        #expect(call.serviceReportReadingValidationIssueLabels.contains { $0.contains("Compressor Amps exceeds Compressor RLA") })
+    }
+
+    @Test func technicalReportExporterIncludesHeadPressureAndAmpValidation() async throws {
+        let customer = Customer(name: "Report Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        call.setTechnicalReading("325", for: "head_pressure")
+        call.setTechnicalReading("10", for: "compressor_rla")
+        call.setTechnicalReading("12", for: "compressor_amps")
+
+        let sections = CustomerDocumentExporter.technicalReportSectionSummaries(for: call)
+        let rows = sections.flatMap(\.rows)
+
+        #expect(rows.contains { $0.label == "Head Pressure (psig)" && $0.value == "325" })
+        #expect(rows.contains { $0.value.contains("Compressor Amps exceeds Compressor RLA") })
     }
 
     @Test func customerEquipmentProfileAppliesToServiceCall() async throws {
@@ -90,6 +164,235 @@ struct GunnAire_OpsTests {
         #expect(call.equipmentLocation == "Downstairs closet")
         #expect(call.equipmentInstallDate == equipment.installDate)
         #expect(call.equipmentWarrantyExpiration == equipment.warrantyExpiration)
+        #expect(call.filterSize == "20x25x1")
+    }
+
+    @Test func serviceCallAttachmentProgressRecalculatesPhotoCounts() async throws {
+        let customer = Customer(name: "Attachment Customer")
+        let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer)
+        let beforePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .beforePhoto,
+            displayName: "before.jpg",
+            localFilePath: "/tmp/before.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 100
+        )
+        let afterPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .afterPhoto,
+            displayName: "after.jpg",
+            localFilePath: "/tmp/after.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 100
+        )
+        let document = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .customerDocument,
+            displayName: "notes.pdf",
+            localFilePath: "/tmp/notes.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 100
+        )
+
+        call.refreshAttachmentProgress(from: [beforePhoto, afterPhoto, document])
+
+        #expect(call.beforePhotoCount == 1)
+        #expect(call.afterPhotoCount == 1)
+        #expect(call.documentationStartedAt != nil)
+
+        call.refreshAttachmentProgress(from: [afterPhoto, document])
+
+        #expect(call.beforePhotoCount == 0)
+        #expect(call.afterPhotoCount == 1)
+    }
+
+    @Test func googleCalendarPatchDoesNotOverwriteEventDetails() async throws {
+        let customer = Customer(name: "Calendar Customer", address: "123 Main St")
+        let call = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "google-event-1",
+            googleEventManagedByApp: true,
+            eventTitle: "Do not overwrite this title",
+            siteAddress: "456 Field Rd",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3_600,
+            customer: customer,
+            notes: "Do not overwrite this body."
+        )
+
+        let patch = GoogleCalendarScheduleSync.makeScheduleOnlyPatch(for: call)
+        let data = try JSONEncoder().encode(patch)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(object["start"] != nil)
+        #expect(object["end"] != nil)
+        #expect(object["summary"] == nil)
+        #expect(object["description"] == nil)
+        #expect(object["location"] == nil)
+        #expect(object["attendees"] == nil)
+    }
+
+    @Test func googleCalendarManagedPatchPreservesExistingGoogleDetails() async throws {
+        let customer = Customer(name: "Calendar Customer", address: "123 Main St")
+        let call = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "google-event-1",
+            googleEventManagedByApp: true,
+            eventTitle: "Customer Follow-up",
+            siteAddress: "",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3_600,
+            customer: customer,
+            notes: "Bring replacement capacitor."
+        )
+
+        let remoteEvent = GoogleCalendarEvent(
+            id: "google-event-1",
+            summary: "Google title stays",
+            description: "Google body stays",
+            location: "Google location stays",
+            htmlLink: nil,
+            attendees: nil,
+            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
+                "gunnaireManaged": "true",
+                "gunnaireManagedVersion": "3",
+                "gunnaireOrigin": "ios-app"
+            ]),
+            start: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T13:00:00Z", timeZone: nil),
+            end: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T14:00:00Z", timeZone: nil)
+        )
+
+        let patch = GoogleCalendarScheduleSync.makeManagedEventPatch(for: call, remoteEvent: remoteEvent)
+        let data = try JSONEncoder().encode(patch)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(object["start"] != nil)
+        #expect(object["end"] != nil)
+        #expect(object["summary"] == nil)
+        #expect(object["description"] == nil)
+        #expect(object["location"] == nil)
+        #expect(object["extendedProperties"] == nil)
+        #expect(Set(object.keys) == ["start", "end"])
+    }
+
+    @Test func googleCalendarManagedPatchDoesNotRepairMissingGoogleDetails() async throws {
+        let customer = Customer(name: "Calendar Customer", address: "123 Main St")
+        let call = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "google-event-1",
+            googleEventManagedByApp: true,
+            eventTitle: "Repair title",
+            siteAddress: "456 Field Rd",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3_600,
+            customer: customer,
+            notes: "Repair body"
+        )
+        let remoteEvent = GoogleCalendarEvent(
+            id: "google-event-1",
+            summary: nil,
+            description: "",
+            location: "Google location stays",
+            htmlLink: nil,
+            attendees: nil,
+            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
+                "gunnaireManaged": "true",
+                "gunnaireManagedVersion": "3",
+                "gunnaireOrigin": "ios-app"
+            ]),
+            start: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T13:00:00Z", timeZone: nil),
+            end: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T14:00:00Z", timeZone: nil)
+        )
+
+        let patch = GoogleCalendarScheduleSync.makeManagedEventPatch(for: call, remoteEvent: remoteEvent)
+        let data = try JSONEncoder().encode(patch)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(object["summary"] == nil)
+        #expect(object["description"] == nil)
+        #expect(object["location"] == nil)
+        #expect(object["start"] != nil)
+        #expect(object["end"] != nil)
+        #expect(object["extendedProperties"] == nil)
+        #expect(Set(object.keys) == ["start", "end"])
+    }
+
+    @Test func googleCalendarCreatePayloadOmitsBlankLocationAndDetails() async throws {
+        let customer = Customer(name: "Calendar Customer", address: "")
+        let call = ServiceCall(
+            eventTitle: "Site reminder",
+            siteAddress: "",
+            type: .reminder,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3_600,
+            customer: customer,
+            notes: "   "
+        )
+
+        let event = GoogleCalendarScheduleSync.makeCalendarCreateEvent(for: call)
+        let data = try JSONEncoder().encode(event)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(object["summary"] as? String == "Site reminder")
+        #expect(object["description"] == nil)
+        #expect(object["location"] == nil)
+        #expect(object["start"] != nil)
+        #expect(object["end"] != nil)
+        #expect(object["extendedProperties"] != nil)
+    }
+
+    @Test func olderGoogleCalendarManagedMarkersAreTreatedAsExternal() async throws {
+        let oldManagedEvent = GoogleCalendarEvent(
+            id: "old-managed-event",
+            summary: "Existing Google Event",
+            description: "Keep this body",
+            location: "Keep this location",
+            htmlLink: nil,
+            attendees: nil,
+            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: ["gunnaireManaged": "true"]),
+            start: GoogleCalendarEventDate(date: nil, dateTime: "2026-06-01T14:00:00Z", timeZone: nil),
+            end: GoogleCalendarEventDate(date: nil, dateTime: "2026-06-01T15:00:00Z", timeZone: nil)
+        )
+
+        #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(oldManagedEvent) == false)
+    }
+
+    @Test func externalGoogleCalendarImportDoesNotReplaceLocalDetailsWithBlankRemoteFields() async throws {
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
+            remoteValue: " ",
+            existingValue: "Customer supplied title",
+            isManagedByApp: false
+        ) == "Customer supplied title")
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
+            remoteValue: nil,
+            existingValue: "123 Existing Location",
+            isManagedByApp: false
+        ) == "123 Existing Location")
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
+            remoteValue: "\n",
+            existingValue: "Existing calendar body",
+            isManagedByApp: false
+        ) == "Existing calendar body")
+    }
+
+    @Test func appManagedGoogleCalendarImportAllowsBlankRemoteFieldsToClearLocalMirror() async throws {
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
+            remoteValue: nil,
+            existingValue: "Old local location",
+            isManagedByApp: true
+        ) == nil)
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
+            remoteValue: " Updated remote body ",
+            existingValue: "Old local body",
+            isManagedByApp: true
+        ) == "Updated remote body")
     }
 
     @Test func customerEquipmentProfileCanBeUpdatedInPlace() async throws {
@@ -126,6 +429,183 @@ struct GunnAire_OpsTests {
         #expect(equipment.isActive == true)
     }
 
+    @Test func serviceReportCanAppendEquipmentProfileHistoryWithoutDuplicates() async throws {
+        let customer = Customer(name: "Equipment Customer")
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            filterCondition: "Replaced",
+            indoorCoilCondition: "Clean",
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer,
+            findingsSummary: "No faults found.",
+            recommendedWorkSummary: "Return in six months."
+        )
+        let note = try #require(call.equipmentProfileServiceHistoryNote)
+        let merged = CustomerEquipment.mergedNotes(existing: "Existing equipment note.", serviceHistoryNote: note)
+        let mergedAgain = CustomerEquipment.mergedNotes(existing: merged, serviceHistoryNote: note)
+
+        #expect(note.contains("Maintenance"))
+        #expect(note.contains("Heating maintenance completed."))
+        #expect(note.contains("Filter: Replaced"))
+        #expect(merged?.contains("Existing equipment note.") == true)
+        #expect(merged?.contains("Return in six months.") == true)
+        #expect(mergedAgain == merged)
+    }
+
+    @Test func equipmentServiceHistoryIncludesCapturedTechnicalReadings() async throws {
+        let customer = Customer(name: "Technical History Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Cooling maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer
+        )
+        call.setTechnicalReading("72", for: "return_air_temp")
+        call.setTechnicalReading("54", for: "supply_air_temp")
+        call.setTechnicalReading("10", for: "superheat")
+        call.setTechnicalReading("8", for: "subcooling")
+        call.setTechnicalReading("238", for: "line_voltage")
+        call.setTechnicalReading("7.4", for: "compressor_amps")
+
+        let summary = try #require(call.technicalReadingServiceHistorySummary)
+        let note = try #require(call.equipmentProfileServiceHistoryNote)
+
+        #expect(summary.contains("Return Air Temp"))
+        #expect(summary.contains("Temperature Split"))
+        #expect(summary.contains("Superheat"))
+        #expect(summary.contains("Line Voltage"))
+        #expect(note.contains("Readings:"))
+        #expect(note.contains("Compressor Amps"))
+    }
+
+    @Test func customerEquipmentProfileMatchesLinkedAndSerializedServiceCalls() async throws {
+        let customer = Customer(name: "Equipment Customer")
+        let otherCustomer = Customer(name: "Other Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .gasFurnace,
+            name: "Main Furnace",
+            manufacturer: "Carrier",
+            modelNumber: "59TN6",
+            serialNumber: "FURN123"
+        )
+        let linkedCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let serialMatchedCall = ServiceCall(
+            equipmentName: "Different label",
+            equipmentSerialNumber: " furn123 ",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let nameModelMatchedCall = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59tn6",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let otherCustomerCall = ServiceCall(
+            equipmentSerialNumber: "FURN123",
+            type: .service,
+            scheduledDate: Date(),
+            customer: otherCustomer
+        )
+
+        #expect(equipment.matches(linkedCall))
+        #expect(equipment.matches(serialMatchedCall))
+        #expect(equipment.matches(nameModelMatchedCall))
+        #expect(equipment.matches(otherCustomerCall) == false)
+    }
+
+    @Test func customerEquipmentServiceHistorySummarizesLastAndNextJobs() async throws {
+        let customer = Customer(name: "Equipment Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .heatPump,
+            name: "Downstairs Heat Pump",
+            serialNumber: "HP123"
+        )
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let pastCall = ServiceCall(
+            equipmentSerialNumber: "HP123",
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400 * 30),
+            customer: customer,
+            status: .completed
+        )
+        let futureCall = ServiceCall(
+            equipmentSerialNumber: "HP123",
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(86_400 * 30),
+            customer: customer,
+            status: .scheduled
+        )
+
+        let summary = try #require(equipment.serviceHistorySummary(in: [pastCall, futureCall], now: now))
+
+        #expect(summary.contains("Last:"))
+        #expect(summary.contains("Next:"))
+        #expect(summary.contains("2 jobs"))
+    }
+
+    @Test func customerEquipmentLatestTechnicalReadingsUseMostRecentCompletedMatchingJob() async throws {
+        let customer = Customer(name: "Equipment Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            serialNumber: "AC123"
+        )
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let olderCall = ServiceCall(
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400 * 60),
+            customer: customer,
+            status: .completed
+        )
+        olderCall.setTechnicalReading("14", for: "superheat")
+        let latestCall = ServiceCall(
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400 * 3),
+            customer: customer,
+            status: .completed
+        )
+        latestCall.setTechnicalReading("9", for: "superheat")
+        latestCall.setTechnicalReading("240", for: "line_voltage")
+        let futureCall = ServiceCall(
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(86_400 * 3),
+            customer: customer,
+            status: .scheduled
+        )
+        futureCall.setTechnicalReading("999", for: "line_voltage")
+
+        let summary = try #require(equipment.latestTechnicalReadingsSummary(in: [olderCall, latestCall, futureCall], now: now))
+
+        #expect(summary.contains("Superheat"))
+        #expect(summary.contains("9"))
+        #expect(summary.contains("Line Voltage"))
+        #expect(summary.contains("240"))
+        #expect(summary.contains("999") == false)
+        #expect(summary.contains("14") == false)
+    }
+
     @Test func coolingEquipmentReadingDefinitionsIncludeStructuredRefrigerantOptions() async throws {
         let refrigerantDefinition = HVACEquipmentType.splitSystemAC.readingDefinitions.first {
             $0.key == "refrigerant_type"
@@ -151,11 +631,25 @@ struct GunnAire_OpsTests {
         #expect(liquidSaturationDefinition?.displayLabel == "Liquid Saturation Temp (F)")
     }
 
+    @Test func technicalReadingDefinitionsIncludeFieldInputHints() async throws {
+        let suctionPressure = try #require(HVACEquipmentType.splitSystemAC.readingDefinitions.first { $0.key == "suction_pressure" })
+        let superheat = try #require(HVACEquipmentType.splitSystemAC.readingDefinitions.first { $0.key == "superheat" })
+        let gasPressure = try #require(HVACEquipmentType.gasFurnace.readingDefinitions.first { $0.key == "gas_pressure_manifold" })
+        let coReading = try #require(HVACEquipmentType.gasFurnace.readingDefinitions.first { $0.key == "co_ppm" })
+
+        #expect(suctionPressure.inputHint?.contains("service ports") == true)
+        #expect(superheat.inputHint?.contains("Calculate") == true)
+        #expect(gasPressure.inputHint?.contains("manometer") == true)
+        #expect(coReading.inputHint?.contains("carbon monoxide") == true)
+    }
+
     @Test func equipmentSpecificReportDefinitionsIncludeFieldServiceControls() async throws {
         let heatPumpKeys = Set(HVACEquipmentType.heatPump.readingDefinitions.map(\.key))
         let furnaceDefinitions = HVACEquipmentType.gasFurnace.readingDefinitions
         let waterHeaterDefinitions = HVACEquipmentType.waterHeater.readingDefinitions
         let airHandlerDefinitions = HVACEquipmentType.airHandler.readingDefinitions
+        let packageUnitDefinitions = HVACEquipmentType.packageUnit.readingDefinitions
+        let miniSplitDefinitions = HVACEquipmentType.miniSplit.readingDefinitions
 
         #expect(heatPumpKeys.contains("reversing_valve_operation"))
         #expect(heatPumpKeys.contains("defrost_control_status"))
@@ -163,6 +657,10 @@ struct GunnAire_OpsTests {
         #expect(furnaceDefinitions.first { $0.key == "heat_exchanger_condition" }?.options.contains("Needs Repair") == true)
         #expect(waterHeaterDefinitions.first { $0.key == "tank_condition" }?.options.contains("Replacement Recommended") == true)
         #expect(airHandlerDefinitions.first { $0.key == "blower_type" }?.options.contains("ECM Variable Speed") == true)
+        #expect(packageUnitDefinitions.first { $0.key == "package_heat_type" }?.options.contains("Dual Fuel") == true)
+        #expect(packageUnitDefinitions.contains { $0.key == "economizer_operation" })
+        #expect(miniSplitDefinitions.contains { $0.key == "communication_voltage" })
+        #expect(miniSplitDefinitions.contains { $0.key == "indoor_filter_condition" })
     }
 
     @Test func hvacEquipmentReadingDefinitionKeysAreUniquePerEquipmentType() async throws {
@@ -194,6 +692,421 @@ struct GunnAire_OpsTests {
         #expect(boilerGroups.first { $0.title == "Hydronics" }?.definitions.contains { $0.key == "water_temp_supply" } == true)
     }
 
+    @Test func technicalReadingGroupProgressSummarizesCapturedRequiredAndInvalidFields() async throws {
+        let customer = Customer(name: "Progress Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let electricalGroup = try #require(call.groupedTechnicalReadingDefinitions.first { $0.title == "Electrical" })
+
+        call.setTechnicalReading("12", for: "line_voltage")
+        call.setTechnicalReading("18", for: "compressor_rla")
+
+        let progress = call.technicalReadingProgress(in: electricalGroup)
+
+        #expect(progress.totalCount >= 4)
+        #expect(progress.capturedCount == 2)
+        #expect(progress.requiredCount == 3)
+        #expect(progress.missingRequiredCount == 1)
+        #expect(progress.validationIssueCount == 1)
+        #expect(progress.needsAttention)
+        #expect(progress.summary.contains("2/"))
+        #expect(progress.summary.contains("invalid"))
+    }
+
+    @Test func equipmentSpecificReportReadinessTracksMissingRequiredItems() async throws {
+        let customer = Customer(name: "Readiness Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked and operating.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        #expect(call.serviceReportMissingRequirementLabels.contains("Refrigerant Type"))
+        #expect(call.serviceReportMissingRequirementLabels.contains("Compressor Amps (A)"))
+        #expect(call.serviceReportMissingRequirementLabels.contains("Equipment Name") == false)
+
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+
+        #expect(call.serviceReportMissingRequirementLabels.isEmpty)
+        #expect(call.serviceReportReadinessSummary == "\(call.serviceReportRequiredItemCount)/\(call.serviceReportRequiredItemCount) required items")
+    }
+
+    @Test func technicalReadingDefinitionsValidateExpectedFieldRanges() async throws {
+        let voltage = HVACTechnicalReadingDefinition(key: "line_voltage", label: "Line Voltage", unit: "V")
+        let superheat = HVACTechnicalReadingDefinition(key: "superheat", label: "Superheat", unit: "F")
+        let condition = HVACTechnicalReadingDefinition(key: "condenser_condition", label: "Condenser Condition")
+
+        #expect(voltage.expectedRangeLabel == "90-600 V")
+        #expect(voltage.validationIssue(for: "240") == nil)
+        #expect(voltage.validationIssue(for: "12")?.contains("outside expected range") == true)
+        #expect(superheat.validationIssue(for: "not a number") == "Superheat (F) must be numeric")
+        #expect(condition.validationIssue(for: "Needs Cleaning") == nil)
+    }
+
+    @Test func invalidTechnicalReadingsBlockReportCompletion() async throws {
+        let customer = Customer(name: "Validation Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        call.setTechnicalReading("12", for: "line_voltage")
+
+        #expect(call.serviceReportReadingValidationIssueLabels.contains { $0.contains("Line Voltage") })
+        #expect(call.canCompleteDocumentation == false)
+        #expect(call.markDocumentationCompleteIfReady() == false)
+        #expect(call.documentationCompletionBlockedMessage?.contains("Line Voltage") == true)
+    }
+
+    @Test func incompleteTechnicalServiceReportDoesNotMarkDocumentationComplete() async throws {
+        let customer = Customer(name: "Incomplete Report Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("72", for: "return_air_temp")
+
+        let markedComplete = call.markDocumentationCompleteIfReady(at: Date(timeIntervalSince1970: 1_800_000_000))
+
+        #expect(markedComplete == false)
+        #expect(call.documentationCompletedAt == nil)
+        #expect(call.documentationCompletionBlockedMessage?.contains("Supply Air Temp (F)") == true)
+    }
+
+    @Test func completeTechnicalServiceReportMarksDocumentationComplete() async throws {
+        let customer = Customer(name: "Complete Report Customer")
+        let completionDate = Date(timeIntervalSince1970: 1_800_000_000)
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+
+        let markedComplete = call.markDocumentationCompleteIfReady(at: completionDate)
+
+        #expect(markedComplete == true)
+        #expect(call.documentationChecklist == true)
+        #expect(call.documentationCompletedAt == completionDate)
+        #expect(call.documentationCompletionBlockedMessage == nil)
+    }
+
+    @Test func jobCloseoutReadinessShowsMissingOperationalEvidence() async throws {
+        let customer = Customer(name: "Closeout Customer")
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        let readiness = call.closeoutReadiness(invoice: nil, payments: [], attachments: [])
+
+        #expect(readiness.isReady == false)
+        #expect(readiness.missingItems.contains("Work completed"))
+        #expect(readiness.missingItems.contains("Technical report complete"))
+        #expect(readiness.missingItems.contains("Onsite report generated"))
+        #expect(readiness.missingItems.contains("Invoice created"))
+    }
+
+    @Test func jobCloseoutReadinessMarksCompletedSyncedJobsReady() async throws {
+        let customer = Customer(name: "Closeout Customer")
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .invoiced,
+            workCompletedChecklist: true,
+            documentationChecklist: true,
+            paymentCollectedChecklist: true
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        let invoice = Invoice(
+            serviceCallID: call.id,
+            customer: customer,
+            quickBooksID: "QB-100",
+            amount: 500,
+            status: "paid",
+            customerSignatureName: "Customer",
+            customerSignedAt: Date(),
+            finalizedAt: Date()
+        )
+        call.linkedInvoiceID = invoice.id
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "ATTACH-1"
+        )
+
+        let readiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [report])
+
+        #expect(readiness.isReady == true)
+        #expect(readiness.statusLabel == "Ready for closeout")
+        #expect(readiness.summary == "\(readiness.totalCount)/\(readiness.totalCount) complete")
+    }
+
+    @Test func jobCloseoutReadinessRequiresGeneratedReportLinkedToInvoice() async throws {
+        let customer = Customer(name: "Closeout Customer")
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .invoiced,
+            workCompletedChecklist: true,
+            documentationChecklist: true,
+            paymentCollectedChecklist: true
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        let invoice = Invoice(
+            serviceCallID: call.id,
+            customer: customer,
+            quickBooksID: "QB-100",
+            amount: 500,
+            status: "paid",
+            customerSignatureName: "Customer",
+            customerSignedAt: Date(),
+            finalizedAt: Date()
+        )
+        let unlinkedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .serviceReport,
+            displayName: "stale-report.pdf",
+            localFilePath: "/tmp/stale-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "ATTACH-1"
+        )
+
+        let readiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [unlinkedReport])
+
+        #expect(readiness.isReady == false)
+        #expect(readiness.missingItems.contains("Onsite report generated"))
+    }
+
+    @Test func jobCloseoutReadinessDetectsPendingQuickBooksAttachments() async throws {
+        let customer = Customer(name: "Closeout Customer")
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .invoiced,
+            workCompletedChecklist: true,
+            documentationChecklist: true,
+            paymentCollectedChecklist: true
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        let invoice = Invoice(
+            serviceCallID: call.id,
+            customer: customer,
+            quickBooksID: "QB-100",
+            amount: 500,
+            status: "paid",
+            customerSignatureName: "Customer",
+            customerSignedAt: Date(),
+            finalizedAt: Date()
+        )
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let readiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [report])
+
+        #expect(readiness.isReady == false)
+        #expect(readiness.missingItems.contains("QuickBooks attachments synced"))
+    }
+
+    @Test func jobCloseoutReadinessRequiresQuickBooksInvoiceSync() async throws {
+        let customer = Customer(name: "Closeout Customer")
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .invoiced,
+            workCompletedChecklist: true,
+            documentationChecklist: true,
+            paymentCollectedChecklist: true
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        let invoice = Invoice(
+            serviceCallID: call.id,
+            customer: customer,
+            amount: 500,
+            status: "paid",
+            customerSignatureName: "Customer",
+            customerSignedAt: Date(),
+            finalizedAt: Date()
+        )
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let readiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [report])
+
+        #expect(readiness.isReady == false)
+        #expect(readiness.requiredItems.contains("QuickBooks invoice synced"))
+        #expect(readiness.missingItems.contains("QuickBooks invoice synced"))
+        #expect(readiness.missingItems.contains("QuickBooks attachments synced") == false)
+    }
+
+    @Test func generalCalendarAppointmentsDoNotRequireTechnicalServiceReportForCompletion() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let completionDate = Date(timeIntervalSince1970: 1_800_000_000)
+        let call = ServiceCall(
+            type: .meeting,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        let markedComplete = call.markDocumentationCompleteIfReady(at: completionDate)
+
+        #expect(markedComplete == true)
+        #expect(call.documentationCompletedAt == completionDate)
+    }
+
+    @Test func furnaceReportReadinessUsesCombustionSpecificRequirements() async throws {
+        let customer = Customer(name: "Furnace Customer")
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        let requiredKeys = Set(call.requiredTechnicalReadingDefinitions.map { $0.key })
+
+        #expect(requiredKeys.contains("gas_pressure_manifold"))
+        #expect(requiredKeys.contains("heat_exchanger_condition"))
+        #expect(requiredKeys.contains("co_ppm"))
+        #expect(requiredKeys.contains("suction_pressure") == false)
+    }
+
+    @Test func packageUnitAndMiniSplitReadinessUseEquipmentSpecificRequirements() async throws {
+        let customer = Customer(name: "Technical Customer")
+        let packageCall = ServiceCall(
+            equipmentName: "Roof Package Unit",
+            equipmentModel: "48TC",
+            equipmentSerialNumber: "RTU123",
+            equipmentTypeRaw: HVACEquipmentType.packageUnit.rawValue,
+            serviceReportSummary: "RTU maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let miniSplitCall = ServiceCall(
+            equipmentName: "Office Mini Split",
+            equipmentModel: "MSZ",
+            equipmentSerialNumber: "MS123",
+            equipmentTypeRaw: HVACEquipmentType.miniSplit.rawValue,
+            serviceReportSummary: "Mini split maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        let packageRequiredKeys = Set(packageCall.requiredTechnicalReadingDefinitions.map(\.key))
+        let miniSplitRequiredKeys = Set(miniSplitCall.requiredTechnicalReadingDefinitions.map(\.key))
+
+        #expect(packageRequiredKeys.contains("package_heat_type"))
+        #expect(packageRequiredKeys.contains("blower_amps"))
+        #expect(packageRequiredKeys.contains("condenser_condition"))
+        #expect(miniSplitRequiredKeys.contains("indoor_head_delta_t"))
+        #expect(miniSplitRequiredKeys.contains("indoor_filter_condition"))
+        #expect(miniSplitRequiredKeys.contains("remote_operation"))
+    }
+
     @Test func onsiteReportTechnicalSectionsUseGroupedCapturedReadings() async throws {
         let customer = Customer(name: "Report Customer")
         let call = ServiceCall(
@@ -220,7 +1133,150 @@ struct GunnAire_OpsTests {
             section.title == "Technical Readings - Air Temperatures" &&
                 section.rows.contains { $0.label == "Return Air Temp (F)" && $0.value == "72" }
         })
-        #expect(sections.flatMap(\.rows).contains { $0.label == "Subcooling (F)" } == false)
+        #expect(sections.flatMap(\.rows).contains {
+            $0.label == "Subcooling (F)" && $0.value == "Missing Required Reading"
+        })
+    }
+
+    @Test func onsiteReportTechnicalSectionsMarkRequiredAndInvalidReadings() async throws {
+        let customer = Customer(name: "Validation Report Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("12", for: "superheat")
+        call.setTechnicalReading("12", for: "line_voltage")
+
+        let rows = CustomerDocumentExporter.technicalReportSectionSummaries(for: call)
+            .flatMap(\.rows)
+
+        #expect(rows.contains { $0.label == "Superheat (F)" && $0.value == "12" })
+        #expect(rows.contains { $0.label == "Superheat (F) Requirement" && $0.value == "Required" })
+        #expect(rows.contains { $0.label == "Line Voltage (V)" && $0.value == "12" })
+        #expect(rows.contains { $0.label == "Line Voltage (V) Requirement" && $0.value == "Required" })
+        #expect(rows.contains { $0.label == "Line Voltage (V) Validation" && $0.value.contains("outside expected range") })
+        #expect(rows.contains { $0.label == "Line Voltage (V) Validation" && $0.value.contains("90-600 V") })
+    }
+
+    @Test func onsiteReportReadinessRowsExposeMissingRequiredTechnicalItems() async throws {
+        let customer = Customer(name: "Readiness Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked and operating.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("72", for: "return_air_temp")
+
+        let rows = CustomerDocumentExporter.serviceReportReadinessRows(for: call)
+
+        #expect(rows.contains { $0.label == "Completion" && $0.value == "Needs details" })
+        #expect(rows.contains { $0.label == "Required Items" && $0.value == call.serviceReportReadinessSummary })
+        #expect(rows.contains { $0.label == "Missing Required Items" && $0.value.contains("Supply Air Temp (F)") })
+        #expect(rows.contains { $0.label == "Missing Required Items" && $0.value.contains("Compressor Amps (A)") })
+    }
+
+    @Test func onsiteReportReadinessRowsExposeInvalidTechnicalReadings() async throws {
+        let customer = Customer(name: "Validation Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        call.setTechnicalReading("12", for: "line_voltage")
+
+        let rows = CustomerDocumentExporter.serviceReportReadinessRows(for: call)
+
+        #expect(rows.contains { $0.label == "Completion" && $0.value == "Needs details" })
+        #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("Line Voltage") })
+        #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("90-600 V") })
+    }
+
+    @Test func onsiteReportCloseoutRowsExposeIntegratedJobReadiness() async throws {
+        let customer = Customer(name: "Closeout Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        let rows = CustomerDocumentExporter.closeoutReadinessRows(
+            for: call,
+            invoice: nil,
+            payments: [],
+            attachments: []
+        )
+
+        #expect(rows.contains { $0.label == "Status" && $0.value == "Needs closeout details" })
+        #expect(rows.contains { $0.label == "Progress" && $0.value.contains("complete") })
+        #expect(rows.contains { $0.label == "Missing Closeout Items" && $0.value.contains("Invoice created") })
+        #expect(rows.contains { $0.label == "Missing Closeout Items" && $0.value.contains("Onsite report generated") })
+    }
+
+    @Test func onsiteReportReadinessRowsMarkCompleteReportsReady() async throws {
+        let customer = Customer(name: "Ready Customer")
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+
+        let rows = CustomerDocumentExporter.serviceReportReadinessRows(for: call)
+
+        #expect(rows.contains { $0.label == "Completion" && $0.value == "Ready" })
+        #expect(rows.contains { $0.label == "Required Items" && $0.value == call.serviceReportReadinessSummary })
+        #expect(rows.contains { $0.label == "Missing Required Items" } == false)
+    }
+
+    @Test func billingDocumentJobContextIncludesEquipmentDetails() async throws {
+        let customer = Customer(name: "Billing Customer", address: "123 Service Rd")
+        let technician = Technician(name: "Lead Tech")
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentManufacturer: "Carrier",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentLocation: "Attic",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            assignedTechnician: technician,
+            customer: customer
+        )
+
+        let rows = CustomerDocumentExporter.billingJobContextSummaries(for: call)
+
+        #expect(rows.contains { $0.label == "Equipment" && $0.value.contains("Gas Furnace") })
+        #expect(rows.contains { $0.label == "Equipment" && $0.value.contains("Carrier") })
+        #expect(rows.contains { $0.label == "Equipment" && $0.value.contains("S/N FURN123") })
+        #expect(rows.contains { $0.label == "Equipment Location" && $0.value == "Attic" })
     }
 
     @Test func serviceCallCalculatesTechnicalReadingsFromFieldInputs() async throws {
@@ -239,11 +1295,42 @@ struct GunnAire_OpsTests {
         call.setTechnicalReading("100", for: "liquid_saturation_temp")
 
         #expect(call.calculateTemperatureSplitReading() == 19)
+        #expect(call.calculateTemperatureRiseReading() == -19)
         #expect(call.calculateSuperheatReading() == 12)
         #expect(call.calculateSubcoolingReading() == 10)
         #expect(call.technicalReading(for: "temperature_split") == "19.0")
+        #expect(call.technicalReading(for: "temperature_rise") == "-19.0")
         #expect(call.technicalReading(for: "superheat") == "12.0")
         #expect(call.technicalReading(for: "subcooling") == "10.0")
+    }
+
+    @Test func serviceCallAutomaticallyCalculatesDerivedTechnicalReadingsFromSourceInputs() async throws {
+        let customer = Customer(name: "Auto Diagnostic Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        call.setTechnicalReading("75", for: "return_air_temp")
+        #expect(call.technicalReading(for: "temperature_split").isEmpty)
+        #expect(call.technicalReading(for: "temperature_rise").isEmpty)
+        call.setTechnicalReading("56", for: "supply_air_temp")
+        #expect(call.technicalReading(for: "temperature_split") == "19.0")
+        #expect(call.technicalReading(for: "temperature_rise") == "-19.0")
+
+        call.setTechnicalReading("52", for: "suction_line_temp")
+        call.setTechnicalReading("40", for: "suction_saturation_temp")
+        #expect(call.technicalReading(for: "superheat") == "12.0")
+
+        call.setTechnicalReading("90", for: "liquid_line_temp")
+        call.setTechnicalReading("100", for: "liquid_saturation_temp")
+        #expect(call.technicalReading(for: "subcooling") == "10.0")
+
+        call.setTechnicalReading("-0.32", for: "static_pressure_return")
+        call.setTechnicalReading("0.28", for: "static_pressure_supply")
+        #expect(call.technicalReading(for: "total_external_static") == "0.6")
     }
 
     @Test func airHandlerCalculatesTotalExternalStaticFromReturnAndSupplyReadings() async throws {
@@ -260,6 +1347,23 @@ struct GunnAire_OpsTests {
         let totalStatic = try #require(call.calculateTotalExternalStaticReading())
         #expect(abs(totalStatic - 0.6) < 0.001)
         #expect(call.technicalReading(for: "total_external_static") == "0.6")
+    }
+
+    @Test func gasFurnaceCalculatesTemperatureRiseFromSupplyAndReturnReadings() async throws {
+        let customer = Customer(name: "Furnace Diagnostic Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("68", for: "return_air_temp")
+        call.setTechnicalReading("122", for: "supply_air_temp")
+
+        let rise = try #require(call.calculateTemperatureRiseReading())
+        #expect(rise == 54)
+        #expect(call.technicalReading(for: "temperature_rise") == "54.0")
+        #expect(call.requiredTechnicalReadingDefinitions.contains { $0.key == "temperature_rise" })
     }
 
     @Test func quickBooksMimeTypeDetection() async throws {
@@ -328,9 +1432,41 @@ struct GunnAire_OpsTests {
         #expect(alreadyLinkedReport.invoiceID == alreadyLinkedInvoiceID)
     }
 
-    @Test func serviceReportAttachmentUploadEligibilityRequiresLinkedQuickBooksInvoice() async throws {
+    @Test func serviceReportAttachmentLinksToEstimateWhenMissing() async throws {
+        let customer = Customer(name: "Estimate Report Customer")
+        let estimate = Estimate(customer: customer, amount: 250)
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let alreadyLinkedEstimateID = UUID()
+        let alreadyLinkedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            estimateID: alreadyLinkedEstimateID,
+            kind: .serviceReport,
+            displayName: "existing-estimate-report.pdf",
+            localFilePath: "/tmp/existing-estimate-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        report.linkToEstimateIfNeeded(estimate)
+        alreadyLinkedReport.linkToEstimateIfNeeded(estimate)
+
+        #expect(report.estimateID == estimate.id)
+        #expect(alreadyLinkedReport.estimateID == alreadyLinkedEstimateID)
+    }
+
+    @Test func invoiceAttachmentUploadEligibilityRequiresLinkedQuickBooksInvoice() async throws {
         let customer = Customer(name: "Report Customer")
         let invoice = Invoice(customer: customer, quickBooksID: "123", amount: 250)
+        let estimate = Estimate(customer: customer, quickBooksID: "789", amount: 250)
         let unSyncedReport = ServiceDocumentAttachment(
             customer: customer,
             serviceCallID: UUID(),
@@ -352,6 +1488,16 @@ struct GunnAire_OpsTests {
             fileSizeBytes: 1024,
             quickBooksAttachableID: "attach-1"
         )
+        let estimateSupport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            estimateID: estimate.id,
+            kind: .estimateSupport,
+            displayName: "estimate-support.pdf",
+            localFilePath: "/tmp/estimate-support.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
         let photo = ServiceDocumentAttachment(
             customer: customer,
             serviceCallID: UUID(),
@@ -362,16 +1508,42 @@ struct GunnAire_OpsTests {
             contentType: "image/jpeg",
             fileSizeBytes: 1024
         )
+        let invoiceSupport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: invoice.id,
+            kind: .invoiceSupport,
+            displayName: "invoice-support.pdf",
+            localFilePath: "/tmp/invoice-support.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let receipt = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: invoice.id,
+            kind: .receipt,
+            displayName: "receipt.jpg",
+            localFilePath: "/tmp/receipt.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
         let localOnlyInvoice = Invoice(customer: customer, amount: 250)
+        let localOnlyEstimate = Estimate(customer: customer, amount: 250)
 
         #expect(unSyncedReport.canUploadToQuickBooksInvoice(invoice) == true)
         #expect(uploadedReport.canUploadToQuickBooksInvoice(invoice) == false)
-        #expect(photo.canUploadToQuickBooksInvoice(invoice) == false)
+        #expect(photo.canUploadToQuickBooksInvoice(invoice) == true)
+        #expect(invoiceSupport.canUploadToQuickBooksInvoice(invoice) == true)
+        #expect(receipt.canUploadToQuickBooksInvoice(invoice) == false)
         #expect(unSyncedReport.canUploadToQuickBooksInvoice(localOnlyInvoice) == false)
+        #expect(estimateSupport.canUploadToQuickBooksEstimate(estimate) == true)
+        #expect(estimateSupport.canUploadToQuickBooksEstimate(localOnlyEstimate) == false)
+        #expect(receipt.canUploadToQuickBooksEstimate(estimate) == false)
     }
 
     @MainActor
-    @Test func quickBooksInvoiceAttachmentSyncFindsPendingServiceReports() async throws {
+    @Test func quickBooksInvoiceAttachmentSyncFindsPendingInvoiceAttachments() async throws {
         let customer = Customer(name: "Report Customer")
         let invoice = Invoice(customer: customer, quickBooksID: "123", amount: 250)
         let otherInvoice = Invoice(customer: customer, quickBooksID: "456", amount: 100)
@@ -396,15 +1568,210 @@ struct GunnAire_OpsTests {
             fileSizeBytes: 1024,
             quickBooksAttachableID: "attach-1"
         )
+        let pendingPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: invoice.id,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+        let receipt = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: invoice.id,
+            kind: .receipt,
+            displayName: "receipt.jpg",
+            localFilePath: "/tmp/receipt.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
 
-        let pending = QuickBooksInvoiceAttachmentSync.pendingServiceReports(
+        let pending = QuickBooksInvoiceAttachmentSync.pendingInvoiceAttachments(
             invoices: [invoice, otherInvoice],
-            attachments: [pendingReport, uploadedReport]
+            attachments: [pendingReport, uploadedReport, pendingPhoto, receipt]
+        )
+
+        #expect(pending.count == 2)
+        #expect(pending.contains { $0.attachment === pendingReport && $0.invoice === invoice })
+        #expect(pending.contains { $0.attachment === pendingPhoto && $0.invoice === invoice })
+        #expect(pending.contains { $0.attachment === receipt } == false)
+    }
+
+    @MainActor
+    @Test func quickBooksAttachmentSyncLinksJobDocumentsToBillingDocumentsBeforeUpload() async throws {
+        let customer = Customer(name: "Linked Customer")
+        let otherCustomer = Customer(name: "Other Customer")
+        let serviceCallID = UUID()
+        let invoice = Invoice(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "INV-123",
+            amount: 450
+        )
+        let estimate = Estimate(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "EST-123",
+            amount: 450
+        )
+        let serviceReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let diagnosticPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+        let mismatchedCustomerDocument = ServiceDocumentAttachment(
+            customer: otherCustomer,
+            serviceCallID: serviceCallID,
+            kind: .customerDocument,
+            displayName: "wrong-customer.pdf",
+            localFilePath: "/tmp/wrong-customer.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let changedCount = QuickBooksInvoiceAttachmentSync.linkServiceCallAttachmentsToBillingDocuments(
+            estimates: [estimate],
+            invoices: [invoice],
+            attachments: [serviceReport, diagnosticPhoto, mismatchedCustomerDocument]
+        )
+        let pendingInvoices = QuickBooksInvoiceAttachmentSync.pendingInvoiceAttachments(
+            invoices: [invoice],
+            attachments: [serviceReport, diagnosticPhoto, mismatchedCustomerDocument]
+        )
+        let pendingEstimates = QuickBooksInvoiceAttachmentSync.pendingEstimateAttachments(
+            estimates: [estimate],
+            attachments: [serviceReport, diagnosticPhoto, mismatchedCustomerDocument]
+        )
+
+        #expect(changedCount == 4)
+        #expect(serviceReport.invoiceID == invoice.id)
+        #expect(serviceReport.estimateID == estimate.id)
+        #expect(diagnosticPhoto.invoiceID == invoice.id)
+        #expect(diagnosticPhoto.estimateID == estimate.id)
+        #expect(mismatchedCustomerDocument.invoiceID == nil)
+        #expect(mismatchedCustomerDocument.estimateID == nil)
+        #expect(pendingInvoices.contains { $0.attachment === serviceReport && $0.invoice === invoice })
+        #expect(pendingInvoices.contains { $0.attachment === diagnosticPhoto && $0.invoice === invoice })
+        #expect(pendingEstimates.contains { $0.attachment === serviceReport && $0.estimate === estimate })
+        #expect(pendingEstimates.contains { $0.attachment === diagnosticPhoto && $0.estimate === estimate })
+    }
+
+    @MainActor
+    @Test func quickBooksAttachmentSyncFindsPendingEstimateAttachments() async throws {
+        let customer = Customer(name: "Estimate Attachment Customer")
+        let estimate = Estimate(customer: customer, quickBooksID: "EST-123", amount: 250)
+        let localOnlyEstimate = Estimate(customer: customer, amount: 100)
+        let pendingEstimatePDF = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            estimateID: estimate.id,
+            kind: .estimateSupport,
+            displayName: "estimate.pdf",
+            localFilePath: "/tmp/estimate.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let uploadedEstimatePDF = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            estimateID: estimate.id,
+            kind: .estimateSupport,
+            displayName: "uploaded-estimate.pdf",
+            localFilePath: "/tmp/uploaded-estimate.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "attach-1"
+        )
+        let localOnlyAttachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            estimateID: localOnlyEstimate.id,
+            kind: .estimateSupport,
+            displayName: "local-estimate.pdf",
+            localFilePath: "/tmp/local-estimate.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let pending = QuickBooksInvoiceAttachmentSync.pendingEstimateAttachments(
+            estimates: [estimate, localOnlyEstimate],
+            attachments: [pendingEstimatePDF, uploadedEstimatePDF, localOnlyAttachment]
         )
 
         #expect(pending.count == 1)
-        #expect(pending.first?.attachment === pendingReport)
-        #expect(pending.first?.invoice === invoice)
+        #expect(pending.contains { $0.attachment === pendingEstimatePDF && $0.estimate === estimate })
+    }
+
+    @MainActor
+    @Test func quickBooksAttachmentSyncQueuesGeneratedBillingPDFsLinkedByServiceCall() async throws {
+        let customer = Customer(name: "Generated Billing Customer")
+        let serviceCallID = UUID()
+        let invoice = Invoice(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "INV-123",
+            amount: 450
+        )
+        let estimate = Estimate(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "EST-123",
+            amount: 450
+        )
+        let generatedInvoicePDF = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .invoiceSupport,
+            displayName: "paid-invoice.pdf",
+            localFilePath: "/tmp/paid-invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 2048
+        )
+        let generatedEstimatePDF = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .estimateSupport,
+            displayName: "estimate.pdf",
+            localFilePath: "/tmp/estimate.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 2048
+        )
+
+        let changed = QuickBooksInvoiceAttachmentSync.linkServiceCallAttachmentsToBillingDocuments(
+            estimates: [estimate],
+            invoices: [invoice],
+            attachments: [generatedInvoicePDF, generatedEstimatePDF]
+        )
+        let pendingInvoices = QuickBooksInvoiceAttachmentSync.pendingInvoiceAttachments(
+            invoices: [invoice],
+            attachments: [generatedInvoicePDF, generatedEstimatePDF]
+        )
+        let pendingEstimates = QuickBooksInvoiceAttachmentSync.pendingEstimateAttachments(
+            estimates: [estimate],
+            attachments: [generatedInvoicePDF, generatedEstimatePDF]
+        )
+
+        #expect(changed == 4)
+        #expect(generatedInvoicePDF.invoiceID == invoice.id)
+        #expect(generatedEstimatePDF.estimateID == estimate.id)
+        #expect(pendingInvoices.contains { $0.attachment === generatedInvoicePDF && $0.invoice === invoice })
+        #expect(pendingEstimates.contains { $0.attachment === generatedEstimatePDF && $0.estimate === estimate })
     }
 
     @Test func serviceDocumentAttachmentExposesLocalFileURLForOpening() async throws {
@@ -423,9 +1790,116 @@ struct GunnAire_OpsTests {
         #expect(attachment.isImage == true)
     }
 
+    @Test func customerPrimaryPhotoPrefersProfileCaptionedImage() async throws {
+        let customer = Customer(name: "Photo Customer")
+        let olderDiagnostic = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_300)
+        )
+        let profilePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .customerDocument,
+            displayName: "customer.jpg",
+            caption: "Profile photo",
+            localFilePath: "/tmp/customer.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+        let generatedReportImage = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .serviceReport,
+            displayName: "report-preview.png",
+            localFilePath: "/tmp/report-preview.png",
+            contentType: "image/png",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_400)
+        )
+
+        let selected = ServiceDocumentAttachment.primaryCustomerPhoto(
+            for: customer,
+            in: [olderDiagnostic, profilePhoto, generatedReportImage]
+        )
+
+        #expect(selected === profilePhoto)
+    }
+
+    @Test func customerPrimaryPhotoFallsBackToLatestUsableImageForThatCustomer() async throws {
+        let customer = Customer(name: "Photo Customer")
+        let otherCustomer = Customer(name: "Other Customer")
+        let olderPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .beforePhoto,
+            displayName: "older.jpg",
+            localFilePath: "/tmp/older.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+        let newerPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .diagnosticPhoto,
+            displayName: "newer.jpg",
+            localFilePath: "/tmp/newer.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_200)
+        )
+        let unrelatedPhoto = ServiceDocumentAttachment(
+            customer: otherCustomer,
+            serviceCallID: nil,
+            kind: .diagnosticPhoto,
+            displayName: "other.jpg",
+            localFilePath: "/tmp/other.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_300)
+        )
+        let nonImage = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .customerDocument,
+            displayName: "manual.pdf",
+            localFilePath: "/tmp/manual.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 128,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_400)
+        )
+
+        let selected = ServiceDocumentAttachment.primaryCustomerPhoto(
+            for: customer,
+            in: [olderPhoto, newerPhoto, unrelatedPhoto, nonImage]
+        )
+
+        #expect(selected === newerPhoto)
+    }
+
     @Test func customerProfileAttachmentDetailLinksJobBillingAndStorageContext() async throws {
         let customer = Customer(name: "Report Customer")
-        let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer, status: .completed)
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .completed
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
         let invoice = Invoice(customer: customer, quickBooksID: "123", amount: 250, status: "paid")
         let estimate = Estimate(customer: customer, quickBooksID: "456", amount: 250, status: "accepted")
         let attachment = ServiceDocumentAttachment(
@@ -446,19 +1920,317 @@ struct GunnAire_OpsTests {
             serviceCalls: [call],
             invoices: [invoice],
             estimates: [estimate],
+            equipmentProfiles: [],
             canViewFinancials: true
         )
 
         #expect(lines.contains("Job: Maintenance - Completed"))
+        #expect(lines.contains("Report: Ready"))
         #expect(lines.contains("Invoice: Paid - QuickBooks synced"))
         #expect(lines.contains("Estimate: Accepted - QuickBooks synced"))
         #expect(lines.contains("Attached to QuickBooks invoice"))
         #expect(lines.contains("Synced to company storage"))
     }
 
+    @Test func customerProfileAttachmentDetailShowsLinkedEquipment() async throws {
+        let customer = Customer(name: "Equipment Attachment Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            manufacturer: "Carrier",
+            modelNumber: "24ABC6",
+            serialNumber: "AC123"
+        )
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: equipment.id,
+            kind: .diagnosticPhoto,
+            displayName: "compressor-plate.jpg",
+            localFilePath: "/tmp/compressor-plate.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048
+        )
+
+        let lines = attachment.customerProfileDetailLines(
+            serviceCalls: [],
+            invoices: [],
+            estimates: [],
+            equipmentProfiles: [equipment],
+            canViewFinancials: false
+        )
+
+        #expect(lines.contains { $0.contains("Equipment: Downstairs AC") })
+        #expect(lines.contains { $0.contains("Carrier") })
+        #expect(lines.contains { $0.contains("AC123") })
+    }
+
+    @Test func equipmentHistoryAttachmentsExcludeCurrentJobAndUnrelatedEquipment() async throws {
+        let customer = Customer(name: "Equipment History Customer")
+        let linkedEquipmentID = UUID()
+        let unrelatedEquipmentID = UUID()
+        let currentCall = ServiceCall(
+            customerEquipmentID: linkedEquipmentID,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let previousCall = ServiceCall(
+            customerEquipmentID: linkedEquipmentID,
+            type: .service,
+            scheduledDate: Date().addingTimeInterval(-86_400),
+            customer: customer
+        )
+        let priorEquipmentReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: previousCall.id,
+            customerEquipmentID: linkedEquipmentID,
+            kind: .serviceReport,
+            displayName: "prior-report.pdf",
+            localFilePath: "/tmp/prior-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date().addingTimeInterval(-100)
+        )
+        let priorEquipmentPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: linkedEquipmentID,
+            kind: .diagnosticPhoto,
+            displayName: "nameplate.jpg",
+            localFilePath: "/tmp/nameplate.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date()
+        )
+        let currentJobAttachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: currentCall.id,
+            customerEquipmentID: linkedEquipmentID,
+            kind: .diagnosticPhoto,
+            displayName: "current-job.jpg",
+            localFilePath: "/tmp/current-job.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048
+        )
+        let unrelatedAttachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: unrelatedEquipmentID,
+            kind: .customerDocument,
+            displayName: "other-unit.pdf",
+            localFilePath: "/tmp/other-unit.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let history = ServiceDocumentAttachment.equipmentHistoryAttachments(
+            for: currentCall,
+            in: [priorEquipmentReport, priorEquipmentPhoto, currentJobAttachment, unrelatedAttachment]
+        )
+
+        #expect(history.map(\.displayName) == ["nameplate.jpg", "prior-report.pdf"])
+    }
+
+    @Test func customerEquipmentAttachmentGroupsFilesByLinkedEquipment() async throws {
+        let customer = Customer(name: "Equipment File Customer")
+        let downstairs = CustomerEquipment(customer: customer, name: "Downstairs AC", modelNumber: "24ABC6")
+        let upstairs = CustomerEquipment(customer: customer, name: "Upstairs Furnace", modelNumber: "59TN6")
+        let downstairsOlder = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: downstairs.id,
+            kind: .customerDocument,
+            displayName: "downstairs-manual.pdf",
+            localFilePath: "/tmp/downstairs-manual.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 10)
+        )
+        let downstairsNewer = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: downstairs.id,
+            kind: .diagnosticPhoto,
+            displayName: "downstairs-nameplate.jpg",
+            localFilePath: "/tmp/downstairs-nameplate.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 20)
+        )
+        let upstairsPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: upstairs.id,
+            kind: .diagnosticPhoto,
+            displayName: "upstairs-nameplate.jpg",
+            localFilePath: "/tmp/upstairs-nameplate.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 30)
+        )
+        let unlinked = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .customerDocument,
+            displayName: "unlinked.pdf",
+            localFilePath: "/tmp/unlinked.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let groups = ServiceDocumentAttachment.groupedEquipmentAttachments(
+            equipmentProfiles: [upstairs, downstairs],
+            attachments: [downstairsOlder, downstairsNewer, upstairsPhoto, unlinked]
+        )
+
+        #expect(groups.map { $0.equipment.name } == ["Downstairs AC", "Upstairs Furnace"])
+        #expect(groups.first?.attachments.map(\.displayName) == ["downstairs-nameplate.jpg", "downstairs-manual.pdf"])
+        #expect(groups.last?.attachments.map(\.displayName) == ["upstairs-nameplate.jpg"])
+    }
+
+    @Test func customerEquipmentAttachmentGroupSummarizesFileTypes() async throws {
+        let customer = Customer(name: "Equipment Summary Customer")
+        let equipment = CustomerEquipment(customer: customer, name: "Main System")
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            customerEquipmentID: equipment.id,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 10)
+        )
+        let photo = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            customerEquipmentID: equipment.id,
+            kind: .diagnosticPhoto,
+            displayName: "photo.jpg",
+            localFilePath: "/tmp/photo.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 20)
+        )
+        let invoice = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            customerEquipmentID: equipment.id,
+            kind: .invoiceSupport,
+            displayName: "invoice.pdf",
+            localFilePath: "/tmp/invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 30)
+        )
+        let manual = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: equipment.id,
+            kind: .customerDocument,
+            displayName: "manual.pdf",
+            localFilePath: "/tmp/manual.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 40)
+        )
+
+        let group = EquipmentAttachmentGroup(equipment: equipment, attachments: [report, photo, invoice, manual])
+
+        #expect(group.serviceReportCount == 1)
+        #expect(group.photoCount == 1)
+        #expect(group.billingDocumentCount == 1)
+        #expect(group.otherDocumentCount == 1)
+        #expect(group.latestAttachmentDate == manual.createdAt)
+        #expect(group.summary == "1 report - 1 photo - 1 billing file - 1 file")
+    }
+
+    @Test func onsiteReportLinkedRecordRowsIncludeInvoiceEstimateAndQuickBooksReferences() async throws {
+        let customer = Customer(name: "Linked Report Customer")
+        let callID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let estimateID = UUID(uuidString: "22222222-3333-4444-5555-666666666666")!
+        let invoiceID = UUID(uuidString: "33333333-4444-5555-6666-777777777777")!
+        let call = ServiceCall(
+            id: callID,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.linkedEstimateID = estimateID
+        call.linkedInvoiceID = invoiceID
+        let estimate = Estimate(id: estimateID, customer: customer, quickBooksID: "QBO-EST-42", amount: 500, status: "accepted")
+        let invoice = Invoice(id: invoiceID, customer: customer, quickBooksID: "QBO-INV-99", amount: 500, status: "paid")
+
+        let rows = CustomerDocumentExporter.linkedRecordRows(serviceCall: call, estimate: estimate, invoice: invoice)
+        let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(serviceCall: call, estimate: estimate, invoice: invoice)
+
+        #expect(rows.contains { $0.label == "Job ID" && $0.value == "11111111" })
+        #expect(rows.contains { $0.label == "Estimate ID" && $0.value == "22222222" })
+        #expect(rows.contains { $0.label == "QuickBooks Estimate ID" && $0.value == "QBO-EST-42" })
+        #expect(rows.contains { $0.label == "Invoice ID" && $0.value == "33333333" })
+        #expect(rows.contains { $0.label == "QuickBooks Invoice ID" && $0.value == "QBO-INV-99" })
+        #expect(caption.contains("Generated onsite maintenance report"))
+        #expect(caption.contains("QuickBooks Invoice ID: QBO-INV-99"))
+        #expect(caption.contains("QuickBooks Estimate ID: QBO-EST-42"))
+    }
+
+    @Test func billingDocumentsIncludeLinkedOnsiteDocumentationSummary() async throws {
+        let customer = Customer(name: "Billing Documentation Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System operational after diagnostics.",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer,
+            findingsSummary: "Compressor capacitor weak.",
+            recommendedWorkSummary: "Replace capacitor and wash condenser coil."
+        )
+        call.setTechnicalReading("76", for: "return_air_temp")
+        call.setTechnicalReading("56", for: "supply_air_temp")
+        call.setTechnicalReading("12", for: "superheat")
+
+        let summaries = CustomerDocumentExporter.billingDocumentationSummaries(for: call)
+        let hasOnsiteDocumentation = summaries.contains { summary in
+            summary.title == "Onsite Documentation"
+        }
+        let hasFindingsSummary = summaries.contains { summary in
+            summary.title == "Service Summary" &&
+                summary.rows.contains { row in
+                    row.label == "Findings" && row.value.contains("capacitor weak")
+                }
+        }
+        let hasTechnicalSnapshot = summaries.contains { summary in
+            summary.title == "Technical Snapshot" &&
+                summary.rows.contains { row in
+                    row.label == "Superheat (F)" && row.value == "12"
+                }
+        }
+
+        #expect(hasOnsiteDocumentation)
+        #expect(hasFindingsSummary)
+        #expect(hasTechnicalSnapshot)
+    }
+
     @Test func customerProfileAttachmentDetailHidesBillingContextForStandardUsers() async throws {
         let customer = Customer(name: "Report Customer")
-        let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer, status: .completed)
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .completed
+        )
+        call.setTechnicalReading("72", for: "return_air_temp")
         let invoice = Invoice(customer: customer, quickBooksID: "123", amount: 250, status: "paid")
         let attachment = ServiceDocumentAttachment(
             customer: customer,
@@ -476,10 +2248,16 @@ struct GunnAire_OpsTests {
             serviceCalls: [call],
             invoices: [invoice],
             estimates: [],
+            equipmentProfiles: [],
             canViewFinancials: false
         )
 
-        #expect(lines == ["Job: Maintenance - Completed"])
+        #expect(lines.contains("Job: Maintenance - Completed"))
+        #expect(lines.contains { $0.contains("Documentation is not complete") })
+        #expect(lines.contains { $0.contains("Supply Air Temp (F)") })
+        #expect(lines.contains { $0.contains("Invoice") } == false)
+        #expect(lines.contains { $0.contains("QuickBooks") } == false)
+        #expect(lines.contains { $0.contains("403") } == false)
     }
 
     @Test func onsiteReportAttachmentManifestIncludesSupportFilesAndExcludesGeneratedReports() async throws {
@@ -523,6 +2301,64 @@ struct GunnAire_OpsTests {
         #expect(summaries.contains { $0.label == "Diagnostic Photo" && $0.detail.contains("Burner compartment") })
         #expect(summaries.contains { $0.label == "Customer Document" && $0.detail.contains("site-access.pdf") })
         #expect(summaries.contains { $0.detail.contains("generated-report.pdf") } == false)
+    }
+
+    @Test func onsiteReportPhotoEvidenceIncludesJobImagesInStableOrder() async throws {
+        let customer = Customer(name: "Report Customer")
+        let serviceCallID = UUID()
+        let beforePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .beforePhoto,
+            displayName: "before.jpg",
+            caption: "Before repair",
+            localFilePath: "/tmp/before.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        let diagnosticPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            caption: "Failed capacitor",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+        let customerImage = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .customerDocument,
+            displayName: "panel-label.png",
+            caption: "Equipment data plate",
+            localFilePath: "/tmp/panel-label.png",
+            contentType: "image/png",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_200)
+        )
+        let generatedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .serviceReport,
+            displayName: "generated-report.pdf",
+            localFilePath: "/tmp/generated-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 8192,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_300)
+        )
+
+        let evidence = CustomerDocumentExporter.photoEvidenceSummaries(
+            for: [generatedReport, customerImage, diagnosticPhoto, beforePhoto]
+        )
+
+        #expect(evidence.map(\.label) == ["Before Photo", "Diagnostic Photo", "Customer Document"])
+        #expect(evidence[0].detail.contains("Before repair"))
+        #expect(evidence[1].detail.contains("Failed capacitor"))
+        #expect(evidence[2].detail.contains("Equipment data plate"))
+        #expect(evidence.contains { $0.detail.contains("generated-report.pdf") } == false)
     }
 
     @Test func generatedServiceReportAttachmentCanBeReusedForSameJobBillingLink() async throws {
@@ -586,6 +2422,114 @@ struct GunnAire_OpsTests {
         #expect(reusable.fileSizeBytes == 4096)
         #expect(reusable.quickBooksAttachableID == nil)
         #expect(reusable.quickBooksSyncError == nil)
+    }
+
+    @Test func generatedServiceReportFallsBackToUnlinkedJobReportWhenInvoiceIsCreatedLater() async throws {
+        let customer = Customer(name: "Report Customer")
+        let serviceCallID = UUID()
+        let invoiceID = UUID()
+        let unlinkedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .serviceReport,
+            displayName: "pre-invoice-report.pdf",
+            localFilePath: "/tmp/pre-invoice-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 10)
+        )
+        let unrelatedUnlinkedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            kind: .serviceReport,
+            displayName: "other-job-report.pdf",
+            localFilePath: "/tmp/other-job-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 20)
+        )
+
+        let reusable = try #require(ServiceDocumentAttachment.reusableGeneratedServiceReport(
+            in: [unlinkedReport, unrelatedUnlinkedReport],
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            estimateID: nil
+        ))
+        reusable.linkToInvoiceIfNeeded(Invoice(
+            id: invoiceID,
+            serviceCallID: serviceCallID,
+            customer: customer,
+            amount: 250,
+            status: "unpaid"
+        ))
+
+        #expect(reusable.id == unlinkedReport.id)
+        #expect(reusable.invoiceID == invoiceID)
+    }
+
+    @Test func generatedBillingDocumentAttachmentCanBeReusedForSameBillingLink() async throws {
+        let customer = Customer(name: "Billing Customer")
+        let serviceCallID = UUID()
+        let estimateID = UUID()
+        let invoiceID = UUID()
+        let olderEstimate = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            estimateID: estimateID,
+            kind: .estimateSupport,
+            displayName: "older-estimate.pdf",
+            localFilePath: "/tmp/older-estimate.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 10)
+        )
+        let latestEstimate = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            estimateID: estimateID,
+            kind: .estimateSupport,
+            displayName: "latest-estimate.pdf",
+            localFilePath: "/tmp/latest-estimate.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 20)
+        )
+        let invoiceDocument = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            kind: .invoiceSupport,
+            displayName: "invoice.pdf",
+            localFilePath: "/tmp/invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 30)
+        )
+
+        let reusableEstimate = try #require(ServiceDocumentAttachment.reusableGeneratedBillingDocument(
+            in: [olderEstimate, latestEstimate, invoiceDocument],
+            kind: .estimateSupport,
+            serviceCallID: serviceCallID,
+            invoiceID: nil,
+            estimateID: estimateID
+        ))
+        let reusableInvoice = try #require(ServiceDocumentAttachment.reusableGeneratedBillingDocument(
+            in: [olderEstimate, latestEstimate, invoiceDocument],
+            kind: .invoiceSupport,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            estimateID: nil
+        ))
+
+        #expect(reusableEstimate.id == latestEstimate.id)
+        #expect(reusableInvoice.id == invoiceDocument.id)
+        #expect(ServiceDocumentAttachment.reusableGeneratedBillingDocument(
+            in: [olderEstimate, latestEstimate, invoiceDocument],
+            kind: .invoiceSupport,
+            serviceCallID: serviceCallID,
+            invoiceID: nil,
+            estimateID: estimateID
+        ) == nil)
     }
 
     @Test func quickBooksUploadMetadataCanReferenceInvoiceForSend() async throws {
@@ -774,6 +2718,7 @@ struct GunnAire_OpsTests {
         let patch = GoogleCalendarScheduleSync.makeScheduleOnlyPatch(for: call)
         let encoded = try JSONEncoder().encode(patch)
         let payload = String(data: encoded, encoding: .utf8) ?? ""
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
 
         #expect(payload.contains("\"start\""))
         #expect(payload.contains("\"end\""))
@@ -781,6 +2726,7 @@ struct GunnAire_OpsTests {
         #expect(payload.contains("description") == false)
         #expect(payload.contains("location") == false)
         #expect(payload.contains("attendees") == false)
+        #expect(Set(object.keys) == ["start", "end"])
     }
 
     @MainActor
@@ -815,6 +2761,90 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
+    @Test func googleCalendarImportedEventsDoNotPublishAfterLocalEdits() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let importedCall = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "google-owned-event",
+            googleEventManagedByApp: false,
+            eventTitle: "Imported title",
+            siteAddress: "Imported address",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer,
+            notes: "Imported details"
+        )
+        let appOwnedCall = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "app-owned-event",
+            googleEventManagedByApp: true,
+            eventTitle: "App title",
+            siteAddress: "App address",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer,
+            notes: "App details"
+        )
+        let newAppCall = ServiceCall(
+            googleCalendarID: "primary",
+            eventTitle: "New app event",
+            siteAddress: "New address",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer,
+            notes: "New details"
+        )
+
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: importedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: newAppCall) == true)
+    }
+
+    @MainActor
+    @Test func googleCalendarExternalEventsRemainReadOnlyAfterLocalFieldChanges() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let importedCall = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "google-owned-event",
+            googleEventManagedByApp: false,
+            eventTitle: "Edited local title",
+            siteAddress: "",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3600,
+            customer: customer,
+            notes: ""
+        )
+
+        #expect(GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(importedCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: importedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: importedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: importedCall) == true)
+    }
+
+    @MainActor
+    @Test func googleCalendarAppOwnedEventsCanMaintainAppDetails() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let appOwnedCall = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "app-owned-event",
+            googleEventManagedByApp: true,
+            eventTitle: "App title",
+            siteAddress: "App address",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3600,
+            customer: customer,
+            notes: "App details"
+        )
+
+        #expect(GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(appOwnedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == true)
+        #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: appOwnedCall) == false)
+    }
+
+    @MainActor
     @Test func googleCalendarExistingEventRequiresRemoteOwnershipMarkerBeforePatch() async throws {
         let customer = Customer(name: "Calendar Customer")
         let call = ServiceCall(
@@ -845,6 +2875,21 @@ struct GunnAire_OpsTests {
             location: "Keep this address",
             htmlLink: nil,
             attendees: nil,
+            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
+                "gunnaireManaged": "true",
+                "gunnaireManagedVersion": "3",
+                "gunnaireOrigin": "ios-app"
+            ]),
+            start: start,
+            end: end
+        )
+        let legacyMarkedRemoteEvent = GoogleCalendarEvent(
+            id: "event-123",
+            summary: "Existing Google title",
+            description: "Keep this body",
+            location: "Keep this address",
+            htmlLink: nil,
+            attendees: nil,
             extendedProperties: GoogleCalendarExtendedProperties(privateProperties: ["gunnaireManaged": "true"]),
             start: start,
             end: end
@@ -852,10 +2897,11 @@ struct GunnAire_OpsTests {
 
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: nil) == false)
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: unmarkedRemoteEvent) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: legacyMarkedRemoteEvent) == false)
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent) == true)
     }
 
-    @Test func googleCalendarManagedMarkerUsesGooglePrivateExtendedProperties() async throws {
+    @Test func googleCalendarManagedMarkerUsesVersionedGooglePrivateExtendedProperties() async throws {
         let event = GoogleWritableCalendarEvent(
             summary: "App-created service call",
             description: nil,
@@ -863,7 +2909,11 @@ struct GunnAire_OpsTests {
             start: GoogleWritableCalendarEventDate(dateTime: "2027-01-15T13:00:00Z", timeZone: "America/New_York"),
             end: GoogleWritableCalendarEventDate(dateTime: "2027-01-15T14:00:00Z", timeZone: "America/New_York"),
             attendees: nil,
-            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: ["gunnaireManaged": "true"])
+            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
+                "gunnaireManaged": "true",
+                "gunnaireManagedVersion": "3",
+                "gunnaireOrigin": "ios-app"
+            ])
         )
         let encoded = try JSONEncoder().encode(event)
         let payload = String(data: encoded, encoding: .utf8) ?? ""
@@ -871,6 +2921,54 @@ struct GunnAire_OpsTests {
         #expect(payload.contains("\"extendedProperties\""))
         #expect(payload.contains("\"private\""))
         #expect(payload.contains("\"gunnaireManaged\":\"true\""))
+        #expect(payload.contains("\"gunnaireManagedVersion\":\"3\""))
+        #expect(payload.contains("\"gunnaireOrigin\":\"ios-app\""))
+    }
+
+    @Test func googleCalendarImportPreservesAppManagedOwnershipMarker() async throws {
+        let start = GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T13:00:00Z", timeZone: nil)
+        let end = GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T14:00:00Z", timeZone: nil)
+        let externallyManagedEvent = GoogleCalendarEvent(
+            id: "external-event",
+            summary: "Customer reminder",
+            description: "Do not overwrite",
+            location: "Customer site",
+            htmlLink: nil,
+            attendees: nil,
+            extendedProperties: nil,
+            start: start,
+            end: end
+        )
+        let appManagedEvent = GoogleCalendarEvent(
+            id: "app-event",
+            summary: "GunnAire service",
+            description: "App-created",
+            location: "Customer site",
+            htmlLink: nil,
+            attendees: nil,
+            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
+                "gunnaireManaged": "true",
+                "gunnaireManagedVersion": "3",
+                "gunnaireOrigin": "ios-app"
+            ]),
+            start: start,
+            end: end
+        )
+        let legacyMarkedEvent = GoogleCalendarEvent(
+            id: "legacy-event",
+            summary: "Older touched event",
+            description: "Do not overwrite",
+            location: "Customer site",
+            htmlLink: nil,
+            attendees: nil,
+            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: ["gunnaireManaged": "true"]),
+            start: start,
+            end: end
+        )
+
+        #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(externallyManagedEvent) == false)
+        #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(legacyMarkedEvent) == false)
+        #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(appManagedEvent) == true)
     }
 
     @Test func gmailRawMessageIncludesPdfAttachment() async throws {
@@ -892,6 +2990,62 @@ struct GunnAire_OpsTests {
         #expect(message.contains("Content-Type: application/pdf; name=\"GunnAire-Estimate.pdf\""))
         #expect(message.contains("Content-Disposition: attachment; filename=\"GunnAire-Estimate.pdf\""))
         #expect(message.contains(Data("pdf-data".utf8).base64EncodedString()))
+    }
+
+    @Test func generatedBillingDocumentEmailCanCarryPdfAttachment() async throws {
+        let attachment = GmailAttachment(
+            fileName: "GunnAire-Invoice.pdf",
+            mimeType: "application/pdf",
+            data: Data("%PDF generated invoice".utf8)
+        )
+
+        let message = GoogleAuthManager.makeGmailRawMessage(
+            to: "customer@example.com",
+            subject: "GunnAire Paid Invoice",
+            body: "Attached is your GunnAire paid invoice.",
+            attachments: [attachment]
+        )
+
+        #expect(message.contains("To: customer@example.com"))
+        #expect(message.contains("Subject: GunnAire Paid Invoice"))
+        #expect(message.contains("Content-Type: application/pdf; name=\"GunnAire-Invoice.pdf\""))
+        #expect(message.contains("Content-Disposition: attachment; filename=\"GunnAire-Invoice.pdf\""))
+    }
+
+    @Test func invoiceDocumentLabelUsesOpenInvoiceUntilFullyPaid() async throws {
+        let customer = Customer(name: "Invoice Customer")
+        let invoice = Invoice(
+            customer: customer,
+            lineItemSummary: "Service labor",
+            amount: 500,
+            status: "sent"
+        )
+        let partialPayment = Payment(invoice: invoice, amount: 125, method: "card")
+
+        #expect(CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: []) == "Invoice")
+        #expect(CustomerDocumentExporter.invoiceDocumentCaption(for: invoice, payments: []) == "Generated invoice PDF")
+        #expect(CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: [partialPayment]) == "Invoice")
+    }
+
+    @Test func invoiceDocumentLabelUsesPaidInvoiceWhenSettled() async throws {
+        let customer = Customer(name: "Invoice Customer")
+        let paidByStatus = Invoice(
+            customer: customer,
+            lineItemSummary: "Service labor",
+            amount: 500,
+            status: "paid"
+        )
+        let paidByBalance = Invoice(
+            customer: customer,
+            lineItemSummary: "Service labor",
+            amount: 500,
+            status: "sent"
+        )
+        let fullPayment = Payment(invoice: paidByBalance, amount: 500, method: "ach")
+
+        #expect(CustomerDocumentExporter.invoiceDocumentLabel(for: paidByStatus, payments: []) == "Paid Invoice")
+        #expect(CustomerDocumentExporter.invoiceDocumentLabel(for: paidByBalance, payments: [fullPayment]) == "Paid Invoice")
+        #expect(CustomerDocumentExporter.invoiceDocumentCaption(for: paidByBalance, payments: [fullPayment]) == "Generated paid invoice PDF")
     }
 
     @Test func mailDraftRoutePersistsAttachmentPaths() async throws {
@@ -1003,6 +3157,186 @@ struct GunnAire_OpsTests {
         let balance = CustomerIntelligence.outstandingBalance(for: invoice, payments: [payment, refund])
 
         #expect(balance == 725)
+    }
+
+    @Test func invoiceStatusRankingPreservesPaidStateDuringDuplicateMerge() async throws {
+        let paidInvoice = Invoice(customer: Customer(name: "Paid Customer"), amount: 500, status: " Paid ")
+
+        #expect(paidInvoice.normalizedStatus == "paid")
+        #expect(Invoice.mostResolvedStatus("unpaid", "paid") == "paid")
+        #expect(Invoice.mostResolvedStatus("overdue", "partial") == "partial")
+        #expect(Invoice.mostResolvedStatus("paid", "partial") == "paid")
+        #expect(Invoice.mostResolvedStatus("", "unpaid") == "unpaid")
+    }
+
+    @Test func invoiceDisplayDeduplicationPrefersPaidQuickBooksRecord() async throws {
+        let customer = Customer(name: "Display Customer")
+        let serviceCallID = UUID()
+        let localDuplicate = Invoice(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            amount: 500,
+            status: "unpaid",
+            createdAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        let quickBooksPaid = Invoice(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "INV-123",
+            amount: 500,
+            status: "paid",
+            createdAt: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+
+        let displayed = Invoice.displayDeduplicated([localDuplicate, quickBooksPaid])
+
+        #expect(displayed.count == 1)
+        #expect(displayed.first === quickBooksPaid)
+        #expect(displayed.first?.normalizedStatus == "paid")
+    }
+
+    @Test func estimateDisplayDeduplicationPrefersQuickBooksRecord() async throws {
+        let customer = Customer(name: "Estimate Display Customer")
+        let serviceCallID = UUID()
+        let localDuplicate = Estimate(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            amount: 750,
+            status: "pending",
+            createdAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        let quickBooksEstimate = Estimate(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "EST-123",
+            amount: 750,
+            status: "accepted",
+            createdAt: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+
+        let displayed = Estimate.displayDeduplicated([localDuplicate, quickBooksEstimate])
+
+        #expect(displayed.count == 1)
+        #expect(displayed.first === quickBooksEstimate)
+        #expect(displayed.first?.status == "accepted")
+    }
+
+    @Test func invoicePaymentHistoryRowsLabelRefundsClearly() async throws {
+        let customer = Customer(name: "Refund Customer")
+        let invoice = Invoice(customer: customer, amount: 1_000, status: "partial")
+        let payment = Payment(
+            invoice: invoice,
+            amount: 400,
+            date: Date(timeIntervalSince1970: 20),
+            method: "card"
+        )
+        let refund = Payment(
+            invoice: invoice,
+            amount: 125,
+            date: Date(timeIntervalSince1970: 40),
+            method: "card",
+            isRefund: true,
+            refundedPaymentID: payment.id
+        )
+
+        let rows = CustomerDocumentExporter.invoicePaymentHistoryRows(for: [refund, payment])
+
+        #expect(rows.count == 2)
+        #expect(rows[0].value.contains("Payment"))
+        #expect(rows[0].value.contains("$400"))
+        #expect(rows[1].value.contains("Refund"))
+        #expect(rows[1].value.contains("-$125"))
+    }
+
+    @Test func paymentSharedCompanyQueueFailureDoesNotRequireQuickBooksRetry() async throws {
+        let customer = Customer(name: "Queue Customer")
+        let invoice = Invoice(customer: customer, amount: 250, status: "partial")
+        let payment = Payment(
+            invoice: invoice,
+            processorSyncStatus: "needs_attention",
+            processorSyncDetail: "Shared company payment queue upload failed: offline",
+            amount: 250,
+            method: "card"
+        )
+
+        #expect(payment.needsSharedCompanyQueueUpload)
+        #expect(payment.needsQuickBooksAttention == false)
+    }
+
+    @Test func paymentProcessorFailureStillRequiresQuickBooksRetryWhenNotCompanyQueue() async throws {
+        let customer = Customer(name: "Processor Customer")
+        let invoice = Invoice(customer: customer, amount: 250, status: "partial")
+        let payment = Payment(
+            invoice: invoice,
+            processorSyncStatus: "needs_attention",
+            processorSyncDetail: "QuickBooks Payments authorization failed.",
+            amount: 250,
+            method: "card"
+        )
+
+        #expect(payment.needsSharedCompanyQueueUpload == false)
+        #expect(payment.needsQuickBooksAttention)
+    }
+
+    @Test func backendPaymentCollectionsDecodeSharedFieldQueueResponse() async throws {
+        let json = Data("""
+        {
+          "payments": [
+            {
+              "id": "queue-record-1",
+              "paymentID": "payment-1",
+              "invoiceID": "invoice-1",
+              "invoiceQuickBooksID": "123",
+              "customerName": "Shared Customer",
+              "customerEmail": "customer@example.com",
+              "amount": 275.5,
+              "method": "card",
+              "cardLast4": "4242",
+              "authorizationReference": "auth-1",
+              "processor": "quickbooks-payments",
+              "notes": "Field collection",
+              "collectedBy": "tech@gunnaire.com",
+              "collectedAt": "2026-08-13T14:00:00Z",
+              "createdAt": "2026-08-13T14:01:00Z"
+            }
+          ]
+        }
+        """.utf8)
+
+        let records = try GunnAireBackendService.decodePaymentCollections(from: json)
+
+        #expect(records.count == 1)
+        #expect(records[0].paymentID == "payment-1")
+        #expect(records[0].customerName == "Shared Customer")
+        #expect(records[0].amount == 275.5)
+        #expect(records[0].collectedBy == "tech@gunnaire.com")
+    }
+
+    @Test func backendDocumentsDecodeSharedDocumentInventoryResponse() async throws {
+        let json = Data("""
+        {
+          "documents": [
+            {
+              "id": "document-1",
+              "filename": "service-report.pdf",
+              "contentType": "application/pdf",
+              "kind": "service_report",
+              "serviceCallID": "call-1",
+              "customerName": "Shared Customer",
+              "storedPath": "/storage/service-report.pdf",
+              "createdAt": "2026-08-13T14:01:00Z"
+            }
+          ]
+        }
+        """.utf8)
+
+        let records = try GunnAireBackendService.decodeDocuments(from: json)
+
+        #expect(records.count == 1)
+        #expect(records[0].id == "document-1")
+        #expect(records[0].filename == "service-report.pdf")
+        #expect(records[0].kind == "service_report")
+        #expect(records[0].customerName == "Shared Customer")
     }
 
     @Test func customerIntelligencePrioritizesOverdueCollection() async throws {

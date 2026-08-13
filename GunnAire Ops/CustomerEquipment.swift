@@ -85,6 +85,67 @@ final class CustomerEquipment {
         serviceCall.equipmentLocation = location
         serviceCall.equipmentInstallDate = installDate
         serviceCall.equipmentWarrantyExpiration = warrantyExpiration
+        serviceCall.filterSize = filterSize
+    }
+
+    func matches(_ serviceCall: ServiceCall) -> Bool {
+        if serviceCall.customerEquipmentID == id {
+            return true
+        }
+        if let customer, serviceCall.customer.id != customer.id {
+            return false
+        }
+        if let serial = normalized(serialNumber),
+           let callSerial = normalized(serviceCall.equipmentSerialNumber),
+           serial == callSerial {
+            return true
+        }
+        guard let equipmentName = normalized(name),
+              let callEquipmentName = normalized(serviceCall.equipmentName),
+              equipmentName == callEquipmentName else {
+            return false
+        }
+        if let model = normalized(modelNumber),
+           let callModel = normalized(serviceCall.equipmentModel) {
+            return model == callModel
+        }
+        return true
+    }
+
+    func matchingServiceCalls(in serviceCalls: [ServiceCall]) -> [ServiceCall] {
+        serviceCalls
+            .filter { matches($0) }
+            .sorted { $0.scheduledDate > $1.scheduledDate }
+    }
+
+    func serviceHistorySummary(in serviceCalls: [ServiceCall], now: Date = Date()) -> String? {
+        let matchingCalls = matchingServiceCalls(in: serviceCalls)
+        guard !matchingCalls.isEmpty else { return nil }
+
+        let lastCompleted = matchingCalls
+            .filter { $0.scheduledDate <= now && $0.status != .cancelled }
+            .max { $0.scheduledDate < $1.scheduledDate }
+        let nextScheduled = matchingCalls
+            .filter { $0.scheduledDate > now && $0.status != .cancelled }
+            .min { $0.scheduledDate < $1.scheduledDate }
+        let parts = [
+            lastCompleted.map { "Last: \($0.scheduledDate.formatted(date: .abbreviated, time: .omitted))" },
+            nextScheduled.map { "Next: \($0.scheduledDate.formatted(date: .abbreviated, time: .omitted))" },
+            "\(matchingCalls.count) job\(matchingCalls.count == 1 ? "" : "s")"
+        ]
+        .compactMap { $0 }
+        return parts.joined(separator: " • ")
+    }
+
+    func latestCompletedServiceCall(in serviceCalls: [ServiceCall], now: Date = Date()) -> ServiceCall? {
+        matchingServiceCalls(in: serviceCalls)
+            .filter { $0.scheduledDate <= now && $0.status != .cancelled }
+            .max { $0.scheduledDate < $1.scheduledDate }
+    }
+
+    func latestTechnicalReadingsSummary(in serviceCalls: [ServiceCall], now: Date = Date()) -> String? {
+        latestCompletedServiceCall(in: serviceCalls, now: now)?
+            .technicalReadingServiceHistorySummary
     }
 
     func updateFrom(
@@ -111,5 +172,25 @@ final class CustomerEquipment {
         self.filterSize = filterSize
         self.notes = notes
         self.isActive = isActive
+    }
+
+    static func mergedNotes(existing: String?, serviceHistoryNote: String?) -> String? {
+        let trimmedExisting = existing?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmedServiceNote = serviceHistoryNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedServiceNote.isEmpty else {
+            return trimmedExisting.isEmpty ? nil : trimmedExisting
+        }
+        guard !trimmedExisting.isEmpty else {
+            return trimmedServiceNote
+        }
+        if trimmedExisting.localizedCaseInsensitiveContains(trimmedServiceNote) {
+            return trimmedExisting
+        }
+        return "\(trimmedExisting)\n\n\(trimmedServiceNote)"
+    }
+
+    private func normalized(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return trimmed?.isEmpty == false ? trimmed : nil
     }
 }

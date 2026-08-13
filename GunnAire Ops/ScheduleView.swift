@@ -10,6 +10,7 @@ struct ScheduleView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
@@ -119,7 +120,7 @@ struct ScheduleView: View {
         callsForSignedInUser
             .filter { call in
                 guard let invoice = invoice(for: call) else { return false }
-                return invoice.finalizedAt == nil || invoice.customerSignedAt == nil
+                return !closeoutReadiness(for: call, invoice: invoice).isReady
             }
             .sorted { $0.scheduledDate > $1.scheduledDate }
     }
@@ -1041,7 +1042,7 @@ struct ScheduleView: View {
         let paid = payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
-                partial + payment.amount
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
             }
         return max(invoice.amount - paid, 0)
     }
@@ -1081,16 +1082,19 @@ struct ScheduleView: View {
 
     private func closeoutReason(for call: ServiceCall) -> String {
         guard let invoice = invoice(for: call) else { return "Invoice needs closeout" }
-        if invoice.customerSignedAt == nil && invoice.finalizedAt == nil {
-            return "Signature and finalization missing"
-        }
-        if invoice.customerSignedAt == nil {
-            return "Customer signature missing"
-        }
-        if invoice.finalizedAt == nil {
-            return "Invoice finalization missing"
-        }
-        return "Invoice needs closeout"
+        let readiness = closeoutReadiness(for: call, invoice: invoice)
+        return readiness.missingItems.first ?? readiness.statusLabel
+    }
+
+    private func closeoutReadiness(for call: ServiceCall, invoice: Invoice?) -> JobCloseoutReadiness {
+        call.closeoutReadiness(
+            invoice: invoice,
+            payments: payments.filter { payment in
+                guard let invoice else { return false }
+                return payment.invoice.id == invoice.id
+            },
+            attachments: attachments.filter { $0.serviceCallID == call.id }
+        )
     }
 
     private func maintenanceReason(for contract: RecurringMaintenanceContract) -> String {
@@ -1302,6 +1306,10 @@ GunnAire
         if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
             call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
         }
+        guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else {
+            try? modelContext.save()
+            return
+        }
         publishToGoogleCalendar(call)
     }
 
@@ -1311,6 +1319,10 @@ GunnAire
             call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
         }
         call.scheduledDate = newStart
+        guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else {
+            try? modelContext.save()
+            return
+        }
         publishToGoogleCalendar(call)
     }
 

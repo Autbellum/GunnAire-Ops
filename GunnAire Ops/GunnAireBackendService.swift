@@ -17,9 +17,38 @@ struct BackendDocumentUploadResponse: Codable {
     let createdAt: String?
 }
 
+struct BackendDocumentRecord: Codable, Identifiable {
+    let id: String
+    let filename: String
+    let contentType: String
+    let kind: String
+    let serviceCallID: String?
+    let customerName: String?
+    let storedPath: String?
+    let createdAt: String?
+}
+
 struct BackendPaymentUploadResponse: Codable {
     let id: String
     let paymentID: String
+    let createdAt: String?
+}
+
+struct BackendPaymentCollectionRecord: Codable, Identifiable {
+    let id: String
+    let paymentID: String
+    let invoiceID: String?
+    let invoiceQuickBooksID: String?
+    let customerName: String
+    let customerEmail: String?
+    let amount: Double
+    let method: String
+    let cardLast4: String?
+    let authorizationReference: String?
+    let processor: String?
+    let notes: String?
+    let collectedBy: String?
+    let collectedAt: String
     let createdAt: String?
 }
 
@@ -46,6 +75,14 @@ enum GunnAireBackendError: LocalizedError {
 enum GunnAireBackendService {
     private struct UsersResponse: Codable {
         let users: [BackendAppUserRecord]
+    }
+
+    private struct PaymentsResponse: Codable {
+        let payments: [BackendPaymentCollectionRecord]
+    }
+
+    private struct DocumentsResponse: Codable {
+        let documents: [BackendDocumentRecord]
     }
 
     private struct UserPayload: Codable {
@@ -86,6 +123,29 @@ enum GunnAireBackendService {
     static func fetchUsers() async throws -> [BackendAppUserRecord] {
         let data = try await send(path: "/api/users", method: "GET")
         return try JSONDecoder().decode(UsersResponse.self, from: data).users
+    }
+
+    static func fetchPaymentCollections() async throws -> [BackendPaymentCollectionRecord] {
+        let data = try await send(path: "/api/payments", method: "GET")
+        return try decodePaymentCollections(from: data)
+    }
+
+    static func decodePaymentCollections(from data: Data) throws -> [BackendPaymentCollectionRecord] {
+        try JSONDecoder().decode(PaymentsResponse.self, from: data).payments
+    }
+
+    static func fetchDocuments() async throws -> [BackendDocumentRecord] {
+        let data = try await send(path: "/api/documents", method: "GET")
+        return try decodeDocuments(from: data)
+    }
+
+    static func decodeDocuments(from data: Data) throws -> [BackendDocumentRecord] {
+        try JSONDecoder().decode(DocumentsResponse.self, from: data).documents
+    }
+
+    static func downloadDocument(id: String) async throws -> Data {
+        let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await send(path: "/api/documents/\(encodedID)/download", method: "GET")
     }
 
     @discardableResult

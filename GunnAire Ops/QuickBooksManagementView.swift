@@ -1820,7 +1820,7 @@ struct QuickBooksManagementView: View {
         let netPayments = localPayments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
-                partial + payment.amount
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
             }
         return max(invoice.amount - netPayments, 0)
     }
@@ -2888,7 +2888,7 @@ private struct QuickBooksCardChargeComposeView: View {
         let netPayments = payments
             .filter { $0.invoice.id == invoice.id }
             .reduce(0) { partial, payment in
-                partial + payment.amount
+                partial + (payment.isRefund ? -payment.amount : payment.amount)
             }
         return max(invoice.amount - netPayments, 0)
     }

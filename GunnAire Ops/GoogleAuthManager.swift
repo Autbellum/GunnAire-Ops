@@ -85,7 +85,10 @@ struct GoogleCalendarEvent: Codable, Identifiable {
     let end: GoogleCalendarEventDate
 
     var isManagedByGunnAire: Bool {
-        extendedProperties?.privateProperties?["gunnaireManaged"] == "true"
+        let properties = extendedProperties?.privateProperties
+        return properties?["gunnaireManaged"] == "true" &&
+            properties?["gunnaireManagedVersion"] == "3" &&
+            properties?["gunnaireOrigin"] == "ios-app"
     }
 }
 
@@ -125,12 +128,15 @@ struct GoogleWritableCalendarEvent: Codable {
 }
 
 struct GoogleCalendarEventPatch: Codable {
-    let summary: String?
-    let description: String?
-    let location: String?
     let start: GoogleWritableCalendarEventDate?
     let end: GoogleWritableCalendarEventDate?
-    let attendees: [GoogleWritableCalendarAttendee]?
+    let extendedProperties: GoogleCalendarExtendedProperties?
+
+    private enum CodingKeys: String, CodingKey {
+        case start
+        case end
+        case extendedProperties
+    }
 }
 
 struct GoogleCalendarExtendedProperties: Codable {
@@ -561,7 +567,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         authorizedJSONRequest(url: url, method: "POST", body: event, completion: completion)
     }
 
-    @available(*, unavailable, message: "Use patchCalendarEvent with GoogleCalendarEventPatch so existing Google details are preserved.")
+    @available(*, unavailable, message: "Use patchCalendarEvent with the schedule-only GoogleCalendarEventPatch so existing Google details are preserved.")
     func updateCalendarEvent(calendarID: String = "primary", eventID: String, event: GoogleWritableCalendarEvent, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
         let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
         let encodedEventID = eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID

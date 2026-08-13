@@ -38,11 +38,54 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
     }
 }
 
+struct EquipmentAttachmentGroup: Identifiable {
+    let equipment: CustomerEquipment
+    let attachments: [ServiceDocumentAttachment]
+
+    var id: UUID { equipment.id }
+
+    var serviceReportCount: Int {
+        attachments.filter { $0.kind == .serviceReport }.count
+    }
+
+    var photoCount: Int {
+        attachments.filter { $0.kind.isPhoto }.count
+    }
+
+    var billingDocumentCount: Int {
+        attachments.filter { [.invoiceSupport, .estimateSupport, .receipt].contains($0.kind) }.count
+    }
+
+    var otherDocumentCount: Int {
+        attachments.count - serviceReportCount - photoCount - billingDocumentCount
+    }
+
+    var latestAttachmentDate: Date? {
+        attachments.map(\.createdAt).max()
+    }
+
+    var summary: String {
+        let parts = [
+            countedLabel(serviceReportCount, singular: "report", plural: "reports"),
+            countedLabel(photoCount, singular: "photo", plural: "photos"),
+            countedLabel(billingDocumentCount, singular: "billing file", plural: "billing files"),
+            countedLabel(otherDocumentCount, singular: "file", plural: "files")
+        ].compactMap { $0 }
+        return parts.isEmpty ? "No files" : parts.joined(separator: " - ")
+    }
+
+    private func countedLabel(_ count: Int, singular: String, plural: String) -> String? {
+        guard count > 0 else { return nil }
+        return "\(count) \(count == 1 ? singular : plural)"
+    }
+}
+
 @Model
 final class ServiceDocumentAttachment {
     @Attribute(.unique) var id: UUID
     var customer: Customer?
     var serviceCallID: UUID?
+    var customerEquipmentID: UUID?
     var invoiceID: UUID?
     var estimateID: UUID?
     var kindRaw: String
@@ -60,6 +103,7 @@ final class ServiceDocumentAttachment {
         id: UUID = UUID(),
         customer: Customer?,
         serviceCallID: UUID?,
+        customerEquipmentID: UUID? = nil,
         invoiceID: UUID? = nil,
         estimateID: UUID? = nil,
         kind: ServiceDocumentAttachmentKind,
@@ -76,6 +120,7 @@ final class ServiceDocumentAttachment {
         self.id = id
         self.customer = customer
         self.serviceCallID = serviceCallID
+        self.customerEquipmentID = customerEquipmentID
         self.invoiceID = invoiceID
         self.estimateID = estimateID
         self.kindRaw = kind.rawValue
@@ -107,11 +152,27 @@ final class ServiceDocumentAttachment {
         kind == .serviceReport
     }
 
+    var canLinkToQuickBooksInvoiceAttachment: Bool {
+        switch kind {
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .invoiceSupport, .estimateSupport, .other:
+            return true
+        case .receipt:
+            return false
+        }
+    }
+
     func canUploadToQuickBooksInvoice(_ invoice: Invoice) -> Bool {
-        canLinkToInvoiceReport &&
+        canLinkToQuickBooksInvoiceAttachment &&
             invoiceID == invoice.id &&
             quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    func canUploadToQuickBooksEstimate(_ estimate: Estimate) -> Bool {
+        canLinkToQuickBooksInvoiceAttachment &&
+            estimateID == estimate.id &&
+            quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+            estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     func linkToInvoiceIfNeeded(_ invoice: Invoice) {
@@ -120,9 +181,20 @@ final class ServiceDocumentAttachment {
         }
     }
 
+    func linkToEstimateIfNeeded(_ estimate: Estimate) {
+        if estimateID == nil {
+            estimateID = estimate.id
+        }
+    }
+
     func linkedServiceCall(in serviceCalls: [ServiceCall]) -> ServiceCall? {
         guard let serviceCallID else { return nil }
         return serviceCalls.first { $0.id == serviceCallID }
+    }
+
+    func linkedEquipment(in equipmentProfiles: [CustomerEquipment]) -> CustomerEquipment? {
+        guard let customerEquipmentID else { return nil }
+        return equipmentProfiles.first { $0.id == customerEquipmentID }
     }
 
     func linkedInvoice(in invoices: [Invoice]) -> Invoice? {
@@ -135,15 +207,31 @@ final class ServiceDocumentAttachment {
         return estimates.first { $0.id == estimateID }
     }
 
+    func customerMatches(_ billingCustomer: Customer) -> Bool {
+        guard let customer else { return true }
+        return customer.id == billingCustomer.id
+    }
+
     func customerProfileDetailLines(
         serviceCalls: [ServiceCall],
         invoices: [Invoice],
         estimates: [Estimate],
+        equipmentProfiles: [CustomerEquipment],
         canViewFinancials: Bool
     ) -> [String] {
         var lines: [String] = []
+        if let equipment = linkedEquipment(in: equipmentProfiles) {
+            lines.append("Equipment: \(equipment.displayName)")
+        }
         if let call = linkedServiceCall(in: serviceCalls) {
             lines.append("Job: \(call.type.displayName) - \(call.status.rawValue.capitalized)")
+            if kind == .serviceReport {
+                if let blockedMessage = call.documentationCompletionBlockedMessage {
+                    lines.append(blockedMessage)
+                } else {
+                    lines.append("Report: Ready")
+                }
+            }
         }
         if canViewFinancials, let invoice = linkedInvoice(in: invoices) {
             let quickBooksStatus = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
@@ -158,7 +246,13 @@ final class ServiceDocumentAttachment {
             lines.append("Estimate: \(estimate.status.capitalized)\(quickBooksStatus)")
         }
         if quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            lines.append("Attached to QuickBooks invoice")
+            if estimateID != nil && invoiceID == nil {
+                lines.append("Attached to QuickBooks estimate")
+            } else if invoiceID != nil {
+                lines.append("Attached to QuickBooks invoice")
+            } else {
+                lines.append("Attached to QuickBooks")
+            }
         } else if canViewFinancials,
                   let quickBooksSyncError,
                   !quickBooksSyncError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -176,15 +270,115 @@ final class ServiceDocumentAttachment {
         invoiceID: UUID?,
         estimateID: UUID?
     ) -> ServiceDocumentAttachment? {
-        attachments
+        let matchingJobReports = attachments
             .filter { attachment in
                 attachment.kind == .serviceReport &&
+                    attachment.serviceCallID == serviceCallID
+            }
+        let exactMatch = matchingJobReports
+            .filter { attachment in
+                attachment.invoiceID == invoiceID &&
+                    attachment.estimateID == estimateID
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+            .first
+        if let exactMatch {
+            return exactMatch
+        }
+
+        return matchingJobReports
+            .filter { attachment in
+                attachment.invoiceID == nil &&
+                    attachment.estimateID == nil
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+            .first
+    }
+
+    static func reusableGeneratedBillingDocument(
+        in attachments: [ServiceDocumentAttachment],
+        kind: ServiceDocumentAttachmentKind,
+        serviceCallID: UUID?,
+        invoiceID: UUID?,
+        estimateID: UUID?
+    ) -> ServiceDocumentAttachment? {
+        attachments
+            .filter { attachment in
+                attachment.kind == kind &&
                     attachment.serviceCallID == serviceCallID &&
                     attachment.invoiceID == invoiceID &&
                     attachment.estimateID == estimateID
             }
             .sorted { $0.createdAt > $1.createdAt }
             .first
+    }
+
+    static func equipmentHistoryAttachments(
+        for serviceCall: ServiceCall,
+        in attachments: [ServiceDocumentAttachment]
+    ) -> [ServiceDocumentAttachment] {
+        guard let equipmentID = serviceCall.customerEquipmentID else { return [] }
+        return attachments
+            .filter { attachment in
+                attachment.customerEquipmentID == equipmentID &&
+                    attachment.serviceCallID != serviceCall.id
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    static func groupedEquipmentAttachments(
+        equipmentProfiles: [CustomerEquipment],
+        attachments: [ServiceDocumentAttachment]
+    ) -> [EquipmentAttachmentGroup] {
+        equipmentProfiles
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+            .compactMap { equipment in
+                let matching = attachments
+                    .filter { $0.customerEquipmentID == equipment.id }
+                    .sorted { $0.createdAt > $1.createdAt }
+                guard !matching.isEmpty else { return nil }
+                return EquipmentAttachmentGroup(equipment: equipment, attachments: matching)
+            }
+    }
+
+    static func primaryCustomerPhoto(
+        for customer: Customer,
+        in attachments: [ServiceDocumentAttachment]
+    ) -> ServiceDocumentAttachment? {
+        attachments
+            .filter { attachment in
+                attachment.customer?.id == customer.id &&
+                    attachment.isImage &&
+                    attachment.kind != .serviceReport
+            }
+            .sorted { lhs, rhs in
+                let lhsScore = customerProfilePhotoScore(lhs)
+                let rhsScore = customerProfilePhotoScore(rhs)
+                if lhsScore == rhsScore {
+                    return lhs.createdAt > rhs.createdAt
+                }
+                return lhsScore > rhsScore
+            }
+            .first
+    }
+
+    private static func customerProfilePhotoScore(_ attachment: ServiceDocumentAttachment) -> Int {
+        let searchableText = [
+            attachment.caption,
+            attachment.displayName
+        ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .joined(separator: " ")
+        if searchableText.contains("profile") || searchableText.contains("customer photo") {
+            return 300
+        }
+        if attachment.kind == .diagnosticPhoto {
+            return 200
+        }
+        if attachment.kind.isPhoto {
+            return 150
+        }
+        return 100
     }
 
     func replaceGeneratedFile(

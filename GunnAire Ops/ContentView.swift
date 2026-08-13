@@ -50,12 +50,7 @@ struct ContentView: View {
 
     private var visibleSidebarItems: [SidebarItem] {
         SidebarItem.allCases.filter { item in
-            switch item {
-            case .estimates, .quickBooksManagement, .syncIntegrations:
-                return isAdminUser
-            default:
-                return true
-            }
+            AppAccess.canAccessSidebarItem(item, email: currentUserEmail, users: users)
         }
     }
 
@@ -359,7 +354,7 @@ struct ServiceCallDetailView: View {
 
     private var totalPaid: Double {
         linkedPayments.reduce(0) { partial, payment in
-            partial + payment.amount
+            partial + (payment.isRefund ? -payment.amount : payment.amount)
         }
     }
 
@@ -1093,8 +1088,9 @@ GunnAire
                                     .buttonStyle(.borderedProminent)
                                 } else if call.status == .inProgress {
                                     Button {
-                                        call.status = .completed
-                                        call.documentationCompletedAt = Date()
+                                        if call.markDocumentationCompleteIfReady() {
+                                            call.status = .completed
+                                        }
                                     } label: {
                                         Label("Mark Complete", systemImage: "checkmark.circle.fill")
                                             .frame(maxWidth: .infinity)
@@ -1311,11 +1307,13 @@ struct AddServiceCallView: View {
     @State private var newCustomerEmail = ""
     @State private var newCustomerAddress = ""
     @State private var siteAddress: String = ""
+    @State private var equipmentType: HVACEquipmentType = .splitSystemAC
     @State private var equipmentName = ""
     @State private var equipmentManufacturer = ""
     @State private var equipmentModel = ""
     @State private var equipmentSerialNumber = ""
     @State private var equipmentLocation = ""
+    @State private var filterSize = ""
     @State private var equipmentInstallDate: Date = Date()
     @State private var includeInstallDate = false
     @State private var equipmentWarrantyExpiration: Date = Date()
@@ -1554,11 +1552,17 @@ struct AddServiceCallView: View {
                             applyEquipmentProfile(equipment)
                         }
                     }
+                    Picker("Equipment Type", selection: $equipmentType) {
+                        ForEach(HVACEquipmentType.allCases) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
                     TextField("Equipment", text: $equipmentName)
                     TextField("Manufacturer", text: $equipmentManufacturer)
                     TextField("Model", text: $equipmentModel)
                     TextField("Serial Number", text: $equipmentSerialNumber)
                     TextField("Equipment Location", text: $equipmentLocation)
+                    TextField("Filter Size", text: $filterSize)
                     Toggle("Track Install Date", isOn: $includeInstallDate)
                     if includeInstallDate {
                         DatePicker("Install Date", selection: $equipmentInstallDate, displayedComponents: .date)
@@ -1679,6 +1683,8 @@ struct AddServiceCallView: View {
             equipmentInstallDate: includeInstallDate ? equipmentInstallDate : nil,
             equipmentWarrantyExpiration: includeWarrantyExpiration ? equipmentWarrantyExpiration : nil,
             customerEquipmentID: selectedCustomerEquipmentID,
+            equipmentTypeRaw: equipmentType.rawValue,
+            filterSize: filterSize.nilIfBlank,
             type: callType,
             scheduledDate: scheduledTime,
             duration: duration,
@@ -1704,11 +1710,13 @@ struct AddServiceCallView: View {
 
     private func applyEquipmentProfile(_ equipment: CustomerEquipment) {
         selectedCustomerEquipmentID = equipment.id
+        equipmentType = equipment.equipmentType ?? .splitSystemAC
         equipmentName = equipment.name
         equipmentManufacturer = equipment.manufacturer ?? ""
         equipmentModel = equipment.modelNumber ?? ""
         equipmentSerialNumber = equipment.serialNumber ?? ""
         equipmentLocation = equipment.location ?? ""
+        filterSize = equipment.filterSize ?? ""
         if let installDate = equipment.installDate {
             equipmentInstallDate = installDate
             includeInstallDate = true
@@ -1804,11 +1812,13 @@ struct EditServiceCallView: View {
     @State private var duration: TimeInterval
     @State private var status: JobStatus
     @State private var siteAddress: String
+    @State private var equipmentType: HVACEquipmentType
     @State private var equipmentName: String
     @State private var equipmentManufacturer: String
     @State private var equipmentModel: String
     @State private var equipmentSerialNumber: String
     @State private var equipmentLocation: String
+    @State private var filterSize: String
     @State private var equipmentInstallDate: Date
     @State private var includeInstallDate: Bool
     @State private var equipmentWarrantyExpiration: Date
@@ -1843,11 +1853,13 @@ struct EditServiceCallView: View {
         _duration = State(initialValue: call.duration)
         _status = State(initialValue: call.status)
         _siteAddress = State(initialValue: call.siteAddress ?? call.customer.address ?? "")
+        _equipmentType = State(initialValue: call.equipmentType ?? .splitSystemAC)
         _equipmentName = State(initialValue: call.equipmentName ?? "")
         _equipmentManufacturer = State(initialValue: call.equipmentManufacturer ?? "")
         _equipmentModel = State(initialValue: call.equipmentModel ?? "")
         _equipmentSerialNumber = State(initialValue: call.equipmentSerialNumber ?? "")
         _equipmentLocation = State(initialValue: call.equipmentLocation ?? "")
+        _filterSize = State(initialValue: call.filterSize ?? "")
         _equipmentInstallDate = State(initialValue: call.equipmentInstallDate ?? Date())
         _includeInstallDate = State(initialValue: call.equipmentInstallDate != nil)
         _equipmentWarrantyExpiration = State(initialValue: call.equipmentWarrantyExpiration ?? Date())
@@ -1901,6 +1913,10 @@ struct EditServiceCallView: View {
         customers.filter { !CustomerDataMaintenance.isSystemCalendarCustomer($0) }
     }
 
+    private var isExternalGoogleCalendarEvent: Bool {
+        GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(call)
+    }
+
     private var selectedCustomerEquipmentProfiles: [CustomerEquipment] {
         guard let customer else { return [] }
         return equipmentProfiles.filter { $0.customer?.id == customer.id && $0.isActive }
@@ -1917,6 +1933,12 @@ struct EditServiceCallView: View {
                 Section("Calendar Event") {
                     TextField("Event Title", text: $eventTitle)
                         .textInputAutocapitalization(.words)
+                        .disabled(isExternalGoogleCalendarEvent)
+                    if isExternalGoogleCalendarEvent {
+                        Text("This event came from Google Calendar. Edit the title, location, and body in Google Calendar; GunnAire will only keep a local mirror.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 Picker("Customer", selection: $customer) {
                     if CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
@@ -1947,6 +1969,7 @@ struct EditServiceCallView: View {
                     .foregroundColor(ServiceCalendarRouting.routingTint(for: technician, selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars))
                 TextField("Service Address", text: $siteAddress, axis: .vertical)
                     .lineLimit(2...3)
+                    .disabled(isExternalGoogleCalendarEvent)
                 Section("Equipment") {
                     if !selectedCustomerEquipmentProfiles.isEmpty {
                         Picker("Customer Equipment", selection: $selectedCustomerEquipmentID) {
@@ -1961,11 +1984,17 @@ struct EditServiceCallView: View {
                             applyEquipmentProfile(equipment)
                         }
                     }
+                    Picker("Equipment Type", selection: $equipmentType) {
+                        ForEach(HVACEquipmentType.allCases) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
                     TextField("Equipment", text: $equipmentName)
                     TextField("Manufacturer", text: $equipmentManufacturer)
                     TextField("Model", text: $equipmentModel)
                     TextField("Serial Number", text: $equipmentSerialNumber)
                     TextField("Equipment Location", text: $equipmentLocation)
+                    TextField("Filter Size", text: $filterSize)
                     Toggle("Track Install Date", isOn: $includeInstallDate)
                     if includeInstallDate {
                         DatePicker("Install Date", selection: $equipmentInstallDate, displayedComponents: .date)
@@ -2005,6 +2034,7 @@ struct EditServiceCallView: View {
                 }
                 TextField("Notes", text: $notes, axis: .vertical)
                     .lineLimit(2...4)
+                    .disabled(isExternalGoogleCalendarEvent)
                 Section("Findings & Follow-Up") {
                     TextField("Findings", text: $findingsSummary, axis: .vertical)
                         .lineLimit(2...4)
@@ -2049,11 +2079,13 @@ struct EditServiceCallView: View {
 
     private func applyEquipmentProfile(_ equipment: CustomerEquipment) {
         selectedCustomerEquipmentID = equipment.id
+        equipmentType = equipment.equipmentType ?? .splitSystemAC
         equipmentName = equipment.name
         equipmentManufacturer = equipment.manufacturer ?? ""
         equipmentModel = equipment.modelNumber ?? ""
         equipmentSerialNumber = equipment.serialNumber ?? ""
         equipmentLocation = equipment.location ?? ""
+        filterSize = equipment.filterSize ?? ""
         if let installDate = equipment.installDate {
             equipmentInstallDate = installDate
             includeInstallDate = true
@@ -2070,8 +2102,11 @@ struct EditServiceCallView: View {
 
     private func saveChanges() {
         guard let customer else { return }
+        let preserveExternalCalendarDetails = GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: call)
         call.type = callType
-        call.eventTitle = eventTitle.nilIfBlank
+        if !preserveExternalCalendarDetails {
+            call.eventTitle = eventTitle.nilIfBlank
+        }
         call.customer = customer
         call.assignedTechnician = technician
         call.status = status
@@ -2082,18 +2117,24 @@ struct EditServiceCallView: View {
                 calendars: accessibleCalendars
             )
         }
-        call.siteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? customer.address : siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !preserveExternalCalendarDetails {
+            call.siteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? customer.address : siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         call.equipmentName = equipmentName.nilIfBlank
         call.equipmentManufacturer = equipmentManufacturer.nilIfBlank
         call.equipmentModel = equipmentModel.nilIfBlank
         call.equipmentSerialNumber = equipmentSerialNumber.nilIfBlank
         call.equipmentLocation = equipmentLocation.nilIfBlank
+        call.equipmentType = equipmentType
+        call.filterSize = filterSize.nilIfBlank
         call.equipmentInstallDate = includeInstallDate ? equipmentInstallDate : nil
         call.equipmentWarrantyExpiration = includeWarrantyExpiration ? equipmentWarrantyExpiration : nil
         call.customerEquipmentID = selectedCustomerEquipmentID
         call.scheduledDate = scheduledTime
         call.duration = duration
-        call.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !preserveExternalCalendarDetails {
+            call.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         call.findingsSummary = findingsSummary.nilIfBlank
         call.recommendedWorkSummary = recommendedWorkSummary.nilIfBlank
         call.followUpRequired = followUpRequired
@@ -2104,13 +2145,16 @@ struct EditServiceCallView: View {
             call.documentationStartedAt = Date()
         }
         if status == .completed || status == .invoiced {
-            call.documentationCompletedAt = call.documentationCompletedAt ?? Date()
+            call.markDocumentationCompleteIfReady()
         }
-        if GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call) {
+        let shouldPublishCalendarChanges = GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call)
+        if shouldPublishCalendarChanges {
             GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
         }
         try? modelContext.save()
-        publishToGoogleCalendar(call)
+        if shouldPublishCalendarChanges {
+            publishToGoogleCalendar(call)
+        }
         dismiss()
     }
 

@@ -1082,6 +1082,24 @@ private extension ReceiptsAndBillsView {
         }
 
         switch selectedAttachEntityType {
+        case .estimate:
+            QuickBooksDataAPI.shared.fetchEstimates { result in
+                DispatchQueue.main.async {
+                    isLoadingAttachTargets = false
+                    switch result {
+                    case .success(let estimates):
+                        attachTargetOptions = estimates.map {
+                            AttachTargetOption(
+                                idValue: $0.Id,
+                                label: "Estimate \($0.Id) • \(currencyString($0.TotalAmt)) • \($0.TxnDate ?? "No date")"
+                            )
+                        }
+                        attachLookupMessage = attachTargetOptions.isEmpty ? "No estimates found." : "Loaded \(attachTargetOptions.count) estimate ID(s)."
+                    case .failure(let error):
+                        attachLookupMessage = "Failed to load estimates: \(error.localizedDescription)"
+                    }
+                }
+            }
         case .invoice:
             QuickBooksDataAPI.shared.fetchInvoices { result in
                 DispatchQueue.main.async {
