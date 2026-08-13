@@ -175,6 +175,42 @@ final class CustomerEquipment {
             .joined(separator: "; ")
     }
 
+    func unresolvedServiceConcernSummary(in serviceCalls: [ServiceCall], now: Date = Date()) -> String? {
+        let calls = matchingServiceCalls(in: serviceCalls)
+            .filter { $0.scheduledDate <= now && $0.status != .cancelled }
+            .sorted { $0.scheduledDate > $1.scheduledDate }
+        var resolvedKeys: Set<String> = []
+        var concerns: [(label: String, status: HVACServiceActionStatus, date: Date)] = []
+
+        for call in calls {
+            for definition in call.serviceActionDefinitions {
+                guard !resolvedKeys.contains(definition.key) else { continue }
+                let status = call.serviceActionStatus(for: definition.key)
+                switch status {
+                case .needsService, .monitor:
+                    concerns.append((definition.label, status, call.scheduledDate))
+                    resolvedKeys.insert(definition.key)
+                case .completed, .notApplicable:
+                    resolvedKeys.insert(definition.key)
+                case .notChecked:
+                    continue
+                }
+            }
+        }
+
+        guard !concerns.isEmpty else { return nil }
+        return concerns
+            .sorted { lhs, rhs in
+                if lhs.status == rhs.status {
+                    return lhs.date > rhs.date
+                }
+                return lhs.status == .needsService
+            }
+            .prefix(6)
+            .map { "\($0.label): \($0.status.label) (\($0.date.formatted(date: .abbreviated, time: .omitted)))" }
+            .joined(separator: "; ")
+    }
+
     func latestServiceContextSummary(in serviceCalls: [ServiceCall], now: Date = Date()) -> String? {
         guard let call = latestCompletedServiceCall(in: serviceCalls, now: now) else {
             return nil

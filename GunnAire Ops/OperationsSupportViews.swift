@@ -2136,7 +2136,7 @@ private struct CustomerEditorView: View {
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
-                                if let concerns = equipment.latestServiceConcernSummary(in: customerServiceCalls) {
+                                if let concerns = equipment.unresolvedServiceConcernSummary(in: customerServiceCalls) {
                                     Text("Open concerns: \(concerns)")
                                         .font(.caption2)
                                         .foregroundColor(.orange)

@@ -540,6 +540,95 @@ struct GunnAire_OpsTests {
         #expect(note.contains("Compressor Amps"))
     }
 
+    @Test func equipmentUnresolvedServiceConcernsCarryForwardUntilCleared() async throws {
+        let customer = Customer(name: "Concern Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .gasFurnace,
+            name: "Main Furnace",
+            serialNumber: "FURN-1"
+        )
+        let olderCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer,
+            status: .completed
+        )
+        olderCall.setServiceActionStatus(.needsService, for: "heat_exchanger_checked")
+        olderCall.setServiceActionStatus(.monitor, for: "burner_assembly_checked")
+
+        let newerCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_086_400),
+            customer: customer,
+            status: .completed
+        )
+        newerCall.setServiceActionStatus(.completed, for: "heat_exchanger_checked")
+
+        let summary = try #require(equipment.unresolvedServiceConcernSummary(
+            in: [olderCall, newerCall],
+            now: Date(timeIntervalSince1970: 1_800_172_800)
+        ))
+
+        #expect(summary.contains("Burner assembly inspected: Monitor"))
+        #expect(summary.contains("Heat exchanger inspected") == false)
+    }
+
+    @Test func equipmentUnresolvedServiceConcernsIgnoreCancelledFutureAndOtherEquipment() async throws {
+        let customer = Customer(name: "Concern Customer")
+        let equipment = CustomerEquipment(customer: customer, name: "Downstairs AC", serialNumber: "AC-1")
+        let otherEquipment = CustomerEquipment(customer: customer, name: "Upstairs AC", serialNumber: "AC-2")
+        let currentCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer,
+            status: .completed
+        )
+        currentCall.setServiceActionStatus(.needsService, for: "condenser_coil_serviced")
+        let cancelledCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_086_400),
+            customer: customer,
+            status: .cancelled
+        )
+        cancelledCall.setServiceActionStatus(.needsService, for: "electrical_connections_checked")
+        let futureCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_172_800),
+            customer: customer,
+            status: .scheduled
+        )
+        futureCall.setServiceActionStatus(.needsService, for: "evaporator_coil_checked")
+        let otherCall = ServiceCall(
+            customerEquipmentID: otherEquipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer,
+            status: .completed
+        )
+        otherCall.setServiceActionStatus(.needsService, for: "electrical_connections_checked")
+
+        let summary = try #require(equipment.unresolvedServiceConcernSummary(
+            in: [currentCall, cancelledCall, futureCall, otherCall],
+            now: Date(timeIntervalSince1970: 1_800_100_000)
+        ))
+
+        #expect(summary.contains("Condenser coil inspected/washed: Needs Service"))
+        #expect(summary.contains("Electrical connections checked") == false)
+        #expect(summary.contains("Evaporator coil inspected") == false)
+    }
+
     @Test func customerEquipmentProfileMatchesLinkedAndSerializedServiceCalls() async throws {
         let customer = Customer(name: "Equipment Customer")
         let otherCustomer = Customer(name: "Other Customer")
