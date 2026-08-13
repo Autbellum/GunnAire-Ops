@@ -668,6 +668,33 @@ struct GunnAire_OpsTests {
         #expect(excludingCurrentSummary.contains("999") == false)
     }
 
+    @Test func serviceCallCopiesCompatiblePreviousTechnicalReadingsWithoutOverwritingCurrentValues() async throws {
+        let customer = Customer(name: "Reading Copy Customer")
+        let previousCall = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_700_000_000),
+            customer: customer
+        )
+        previousCall.setTechnicalReading("11", for: "superheat")
+        previousCall.setTechnicalReading("242", for: "line_voltage")
+        previousCall.setTechnicalReading("3.5", for: "gas_pressure_inlet")
+        let currentCall = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer
+        )
+        currentCall.setTechnicalReading("238", for: "line_voltage")
+
+        let copied = currentCall.copyTechnicalReadings(from: previousCall)
+
+        #expect(copied == 1)
+        #expect(currentCall.technicalReading(for: "superheat") == "11")
+        #expect(currentCall.technicalReading(for: "line_voltage") == "238")
+        #expect(currentCall.technicalReading(for: "gas_pressure_inlet").isEmpty)
+    }
+
     @Test func coolingEquipmentReadingDefinitionsIncludeStructuredRefrigerantOptions() async throws {
         let refrigerantDefinition = HVACEquipmentType.splitSystemAC.readingDefinitions.first {
             $0.key == "refrigerant_type"

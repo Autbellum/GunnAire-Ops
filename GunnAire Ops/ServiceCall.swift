@@ -1061,6 +1061,25 @@ final class ServiceCall {
         }
     }
 
+    @discardableResult
+    func copyTechnicalReadings(from source: ServiceCall, overwriteExisting: Bool = false) -> Int {
+        let allowedKeys = Set(technicalReadingDefinitions.map(\.key))
+        var copiedCount = 0
+        for key in allowedKeys.sorted() {
+            guard let sourceValue = source.technicalReadings[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !sourceValue.isEmpty else {
+                continue
+            }
+            if !overwriteExisting,
+               !technicalReading(for: key).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                continue
+            }
+            setTechnicalReading(sourceValue, for: key)
+            copiedCount += 1
+        }
+        return copiedCount
+    }
+
     func calculateTemperatureSplitReading() -> Double? {
         guard let returnTemp = numericTechnicalReading(for: "return_air_temp"),
               let supplyTemp = numericTechnicalReading(for: "supply_air_temp") else {

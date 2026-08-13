@@ -2123,6 +2123,15 @@ GunnAire
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
+            if let previousCall = latestCompletedServiceCall(for: call),
+               !previousCall.populatedTechnicalReadingRows.isEmpty {
+                Button {
+                    copyPreviousTechnicalReadings(from: previousCall, to: call)
+                } label: {
+                    Label("Use Previous Readings", systemImage: "arrow.down.doc")
+                }
+                .buttonStyle(.bordered)
+            }
 
             SearchableDropdownPicker(
                 title: "Equipment Type",
@@ -2345,6 +2354,25 @@ GunnAire
             in: serviceCalls.filter { $0.id != call.id },
             now: Date()
         )
+    }
+
+    private func latestCompletedServiceCall(for call: ServiceCall) -> ServiceCall? {
+        guard let equipment = activeCustomerEquipmentProfiles.first(where: { $0.matches(call) }) else {
+            return nil
+        }
+        return equipment.latestCompletedServiceCall(
+            in: serviceCalls.filter { $0.id != call.id },
+            now: Date()
+        )
+    }
+
+    private func copyPreviousTechnicalReadings(from previousCall: ServiceCall, to call: ServiceCall) {
+        let copiedCount = call.copyTechnicalReadings(from: previousCall)
+        if copiedCount == 0 {
+            actionMessage = "No blank matching readings were available to copy from the previous service."
+        } else {
+            actionMessage = "Copied \(copiedCount) previous technical reading\(copiedCount == 1 ? "" : "s") into blank fields."
+        }
     }
 
     @ViewBuilder
