@@ -1472,6 +1472,7 @@ struct OperationsDashboardView: View {
             dispatchMessage = "\(dispatchMessage ?? "") Google-owned calendar event left unchanged."
             return
         }
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
         publishToGoogleCalendar(call)
     }
 

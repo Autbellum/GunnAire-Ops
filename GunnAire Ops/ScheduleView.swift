@@ -924,7 +924,7 @@ struct ScheduleView: View {
 
     private func deleteCall(_ call: ServiceCall) {
         let shouldDeleteGoogleEvent = GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call)
-        if shouldDeleteGoogleEvent {
+        if call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             GoogleCalendarScheduleSync.markCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: call.googleEventID)
         }
 
@@ -1302,6 +1302,7 @@ GunnAire
             try? modelContext.save()
             return
         }
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
         publishToGoogleCalendar(call)
     }
 
@@ -1315,6 +1316,7 @@ GunnAire
             try? modelContext.save()
             return
         }
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
         publishToGoogleCalendar(call)
     }
 

@@ -3271,6 +3271,17 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: importedCall) == true)
     }
 
+    @Test func googleCalendarDeletedExternalEventsAreRememberedLocally() async throws {
+        let calendarID = "shared-calendar@example.com"
+        let eventID = "externally-owned-event-\(UUID().uuidString)"
+
+        #expect(GoogleCalendarScheduleSync.isCalendarEventDeleted(calendarID: calendarID, eventID: eventID) == false)
+
+        GoogleCalendarScheduleSync.markCalendarEventDeleted(calendarID: calendarID, eventID: eventID)
+
+        #expect(GoogleCalendarScheduleSync.isCalendarEventDeleted(calendarID: calendarID, eventID: eventID))
+    }
+
     @MainActor
     @Test func googleCalendarAppOwnedEventsCanMaintainAppDetails() async throws {
         let customer = Customer(name: "Calendar Customer")
