@@ -1193,6 +1193,31 @@ struct GunnAire_OpsTests {
         #expect(attentionKeys.contains("control_voltage") == false)
     }
 
+    @Test func technicalReadingGroupCanMarkBlankFieldsUnableToTestWithoutOverwritingMeasurements() async throws {
+        let customer = Customer(name: "Unable To Test Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let electricalGroup = try #require(call.groupedTechnicalReadingDefinitions.first { $0.title == "Electrical" })
+        call.setTechnicalReading("238", for: "line_voltage")
+
+        let markedCount = call.markBlankTechnicalReadingsUnableToTest(in: electricalGroup)
+
+        #expect(markedCount == electricalGroup.definitions.count - 1)
+        #expect(call.technicalReading(for: "line_voltage") == "238")
+        for definition in electricalGroup.definitions where definition.key != "line_voltage" {
+            #expect(call.technicalReading(for: definition.key) == HVACTechnicalReadingDefinition.unableToTestValue)
+        }
+        #expect(call.diagnosticsCaptured)
+    }
+
     @Test func targetSuperheatAndSubcoolingDeviationBlocksReportCompletion() async throws {
         let customer = Customer(name: "Target Deviation Customer")
         let call = ServiceCall(

@@ -2270,6 +2270,14 @@ GunnAire
 
             ForEach(call.groupedTechnicalReadingDefinitions) { group in
                 DisclosureGroup {
+                    Button {
+                        call.markBlankTechnicalReadingsUnableToTest(in: group)
+                    } label: {
+                        Label("Mark Blank Fields Unable To Test", systemImage: "checklist.unchecked")
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.caption)
+
                     ForEach(call.prioritizedTechnicalReadingDefinitions(in: group)) { definition in
                         technicalReadingInput(for: call, definition: definition)
                     }

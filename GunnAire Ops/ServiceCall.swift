@@ -1434,6 +1434,18 @@ final class ServiceCall {
     }
 
     @discardableResult
+    func markBlankTechnicalReadingsUnableToTest(in group: HVACTechnicalReadingGroup) -> Int {
+        var markedCount = 0
+        for definition in group.definitions {
+            let existingValue = technicalReading(for: definition.key).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard existingValue.isEmpty else { continue }
+            setTechnicalReading(HVACTechnicalReadingDefinition.unableToTestValue, for: definition.key)
+            markedCount += 1
+        }
+        return markedCount
+    }
+
+    @discardableResult
     func copyTechnicalReadings(from source: ServiceCall, overwriteExisting: Bool = false) -> Int {
         let allowedKeys = Set(technicalReadingDefinitions.map(\.key))
         var copiedCount = 0
