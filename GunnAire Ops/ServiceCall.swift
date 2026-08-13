@@ -2087,8 +2087,7 @@ final class ServiceCall {
             }
             let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
             let balanceDue = Invoice.outstandingBalance(for: invoice, payments: invoicePayments)
-            let paymentResolved = paymentCollectedChecklist ||
-                Invoice.isPaid(invoice, payments: invoicePayments) ||
+            let paymentResolved = Invoice.isPaid(invoice, payments: invoicePayments) ||
                 balanceDue <= 0.009
             if !paymentResolved {
                 missing.append("Payment resolved")

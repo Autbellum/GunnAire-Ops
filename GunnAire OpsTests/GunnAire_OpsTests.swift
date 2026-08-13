@@ -2066,6 +2066,76 @@ struct GunnAire_OpsTests {
         #expect(readiness.summary == "\(readiness.totalCount)/\(readiness.totalCount) complete")
     }
 
+    @Test func jobCloseoutReadinessRequiresSettledInvoiceDespitePaymentChecklist() async throws {
+        let customer = Customer(name: "Unsettled Closeout Customer")
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .invoiced,
+            workCompletedChecklist: true,
+            documentationChecklist: true,
+            paymentCollectedChecklist: true
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        let invoice = Invoice(
+            serviceCallID: call.id,
+            customer: customer,
+            quickBooksID: "QB-101",
+            amount: 500,
+            status: "unpaid",
+            customerSignatureName: "Customer",
+            customerSignedAt: Date(),
+            finalizedAt: Date()
+        )
+        call.linkedInvoiceID = invoice.id
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "ATTACH-1"
+        )
+        let beforePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .beforePhoto,
+            displayName: "before.jpg",
+            localFilePath: "/tmp/before.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 512,
+            quickBooksAttachableID: "ATTACH-2"
+        )
+        let afterPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .afterPhoto,
+            displayName: "after.jpg",
+            localFilePath: "/tmp/after.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 512,
+            quickBooksAttachableID: "ATTACH-3"
+        )
+
+        let readiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [report, beforePhoto, afterPhoto])
+
+        #expect(readiness.isReady == false)
+        #expect(readiness.missingItems.contains("Payment resolved"))
+    }
+
     @Test func serviceCloseoutRequiresBeforeAndAfterPhotoEvidence() async throws {
         let customer = Customer(name: "Photo Evidence Customer")
         let call = ServiceCall(
