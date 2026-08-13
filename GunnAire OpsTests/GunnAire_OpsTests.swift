@@ -2989,6 +2989,49 @@ struct GunnAire_OpsTests {
         #expect(hasTechnicalSnapshot)
     }
 
+    @Test func onsiteReportJobRowsIncludeStructuredCustomerContactContext() async throws {
+        let customer = Customer(
+            name: "Standalone Report Customer",
+            phone: "555-0100",
+            email: "customer@example.com",
+            address: "123 Customer Rd"
+        )
+        let technician = Technician(name: "Lead Tech")
+        let call = ServiceCall(
+            siteAddress: "456 Job Site Ave",
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            assignedTechnician: technician,
+            customer: customer,
+            status: .inProgress
+        )
+
+        let rows = CustomerDocumentExporter.onsiteReportJobRows(for: call)
+
+        #expect(rows.contains { $0.label == "Customer" && $0.value == "Standalone Report Customer" })
+        #expect(rows.contains { $0.label == "Customer Address" && $0.value == "123 Customer Rd" })
+        #expect(rows.contains { $0.label == "Customer Phone" && $0.value == "555-0100" })
+        #expect(rows.contains { $0.label == "Customer Email" && $0.value == "customer@example.com" })
+        #expect(rows.contains { $0.label == "Site Address" && $0.value == "456 Job Site Ave" })
+        #expect(rows.contains { $0.label == "Technician" && $0.value == "Lead Tech" })
+    }
+
+    @Test func onsiteReportJobRowsFallBackToCustomerAddressForSiteAddress() async throws {
+        let customer = Customer(name: "Fallback Customer", address: "123 Customer Rd")
+        let call = ServiceCall(
+            siteAddress: nil,
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer
+        )
+
+        let rows = CustomerDocumentExporter.onsiteReportJobRows(for: call)
+
+        #expect(rows.contains { $0.label == "Site Address" && $0.value == "123 Customer Rd" })
+        #expect(rows.contains { $0.label == "Customer Email" } == false)
+        #expect(rows.contains { $0.label == "Customer Phone" } == false)
+    }
+
     @Test func customerProfileAttachmentDetailHidesBillingContextForStandardUsers() async throws {
         let customer = Customer(name: "Report Customer")
         let call = ServiceCall(

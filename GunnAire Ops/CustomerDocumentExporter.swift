@@ -95,14 +95,7 @@ enum CustomerDocumentExporter {
         var sections: [DocumentSection] = [
             DocumentSection(
                 title: "Job",
-                rows: [
-                    row("Customer", serviceCall.customer.name),
-                    row("Scheduled", formattedDateTime(serviceCall.scheduledDate)),
-                    row("Job Type", serviceCall.type.displayName),
-                    row("Status", serviceCall.status.rawValue.capitalized),
-                    row("Technician", serviceCall.assignedTechnician?.name),
-                    row("Site Address", serviceCall.siteAddress ?? serviceCall.customer.address)
-                ]
+                rows: onsiteReportJobRows(for: serviceCall).map { row($0.label, $0.value) }
             ),
             linkedRecordSection(serviceCall: serviceCall, estimate: estimate, invoice: invoice, payments: payments),
             serviceReportReadinessSection(for: serviceCall),
@@ -169,6 +162,20 @@ enum CustomerDocumentExporter {
         }
 
         return sections
+    }
+
+    static func onsiteReportJobRows(for serviceCall: ServiceCall) -> [(label: String, value: String)] {
+        [
+            ("Customer", serviceCall.customer.name),
+            ("Customer Address", serviceCall.customer.address ?? ""),
+            ("Customer Phone", serviceCall.customer.phone ?? ""),
+            ("Customer Email", serviceCall.customer.email ?? ""),
+            ("Scheduled", formattedDateTime(serviceCall.scheduledDate)),
+            ("Job Type", serviceCall.type.displayName),
+            ("Status", serviceCall.status.rawValue.capitalized),
+            ("Technician", serviceCall.assignedTechnician?.name ?? ""),
+            ("Site Address", serviceCall.siteAddress ?? serviceCall.customer.address ?? "")
+        ].filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     static func linkedRecordRows(
