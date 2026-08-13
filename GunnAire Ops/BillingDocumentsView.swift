@@ -515,7 +515,7 @@ GunnAire
                     estimate: estimate,
                     invoice: nil,
                     payments: [],
-                    attachments: emailAttachments.filter { $0.serviceCallID == serviceCall.id },
+                    attachments: reportEvidenceAttachments(for: serviceCall, in: emailAttachments),
                     equipmentProfiles: equipmentProfiles,
                     serviceCalls: serviceCalls
                 )
@@ -618,7 +618,7 @@ GunnAire
                     estimate: linkedEstimate,
                     invoice: invoice,
                     payments: invoicePayments,
-                    attachments: emailAttachments.filter { $0.serviceCallID == serviceCall.id },
+                    attachments: reportEvidenceAttachments(for: serviceCall, in: emailAttachments),
                     equipmentProfiles: equipmentProfiles,
                     serviceCalls: serviceCalls
                 )
@@ -733,6 +733,19 @@ GunnAire
     private var activeJobAttachments: [ServiceDocumentAttachment] {
         guard let call = activeServiceCall else { return [] }
         return attachments.filter { $0.serviceCallID == call.id }
+    }
+
+    private var activeJobReportEvidenceAttachments: [ServiceDocumentAttachment] {
+        guard let call = activeServiceCall else { return [] }
+        return reportEvidenceAttachments(for: call)
+    }
+
+    private func reportEvidenceAttachments(
+        for call: ServiceCall,
+        in sourceAttachments: [ServiceDocumentAttachment]? = nil
+    ) -> [ServiceDocumentAttachment] {
+        let source = sourceAttachments ?? attachments
+        return CustomerDocumentExporter.reportEvidenceAttachments(for: source, serviceCall: call)
     }
 
     private var filteredActiveJobAttachments: [ServiceDocumentAttachment] {
@@ -3478,7 +3491,7 @@ GunnAire
                 estimate: linkedEstimate,
                 invoice: invoice,
                 payments: invoicePayments,
-                attachments: attachments.filter { $0.serviceCallID == serviceCall.id },
+                attachments: reportEvidenceAttachments(for: serviceCall),
                 equipmentProfiles: equipmentProfiles,
                 serviceCalls: serviceCalls
             )
@@ -3575,7 +3588,7 @@ GunnAire
                         estimate: estimate,
                         invoice: nil,
                         payments: [],
-                        attachments: attachments.filter { $0.serviceCallID == linkedCall.id },
+                        attachments: reportEvidenceAttachments(for: linkedCall),
                         equipmentProfiles: equipmentProfiles,
                         serviceCalls: serviceCalls
                     )
@@ -3618,7 +3631,7 @@ GunnAire
                 estimate: linkedEstimate,
                 invoice: invoice,
                 payments: invoicePayments,
-                attachments: attachments.filter { $0.serviceCallID == serviceCall.id },
+                attachments: reportEvidenceAttachments(for: serviceCall),
                 equipmentProfiles: equipmentProfiles,
                 serviceCalls: serviceCalls
             )
@@ -4039,7 +4052,7 @@ GunnAire
                 estimate: currentJobEstimate,
                 invoice: currentJobInvoice,
                 payments: currentJobPayments,
-                attachments: activeJobAttachments,
+                attachments: activeJobReportEvidenceAttachments,
                 equipmentProfiles: equipmentProfiles,
                 serviceCalls: serviceCalls,
                 includeFinancials: canViewFinancials || canCollectFieldPayments

@@ -622,14 +622,7 @@ enum CustomerDocumentExporter {
     ) -> [ServiceDocumentAttachment] {
         let invoiceID = invoice?.id ?? serviceCall.linkedInvoiceID
         let estimateID = estimate?.id ?? serviceCall.linkedEstimateID
-        return attachments.filter { attachment in
-            let isJobAttachment = attachment.serviceCallID == serviceCall.id
-            let isServicedEquipmentPhoto = attachment.kind == .equipmentDataPlatePhoto &&
-                attachment.customerEquipmentID == serviceCall.customerEquipmentID &&
-                attachment.serviceCallID == nil
-            guard isJobAttachment || isServicedEquipmentPhoto else {
-                return false
-            }
+        return reportEvidenceAttachments(for: attachments, serviceCall: serviceCall).filter { attachment in
             if let attachmentInvoiceID = attachment.invoiceID {
                 return invoiceID == attachmentInvoiceID
             }
@@ -640,6 +633,20 @@ enum CustomerDocumentExporter {
                 return estimateID == attachmentEstimateID
             }
             return true
+        }
+    }
+
+    static func reportEvidenceAttachments(
+        for attachments: [ServiceDocumentAttachment],
+        serviceCall: ServiceCall
+    ) -> [ServiceDocumentAttachment] {
+        attachments.filter { attachment in
+            if attachment.serviceCallID == serviceCall.id {
+                return true
+            }
+            return attachment.kind == .equipmentDataPlatePhoto &&
+                attachment.customerEquipmentID == serviceCall.customerEquipmentID &&
+                attachment.serviceCallID == nil
         }
     }
 

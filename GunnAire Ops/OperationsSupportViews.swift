@@ -1540,7 +1540,7 @@ struct OnsiteDocumentationView: View {
                 estimate: estimate(for: call),
                 invoice: linkedInvoice,
                 payments: payments(for: linkedInvoice),
-                attachments: attachments(for: call),
+                attachments: reportEvidenceAttachments(for: call),
                 equipmentProfiles: equipmentProfiles,
                 serviceCalls: serviceCalls,
                 includeFinancials: canIncludeFinancialsInOnsiteReports
@@ -1645,6 +1645,10 @@ struct OnsiteDocumentationView: View {
 
     private func attachments(for call: ServiceCall) -> [ServiceDocumentAttachment] {
         documentAttachments.filter { $0.serviceCallID == call.id }
+    }
+
+    private func reportEvidenceAttachments(for call: ServiceCall) -> [ServiceDocumentAttachment] {
+        CustomerDocumentExporter.reportEvidenceAttachments(for: documentAttachments, serviceCall: call)
     }
 
     private func generateEstimateDocument(for call: ServiceCall) {
