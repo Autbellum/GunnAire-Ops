@@ -1833,7 +1833,8 @@ private struct CustomerEditorView: View {
     private var equipmentAttachmentGroups: [EquipmentAttachmentGroup] {
         ServiceDocumentAttachment.groupedEquipmentAttachments(
             equipmentProfiles: customerEquipmentProfiles,
-            attachments: filteredCustomerAttachments
+            attachments: filteredCustomerAttachments,
+            serviceCalls: customerServiceCalls
         )
     }
 

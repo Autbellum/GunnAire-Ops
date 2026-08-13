@@ -256,9 +256,10 @@ final class ServiceDocumentAttachment {
         return serviceCalls.first { $0.id == serviceCallID }
     }
 
-    func linkedEquipment(in equipmentProfiles: [CustomerEquipment]) -> CustomerEquipment? {
-        guard let customerEquipmentID else { return nil }
-        return equipmentProfiles.first { $0.id == customerEquipmentID }
+    func linkedEquipment(in equipmentProfiles: [CustomerEquipment], serviceCalls: [ServiceCall] = []) -> CustomerEquipment? {
+        let resolvedEquipmentID = customerEquipmentID ?? linkedServiceCall(in: serviceCalls)?.customerEquipmentID
+        guard let resolvedEquipmentID else { return nil }
+        return equipmentProfiles.first { $0.id == resolvedEquipmentID }
     }
 
     func linkedInvoice(in invoices: [Invoice]) -> Invoice? {
@@ -295,7 +296,7 @@ final class ServiceDocumentAttachment {
                 : "Not downloaded on this device"
             lines.append("Local File: \(localStatus)")
         }
-        if let equipment = linkedEquipment(in: equipmentProfiles) {
+        if let equipment = linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls) {
             lines.append("Equipment: \(equipment.displayName)")
         }
         if let call = linkedServiceCall(in: serviceCalls) {
@@ -423,13 +424,17 @@ final class ServiceDocumentAttachment {
 
     static func groupedEquipmentAttachments(
         equipmentProfiles: [CustomerEquipment],
-        attachments: [ServiceDocumentAttachment]
+        attachments: [ServiceDocumentAttachment],
+        serviceCalls: [ServiceCall] = []
     ) -> [EquipmentAttachmentGroup] {
         equipmentProfiles
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
             .compactMap { equipment in
                 let matching = attachments
-                    .filter { $0.customerEquipmentID == equipment.id }
+                    .filter { attachment in
+                        attachment.customerEquipmentID == equipment.id ||
+                            attachment.linkedServiceCall(in: serviceCalls)?.customerEquipmentID == equipment.id
+                    }
                     .sorted { $0.createdAt > $1.createdAt }
                 guard !matching.isEmpty else { return nil }
                 return EquipmentAttachmentGroup(equipment: equipment, attachments: matching)

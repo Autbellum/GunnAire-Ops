@@ -2345,6 +2345,46 @@ struct GunnAire_OpsTests {
         #expect(lines.contains { $0.contains("AC123") })
     }
 
+    @Test func customerProfileAttachmentDetailInfersEquipmentFromLinkedServiceCall() async throws {
+        let customer = Customer(name: "Equipment Attachment Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            manufacturer: "Carrier",
+            modelNumber: "24ABC6",
+            serialNumber: "AC123"
+        )
+        let call = ServiceCall(
+            customerEquipmentID: equipment.id,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer
+        )
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            customerEquipmentID: nil,
+            kind: .diagnosticPhoto,
+            displayName: "legacy-job-photo.jpg",
+            localFilePath: "/tmp/legacy-job-photo.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048
+        )
+
+        let lines = attachment.customerProfileDetailLines(
+            serviceCalls: [call],
+            invoices: [],
+            estimates: [],
+            equipmentProfiles: [equipment],
+            canViewFinancials: false
+        )
+
+        #expect(lines.contains { $0.contains("Equipment: Downstairs AC") })
+        #expect(lines.contains { $0.contains("Carrier") })
+        #expect(lines.contains { $0.contains("AC123") })
+    }
+
     @Test func customerProfileAttachmentDetailShowsOperationalFileMetadata() async throws {
         let customer = Customer(name: "File Metadata Customer")
         let attachment = ServiceDocumentAttachment(
@@ -2516,6 +2556,12 @@ struct GunnAire_OpsTests {
         let customer = Customer(name: "Equipment File Customer")
         let downstairs = CustomerEquipment(customer: customer, name: "Downstairs AC", modelNumber: "24ABC6")
         let upstairs = CustomerEquipment(customer: customer, name: "Upstairs Furnace", modelNumber: "59TN6")
+        let downstairsCall = ServiceCall(
+            customerEquipmentID: downstairs.id,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer
+        )
         let downstairsOlder = ServiceDocumentAttachment(
             customer: customer,
             serviceCallID: nil,
@@ -2537,6 +2583,17 @@ struct GunnAire_OpsTests {
             contentType: "image/jpeg",
             fileSizeBytes: 2048,
             createdAt: Date(timeIntervalSince1970: 20)
+        )
+        let legacyDownstairsJobPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: downstairsCall.id,
+            customerEquipmentID: nil,
+            kind: .diagnosticPhoto,
+            displayName: "legacy-downstairs-photo.jpg",
+            localFilePath: "/tmp/legacy-downstairs-photo.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 25)
         )
         let upstairsPhoto = ServiceDocumentAttachment(
             customer: customer,
@@ -2561,11 +2618,12 @@ struct GunnAire_OpsTests {
 
         let groups = ServiceDocumentAttachment.groupedEquipmentAttachments(
             equipmentProfiles: [upstairs, downstairs],
-            attachments: [downstairsOlder, downstairsNewer, upstairsPhoto, unlinked]
+            attachments: [downstairsOlder, downstairsNewer, legacyDownstairsJobPhoto, upstairsPhoto, unlinked],
+            serviceCalls: [downstairsCall]
         )
 
         #expect(groups.map { $0.equipment.name } == ["Downstairs AC", "Upstairs Furnace"])
-        #expect(groups.first?.attachments.map(\.displayName) == ["downstairs-nameplate.jpg", "downstairs-manual.pdf"])
+        #expect(groups.first?.attachments.map(\.displayName) == ["legacy-downstairs-photo.jpg", "downstairs-nameplate.jpg", "downstairs-manual.pdf"])
         #expect(groups.last?.attachments.map(\.displayName) == ["upstairs-nameplate.jpg"])
     }
 
