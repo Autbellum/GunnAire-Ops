@@ -179,6 +179,10 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
                 HVACTechnicalReadingDefinition(key: "ignition_type", label: "Ignition Type", unit: nil, options: Self.ignitionOptions),
                 HVACTechnicalReadingDefinition(key: "gas_pressure_inlet", label: "Gas Pressure Inlet", unit: "in. w.c."),
                 HVACTechnicalReadingDefinition(key: "gas_pressure_manifold", label: "Gas Pressure Manifold", unit: "in. w.c."),
+                HVACTechnicalReadingDefinition(key: "flue_temp", label: "Flue Temp", unit: "F"),
+                HVACTechnicalReadingDefinition(key: "o2_percent", label: "O2", unit: "%"),
+                HVACTechnicalReadingDefinition(key: "co2_percent", label: "CO2", unit: "%"),
+                HVACTechnicalReadingDefinition(key: "co_ppm", label: "CO Reading", unit: "ppm"),
                 HVACTechnicalReadingDefinition(key: "blower_amps", label: "Blower Amps", unit: "A"),
                 HVACTechnicalReadingDefinition(key: "heat_strip_amps", label: "Heat Strip Amps", unit: "A"),
                 HVACTechnicalReadingDefinition(key: "condenser_condition", label: "Condenser Condition", unit: nil, options: Self.conditionOptions),
@@ -323,7 +327,7 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
                 "refrigerant_type", "suction_pressure", "liquid_pressure", "head_pressure",
                 "suction_saturation_temp", "liquid_saturation_temp", "suction_line_temp", "liquid_line_temp",
                 "superheat", "subcooling", "line_voltage", "compressor_rla", "compressor_amps",
-                "economizer_operation", "package_heat_type", "blower_amps",
+                "economizer_operation", "package_heat_type", "blower_amps", "co_ppm",
                 "condenser_condition", "evaporator_condition", "heat_exchanger_condition"
             ]
         case .miniSplit:

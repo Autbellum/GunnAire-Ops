@@ -943,8 +943,20 @@ struct GunnAire_OpsTests {
         #expect(airHandlerDefinitions.first { $0.key == "blower_type" }?.options.contains("ECM Variable Speed") == true)
         #expect(packageUnitDefinitions.first { $0.key == "package_heat_type" }?.options.contains("Dual Fuel") == true)
         #expect(packageUnitDefinitions.contains { $0.key == "economizer_operation" })
+        #expect(packageUnitDefinitions.contains { $0.key == "flue_temp" })
+        #expect(packageUnitDefinitions.contains { $0.key == "co_ppm" })
         #expect(miniSplitDefinitions.contains { $0.key == "communication_voltage" })
         #expect(miniSplitDefinitions.contains { $0.key == "indoor_filter_condition" })
+    }
+
+    @Test func packageUnitReportsRequireCombustionSafetyReading() async throws {
+        let requiredKeys = Set(HVACEquipmentType.packageUnit.requiredReadingKeysForCompleteServiceReport)
+        let definitionKeys = Set(HVACEquipmentType.packageUnit.readingDefinitions.map(\.key))
+
+        #expect(definitionKeys.contains("co_ppm"))
+        #expect(definitionKeys.contains("flue_temp"))
+        #expect(requiredKeys.contains("co_ppm"))
+        #expect(requiredKeys.isSubset(of: definitionKeys))
     }
 
     @Test func equipmentSpecificServiceActionsDriveMaintenanceCloseout() async throws {
