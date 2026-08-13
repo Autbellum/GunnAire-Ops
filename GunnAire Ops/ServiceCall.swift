@@ -1350,6 +1350,10 @@ final class ServiceCall {
             "Technical report complete",
             "Onsite report generated"
         ]
+        if requiresFieldPhotoEvidence {
+            requiredItems.append("Before photo captured")
+            requiredItems.append("After photo captured")
+        }
         if type != .estimate {
             requiredItems.append("Invoice created")
         }
@@ -1378,6 +1382,15 @@ final class ServiceCall {
         }
         if !hasGeneratedReport {
             missing.append("Onsite report generated")
+        }
+        let photoEvidence = resolvedFieldPhotoEvidence(from: attachments)
+        if requiresFieldPhotoEvidence {
+            if photoEvidence.beforeCount == 0 {
+                missing.append("Before photo captured")
+            }
+            if photoEvidence.afterCount == 0 {
+                missing.append("After photo captured")
+            }
         }
         if type != .estimate && invoice == nil {
             missing.append("Invoice created")
@@ -1411,6 +1424,22 @@ final class ServiceCall {
         }
 
         return JobCloseoutReadiness(requiredItems: requiredItems, missingItems: missing)
+    }
+
+    private var requiresFieldPhotoEvidence: Bool {
+        switch type {
+        case .service, .install, .maintenance:
+            return true
+        case .estimate, .meeting, .reminder, .siteVisit, .other:
+            return false
+        }
+    }
+
+    private func resolvedFieldPhotoEvidence(from attachments: [ServiceDocumentAttachment]) -> (beforeCount: Int, afterCount: Int) {
+        let jobAttachments = attachments.filter { $0.serviceCallID == id }
+        let resolvedBeforeCount = max(beforePhotoCount, jobAttachments.filter { $0.kind == .beforePhoto }.count)
+        let resolvedAfterCount = max(afterPhotoCount, jobAttachments.filter { $0.kind == .afterPhoto }.count)
+        return (resolvedBeforeCount, resolvedAfterCount)
     }
 
     func refreshAttachmentProgress(from attachments: [ServiceDocumentAttachment]) {

@@ -1021,6 +1021,8 @@ struct GunnAire_OpsTests {
         #expect(readiness.missingItems.contains("Work completed"))
         #expect(readiness.missingItems.contains("Technical report complete"))
         #expect(readiness.missingItems.contains("Onsite report generated"))
+        #expect(readiness.missingItems.contains("Before photo captured"))
+        #expect(readiness.missingItems.contains("After photo captured"))
         #expect(readiness.missingItems.contains("Invoice created"))
     }
 
@@ -1065,12 +1067,147 @@ struct GunnAire_OpsTests {
             fileSizeBytes: 1024,
             quickBooksAttachableID: "ATTACH-1"
         )
+        let beforePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .beforePhoto,
+            displayName: "before.jpg",
+            localFilePath: "/tmp/before.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 512,
+            quickBooksAttachableID: "ATTACH-2"
+        )
+        let afterPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .afterPhoto,
+            displayName: "after.jpg",
+            localFilePath: "/tmp/after.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 512,
+            quickBooksAttachableID: "ATTACH-3"
+        )
 
-        let readiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [report])
+        let readiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [report, beforePhoto, afterPhoto])
 
         #expect(readiness.isReady == true)
         #expect(readiness.statusLabel == "Ready for closeout")
         #expect(readiness.summary == "\(readiness.totalCount)/\(readiness.totalCount) complete")
+    }
+
+    @Test func serviceCloseoutRequiresBeforeAndAfterPhotoEvidence() async throws {
+        let customer = Customer(name: "Photo Evidence Customer")
+        let call = ServiceCall(
+            equipmentName: "Main AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Cooling maintenance completed.",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .completed,
+            workCompletedChecklist: true
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let readiness = call.closeoutReadiness(invoice: nil, payments: [], attachments: [report])
+
+        #expect(readiness.requiredItems.contains("Before photo captured"))
+        #expect(readiness.requiredItems.contains("After photo captured"))
+        #expect(readiness.missingItems.contains("Before photo captured"))
+        #expect(readiness.missingItems.contains("After photo captured"))
+    }
+
+    @Test func serviceCloseoutAcceptsAttachedBeforeAndAfterPhotos() async throws {
+        let customer = Customer(name: "Photo Evidence Customer")
+        let call = ServiceCall(
+            equipmentName: "Main AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Cooling maintenance completed.",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .completed,
+            workCompletedChecklist: true
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let beforePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .beforePhoto,
+            displayName: "before.jpg",
+            localFilePath: "/tmp/before.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 512
+        )
+        let afterPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .afterPhoto,
+            displayName: "after.jpg",
+            localFilePath: "/tmp/after.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 512
+        )
+
+        let readiness = call.closeoutReadiness(invoice: nil, payments: [], attachments: [report, beforePhoto, afterPhoto])
+
+        #expect(readiness.missingItems.contains("Before photo captured") == false)
+        #expect(readiness.missingItems.contains("After photo captured") == false)
+    }
+
+    @Test func meetingCloseoutDoesNotRequireFieldPhotos() async throws {
+        let customer = Customer(name: "Meeting Customer")
+        let call = ServiceCall(
+            type: .meeting,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .completed,
+            workCompletedChecklist: true
+        )
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .serviceReport,
+            displayName: "meeting-notes.pdf",
+            localFilePath: "/tmp/meeting-notes.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let readiness = call.closeoutReadiness(invoice: nil, payments: [], attachments: [report])
+
+        #expect(readiness.requiredItems.contains("Before photo captured") == false)
+        #expect(readiness.requiredItems.contains("After photo captured") == false)
+        #expect(readiness.missingItems.contains("Before photo captured") == false)
+        #expect(readiness.missingItems.contains("After photo captured") == false)
     }
 
     @Test func jobCloseoutReadinessRequiresGeneratedReportLinkedToInvoice() async throws {
