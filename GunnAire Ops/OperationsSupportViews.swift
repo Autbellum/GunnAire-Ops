@@ -17,6 +17,7 @@ enum CustomerDataMaintenance {
         var contracts = 0
         var timeEntries = 0
         var documentAttachments = 0
+        var equipmentProfiles = 0
     }
 
     private static let genericCalendarCustomerNames: Set<String> = [
@@ -66,6 +67,7 @@ enum CustomerDataMaintenance {
         let contracts = (try? modelContext.fetch(FetchDescriptor<RecurringMaintenanceContract>())) ?? []
         let timeEntries = (try? modelContext.fetch(FetchDescriptor<TimeEntry>())) ?? []
         let documentAttachments = (try? modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())) ?? []
+        let equipmentProfiles = (try? modelContext.fetch(FetchDescriptor<CustomerEquipment>())) ?? []
 
         var summary = DeletionSummary()
         for customer in genericCustomers {
@@ -78,7 +80,8 @@ enum CustomerDataMaintenance {
                 payments: payments,
                 contracts: contracts,
                 timeEntries: timeEntries,
-                documentAttachments: documentAttachments
+                documentAttachments: documentAttachments,
+                equipmentProfiles: equipmentProfiles
             ))
         }
         try? modelContext.save()
@@ -94,7 +97,8 @@ enum CustomerDataMaintenance {
         payments: [Payment],
         contracts: [RecurringMaintenanceContract],
         timeEntries: [TimeEntry],
-        documentAttachments: [ServiceDocumentAttachment]
+        documentAttachments: [ServiceDocumentAttachment],
+        equipmentProfiles: [CustomerEquipment]
     ) -> DeletionSummary {
         var summary = DeletionSummary()
         let customerID = customer.id
@@ -133,6 +137,10 @@ enum CustomerDataMaintenance {
             modelContext.delete(attachment)
             summary.documentAttachments += 1
         }
+        for equipment in equipmentProfiles where equipment.customer?.id == customerID {
+            modelContext.delete(equipment)
+            summary.equipmentProfiles += 1
+        }
         modelContext.delete(customer)
         summary.customers += 1
         return summary
@@ -149,15 +157,16 @@ private extension CustomerDataMaintenance.DeletionSummary {
         contracts += other.contracts
         timeEntries += other.timeEntries
         documentAttachments += other.documentAttachments
+        equipmentProfiles += other.equipmentProfiles
     }
 
     var deletedAnything: Bool {
-        customers + serviceCalls + estimates + invoices + payments + contracts + timeEntries + documentAttachments > 0
+        customers + serviceCalls + estimates + invoices + payments + contracts + timeEntries + documentAttachments + equipmentProfiles > 0
     }
 
     var customerScreenMessage: String {
         deletedAnything
-            ? "Cleaned \(customers) calendar-created customer\(customers == 1 ? "" : "s"), \(serviceCalls) related local job\(serviceCalls == 1 ? "" : "s"), and \(documentAttachments) attachment\(documentAttachments == 1 ? "" : "s")."
+            ? "Cleaned \(customers) calendar-created customer\(customers == 1 ? "" : "s"), \(serviceCalls) related local job\(serviceCalls == 1 ? "" : "s"), \(equipmentProfiles) equipment profile\(equipmentProfiles == 1 ? "" : "s"), and \(documentAttachments) attachment\(documentAttachments == 1 ? "" : "s")."
             : "No calendar-created generic customers found."
     }
 }
@@ -172,6 +181,7 @@ struct CustomersView: View {
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
+    @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
 
     @State private var newCustomerName = ""
     @State private var newCustomerEmail = ""
@@ -1489,6 +1499,7 @@ private struct CustomerEditorView: View {
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
+    @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
 
     let customer: Customer
 
@@ -1506,6 +1517,16 @@ private struct CustomerEditorView: View {
     @State private var customerAttachmentKind: ServiceDocumentAttachmentKind = .customerDocument
     @State private var customerAttachmentCaption = ""
     @State private var customerAttachmentMessage: String?
+    @State private var newEquipmentType: HVACEquipmentType = .splitSystemAC
+    @State private var newEquipmentName = ""
+    @State private var newEquipmentManufacturer = ""
+    @State private var newEquipmentModel = ""
+    @State private var newEquipmentSerial = ""
+    @State private var newEquipmentLocation = ""
+    @State private var newEquipmentFilterSize = ""
+    @State private var newEquipmentNotes = ""
+    @State private var includeNewEquipmentWarranty = false
+    @State private var newEquipmentWarranty = Date()
 
     private var customerServiceCalls: [ServiceCall] {
         serviceCalls.filter { $0.customer.id == customer.id }
@@ -1517,6 +1538,10 @@ private struct CustomerEditorView: View {
 
     private var customerAttachments: [ServiceDocumentAttachment] {
         documentAttachments.filter { $0.customer?.id == customer.id }
+    }
+
+    private var customerEquipmentProfiles: [CustomerEquipment] {
+        equipmentProfiles.filter { $0.customer?.id == customer.id }
     }
 
     private var openCustomerInvoiceBalances: [(invoice: Invoice, balance: Double)] {
@@ -1669,6 +1694,74 @@ private struct CustomerEditorView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(customerHealthTint)
                     }
+                }
+
+                Section("Equipment Profiles") {
+                    if customerEquipmentProfiles.isEmpty {
+                        Text("No equipment profiles saved for this customer.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(customerEquipmentProfiles) { equipment in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(equipment.name)
+                                        .font(.headline)
+                                    Spacer()
+                                    Text(equipment.isActive ? "Active" : "Inactive")
+                                        .font(.caption)
+                                        .foregroundColor(equipment.isActive ? .green : .secondary)
+                                }
+                                Text(equipment.displayName)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                if let location = equipment.location, !location.isEmpty {
+                                    Text("Location: \(location)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                if let warranty = equipment.warrantyExpiration {
+                                    Text("Warranty: \(warranty.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                HStack {
+                                    Button(equipment.isActive ? "Deactivate" : "Reactivate") {
+                                        equipment.isActive.toggle()
+                                        try? modelContext.save()
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                            .padding(.vertical, 3)
+                        }
+                    }
+
+                    Picker("Type", selection: $newEquipmentType) {
+                        ForEach(HVACEquipmentType.allCases) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
+                    TextField("Equipment Name", text: $newEquipmentName)
+                    TextField("Manufacturer", text: $newEquipmentManufacturer)
+                    TextField("Model", text: $newEquipmentModel)
+                    TextField("Serial Number", text: $newEquipmentSerial)
+                    TextField("Location", text: $newEquipmentLocation)
+                    TextField("Filter Size", text: $newEquipmentFilterSize)
+                    TextField("Equipment Notes", text: $newEquipmentNotes, axis: .vertical)
+                        .lineLimit(2...4)
+                    Toggle("Track Warranty Expiration", isOn: $includeNewEquipmentWarranty)
+                    if includeNewEquipmentWarranty {
+                        DatePicker("Warranty Expiration", selection: $newEquipmentWarranty, displayedComponents: .date)
+                    }
+                    Button {
+                        addCustomerEquipmentProfile()
+                    } label: {
+                        Label("Add Equipment Profile", systemImage: "wrench.and.screwdriver")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.brandGold)
+                    .foregroundStyle(Color.primaryBlack)
+                    .disabled(newEquipmentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
                 Section("Documents & Photos") {
@@ -2063,6 +2156,36 @@ private struct CustomerEditorView: View {
         return "application/octet-stream"
     }
 
+    private func addCustomerEquipmentProfile() {
+        let trimmedName = newEquipmentName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: newEquipmentType,
+            name: trimmedName,
+            manufacturer: newEquipmentManufacturer.nilIfBlank,
+            modelNumber: newEquipmentModel.nilIfBlank,
+            serialNumber: newEquipmentSerial.nilIfBlank,
+            location: newEquipmentLocation.nilIfBlank,
+            warrantyExpiration: includeNewEquipmentWarranty ? newEquipmentWarranty : nil,
+            filterSize: newEquipmentFilterSize.nilIfBlank,
+            notes: newEquipmentNotes.nilIfBlank
+        )
+        modelContext.insert(equipment)
+        try? modelContext.save()
+        newEquipmentType = .splitSystemAC
+        newEquipmentName = ""
+        newEquipmentManufacturer = ""
+        newEquipmentModel = ""
+        newEquipmentSerial = ""
+        newEquipmentLocation = ""
+        newEquipmentFilterSize = ""
+        newEquipmentNotes = ""
+        includeNewEquipmentWarranty = false
+        newEquipmentWarranty = Date()
+        customerActionMessage = "Added equipment profile to \(customer.name)."
+    }
+
     private func deleteCustomer() {
         _ = CustomerDataMaintenance.deleteCustomer(
             customer,
@@ -2073,7 +2196,8 @@ private struct CustomerEditorView: View {
             payments: payments,
             contracts: recurringContracts,
             timeEntries: timeEntries,
-            documentAttachments: documentAttachments
+            documentAttachments: documentAttachments,
+            equipmentProfiles: equipmentProfiles
         )
         try? modelContext.save()
         dismiss()

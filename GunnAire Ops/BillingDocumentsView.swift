@@ -15,6 +15,7 @@ struct BillingDocumentsView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
+    @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
 
     private let initialServiceCall: ServiceCall?
     private let showsDismissButton: Bool
@@ -422,6 +423,11 @@ GunnAire
     private var activeJobAttachments: [ServiceDocumentAttachment] {
         guard let call = activeServiceCall else { return [] }
         return attachments.filter { $0.serviceCallID == call.id }
+    }
+
+    private var activeCustomerEquipmentProfiles: [CustomerEquipment] {
+        guard let call = activeServiceCall else { return [] }
+        return equipmentProfiles.filter { $0.customer?.id == call.customer.id && $0.isActive }
     }
 
     var body: some View {
@@ -1746,6 +1752,24 @@ GunnAire
     @ViewBuilder
     private func technicalServiceReportSection(for call: ServiceCall) -> some View {
         Section("Technical HVAC Report") {
+            if !activeCustomerEquipmentProfiles.isEmpty {
+                Picker("Customer Equipment", selection: Binding(
+                    get: { call.customerEquipmentID },
+                    set: { selectedID in
+                        call.customerEquipmentID = selectedID
+                        if let selectedID,
+                           let equipment = activeCustomerEquipmentProfiles.first(where: { $0.id == selectedID }) {
+                            applyEquipmentProfile(equipment, to: call)
+                        }
+                    }
+                )) {
+                    Text("No linked equipment").tag(UUID?.none)
+                    ForEach(activeCustomerEquipmentProfiles) { equipment in
+                        Text(equipment.displayName).tag(UUID?.some(equipment.id))
+                    }
+                }
+            }
+
             Picker("Equipment Type", selection: Binding(
                 get: { call.equipmentType ?? .splitSystemAC },
                 set: { newValue in
@@ -1761,6 +1785,12 @@ GunnAire
             TextField("Equipment Name", text: optionalServiceCallTextBinding(call, \.equipmentName))
             TextField("Model", text: optionalServiceCallTextBinding(call, \.equipmentModel))
             TextField("Serial Number", text: optionalServiceCallTextBinding(call, \.equipmentSerialNumber))
+
+            Button(call.customerEquipmentID == nil ? "Save as Customer Equipment" : "Update Customer Equipment") {
+                saveCurrentEquipmentProfile(for: call)
+            }
+            .buttonStyle(.bordered)
+            .disabled(call.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
 
             ForEach(call.technicalReadingDefinitions) { definition in
                 TextField(definition.displayLabel, text: technicalReadingBinding(for: call, key: definition.key))
@@ -1818,6 +1848,58 @@ GunnAire
             get: { call.technicalReading(for: key) },
             set: { call.setTechnicalReading($0, for: key) }
         )
+    }
+
+    private func applyEquipmentProfile(_ equipment: CustomerEquipment, to call: ServiceCall) {
+        call.customerEquipmentID = equipment.id
+        call.equipmentType = equipment.equipmentType
+        call.equipmentName = equipment.name
+        call.equipmentModel = equipment.modelNumber
+        call.equipmentSerialNumber = equipment.serialNumber
+        call.equipmentWarrantyExpiration = equipment.warrantyExpiration
+        if call.filterSize?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            call.filterSize = equipment.filterSize
+        }
+        call.equipmentVerifiedChecklist = true
+        call.diagnosticsCaptured = true
+        actionMessage = "Loaded equipment profile for this job."
+    }
+
+    private func saveCurrentEquipmentProfile(for call: ServiceCall) {
+        let equipmentName = call.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let equipmentName, !equipmentName.isEmpty else {
+            actionMessage = "Enter equipment name before saving a customer equipment profile."
+            return
+        }
+
+        let equipment: CustomerEquipment
+        if let existingID = call.customerEquipmentID,
+           let existing = equipmentProfiles.first(where: { $0.id == existingID }) {
+            equipment = existing
+        } else if let serial = call.equipmentSerialNumber?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !serial.isEmpty,
+                  let existing = equipmentProfiles.first(where: {
+                      $0.customer?.id == call.customer.id &&
+                      $0.serialNumber?.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(serial) == .orderedSame
+                  }) {
+            equipment = existing
+            call.customerEquipmentID = existing.id
+        } else {
+            equipment = CustomerEquipment(customer: call.customer, name: equipmentName)
+            modelContext.insert(equipment)
+            call.customerEquipmentID = equipment.id
+        }
+
+        equipment.equipmentType = call.equipmentType
+        equipment.name = equipmentName
+        equipment.modelNumber = call.equipmentModel
+        equipment.serialNumber = call.equipmentSerialNumber
+        equipment.warrantyExpiration = call.equipmentWarrantyExpiration
+        equipment.filterSize = call.filterSize
+        equipment.isActive = true
+        call.equipmentVerifiedChecklist = true
+        try? modelContext.save()
+        actionMessage = "Saved equipment profile to \(call.customer.name)."
     }
 
     private func calculateTemperatureSplit(for call: ServiceCall) {

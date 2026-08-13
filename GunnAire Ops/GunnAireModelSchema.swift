@@ -15,6 +15,7 @@ enum GunnAireModelSchema {
             Vendor.self,
             AppUser.self,
             ServiceDocumentAttachment.self,
+            CustomerEquipment.self,
         ])
     }
 }
