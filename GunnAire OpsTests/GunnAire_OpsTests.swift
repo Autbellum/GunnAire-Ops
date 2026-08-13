@@ -4206,6 +4206,112 @@ struct GunnAire_OpsTests {
         #expect(detail.contains("Invoice ID:"))
     }
 
+    @Test func billingPhotoAttachmentsAreScopedToInvoiceJobAndTarget() async throws {
+        let customer = Customer(name: "Billing Photo Customer")
+        let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer)
+        let invoiceID = UUID()
+        let otherInvoiceID = UUID()
+        let jobBeforePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .beforePhoto,
+            displayName: "job-before.jpg",
+            localFilePath: "/tmp/job-before.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 100)
+        )
+        let invoicePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoiceID,
+            kind: .afterPhoto,
+            displayName: "invoice-after.jpg",
+            localFilePath: "/tmp/invoice-after.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+        let wrongInvoicePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: otherInvoiceID,
+            kind: .diagnosticPhoto,
+            displayName: "wrong-invoice.jpg",
+            localFilePath: "/tmp/wrong-invoice.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 300)
+        )
+        let unrelatedJobPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            kind: .beforePhoto,
+            displayName: "unrelated-job.jpg",
+            localFilePath: "/tmp/unrelated-job.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 400)
+        )
+
+        let selected = CustomerDocumentExporter.billingPhotoAttachments(
+            for: [unrelatedJobPhoto, wrongInvoicePhoto, invoicePhoto, jobBeforePhoto],
+            serviceCall: call,
+            invoiceID: invoiceID,
+            estimateID: nil
+        )
+
+        #expect(selected.map(\.displayName) == ["job-before.jpg", "invoice-after.jpg"])
+    }
+
+    @Test func billingPhotoAttachmentsAreScopedToEstimateJobAndTarget() async throws {
+        let customer = Customer(name: "Estimate Photo Customer")
+        let call = ServiceCall(type: .estimate, scheduledDate: Date(), customer: customer)
+        let estimateID = UUID()
+        let otherEstimateID = UUID()
+        let jobPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .beforePhoto,
+            displayName: "estimate-job.jpg",
+            localFilePath: "/tmp/estimate-job.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 100)
+        )
+        let estimatePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            estimateID: estimateID,
+            kind: .diagnosticPhoto,
+            displayName: "estimate-diagnostic.jpg",
+            localFilePath: "/tmp/estimate-diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+        let wrongEstimatePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            estimateID: otherEstimateID,
+            kind: .afterPhoto,
+            displayName: "wrong-estimate.jpg",
+            localFilePath: "/tmp/wrong-estimate.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 300)
+        )
+
+        let selected = CustomerDocumentExporter.billingPhotoAttachments(
+            for: [wrongEstimatePhoto, estimatePhoto, jobPhoto],
+            serviceCall: call,
+            invoiceID: nil,
+            estimateID: estimateID
+        )
+
+        #expect(selected.map(\.displayName) == ["estimate-job.jpg", "estimate-diagnostic.jpg"])
+    }
+
     @Test func onsiteReportChecklistCountsActualJobPhotoAttachments() async throws {
         let customer = Customer(name: "Photo Count Customer")
         let call = ServiceCall(

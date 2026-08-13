@@ -87,7 +87,18 @@ enum CustomerDocumentExporter {
     ) throws -> URL {
         let fileName = makeFileName(prefix: "GunnAire-Estimate", customerName: estimate.customer.name)
         let sections = estimateSections(estimate: estimate, serviceCall: serviceCall, attachments: attachments)
-        return try renderPDF(title: "Estimate", customer: estimate.customer, sections: sections, fileName: fileName)
+        return try renderPDF(
+            title: "Estimate",
+            customer: estimate.customer,
+            sections: sections,
+            imageAttachments: billingPhotoAttachments(
+                for: attachments,
+                serviceCall: serviceCall,
+                invoiceID: nil,
+                estimateID: estimate.id
+            ),
+            fileName: fileName
+        )
     }
 
     static func exportInvoice(
@@ -99,7 +110,18 @@ enum CustomerDocumentExporter {
         let paid = isInvoicePaid(invoice, payments: payments)
         let fileName = makeFileName(prefix: paid ? "GunnAire-Paid-Invoice" : "GunnAire-Invoice", customerName: invoice.customer.name)
         let sections = invoiceSections(invoice: invoice, serviceCall: serviceCall, payments: payments, attachments: attachments)
-        return try renderPDF(title: paid ? "Paid Invoice" : "Invoice", customer: invoice.customer, sections: sections, fileName: fileName)
+        return try renderPDF(
+            title: paid ? "Paid Invoice" : "Invoice",
+            customer: invoice.customer,
+            sections: sections,
+            imageAttachments: billingPhotoAttachments(
+                for: attachments,
+                serviceCall: serviceCall,
+                invoiceID: invoice.id,
+                estimateID: nil
+            ),
+            fileName: fileName
+        )
     }
 
     static func exportPaidInvoice(
@@ -463,6 +485,27 @@ enum CustomerDocumentExporter {
                 }
                 return lhs.createdAt < rhs.createdAt
             }
+    }
+
+    static func billingPhotoAttachments(
+        for attachments: [ServiceDocumentAttachment],
+        serviceCall: ServiceCall?,
+        invoiceID: UUID?,
+        estimateID: UUID?
+    ) -> [ServiceDocumentAttachment] {
+        guard let serviceCallID = serviceCall?.id else { return [] }
+        return photoEvidenceAttachments(for: attachments)
+            .filter { attachment in
+                attachment.serviceCallID == serviceCallID &&
+                    billingTargetMatches(attachmentID: attachment.invoiceID, targetID: invoiceID) &&
+                    billingTargetMatches(attachmentID: attachment.estimateID, targetID: estimateID)
+            }
+    }
+
+    private static func billingTargetMatches(attachmentID: UUID?, targetID: UUID?) -> Bool {
+        guard let attachmentID else { return true }
+        guard let targetID else { return false }
+        return attachmentID == targetID
     }
 
     static func photoAttachmentCaption(for attachment: ServiceDocumentAttachment) -> String {
