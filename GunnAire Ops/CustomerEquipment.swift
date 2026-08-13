@@ -149,6 +149,34 @@ final class CustomerEquipment {
             .technicalReadingServiceHistorySummary
     }
 
+    func recentTechnicalTrendSummary(in serviceCalls: [ServiceCall], now: Date = Date()) -> String? {
+        let completedCalls = matchingServiceCalls(in: serviceCalls)
+            .filter { $0.scheduledDate <= now && $0.status != .cancelled }
+            .sorted { $0.scheduledDate > $1.scheduledDate }
+        guard let latestCall = completedCalls.first else { return nil }
+
+        let priorCalls = Array(completedCalls.dropFirst())
+        guard !priorCalls.isEmpty else { return nil }
+
+        let latestDefinitions = Dictionary(uniqueKeysWithValues: latestCall.technicalReadingDefinitions.map { ($0.key, $0) })
+        let trendKeys = Self.technicalTrendPriorityKeys(for: latestCall.equipmentType ?? equipmentType ?? .splitSystemAC)
+        let trendRows = trendKeys.compactMap { key -> String? in
+            let latestValue = latestCall.technicalReading(for: key).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !latestValue.isEmpty else { return nil }
+            guard let previous = priorCalls.compactMap({ call -> (value: String, date: Date)? in
+                let value = call.technicalReading(for: key).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !value.isEmpty else { return nil }
+                return (value, call.scheduledDate)
+            }).first else { return nil }
+            guard !Self.trendValuesEquivalent(latestValue, previous.value) else { return nil }
+            let label = latestDefinitions[key]?.label ?? key.replacingOccurrences(of: "_", with: " ").capitalized
+            return "\(label): \(latestValue) (was \(previous.value) \(previous.date.formatted(date: .abbreviated, time: .omitted)))"
+        }
+
+        guard !trendRows.isEmpty else { return nil }
+        return trendRows.prefix(6).joined(separator: "; ")
+    }
+
     func latestServiceConcernSummary(in serviceCalls: [ServiceCall], now: Date = Date()) -> String? {
         guard let call = latestCompletedServiceCall(in: serviceCalls, now: now) else {
             return nil
@@ -219,6 +247,7 @@ final class CustomerEquipment {
             "Last service: \(call.scheduledDate.formatted(date: .abbreviated, time: .omitted))",
             call.serviceReportSummary.map { "Report: \($0)" },
             call.technicalReadingServiceHistorySummary.map { "Readings: \($0)" },
+            recentTechnicalTrendSummary(in: serviceCalls, now: now).map { "Trends: \($0)" },
             call.serviceActionServiceHistorySummary.map { "Actions: \($0)" }
         ]
             .compactMap { value -> String? in
@@ -270,6 +299,52 @@ final class CustomerEquipment {
             return trimmedExisting
         }
         return "\(trimmedExisting)\n\n\(trimmedServiceNote)"
+    }
+
+    private static func technicalTrendPriorityKeys(for equipmentType: HVACEquipmentType) -> [String] {
+        let common = [
+            "temperature_split",
+            "temperature_rise",
+            "total_external_static",
+            "superheat",
+            "subcooling",
+            "compressor_amps",
+            "blower_amps",
+            "line_voltage",
+            "co_ppm"
+        ]
+        switch equipmentType {
+        case .splitSystemAC:
+            return common + ["suction_pressure", "liquid_pressure", "head_pressure", "condenser_condition", "evaporator_condition"]
+        case .heatPump:
+            return common + ["reversing_valve_operation", "defrost_control_status", "aux_heat_amps"]
+        case .packageUnit:
+            return common + ["economizer_operation", "mixed_air_temp", "outdoor_air_damper_position", "economizer_sensor_status", "heat_exchanger_condition"]
+        case .miniSplit:
+            return common + ["indoor_head_delta_t", "communication_voltage", "inverter_frequency", "indoor_filter_condition", "condensate_pump_status"]
+        case .gasFurnace:
+            return ["temperature_rise", "gas_pressure_inlet", "gas_pressure_manifold", "flame_sensor_microamps", "inducer_amps", "blower_amps", "draft_pressure", "co_ppm", "heat_exchanger_condition"]
+        case .airHandler:
+            return ["temperature_split", "temperature_rise", "static_pressure_return", "static_pressure_supply", "total_external_static", "blower_amps", "heat_strip_amps", "blower_wheel_condition", "duct_condition"]
+        case .boiler:
+            return ["water_temp_supply", "water_temp_return", "system_pressure", "expansion_tank_pressure", "gas_pressure_inlet", "gas_pressure_manifold", "circulator_amps", "co_ppm"]
+        case .waterHeater:
+            return ["water_temp_out", "incoming_water_temp", "gas_pressure_inlet", "gas_pressure_manifold", "draft_pressure", "tank_condition", "co_ppm"]
+        case .ventilation:
+            return ["airflow", "outside_air_cfm", "exhaust_air_cfm", "motor_amps", "line_voltage", "static_pressure", "belt_condition", "damper_operation"]
+        case .iaqAccessory:
+            return ["return_humidity", "supply_humidity", "airflow", "static_pressure", "filter_media_condition", "water_panel_condition", "uv_lamp_status", "damper_operation"]
+        case .other:
+            return ["temperature_split", "temperature_rise", "line_voltage"]
+        }
+    }
+
+    private static func trendValuesEquivalent(_ lhs: String, _ rhs: String) -> Bool {
+        if let lhsNumber = Double(lhs.replacingOccurrences(of: ",", with: ".")),
+           let rhsNumber = Double(rhs.replacingOccurrences(of: ",", with: ".")) {
+            return abs(lhsNumber - rhsNumber) < 0.05
+        }
+        return lhs.caseInsensitiveCompare(rhs) == .orderedSame
     }
 
     private func normalized(_ value: String?) -> String? {

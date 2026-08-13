@@ -811,6 +811,99 @@ struct GunnAire_OpsTests {
         #expect(summary.contains("14") == false)
     }
 
+    @Test func customerEquipmentRecentTechnicalTrendSummarizesChangedReadings() async throws {
+        let customer = Customer(name: "Trend Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            serialNumber: "AC-TREND"
+        )
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let olderCall = ServiceCall(
+            equipmentSerialNumber: "AC-TREND",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400 * 90),
+            customer: customer,
+            status: .completed
+        )
+        olderCall.setTechnicalReading("9", for: "superheat")
+        olderCall.setTechnicalReading("8", for: "subcooling")
+        olderCall.setTechnicalReading("7.2", for: "compressor_amps")
+        olderCall.setTechnicalReading("Normal", for: "condenser_condition")
+        let latestCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400),
+            customer: customer,
+            status: .completed
+        )
+        latestCall.setTechnicalReading("14", for: "superheat")
+        latestCall.setTechnicalReading("8.0", for: "subcooling")
+        latestCall.setTechnicalReading("8.4", for: "compressor_amps")
+        latestCall.setTechnicalReading("Needs Cleaning", for: "condenser_condition")
+        let cancelledCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: now,
+            customer: customer,
+            status: .cancelled
+        )
+        cancelledCall.setTechnicalReading("99", for: "superheat")
+
+        let trend = try #require(equipment.recentTechnicalTrendSummary(
+            in: [olderCall, latestCall, cancelledCall],
+            now: now
+        ))
+        let context = try #require(equipment.latestServiceContextSummary(
+            in: [olderCall, latestCall, cancelledCall],
+            now: now
+        ))
+
+        #expect(trend.contains("Superheat: 14"))
+        #expect(trend.contains("was 9"))
+        #expect(trend.contains("Compressor Amps: 8.4"))
+        #expect(trend.contains("Condenser Condition: Needs Cleaning"))
+        #expect(trend.contains("Subcooling") == false)
+        #expect(trend.contains("99") == false)
+        #expect(context.contains("Trends:"))
+    }
+
+    @Test func customerEquipmentRecentTechnicalTrendRequiresPriorChangedReading() async throws {
+        let customer = Customer(name: "Stable Trend Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .gasFurnace,
+            name: "Main Furnace",
+            serialNumber: "FURN-STABLE"
+        )
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let olderCall = ServiceCall(
+            equipmentSerialNumber: "FURN-STABLE",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400 * 180),
+            customer: customer,
+            status: .completed
+        )
+        olderCall.setTechnicalReading("52", for: "temperature_rise")
+        let latestCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400),
+            customer: customer,
+            status: .completed
+        )
+        latestCall.setTechnicalReading("52.0", for: "temperature_rise")
+
+        #expect(equipment.recentTechnicalTrendSummary(in: [olderCall, latestCall], now: now) == nil)
+        #expect(equipment.recentTechnicalTrendSummary(in: [latestCall], now: now) == nil)
+    }
+
     @Test func customerEquipmentLatestConcernSummaryShowsOnlyOpenServiceActions() async throws {
         let customer = Customer(name: "Equipment Concern Customer")
         let equipment = CustomerEquipment(

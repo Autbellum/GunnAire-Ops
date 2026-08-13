@@ -2180,6 +2180,12 @@ private struct CustomerEditorView: View {
                                         .foregroundColor(.secondary)
                                         .lineLimit(3)
                                 }
+                                if let trends = equipment.recentTechnicalTrendSummary(in: customerServiceCalls) {
+                                    Text("Reading trends: \(trends)")
+                                        .font(.caption2)
+                                        .foregroundColor(.orange)
+                                        .lineLimit(3)
+                                }
                                 if let fileSummary = equipmentFileSummary(for: equipment) {
                                     Text("Files: \(fileSummary)")
                                         .font(.caption2)
