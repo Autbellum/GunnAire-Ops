@@ -330,6 +330,9 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
             return [
                 "return_air_temp", "supply_air_temp", "temperature_split",
                 "refrigerant_type", "suction_pressure", "liquid_pressure",
+                "suction_saturation_temp", "liquid_saturation_temp",
+                "suction_line_temp", "liquid_line_temp",
+                "superheat", "subcooling",
                 "line_voltage", "communication_voltage", "indoor_head_delta_t",
                 "indoor_fan_operation", "indoor_filter_condition", "indoor_coil_condition",
                 "condensate_pump_status", "remote_operation"

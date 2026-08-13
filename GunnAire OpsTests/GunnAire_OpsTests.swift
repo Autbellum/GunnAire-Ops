@@ -1496,7 +1496,7 @@ struct GunnAire_OpsTests {
             "subcooling"
         ]
 
-        for equipmentType in [HVACEquipmentType.splitSystemAC, .heatPump, .packageUnit] {
+        for equipmentType in [HVACEquipmentType.splitSystemAC, .heatPump, .packageUnit, .miniSplit] {
             let requiredKeys = Set(equipmentType.requiredReadingKeysForCompleteServiceReport)
             #expect(requiredSourceKeys.isSubset(of: requiredKeys), "\(equipmentType.displayName) must require calculated refrigerant source readings")
         }
