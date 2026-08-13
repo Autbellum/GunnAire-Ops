@@ -64,6 +64,12 @@ enum CustomerDocumentExporter {
         payments: [Payment],
         attachments: [ServiceDocumentAttachment] = []
     ) throws -> URL {
+        let scopedAttachments = onsiteReportAttachments(
+            for: attachments,
+            serviceCall: serviceCall,
+            estimate: estimate,
+            invoice: invoice
+        )
         let title = "\(serviceCall.type.displayName) Report"
         let fileName = makeFileName(
             prefix: "GunnAire-Onsite-Report",
@@ -75,9 +81,9 @@ enum CustomerDocumentExporter {
             estimate: estimate,
             invoice: invoice,
             payments: payments,
-            attachments: attachments
+            attachments: scopedAttachments
         )
-        return try renderPDF(title: title, customer: serviceCall.customer, sections: sections, imageAttachments: attachments, fileName: fileName)
+        return try renderPDF(title: title, customer: serviceCall.customer, sections: sections, imageAttachments: scopedAttachments, fileName: fileName)
     }
 
     static func exportEstimate(
@@ -499,6 +505,31 @@ enum CustomerDocumentExporter {
                 attachment.serviceCallID == serviceCallID &&
                     billingTargetMatches(attachment: attachment, invoiceID: invoiceID, estimateID: estimateID)
             }
+    }
+
+    static func onsiteReportAttachments(
+        for attachments: [ServiceDocumentAttachment],
+        serviceCall: ServiceCall,
+        estimate: Estimate?,
+        invoice: Invoice?
+    ) -> [ServiceDocumentAttachment] {
+        let invoiceID = invoice?.id ?? serviceCall.linkedInvoiceID
+        let estimateID = estimate?.id ?? serviceCall.linkedEstimateID
+        return attachments.filter { attachment in
+            guard attachment.serviceCallID == serviceCall.id else {
+                return false
+            }
+            if let attachmentInvoiceID = attachment.invoiceID {
+                return invoiceID == attachmentInvoiceID
+            }
+            if let attachmentEstimateID = attachment.estimateID {
+                if invoiceID != nil {
+                    return estimateID == attachmentEstimateID
+                }
+                return estimateID == attachmentEstimateID
+            }
+            return true
+        }
     }
 
     private static func billingTargetMatches(
