@@ -128,7 +128,7 @@ enum CustomerDocumentExporter {
                     row("Notes", serviceCall.notes)
                 ]
             ),
-            checklistSection(for: serviceCall)
+            checklistSection(for: serviceCall, attachments: attachments)
         ]
 
         sections.append(contentsOf: technicalReportSections(for: serviceCall))
@@ -657,21 +657,36 @@ enum CustomerDocumentExporter {
         }
     }
 
-    private static func checklistSection(for serviceCall: ServiceCall) -> DocumentSection {
+    static func checklistRows(for serviceCall: ServiceCall, attachments: [ServiceDocumentAttachment] = []) -> [(label: String, value: String)] {
+        let counts = fieldPhotoCounts(for: serviceCall, attachments: attachments)
+        return [
+            ("Customer Notified", yesNo(serviceCall.customerNotified)),
+            ("Arrival Confirmed", yesNo(serviceCall.arrivalConfirmed)),
+            ("Work Completed", yesNo(serviceCall.workCompletedChecklist)),
+            ("Documentation Completed", yesNo(serviceCall.documentationChecklist)),
+            ("Payment Collected", yesNo(serviceCall.paymentCollectedChecklist)),
+            ("Diagnostics Captured", yesNo(serviceCall.diagnosticsCaptured)),
+            ("Safety Checklist", yesNo(serviceCall.safetyChecklistComplete)),
+            ("Before Photos", "\(counts.beforeCount)"),
+            ("After Photos", "\(counts.afterCount)")
+        ]
+    }
+
+    private static func checklistSection(for serviceCall: ServiceCall, attachments: [ServiceDocumentAttachment]) -> DocumentSection {
         DocumentSection(
             title: "Checklist",
-            rows: [
-                row("Customer Notified", yesNo(serviceCall.customerNotified)),
-                row("Arrival Confirmed", yesNo(serviceCall.arrivalConfirmed)),
-                row("Work Completed", yesNo(serviceCall.workCompletedChecklist)),
-                row("Documentation Completed", yesNo(serviceCall.documentationChecklist)),
-                row("Payment Collected", yesNo(serviceCall.paymentCollectedChecklist)),
-                row("Diagnostics Captured", yesNo(serviceCall.diagnosticsCaptured)),
-                row("Safety Checklist", yesNo(serviceCall.safetyChecklistComplete)),
-                row("Before Photos", "\(serviceCall.beforePhotoCount)"),
-                row("After Photos", "\(serviceCall.afterPhotoCount)")
-            ]
+            rows: checklistRows(for: serviceCall, attachments: attachments).map { row($0.label, $0.value) }
         )
+    }
+
+    private static func fieldPhotoCounts(
+        for serviceCall: ServiceCall,
+        attachments: [ServiceDocumentAttachment]
+    ) -> (beforeCount: Int, afterCount: Int) {
+        let jobAttachments = attachments.filter { $0.serviceCallID == serviceCall.id }
+        let beforeCount = max(serviceCall.beforePhotoCount, jobAttachments.filter { $0.kind == .beforePhoto }.count)
+        let afterCount = max(serviceCall.afterPhotoCount, jobAttachments.filter { $0.kind == .afterPhoto }.count)
+        return (beforeCount, afterCount)
     }
 
     private static func renderPDF(

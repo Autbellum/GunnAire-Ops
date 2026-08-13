@@ -3416,6 +3416,65 @@ struct GunnAire_OpsTests {
         #expect(detail.contains("Invoice ID:"))
     }
 
+    @Test func onsiteReportChecklistCountsActualJobPhotoAttachments() async throws {
+        let customer = Customer(name: "Photo Count Customer")
+        let call = ServiceCall(
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            beforePhotoCount: 0,
+            afterPhotoCount: 0
+        )
+        let beforePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .beforePhoto,
+            displayName: "before.jpg",
+            localFilePath: "/tmp/before.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 512
+        )
+        let afterPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .afterPhoto,
+            displayName: "after.jpg",
+            localFilePath: "/tmp/after.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 512
+        )
+
+        let rows = CustomerDocumentExporter.checklistRows(for: call, attachments: [beforePhoto, afterPhoto])
+
+        #expect(rows.contains { $0.label == "Before Photos" && $0.value == "1" })
+        #expect(rows.contains { $0.label == "After Photos" && $0.value == "1" })
+    }
+
+    @Test func onsiteReportChecklistIgnoresOtherJobPhotoAttachments() async throws {
+        let customer = Customer(name: "Photo Count Customer")
+        let call = ServiceCall(
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            beforePhotoCount: 1,
+            afterPhotoCount: 0
+        )
+        let unrelatedAfterPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            kind: .afterPhoto,
+            displayName: "unrelated-after.jpg",
+            localFilePath: "/tmp/unrelated-after.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 512
+        )
+
+        let rows = CustomerDocumentExporter.checklistRows(for: call, attachments: [unrelatedAfterPhoto])
+
+        #expect(rows.contains { $0.label == "Before Photos" && $0.value == "1" })
+        #expect(rows.contains { $0.label == "After Photos" && $0.value == "0" })
+    }
+
     @Test func generatedServiceReportAttachmentCanBeReusedForSameJobBillingLink() async throws {
         let customer = Customer(name: "Report Customer")
         let serviceCallID = UUID()
