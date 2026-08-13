@@ -5,11 +5,6 @@ import SwiftData
 enum GoogleCalendarScheduleSync {
     private static let deletedCalendarEventKeysStorageKey = "GunnAireDeletedGoogleCalendarEventKeys"
     private static let locallyEditedCalendarCallIDsStorageKey = "GunnAireLocallyEditedGoogleCalendarCallIDs"
-    private static let managedEventProperties = [
-        "gunnaireManaged": "true",
-        "gunnaireManagedVersion": "3",
-        "gunnaireOrigin": "ios-app"
-    ]
     static func markCalendarEventDeleted(calendarID: String?, eventID: String?) {
         guard let eventID, !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         var deletedKeys = Set(UserDefaults.standard.stringArray(forKey: deletedCalendarEventKeysStorageKey) ?? [])
@@ -89,9 +84,9 @@ enum GoogleCalendarScheduleSync {
                             }
                         }
                     }
+                }
             }
         }
-    }
     }
 
     static func exportImmediately(
@@ -265,12 +260,12 @@ enum GoogleCalendarScheduleSync {
                 }
             }
             let eventNotes = calendarNotes(description: event.description)
-            let isManagedByApp = isImportedEventManagedByApp(event)
+            let isManagedByApp = false
 
             let call = callsByGoogleEventKey[eventKey] ?? callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint] ?? ServiceCall(
                 googleCalendarID: calendarEvent.calendarID,
                 googleEventID: event.id,
-                googleEventManagedByApp: isManagedByApp,
+                googleEventManagedByApp: false,
                 eventTitle: normalizedOptional(event.summary),
                 siteAddress: event.location,
                 type: inferCallType(from: event.summary, description: event.description),
@@ -291,10 +286,8 @@ enum GoogleCalendarScheduleSync {
             }
             call.googleCalendarID = calendarEvent.calendarID
             call.googleEventID = event.id
-            call.googleEventManagedByApp = isManagedByApp
-            if !isManagedByApp {
-                clearCalendarCallLocallyEdited(call)
-            }
+            call.googleEventManagedByApp = false
+            clearCalendarCallLocallyEdited(call)
             call.eventTitle = mergedImportedCalendarText(
                 remoteValue: event.summary,
                 existingValue: call.eventTitle,
@@ -585,7 +578,7 @@ enum GoogleCalendarScheduleSync {
                 )
                 return
             }
-            call.googleEventManagedByApp = true
+            call.googleEventManagedByApp = false
             let patch = makeManagedEventPatch(for: call, remoteEvent: remoteEvent)
             auth.patchCalendarEvent(calendarID: currentCalendarID, eventID: eventID, patch: patch) { result in
                 finish(currentCalendarID, result)
@@ -617,7 +610,7 @@ enum GoogleCalendarScheduleSync {
             let event = makeCalendarCreateEvent(for: call)
             auth.createCalendarEvent(calendarID: targetCalendarID, event: event) { result in
                 if case .success = result {
-                    call.googleEventManagedByApp = true
+                    call.googleEventManagedByApp = false
                 }
                 finish(targetCalendarID, result)
             }
@@ -649,8 +642,8 @@ enum GoogleCalendarScheduleSync {
         false
     }
 
-    static func isImportedEventManagedByApp(_ event: GoogleCalendarEvent) -> Bool {
-        event.isManagedByGunnAire
+    static func isImportedEventManagedByApp(_: GoogleCalendarEvent) -> Bool {
+        false
     }
 
     static func shouldSelectGoogleCalendarBeforeCreate(for call: ServiceCall) -> Bool {
@@ -708,7 +701,7 @@ enum GoogleCalendarScheduleSync {
                 timeZone: timeZone
             ),
             attendees: attendees,
-            extendedProperties: preserveExternalDetails ? nil : GoogleCalendarExtendedProperties(privateProperties: managedEventProperties)
+            extendedProperties: nil
         )
     }
 

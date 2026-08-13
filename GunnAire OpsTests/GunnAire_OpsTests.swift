@@ -6851,7 +6851,7 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent) == false)
     }
 
-    @Test func googleCalendarCreatePayloadMarksOnlyAppCreatedEventOwnership() async throws {
+    @Test func googleCalendarCreatePayloadDoesNotMarkAppOwnership() async throws {
         let customer = Customer(name: "Calendar Customer", address: "123 Main St")
         let call = ServiceCall(
             eventTitle: "App-created service call",
@@ -6869,10 +6869,10 @@ struct GunnAire_OpsTests {
         #expect(payload.contains("\"summary\""))
         #expect(payload.contains("\"description\""))
         #expect(payload.contains("\"location\""))
-        #expect(payload.contains("\"extendedProperties\""))
-        #expect(payload.contains("gunnaireManaged"))
-        #expect(payload.contains("gunnaireManagedVersion"))
-        #expect(payload.contains("gunnaireOrigin"))
+        #expect(payload.contains("\"extendedProperties\"") == false)
+        #expect(payload.contains("gunnaireManaged") == false)
+        #expect(payload.contains("gunnaireManagedVersion") == false)
+        #expect(payload.contains("gunnaireOrigin") == false)
     }
 
     @MainActor
@@ -7001,7 +7001,7 @@ struct GunnAire_OpsTests {
 
         #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(externallyManagedEvent) == false)
         #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(legacyMarkedEvent) == false)
-        #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(appManagedEvent))
+        #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(appManagedEvent) == false)
     }
 
     @Test func gmailRawMessageIncludesPdfAttachment() async throws {
