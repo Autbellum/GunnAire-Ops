@@ -3182,7 +3182,7 @@ GunnAire
                 saveCurrentEquipmentProfile(for: linkedCall, announce: false)
                 linkExistingEstimateAttachments(to: estimate, serviceCallID: linkedCall.id)
             }
-            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: linkedCall)
+            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: linkedCall, attachments: attachments)
             let data = try Data(contentsOf: url)
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
@@ -3797,7 +3797,7 @@ GunnAire
     private func generateEstimateDocument(_ estimate: Estimate) {
         do {
             let serviceCall = serviceCall(for: estimate)
-            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: serviceCall)
+            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: serviceCall, attachments: attachments)
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall?.id

@@ -1574,6 +1574,49 @@ struct GunnAire_OpsTests {
         #expect(synced.syncedQuickBooksAttachmentCount == 1)
     }
 
+    @Test func estimateDocumentationStatusTracksMissingPendingAndSyncedReports() async throws {
+        let customer = Customer(name: "Estimate Documentation Customer")
+        let call = ServiceCall(
+            equipmentName: "Main AC",
+            equipmentModel: "24ABC",
+            equipmentSerialNumber: "AC123",
+            type: .estimate,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let estimate = Estimate(
+            serviceCallID: call.id,
+            customer: customer,
+            quickBooksID: "QB-EST-1",
+            amount: 500
+        )
+
+        let missing = call.estimateDocumentationStatus(estimate: estimate, attachments: [])
+        #expect(missing.isReady == false)
+        #expect(missing.statusLabel == "Onsite report missing")
+
+        let pendingReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            estimateID: estimate.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let pending = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport])
+        #expect(pending.isReady == false)
+        #expect(pending.statusLabel == "QuickBooks attachments pending")
+        #expect(pending.pendingQuickBooksAttachmentCount == 1)
+
+        pendingReport.quickBooksAttachableID = "ATTACH-EST-1"
+        let synced = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport])
+        #expect(synced.isReady)
+        #expect(synced.statusLabel == "Estimate documentation ready")
+        #expect(synced.syncedQuickBooksAttachmentCount == 1)
+    }
+
     @Test func jobCloseoutReadinessRequiresQuickBooksInvoiceSync() async throws {
         let customer = Customer(name: "Closeout Customer")
         let call = ServiceCall(

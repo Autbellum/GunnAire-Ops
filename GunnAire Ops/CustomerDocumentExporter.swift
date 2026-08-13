@@ -80,9 +80,13 @@ enum CustomerDocumentExporter {
         return try renderPDF(title: title, customer: serviceCall.customer, sections: sections, imageAttachments: attachments, fileName: fileName)
     }
 
-    static func exportEstimate(_ estimate: Estimate, serviceCall: ServiceCall?) throws -> URL {
+    static func exportEstimate(
+        _ estimate: Estimate,
+        serviceCall: ServiceCall?,
+        attachments: [ServiceDocumentAttachment] = []
+    ) throws -> URL {
         let fileName = makeFileName(prefix: "GunnAire-Estimate", customerName: estimate.customer.name)
-        let sections = estimateSections(estimate: estimate, serviceCall: serviceCall)
+        let sections = estimateSections(estimate: estimate, serviceCall: serviceCall, attachments: attachments)
         return try renderPDF(title: "Estimate", customer: estimate.customer, sections: sections, fileName: fileName)
     }
 
@@ -540,7 +544,11 @@ enum CustomerDocumentExporter {
         return nil
     }
 
-    private static func estimateSections(estimate: Estimate, serviceCall: ServiceCall?) -> [DocumentSection] {
+    private static func estimateSections(
+        estimate: Estimate,
+        serviceCall: ServiceCall?,
+        attachments: [ServiceDocumentAttachment] = []
+    ) -> [DocumentSection] {
         var sections: [DocumentSection] = []
         if let serviceCall {
             sections.append(DocumentSection(
@@ -550,16 +558,23 @@ enum CustomerDocumentExporter {
             sections.append(contentsOf: billingDocumentationSections(for: serviceCall))
         }
 
+        let documentationStatus = serviceCall?.estimateDocumentationStatus(estimate: estimate, attachments: attachments)
+        var estimateRows = [
+            row("Created", formattedDateTime(estimate.createdAt)),
+            row("Status", estimate.status.capitalized),
+            row("QuickBooks ID", estimate.quickBooksID),
+            row("Items", estimate.lineItemSummary),
+            row("Notes", estimate.notes),
+            row("Total", currency(estimate.amount))
+        ]
+        if let documentationStatus {
+            estimateRows.append(row("Documentation Status", documentationStatus.statusLabel))
+            estimateRows.append(row("Documentation Summary", documentationStatus.summary))
+        }
+
         sections.append(DocumentSection(
             title: "Estimate Detail",
-            rows: [
-                row("Created", formattedDateTime(estimate.createdAt)),
-                row("Status", estimate.status.capitalized),
-                row("QuickBooks ID", estimate.quickBooksID),
-                row("Items", estimate.lineItemSummary),
-                row("Notes", estimate.notes),
-                row("Total", currency(estimate.amount))
-            ]
+            rows: estimateRows
         ))
         return sections
     }

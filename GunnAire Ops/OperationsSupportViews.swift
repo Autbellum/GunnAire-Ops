@@ -1592,7 +1592,7 @@ struct OnsiteDocumentationView: View {
             return
         }
         do {
-            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: call)
+            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: call, attachments: documentAttachments)
             generatedCustomerDocumentURL = url
             persistGeneratedBillingDocument(
                 url,

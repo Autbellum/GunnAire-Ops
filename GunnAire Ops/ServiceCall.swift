@@ -803,6 +803,40 @@ struct InvoiceDocumentationStatus: Equatable {
     }
 }
 
+struct EstimateDocumentationStatus: Equatable {
+    let linkedReportCount: Int
+    let pendingQuickBooksAttachmentCount: Int
+    let syncedQuickBooksAttachmentCount: Int
+    let requiresQuickBooksAttachmentSync: Bool
+
+    var isReady: Bool {
+        linkedReportCount > 0 && pendingQuickBooksAttachmentCount == 0
+    }
+
+    var statusLabel: String {
+        if linkedReportCount == 0 {
+            return "Onsite report missing"
+        }
+        if pendingQuickBooksAttachmentCount > 0 {
+            return "QuickBooks attachments pending"
+        }
+        return "Estimate documentation ready"
+    }
+
+    var summary: String {
+        var parts = [
+            "\(linkedReportCount) onsite report\(linkedReportCount == 1 ? "" : "s")"
+        ]
+        if requiresQuickBooksAttachmentSync {
+            parts.append("\(syncedQuickBooksAttachmentCount) synced")
+            if pendingQuickBooksAttachmentCount > 0 {
+                parts.append("\(pendingQuickBooksAttachmentCount) pending")
+            }
+        }
+        return parts.joined(separator: " - ")
+    }
+}
+
 @Model
 final class ServiceCall {
     @Attribute(.unique) var id: UUID
@@ -1860,6 +1894,31 @@ final class ServiceCall {
             pendingQuickBooksAttachmentCount: pendingQuickBooksAttachments.count,
             syncedQuickBooksAttachmentCount: syncedQuickBooksAttachments.count,
             requiresQuickBooksAttachmentSync: hasQuickBooksInvoice
+        )
+    }
+
+    func estimateDocumentationStatus(
+        estimate: Estimate,
+        attachments: [ServiceDocumentAttachment]
+    ) -> EstimateDocumentationStatus {
+        let jobAttachments = attachments.filter { $0.serviceCallID == id }
+        let linkedReports = jobAttachments.filter {
+            $0.kind == .serviceReport && $0.estimateID == estimate.id
+        }
+        let hasQuickBooksEstimate = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let pendingQuickBooksAttachments = hasQuickBooksEstimate
+            ? jobAttachments.filter { $0.canUploadToQuickBooksEstimate(estimate) }
+            : []
+        let syncedQuickBooksAttachments = jobAttachments.filter {
+            $0.estimateID == estimate.id &&
+                $0.quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
+
+        return EstimateDocumentationStatus(
+            linkedReportCount: linkedReports.count,
+            pendingQuickBooksAttachmentCount: pendingQuickBooksAttachments.count,
+            syncedQuickBooksAttachmentCount: syncedQuickBooksAttachments.count,
+            requiresQuickBooksAttachmentSync: hasQuickBooksEstimate
         )
     }
 
