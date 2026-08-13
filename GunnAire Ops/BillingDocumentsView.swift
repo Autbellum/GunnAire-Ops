@@ -3150,6 +3150,21 @@ GunnAire
 
             try? modelContext.save()
             syncAttachmentIfPossible(attachment, data: data)
+            if let linkedCall {
+                do {
+                    let report = try generateAndPersistOnsiteReportAttachment(
+                        for: linkedCall,
+                        estimate: estimate,
+                        invoice: nil,
+                        payments: [],
+                        attachments: attachments.filter { $0.serviceCallID == linkedCall.id }
+                    )
+                    syncAttachmentIfPossible(report.attachment, data: report.data)
+                } catch {
+                    actionMessage = "Could not prepare the onsite report before sending this estimate: \(error.localizedDescription)"
+                    return false
+                }
+            }
             syncLinkedEstimateAttachmentsToQuickBooks(estimate)
             return true
         } catch {
@@ -3178,70 +3193,91 @@ GunnAire
                 estimate.id == serviceCall.linkedEstimateID || estimate.serviceCallID == serviceCall.id
             }
             let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
-            let jobAttachments = attachments.filter { $0.serviceCallID == serviceCall.id }
-            let url = try CustomerDocumentExporter.exportOnsiteReport(
-                serviceCall: serviceCall,
+            let report = try generateAndPersistOnsiteReportAttachment(
+                for: serviceCall,
                 estimate: linkedEstimate,
                 invoice: invoice,
                 payments: invoicePayments,
-                attachments: jobAttachments
+                attachments: attachments.filter { $0.serviceCallID == serviceCall.id }
             )
-            let data = try Data(contentsOf: url)
-            let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
-                serviceCall: serviceCall,
-                estimate: linkedEstimate,
-                invoice: invoice
-            )
-            let attachment: ServiceDocumentAttachment
-            if let reusable = ServiceDocumentAttachment.reusableGeneratedServiceReport(
-                in: attachments,
-                serviceCallID: serviceCall.id,
-                invoiceID: invoice.id,
-                estimateID: linkedEstimate?.id ?? serviceCall.linkedEstimateID
-            ) {
-                reusable.replaceGeneratedFile(
-                    displayName: url.lastPathComponent,
-                    localFilePath: url.path,
-                    contentType: "application/pdf",
-                    fileSizeBytes: data.count,
-                    caption: caption
-                )
-                reusable.refreshGeneratedDocumentContext(
-                    customer: serviceCall.customer,
-                    serviceCallID: serviceCall.id,
-                    customerEquipmentID: serviceCall.customerEquipmentID,
-                    invoiceID: invoice.id,
-                    estimateID: linkedEstimate?.id ?? serviceCall.linkedEstimateID
-                )
-                attachment = reusable
-            } else {
-                let generated = ServiceDocumentAttachment(
-                    customer: serviceCall.customer,
-                    serviceCallID: serviceCall.id,
-                    customerEquipmentID: serviceCall.customerEquipmentID,
-                    invoiceID: invoice.id,
-                    estimateID: linkedEstimate?.id ?? serviceCall.linkedEstimateID,
-                    kind: .serviceReport,
-                    displayName: url.lastPathComponent,
-                    caption: caption,
-                    localFilePath: url.path,
-                    contentType: "application/pdf",
-                    fileSizeBytes: data.count
-                )
-                modelContext.insert(generated)
-                attachment = generated
-            }
-
-            attachment.linkToInvoiceIfNeeded(invoice)
+            report.attachment.linkToInvoiceIfNeeded(invoice)
             serviceCall.markDocumentationCompleteIfReady()
             try? modelContext.save()
-            syncAttachmentIfPossible(attachment, data: data)
+            syncAttachmentIfPossible(report.attachment, data: report.data)
             syncLinkedInvoiceAttachmentsToQuickBooks(invoice)
             return true
         } catch {
             actionMessage = "Could not prepare the onsite report before sending this invoice: \(error.localizedDescription)"
             return false
         }
+    }
+
+    private func generateAndPersistOnsiteReportAttachment(
+        for serviceCall: ServiceCall,
+        estimate: Estimate?,
+        invoice: Invoice?,
+        payments: [Payment],
+        attachments jobAttachments: [ServiceDocumentAttachment]
+    ) throws -> (attachment: ServiceDocumentAttachment, data: Data) {
+        let url = try CustomerDocumentExporter.exportOnsiteReport(
+            serviceCall: serviceCall,
+            estimate: estimate,
+            invoice: invoice,
+            payments: payments,
+            attachments: jobAttachments
+        )
+        let data = try Data(contentsOf: url)
+        let invoiceID = invoice?.id ?? serviceCall.linkedInvoiceID
+        let estimateID = estimate?.id ?? serviceCall.linkedEstimateID
+        let caption = CustomerDocumentExporter.onsiteReportAttachmentCaption(
+            serviceCall: serviceCall,
+            estimate: estimate,
+            invoice: invoice
+        )
+
+        let attachment: ServiceDocumentAttachment
+        if let reusable = ServiceDocumentAttachment.reusableGeneratedServiceReport(
+            in: attachments,
+            serviceCallID: serviceCall.id,
+            invoiceID: invoiceID,
+            estimateID: estimateID
+        ) {
+            reusable.replaceGeneratedFile(
+                displayName: url.lastPathComponent,
+                localFilePath: url.path,
+                contentType: "application/pdf",
+                fileSizeBytes: data.count,
+                caption: caption
+            )
+            reusable.refreshGeneratedDocumentContext(
+                customer: serviceCall.customer,
+                serviceCallID: serviceCall.id,
+                customerEquipmentID: serviceCall.customerEquipmentID,
+                invoiceID: invoiceID,
+                estimateID: estimateID
+            )
+            attachment = reusable
+        } else {
+            let generated = ServiceDocumentAttachment(
+                customer: serviceCall.customer,
+                serviceCallID: serviceCall.id,
+                customerEquipmentID: serviceCall.customerEquipmentID,
+                invoiceID: invoiceID,
+                estimateID: estimateID,
+                kind: .serviceReport,
+                displayName: url.lastPathComponent,
+                caption: caption,
+                localFilePath: url.path,
+                contentType: "application/pdf",
+                fileSizeBytes: data.count
+            )
+            modelContext.insert(generated)
+            attachment = generated
+        }
+
+        serviceCall.markDocumentationCompleteIfReady()
+        try? modelContext.save()
+        return (attachment, data)
     }
 
     @discardableResult

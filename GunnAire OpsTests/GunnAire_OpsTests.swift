@@ -2098,6 +2098,45 @@ struct GunnAire_OpsTests {
         #expect(urls.map(\.lastPathComponent) == ["gunnaire-invoice.pdf"])
     }
 
+    @Test func customerEmailAttachmentsPreferReportLinkedToEstimate() async throws {
+        let customer = Customer(name: "Email Estimate Customer")
+        let serviceCallID = UUID()
+        let estimateID = UUID()
+        let otherEstimateID = UUID()
+        let estimateURL = URL(fileURLWithPath: "/tmp/gunnaire-estimate.pdf")
+        let newestWrongEstimateReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            estimateID: otherEstimateID,
+            kind: .serviceReport,
+            displayName: "wrong-estimate-report.pdf",
+            localFilePath: "/tmp/wrong-estimate-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 300)
+        )
+        let linkedReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            estimateID: estimateID,
+            kind: .serviceReport,
+            displayName: "linked-estimate-report.pdf",
+            localFilePath: "/tmp/linked-estimate-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let urls = CustomerDocumentExporter.customerEmailAttachmentURLs(
+            primaryDocumentURL: estimateURL,
+            serviceCallID: serviceCallID,
+            estimateID: estimateID,
+            attachments: [newestWrongEstimateReport, linkedReport]
+        )
+
+        #expect(urls.map(\.lastPathComponent) == ["gunnaire-estimate.pdf", "linked-estimate-report.pdf"])
+    }
+
     @Test func serviceReportAttachmentLinksToEstimateWhenMissing() async throws {
         let customer = Customer(name: "Estimate Report Customer")
         let estimate = Estimate(customer: customer, amount: 250)
