@@ -1281,6 +1281,50 @@ struct GunnAire_OpsTests {
         #expect(damperPosition.validationIssue(for: "135")?.contains("0-100") == true)
     }
 
+    @Test func packageUnitCoolingOnlyReportsDoNotRequireCombustionReadings() async throws {
+        let customer = Customer(name: "Cooling Only RTU Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.packageUnit.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("co_ppm"))
+
+        call.setTechnicalReading("Cooling Only", for: "package_heat_type")
+
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("package_heat_type"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("co_ppm") == false)
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("gas_pressure_manifold") == false)
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("heat_exchanger_condition") == false)
+        #expect(call.requiredTechnicalReadingDefinitions.contains { $0.key == "co_ppm" } == false)
+    }
+
+    @Test func packageUnitEconomizerReportsRequireEconomizerDiagnosticsWhenPresent() async throws {
+        let customer = Customer(name: "Economizer RTU Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.packageUnit.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("mixed_air_temp") == false)
+
+        call.setTechnicalReading("Normal", for: "economizer_operation")
+
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("mixed_air_temp"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("outdoor_air_damper_position"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("economizer_sensor_status"))
+        #expect(call.requiredTechnicalReadingDefinitions.contains { $0.key == "mixed_air_temp" })
+
+        call.setTechnicalReading("Not Applicable", for: "economizer_operation")
+
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("mixed_air_temp") == false)
+        #expect(call.requiredTechnicalReadingDefinitions.contains { $0.key == "mixed_air_temp" } == false)
+    }
+
     @Test func equipmentSpecificServiceActionsDriveMaintenanceCloseout() async throws {
         let splitActions = HVACEquipmentType.splitSystemAC.serviceActionDefinitions
         let furnaceActions = HVACEquipmentType.gasFurnace.serviceActionDefinitions
@@ -2871,6 +2915,28 @@ struct GunnAire_OpsTests {
         #expect(rows.contains { $0.label == "Flue Temp (F)" && $0.value == "325" })
         #expect(rows.contains { $0.label == "CO Reading (ppm)" && $0.value == "18" })
         #expect(rows.contains { $0.label == "CO Reading (ppm) Requirement" && $0.value == "Required" })
+    }
+
+    @Test func onsiteReportReadinessUsesDynamicPackageUnitRequirements() async throws {
+        let customer = Customer(name: "Dynamic Package Report Customer")
+        let call = ServiceCall(
+            equipmentName: "Cooling Only RTU",
+            equipmentTypeRaw: HVACEquipmentType.packageUnit.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("Cooling Only", for: "package_heat_type")
+        call.setTechnicalReading("Normal", for: "economizer_operation")
+
+        let rows = CustomerDocumentExporter.serviceReportReadinessRows(for: call)
+        let missing = rows.first { $0.label == "Missing Required Items" }?.value ?? ""
+
+        #expect(missing.contains("CO Reading") == false)
+        #expect(missing.contains("Gas Pressure Manifold") == false)
+        #expect(missing.contains("Mixed Air Temp"))
+        #expect(missing.contains("Outdoor Air Damper Position"))
+        #expect(missing.contains("Economizer Sensor"))
     }
 
     @Test func onsiteReportTechnicalSectionsMarkRequiredAndInvalidReadings() async throws {

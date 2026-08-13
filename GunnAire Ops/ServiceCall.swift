@@ -1580,6 +1580,23 @@ final class ServiceCall {
         Double(technicalReading(for: key).replacingOccurrences(of: ",", with: "."))
     }
 
+    private func normalizedTechnicalReading(_ key: String) -> String {
+        technicalReading(for: key)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    private static func isNonApplicableTechnicalStatus(_ value: String) -> Bool {
+        [
+            "n/a",
+            "na",
+            "not applicable",
+            "not tested",
+            "unable to test",
+            HVACTechnicalReadingDefinition.unableToTestValue.lowercased()
+        ].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
     private static func applyDerivedTechnicalReadings(to readings: inout [String: String], afterChanging changedKey: String) {
         let derivedTargets: Set<String> = [
             "temperature_split",
@@ -1647,9 +1664,38 @@ final class ServiceCall {
     }
 
     var requiredTechnicalReadingDefinitions: [HVACTechnicalReadingDefinition] {
-        guard let equipmentType else { return [] }
-        let requiredKeys = Set(equipmentType.requiredReadingKeysForCompleteServiceReport)
+        guard equipmentType != nil else { return [] }
+        let requiredKeys = effectiveRequiredReadingKeysForCompleteServiceReport
         return technicalReadingDefinitions.filter { requiredKeys.contains($0.key) }
+    }
+
+    var effectiveRequiredReadingKeysForCompleteServiceReport: Set<String> {
+        guard let equipmentType else { return [] }
+        var requiredKeys = Set(equipmentType.requiredReadingKeysForCompleteServiceReport)
+        guard equipmentType == .packageUnit else { return requiredKeys }
+
+        if normalizedTechnicalReading("package_heat_type") == "cooling only" {
+            requiredKeys.subtract([
+                "gas_pressure_inlet",
+                "gas_pressure_manifold",
+                "flue_temp",
+                "o2_percent",
+                "co2_percent",
+                "co_ppm",
+                "heat_exchanger_condition"
+            ])
+        }
+
+        let economizerStatus = normalizedTechnicalReading("economizer_operation")
+        if !economizerStatus.isEmpty,
+           !Self.isNonApplicableTechnicalStatus(economizerStatus) {
+            requiredKeys.formUnion([
+                "mixed_air_temp",
+                "outdoor_air_damper_position",
+                "economizer_sensor_status"
+            ])
+        }
+        return requiredKeys
     }
 
     var serviceActionDefinitions: [HVACServiceActionDefinition] {
