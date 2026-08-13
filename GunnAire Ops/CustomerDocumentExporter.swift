@@ -484,6 +484,7 @@ enum CustomerDocumentExporter {
     static func photoEvidenceAttachments(for attachments: [ServiceDocumentAttachment]) -> [ServiceDocumentAttachment] {
         attachments
             .filter { $0.kind != .serviceReport }
+            .filter { $0.kind != .customerProfilePhoto }
             .filter { $0.kind.isPhoto || $0.isImage }
             .sorted { lhs, rhs in
                 if lhs.createdAt == rhs.createdAt {

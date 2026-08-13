@@ -5040,6 +5040,39 @@ struct GunnAire_OpsTests {
         #expect(evidence.contains { $0.detail.contains("generated-report.pdf") } == false)
     }
 
+    @Test func photoEvidenceExcludesCustomerProfilePhotos() async throws {
+        let customer = Customer(name: "Profile Photo Evidence Customer")
+        let serviceCallID = UUID()
+        let profilePhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .customerProfilePhoto,
+            displayName: "customer-profile.jpg",
+            caption: "Customer profile",
+            localFilePath: "/tmp/customer-profile.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        let diagnosticPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            caption: "Job diagnostic",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+
+        let evidence = CustomerDocumentExporter.photoEvidenceSummaries(for: [profilePhoto, diagnosticPhoto])
+        let embedded = CustomerDocumentExporter.embeddedPhotoEvidenceAttachments(for: [profilePhoto, diagnosticPhoto])
+
+        #expect(evidence.map(\.label) == ["Diagnostic Photo"])
+        #expect(embedded == [diagnosticPhoto])
+    }
+
     @Test func embeddedPhotoEvidenceIncludesEveryCapturedJobImage() async throws {
         let customer = Customer(name: "Complete Photo Customer")
         let serviceCallID = UUID()
@@ -5901,6 +5934,24 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: importedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: newAppCall) == true)
+    }
+
+    @Test func googleCalendarImportDoesNotBlankExistingManagedDetails() async throws {
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
+            remoteValue: nil,
+            existingValue: "Existing Google details",
+            isManagedByApp: true
+        ) == "Existing Google details")
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
+            remoteValue: "   ",
+            existingValue: "Existing Google location",
+            isManagedByApp: true
+        ) == "Existing Google location")
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
+            remoteValue: "Updated Google title",
+            existingValue: "Existing Google title",
+            isManagedByApp: true
+        ) == "Updated Google title")
     }
 
     @MainActor

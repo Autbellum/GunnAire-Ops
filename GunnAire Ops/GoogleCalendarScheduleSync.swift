@@ -1001,7 +1001,7 @@ enum GoogleCalendarScheduleSync {
     static func mergedImportedCalendarText(remoteValue: String?, existingValue: String?, isManagedByApp: Bool) -> String? {
         let remote = normalizedOptional(remoteValue)
         if isManagedByApp {
-            return remote
+            return remote ?? normalizedOptional(existingValue)
         }
         return remote ?? normalizedOptional(existingValue)
     }
