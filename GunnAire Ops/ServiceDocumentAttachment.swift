@@ -7,6 +7,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
     case afterPhoto = "after_photo"
     case diagnosticPhoto = "diagnostic_photo"
     case customerProfilePhoto = "customer_profile_photo"
+    case equipmentDataPlatePhoto = "equipment_data_plate_photo"
     case customerDocument = "customer_document"
     case invoiceSupport = "invoice_support"
     case estimateSupport = "estimate_support"
@@ -22,6 +23,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
         case .afterPhoto: return "After Photo"
         case .diagnosticPhoto: return "Diagnostic Photo"
         case .customerProfilePhoto: return "Customer Profile Photo"
+        case .equipmentDataPlatePhoto: return "Equipment Data Plate Photo"
         case .customerDocument: return "Customer Document"
         case .invoiceSupport: return "Invoice Support"
         case .estimateSupport: return "Estimate Support"
@@ -32,7 +34,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
 
     var isPhoto: Bool {
         switch self {
-        case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto:
+        case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .equipmentDataPlatePhoto:
             return true
         case .serviceReport, .customerDocument, .invoiceSupport, .estimateSupport, .receipt, .other:
             return false
@@ -43,7 +45,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
         switch self {
         case .invoiceSupport, .estimateSupport, .receipt:
             return true
-        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .customerDocument, .other:
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .equipmentDataPlatePhoto, .customerDocument, .other:
             return false
         }
     }
@@ -58,7 +60,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
             return "Invoice Documents"
         case .receipt:
             return "Receipts & Bills"
-        case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto:
+        case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .equipmentDataPlatePhoto:
             return "Photos"
         case .customerDocument, .other:
             return "Customer Files"
@@ -181,14 +183,14 @@ final class ServiceDocumentAttachment {
         switch kind {
         case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .customerDocument, .other:
             return true
-        case .serviceReport, .invoiceSupport, .estimateSupport, .receipt:
+        case .equipmentDataPlatePhoto, .serviceReport, .invoiceSupport, .estimateSupport, .receipt:
             return false
         }
     }
 
     var canShowInActiveEquipmentHistory: Bool {
         switch kind {
-        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .customerDocument, .other:
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .equipmentDataPlatePhoto, .customerDocument, .other:
             return true
         case .invoiceSupport, .estimateSupport, .receipt:
             return false
@@ -205,7 +207,7 @@ final class ServiceDocumentAttachment {
 
     var canLinkToQuickBooksInvoiceAttachment: Bool {
         switch kind {
-        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .invoiceSupport, .estimateSupport, .other:
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .equipmentDataPlatePhoto, .customerDocument, .invoiceSupport, .estimateSupport, .other:
             return true
         case .customerProfilePhoto, .receipt:
             return false
@@ -214,7 +216,7 @@ final class ServiceDocumentAttachment {
 
     var canLinkToQuickBooksInvoiceDocument: Bool {
         switch kind {
-        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .invoiceSupport, .other:
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .equipmentDataPlatePhoto, .customerDocument, .invoiceSupport, .other:
             return true
         case .customerProfilePhoto, .estimateSupport, .receipt:
             return false
@@ -223,7 +225,7 @@ final class ServiceDocumentAttachment {
 
     var canLinkToQuickBooksEstimateDocument: Bool {
         switch kind {
-        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerDocument, .estimateSupport, .other:
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .equipmentDataPlatePhoto, .customerDocument, .estimateSupport, .other:
             return true
         case .customerProfilePhoto, .invoiceSupport, .receipt:
             return false

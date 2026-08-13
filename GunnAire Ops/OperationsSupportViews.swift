@@ -2212,6 +2212,7 @@ private struct CustomerEditorView: View {
                         Text(ServiceDocumentAttachmentKind.customerProfilePhoto.label).tag(ServiceDocumentAttachmentKind.customerProfilePhoto)
                         Text(ServiceDocumentAttachmentKind.customerDocument.label).tag(ServiceDocumentAttachmentKind.customerDocument)
                         Text(ServiceDocumentAttachmentKind.diagnosticPhoto.label).tag(ServiceDocumentAttachmentKind.diagnosticPhoto)
+                        Text(ServiceDocumentAttachmentKind.equipmentDataPlatePhoto.label).tag(ServiceDocumentAttachmentKind.equipmentDataPlatePhoto)
                         if canViewFinancials {
                             Text(ServiceDocumentAttachmentKind.receipt.label).tag(ServiceDocumentAttachmentKind.receipt)
                         }

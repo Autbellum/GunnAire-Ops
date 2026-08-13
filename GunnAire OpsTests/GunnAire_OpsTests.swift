@@ -3336,6 +3336,37 @@ struct GunnAire_OpsTests {
         #expect(selected === dedicatedProfilePhoto)
     }
 
+    @Test func equipmentDataPlatePhotoStaysEquipmentEvidenceNotCustomerProfile() async throws {
+        let customer = Customer(name: "Equipment Photo Customer")
+        let equipment = CustomerEquipment(customer: customer, name: "Main System")
+        let invoice = Invoice(customer: customer, quickBooksID: "INV-123", amount: 500)
+        let estimate = Estimate(customer: customer, quickBooksID: "EST-123", amount: 500)
+        let dataPlate = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: equipment.id,
+            kind: .equipmentDataPlatePhoto,
+            displayName: "data-plate.jpg",
+            localFilePath: "/tmp/data-plate.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128
+        )
+
+        #expect(ServiceDocumentAttachmentKind.equipmentDataPlatePhoto.label == "Equipment Data Plate Photo")
+        #expect(ServiceDocumentAttachmentKind.equipmentDataPlatePhoto.customerProfileGroupTitle == "Photos")
+        #expect(dataPlate.isImage)
+        #expect(dataPlate.kind.isPhoto)
+        #expect(dataPlate.canUseAsCustomerProfilePhoto == false)
+        #expect(dataPlate.canShowInActiveEquipmentHistory)
+        #expect(dataPlate.canBePendingQuickBooksInvoiceAttachment(for: invoice))
+
+        dataPlate.linkToInvoiceIfNeeded(invoice)
+        dataPlate.linkToEstimateIfNeeded(estimate)
+
+        #expect(dataPlate.canUploadToQuickBooksInvoice(invoice))
+        #expect(dataPlate.canUploadToQuickBooksEstimate(estimate))
+    }
+
     @Test func customerPrimaryPhotoFallsBackToLatestUsableImageForThatCustomer() async throws {
         let customer = Customer(name: "Photo Customer")
         let otherCustomer = Customer(name: "Other Customer")
