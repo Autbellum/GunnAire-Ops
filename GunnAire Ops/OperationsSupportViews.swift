@@ -667,6 +667,7 @@ struct SyncIntegrationsView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
+    @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
@@ -1158,6 +1159,7 @@ struct OnsiteDocumentationView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
+    @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @State private var selectedServiceCallID: UUID?
     @State private var didLoadPendingRoute = false
     @State private var generatedCustomerDocumentURL: URL?
@@ -1521,7 +1523,9 @@ struct OnsiteDocumentationView: View {
                 estimate: estimate(for: call),
                 invoice: linkedInvoice,
                 payments: payments(for: linkedInvoice),
-                attachments: attachments(for: call)
+                attachments: attachments(for: call),
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
             )
             generatedCustomerDocumentURL = url
             if !call.markDocumentationCompleteIfReady() {

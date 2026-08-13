@@ -688,7 +688,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldPatchExistingGoogleCalendarEvent(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> Bool {
-        call.googleEventManagedByApp && remoteEvent?.isManagedByGunnAire == true
+        false
     }
 
     static func isImportedEventManagedByApp(_ event: GoogleCalendarEvent) -> Bool {

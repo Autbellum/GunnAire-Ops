@@ -62,7 +62,9 @@ enum CustomerDocumentExporter {
         estimate: Estimate?,
         invoice: Invoice?,
         payments: [Payment],
-        attachments: [ServiceDocumentAttachment] = []
+        attachments: [ServiceDocumentAttachment] = [],
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = []
     ) throws -> URL {
         let scopedAttachments = onsiteReportAttachments(
             for: attachments,
@@ -81,7 +83,9 @@ enum CustomerDocumentExporter {
             estimate: estimate,
             invoice: invoice,
             payments: payments,
-            attachments: scopedAttachments
+            attachments: scopedAttachments,
+            equipmentProfiles: equipmentProfiles,
+            serviceCalls: serviceCalls
         )
         return try renderPDF(title: title, customer: serviceCall.customer, sections: sections, imageAttachments: scopedAttachments, fileName: fileName)
     }
@@ -144,7 +148,9 @@ enum CustomerDocumentExporter {
         estimate: Estimate?,
         invoice: Invoice?,
         payments: [Payment],
-        attachments: [ServiceDocumentAttachment]
+        attachments: [ServiceDocumentAttachment],
+        equipmentProfiles: [CustomerEquipment],
+        serviceCalls: [ServiceCall]
     ) -> [DocumentSection] {
         var sections: [DocumentSection] = [
             DocumentSection(
@@ -186,6 +192,14 @@ enum CustomerDocumentExporter {
             checklistSection(for: serviceCall, attachments: attachments)
         ]
 
+        if let equipmentHistorySection = equipmentHistorySection(
+            serviceCall: serviceCall,
+            equipmentProfiles: equipmentProfiles,
+            serviceCalls: serviceCalls
+        ) {
+            sections.insert(equipmentHistorySection, at: 4)
+        }
+
         sections.append(contentsOf: technicalReportSections(for: serviceCall))
         sections.append(contentsOf: photoEvidenceSections(
             for: attachments,
@@ -217,6 +231,64 @@ enum CustomerDocumentExporter {
         }
 
         return sections
+    }
+
+    static func equipmentHistoryRows(
+        serviceCall: ServiceCall,
+        equipmentProfiles: [CustomerEquipment],
+        serviceCalls: [ServiceCall]
+    ) -> [(label: String, value: String)] {
+        guard let equipment = matchingEquipmentProfile(
+            for: serviceCall,
+            equipmentProfiles: equipmentProfiles
+        ) else { return [] }
+        let relatedCalls = serviceCalls.filter { $0.customer.id == serviceCall.customer.id }
+        var rows: [(label: String, value: String)] = [
+            ("Equipment Profile", equipment.displayName)
+        ]
+        if let history = equipment.serviceHistorySummary(in: relatedCalls, now: serviceCall.scheduledDate) {
+            rows.append(("Service History", history))
+        }
+        if let latestContext = equipment.latestServiceContextSummary(
+            in: relatedCalls.filter { $0.id != serviceCall.id },
+            now: serviceCall.scheduledDate
+        ) {
+            rows.append(("Previous Service Context", latestContext))
+        }
+        if let trends = equipment.recentTechnicalTrendSummary(in: relatedCalls, now: serviceCall.scheduledDate) {
+            rows.append(("Reading Trends", trends))
+        }
+        return rows.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    private static func equipmentHistorySection(
+        serviceCall: ServiceCall,
+        equipmentProfiles: [CustomerEquipment],
+        serviceCalls: [ServiceCall]
+    ) -> DocumentSection? {
+        let rows = equipmentHistoryRows(
+            serviceCall: serviceCall,
+            equipmentProfiles: equipmentProfiles,
+            serviceCalls: serviceCalls
+        )
+        guard !rows.isEmpty else { return nil }
+        return DocumentSection(
+            title: "Equipment History",
+            rows: rows.map { row($0.label, $0.value) }
+        )
+    }
+
+    private static func matchingEquipmentProfile(
+        for serviceCall: ServiceCall,
+        equipmentProfiles: [CustomerEquipment]
+    ) -> CustomerEquipment? {
+        if let equipmentID = serviceCall.customerEquipmentID,
+           let linked = equipmentProfiles.first(where: { $0.id == equipmentID }) {
+            return linked
+        }
+        return equipmentProfiles.first {
+            $0.customer?.id == serviceCall.customer.id && $0.matches(serviceCall)
+        }
     }
 
     static func onsiteReportJobRows(for serviceCall: ServiceCall) -> [(label: String, value: String)] {

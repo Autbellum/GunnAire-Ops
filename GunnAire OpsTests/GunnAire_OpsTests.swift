@@ -4978,6 +4978,75 @@ struct GunnAire_OpsTests {
         #expect(technicalRows.contains { $0.label == "Economizer Sensor" && $0.value == "Normal" })
     }
 
+    @Test func onsiteReportEquipmentHistoryRowsIncludePriorContextAndTrends() async throws {
+        let customer = Customer(name: "Report Trend Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            serialNumber: "AC-REPORT-TREND"
+        )
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let previousCall = ServiceCall(
+            equipmentSerialNumber: "AC-REPORT-TREND",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Previous cooling maintenance completed.",
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400 * 90),
+            customer: customer,
+            status: .completed
+        )
+        previousCall.setTechnicalReading("9", for: "superheat")
+        previousCall.setTechnicalReading("7.1", for: "compressor_amps")
+        previousCall.setServiceActionStatus(.monitor, for: "condensate_drain_checked")
+        let currentCall = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentSerialNumber: "AC-REPORT-TREND",
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Current cooling maintenance completed.",
+            type: .maintenance,
+            scheduledDate: now,
+            customer: customer,
+            status: .completed
+        )
+        currentCall.setTechnicalReading("14", for: "superheat")
+        currentCall.setTechnicalReading("8.6", for: "compressor_amps")
+
+        let rows = CustomerDocumentExporter.equipmentHistoryRows(
+            serviceCall: currentCall,
+            equipmentProfiles: [equipment],
+            serviceCalls: [previousCall, currentCall]
+        )
+
+        #expect(rows.contains { $0.label == "Equipment Profile" && $0.value.contains("Downstairs AC") })
+        #expect(rows.contains { $0.label == "Service History" && $0.value.contains("2 jobs") })
+        #expect(rows.contains { $0.label == "Previous Service Context" && $0.value.contains("Previous cooling maintenance") })
+        #expect(rows.contains { $0.label == "Previous Service Context" && $0.value.contains("Condensate drain checked/treated: Monitor") })
+        #expect(rows.contains { $0.label == "Reading Trends" && $0.value.contains("Superheat: 14") })
+        #expect(rows.contains { $0.label == "Reading Trends" && $0.value.contains("Compressor Amps: 8.6") })
+    }
+
+    @Test func onsiteReportEquipmentHistoryRowsRequireMatchingEquipmentProfile() async throws {
+        let customer = Customer(name: "No Equipment Report Customer")
+        let call = ServiceCall(
+            equipmentName: "Unprofiled System",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer,
+            status: .completed
+        )
+
+        let rows = CustomerDocumentExporter.equipmentHistoryRows(
+            serviceCall: call,
+            equipmentProfiles: [],
+            serviceCalls: [call]
+        )
+
+        #expect(rows.isEmpty)
+    }
+
     @Test func onsiteReportJobRowsIncludeStructuredCustomerContactContext() async throws {
         let customer = Customer(
             name: "Standalone Report Customer",
@@ -6281,7 +6350,7 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: nil) == false)
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: unmarkedRemoteEvent) == false)
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: legacyMarkedRemoteEvent) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent))
+        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent) == false)
     }
 
     @Test func googleCalendarCreatePayloadMarksOnlyAppCreatedEventOwnership() async throws {
@@ -6366,6 +6435,29 @@ struct GunnAire_OpsTests {
         #expect(payload.contains("location") == false)
         #expect(payload.contains("description") == false)
         #expect(payload.contains("attendees") == false)
+    }
+
+    @MainActor
+    @Test func googleCalendarLinkedEventsDoNotExportEvenIfMarkedLocallyEdited() async throws {
+        let customer = Customer(name: "Calendar Customer")
+        let linkedCall = ServiceCall(
+            googleCalendarID: "shared-calendar@example.com",
+            googleEventID: "google-event-123",
+            googleEventManagedByApp: true,
+            eventTitle: "Keep Google title",
+            siteAddress: "Keep Google location",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3600,
+            customer: customer,
+            notes: "Keep Google body"
+        )
+
+        GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(linkedCall)
+
+        #expect(GoogleCalendarScheduleSync.shouldExportDuringCalendarSync(linkedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: linkedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: linkedCall) == false)
     }
 
     @Test func googleCalendarImportTreatsManagedMarkersAsReadOnly() async throws {

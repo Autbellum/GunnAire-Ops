@@ -509,7 +509,9 @@ GunnAire
                     estimate: estimate,
                     invoice: nil,
                     payments: [],
-                    attachments: emailAttachments.filter { $0.serviceCallID == serviceCall.id }
+                    attachments: emailAttachments.filter { $0.serviceCallID == serviceCall.id },
+                    equipmentProfiles: equipmentProfiles,
+                    serviceCalls: serviceCalls
                 )
                 report.attachment.linkToEstimateIfNeeded(estimate)
                 syncAttachmentIfPossible(report.attachment, data: report.data)
@@ -610,7 +612,9 @@ GunnAire
                     estimate: linkedEstimate,
                     invoice: invoice,
                     payments: invoicePayments,
-                    attachments: emailAttachments.filter { $0.serviceCallID == serviceCall.id }
+                    attachments: emailAttachments.filter { $0.serviceCallID == serviceCall.id },
+                    equipmentProfiles: equipmentProfiles,
+                    serviceCalls: serviceCalls
                 )
                 report.attachment.linkToInvoiceIfNeeded(invoice)
                 syncAttachmentIfPossible(report.attachment, data: report.data)
@@ -3414,7 +3418,9 @@ GunnAire
                 estimate: linkedEstimate,
                 invoice: invoice,
                 payments: invoicePayments,
-                attachments: attachments.filter { $0.serviceCallID == serviceCall.id }
+                attachments: attachments.filter { $0.serviceCallID == serviceCall.id },
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
             )
             report.attachment.linkToInvoiceIfNeeded(invoice)
             syncAttachmentIfPossible(report.attachment, data: report.data)
@@ -3509,7 +3515,9 @@ GunnAire
                         estimate: estimate,
                         invoice: nil,
                         payments: [],
-                        attachments: attachments.filter { $0.serviceCallID == linkedCall.id }
+                        attachments: attachments.filter { $0.serviceCallID == linkedCall.id },
+                        equipmentProfiles: equipmentProfiles,
+                        serviceCalls: serviceCalls
                     )
                     syncAttachmentIfPossible(report.attachment, data: report.data)
                 } catch {
@@ -3550,7 +3558,9 @@ GunnAire
                 estimate: linkedEstimate,
                 invoice: invoice,
                 payments: invoicePayments,
-                attachments: attachments.filter { $0.serviceCallID == serviceCall.id }
+                attachments: attachments.filter { $0.serviceCallID == serviceCall.id },
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
             )
             report.attachment.linkToInvoiceIfNeeded(invoice)
             serviceCall.markDocumentationCompleteIfReady()
@@ -3569,14 +3579,18 @@ GunnAire
         estimate: Estimate?,
         invoice: Invoice?,
         payments: [Payment],
-        attachments jobAttachments: [ServiceDocumentAttachment]
+        attachments jobAttachments: [ServiceDocumentAttachment],
+        equipmentProfiles: [CustomerEquipment],
+        serviceCalls: [ServiceCall]
     ) throws -> (attachment: ServiceDocumentAttachment, data: Data) {
         let url = try CustomerDocumentExporter.exportOnsiteReport(
             serviceCall: serviceCall,
             estimate: estimate,
             invoice: invoice,
             payments: payments,
-            attachments: jobAttachments
+            attachments: jobAttachments,
+            equipmentProfiles: equipmentProfiles,
+            serviceCalls: serviceCalls
         )
         let data = try Data(contentsOf: url)
         let invoiceID = invoice?.id ?? serviceCall.linkedInvoiceID
@@ -3963,7 +3977,9 @@ GunnAire
                 estimate: currentJobEstimate,
                 invoice: currentJobInvoice,
                 payments: currentJobPayments,
-                attachments: activeJobAttachments
+                attachments: activeJobAttachments,
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
             )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = serviceCall.customer.id
