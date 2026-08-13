@@ -86,15 +86,25 @@ enum CustomerDocumentExporter {
         return try renderPDF(title: "Estimate", customer: estimate.customer, sections: sections, fileName: fileName)
     }
 
-    static func exportInvoice(_ invoice: Invoice, serviceCall: ServiceCall?, payments: [Payment]) throws -> URL {
+    static func exportInvoice(
+        _ invoice: Invoice,
+        serviceCall: ServiceCall?,
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment] = []
+    ) throws -> URL {
         let paid = isInvoicePaid(invoice, payments: payments)
         let fileName = makeFileName(prefix: paid ? "GunnAire-Paid-Invoice" : "GunnAire-Invoice", customerName: invoice.customer.name)
-        let sections = invoiceSections(invoice: invoice, serviceCall: serviceCall, payments: payments)
+        let sections = invoiceSections(invoice: invoice, serviceCall: serviceCall, payments: payments, attachments: attachments)
         return try renderPDF(title: paid ? "Paid Invoice" : "Invoice", customer: invoice.customer, sections: sections, fileName: fileName)
     }
 
-    static func exportPaidInvoice(_ invoice: Invoice, serviceCall: ServiceCall?, payments: [Payment]) throws -> URL {
-        try exportInvoice(invoice, serviceCall: serviceCall, payments: payments)
+    static func exportPaidInvoice(
+        _ invoice: Invoice,
+        serviceCall: ServiceCall?,
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment] = []
+    ) throws -> URL {
+        try exportInvoice(invoice, serviceCall: serviceCall, payments: payments, attachments: attachments)
     }
 
     private static func onsiteReportSections(
@@ -558,6 +568,7 @@ enum CustomerDocumentExporter {
         invoice: Invoice,
         serviceCall: ServiceCall?,
         payments: [Payment],
+        attachments: [ServiceDocumentAttachment] = [],
         includeCustomerHeader: Bool = true
     ) -> [DocumentSection] {
         var sections: [DocumentSection] = []
@@ -569,9 +580,10 @@ enum CustomerDocumentExporter {
             sections.append(contentsOf: billingDocumentationSections(for: serviceCall))
         }
 
+        let documentationStatus = serviceCall?.invoiceDocumentationStatus(invoice: invoice, attachments: attachments)
         sections.append(DocumentSection(
             title: "Invoice Detail",
-            rows: invoiceDetailRows(for: invoice, payments: payments).map { row($0.label, $0.value) }
+            rows: invoiceDetailRows(for: invoice, payments: payments, documentationStatus: documentationStatus).map { row($0.label, $0.value) }
         ))
 
         if !payments.isEmpty {
@@ -596,13 +608,17 @@ enum CustomerDocumentExporter {
         return sections
     }
 
-    static func invoiceDetailRows(for invoice: Invoice, payments: [Payment]) -> [(label: String, value: String)] {
+    static func invoiceDetailRows(
+        for invoice: Invoice,
+        payments: [Payment],
+        documentationStatus: InvoiceDocumentationStatus? = nil
+    ) -> [(label: String, value: String)] {
         let paidTotal = payments.reduce(0) { partial, payment in
             partial + (payment.isRefund ? -payment.amount : payment.amount)
         }
         let balance = Invoice.outstandingBalance(for: invoice, payments: payments)
         let status = Invoice.resolvedStatus(for: invoice, payments: payments)
-        return [
+        var rows = [
             ("Created", formattedDateTime(invoice.createdAt)),
             ("Status", status.capitalized),
             ("QuickBooks ID", invoice.quickBooksID ?? ""),
@@ -612,6 +628,11 @@ enum CustomerDocumentExporter {
             ("Payments", currency(paidTotal)),
             ("Balance Due", currency(balance))
         ]
+        if let documentationStatus {
+            rows.append(("Documentation Status", documentationStatus.statusLabel))
+            rows.append(("Documentation Summary", documentationStatus.summary))
+        }
+        return rows
     }
 
     static func billingJobContextSummaries(for serviceCall: ServiceCall) -> [(label: String, value: String)] {

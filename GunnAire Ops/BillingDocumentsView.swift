@@ -483,7 +483,8 @@ GunnAire
             let url = try CustomerDocumentExporter.exportInvoice(
                 invoice,
                 serviceCall: serviceCall,
-                payments: invoicePayments
+                payments: invoicePayments,
+                attachments: attachments
             )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
@@ -3370,7 +3371,8 @@ GunnAire
             let url = try CustomerDocumentExporter.exportInvoice(
                 invoice,
                 serviceCall: serviceCall,
-                payments: invoicePayments
+                payments: invoicePayments,
+                attachments: attachments
             )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
@@ -3824,7 +3826,8 @@ GunnAire
             let url = try CustomerDocumentExporter.exportInvoice(
                 invoice,
                 serviceCall: serviceCall,
-                payments: invoicePayments
+                payments: invoicePayments,
+                attachments: attachments
             )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id

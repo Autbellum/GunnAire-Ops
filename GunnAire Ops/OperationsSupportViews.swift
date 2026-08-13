@@ -1616,7 +1616,8 @@ struct OnsiteDocumentationView: View {
             let url = try CustomerDocumentExporter.exportInvoice(
                 invoice,
                 serviceCall: linkedCall,
-                payments: invoicePayments
+                payments: invoicePayments,
+                attachments: documentAttachments
             )
             generatedCustomerDocumentURL = url
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)

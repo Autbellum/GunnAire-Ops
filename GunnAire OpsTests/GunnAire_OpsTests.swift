@@ -3776,6 +3776,32 @@ struct GunnAire_OpsTests {
         #expect(rows.contains { $0.label == "Balance Due" && $0.value == "$125.00" })
     }
 
+    @Test func invoiceDetailRowsIncludeDocumentationReadinessWhenAvailable() async throws {
+        let customer = Customer(name: "Documentation Invoice Customer")
+        let invoice = Invoice(
+            customer: customer,
+            quickBooksID: "QBO-INV-101",
+            amount: 750,
+            status: "unpaid"
+        )
+        let documentationStatus = InvoiceDocumentationStatus(
+            linkedReportCount: 1,
+            pendingQuickBooksAttachmentCount: 1,
+            syncedQuickBooksAttachmentCount: 0,
+            requiresQuickBooksAttachmentSync: true
+        )
+
+        let rows = CustomerDocumentExporter.invoiceDetailRows(
+            for: invoice,
+            payments: [],
+            documentationStatus: documentationStatus
+        )
+
+        #expect(rows.contains { $0.label == "Documentation Status" && $0.value == "QuickBooks attachments pending" })
+        #expect(rows.contains { $0.label == "Documentation Summary" && $0.value.contains("1 onsite report") })
+        #expect(rows.contains { $0.label == "Documentation Summary" && $0.value.contains("1 pending") })
+    }
+
     @Test func billingDocumentsIncludeLinkedOnsiteDocumentationSummary() async throws {
         let customer = Customer(name: "Billing Documentation Customer")
         let call = ServiceCall(
