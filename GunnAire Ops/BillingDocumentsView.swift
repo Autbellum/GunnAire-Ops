@@ -2698,12 +2698,51 @@ GunnAire
     }
 
     private func serviceReportOptionPicker(_ title: String, selection: Binding<String>, options: [String]) -> some View {
-        SearchableDropdownPicker(
-            title: title,
-            options: options.map { SearchableDropdownOption(id: $0, title: $0) },
-            selectedID: optionalStringSelection(selection),
-            placeholder: "Not Set",
-            showsClearButton: true
+        VStack(alignment: .leading, spacing: 6) {
+            SearchableDropdownPicker(
+                title: title,
+                options: dropdownOptions(options, currentValue: selection.wrappedValue),
+                selectedID: optionalStringSelection(selection),
+                placeholder: "Not Set",
+                showsClearButton: true
+            )
+            if shouldShowCustomOptionField(selection.wrappedValue, options: options) {
+                TextField("Specify \(title)", text: customOptionBinding(selection, options: options))
+                    .textInputAutocapitalization(.words)
+            }
+        }
+    }
+
+    private func dropdownOptions(_ options: [String], currentValue: String) -> [SearchableDropdownOption] {
+        let trimmedCurrentValue = currentValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        var dropdownOptions = options.map { SearchableDropdownOption(id: $0, title: $0) }
+        if !trimmedCurrentValue.isEmpty,
+           !options.contains(where: { $0.caseInsensitiveCompare(trimmedCurrentValue) == .orderedSame }) {
+            dropdownOptions.append(SearchableDropdownOption(id: trimmedCurrentValue, title: trimmedCurrentValue, subtitle: "Custom"))
+        }
+        return dropdownOptions
+    }
+
+    private func shouldShowCustomOptionField(_ value: String, options: [String]) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return trimmed.caseInsensitiveCompare("Other") == .orderedSame ||
+            !options.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame })
+    }
+
+    private func customOptionBinding(_ selection: Binding<String>, options: [String]) -> Binding<String> {
+        Binding(
+            get: {
+                let trimmed = selection.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !options.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) else {
+                    return ""
+                }
+                return trimmed
+            },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                selection.wrappedValue = trimmed.isEmpty ? "Other" : trimmed
+            }
         )
     }
 
