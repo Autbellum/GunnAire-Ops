@@ -145,12 +145,12 @@ final class Invoice {
     }
 
     private static func displayDedupeKey(for invoice: Invoice) -> String {
+        if let serviceCallID = invoice.serviceCallID {
+            return "call:\(serviceCallID.uuidString.lowercased()):\(String(format: "%.2f", invoice.amount))"
+        }
         if let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
            !quickBooksID.isEmpty {
             return "qb:\(quickBooksID.lowercased())"
-        }
-        if let serviceCallID = invoice.serviceCallID {
-            return "call:\(serviceCallID.uuidString.lowercased()):\(String(format: "%.2f", invoice.amount))"
         }
         let customerKey = invoice.customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let day = Calendar.current.startOfDay(for: invoice.createdAt).timeIntervalSince1970
@@ -158,15 +158,15 @@ final class Invoice {
     }
 
     private static func preferredDisplayInvoice(_ lhs: Invoice, _ rhs: Invoice) -> Invoice {
+        let lhsRank = rank(for: resolvedStatus(for: lhs, payments: []))
+        let rhsRank = rank(for: resolvedStatus(for: rhs, payments: []))
+        if lhsRank != rhsRank {
+            return rhsRank > lhsRank ? rhs : lhs
+        }
         let lhsHasQuickBooks = lhs.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let rhsHasQuickBooks = rhs.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         if lhsHasQuickBooks != rhsHasQuickBooks {
             return rhsHasQuickBooks ? rhs : lhs
-        }
-        let lhsRank = rank(for: lhs.status)
-        let rhsRank = rank(for: rhs.status)
-        if lhsRank != rhsRank {
-            return rhsRank > lhsRank ? rhs : lhs
         }
         return rhs.createdAt > lhs.createdAt ? rhs : lhs
     }

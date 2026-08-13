@@ -238,10 +238,7 @@ struct BillingDocumentsView: View {
 
     private var currentJobBalanceDue: Double? {
         guard let invoice = currentJobInvoice else { return nil }
-        let paid = currentJobPayments.reduce(0) { partial, payment in
-            partial + (payment.isRefund ? -payment.amount : payment.amount)
-        }
-        return max(invoice.amount - paid, 0)
+        return Invoice.outstandingBalance(for: invoice, payments: currentJobPayments)
     }
 
     private var estimateMetrics: (pending: Int, accepted: Int, followUp: Int) {

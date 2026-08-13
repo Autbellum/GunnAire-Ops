@@ -53,12 +53,12 @@ final class Estimate {
     }
 
     private static func displayDedupeKey(for estimate: Estimate) -> String {
+        if let serviceCallID = estimate.serviceCallID {
+            return "call:\(serviceCallID.uuidString.lowercased()):\(String(format: "%.2f", estimate.amount))"
+        }
         if let quickBooksID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
            !quickBooksID.isEmpty {
             return "qb:\(quickBooksID.lowercased())"
-        }
-        if let serviceCallID = estimate.serviceCallID {
-            return "call:\(serviceCallID.uuidString.lowercased()):\(String(format: "%.2f", estimate.amount))"
         }
         let customerKey = estimate.customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let day = Calendar.current.startOfDay(for: estimate.createdAt).timeIntervalSince1970

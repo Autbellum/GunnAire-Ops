@@ -6129,6 +6129,33 @@ struct GunnAire_OpsTests {
         #expect(displayed.first?.normalizedStatus == "paid")
     }
 
+    @Test func invoiceDisplayDeduplicationCollapsesLocalAndQuickBooksCopiesForSameServiceCall() async throws {
+        let customer = Customer(name: "Display Customer")
+        let serviceCallID = UUID()
+        let localPaidCopy = Invoice(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            amount: 500,
+            status: "paid",
+            createdAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        let quickBooksUnpaidCopy = Invoice(
+            serviceCallID: serviceCallID,
+            customer: customer,
+            quickBooksID: "INV-123",
+            quickBooksBalanceDue: 500,
+            amount: 500,
+            status: "unpaid",
+            createdAt: Date(timeIntervalSince1970: 1_800_000_100)
+        )
+
+        let displayed = Invoice.displayDeduplicated([localPaidCopy, quickBooksUnpaidCopy])
+
+        #expect(displayed.count == 1)
+        #expect(displayed.first === localPaidCopy)
+        #expect(Invoice.resolvedStatus(for: displayed.first!, payments: []) == "paid")
+    }
+
     @Test func estimateDisplayDeduplicationPrefersQuickBooksRecord() async throws {
         let customer = Customer(name: "Estimate Display Customer")
         let serviceCallID = UUID()
