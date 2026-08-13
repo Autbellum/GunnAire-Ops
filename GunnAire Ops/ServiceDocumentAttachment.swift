@@ -452,6 +452,23 @@ final class ServiceDocumentAttachment {
             }
     }
 
+    func isLinkedToEquipment(
+        equipmentProfiles: [CustomerEquipment],
+        serviceCalls: [ServiceCall] = []
+    ) -> Bool {
+        linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls) != nil
+    }
+
+    static func customerLevelAttachments(
+        in attachments: [ServiceDocumentAttachment],
+        equipmentProfiles: [CustomerEquipment],
+        serviceCalls: [ServiceCall] = []
+    ) -> [ServiceDocumentAttachment] {
+        attachments.filter {
+            !$0.isLinkedToEquipment(equipmentProfiles: equipmentProfiles, serviceCalls: serviceCalls)
+        }
+    }
+
     static func primaryCustomerPhoto(
         for customer: Customer,
         in attachments: [ServiceDocumentAttachment]

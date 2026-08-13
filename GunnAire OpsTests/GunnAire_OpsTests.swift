@@ -2789,6 +2789,57 @@ struct GunnAire_OpsTests {
         #expect(groups.last?.attachments.map(\.displayName) == ["upstairs-nameplate.jpg"])
     }
 
+    @Test func customerLevelAttachmentsExcludeEquipmentHistoryFiles() async throws {
+        let customer = Customer(name: "Equipment File Customer")
+        let equipment = CustomerEquipment(customer: customer, name: "Downstairs AC", modelNumber: "24ABC6")
+        let serviceCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer
+        )
+        let directEquipmentPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: equipment.id,
+            kind: .diagnosticPhoto,
+            displayName: "equipment-nameplate.jpg",
+            localFilePath: "/tmp/equipment-nameplate.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048
+        )
+        let legacyJobPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCall.id,
+            customerEquipmentID: nil,
+            kind: .diagnosticPhoto,
+            displayName: "legacy-job-photo.jpg",
+            localFilePath: "/tmp/legacy-job-photo.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048
+        )
+        let unlinkedCustomerFile = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: nil,
+            kind: .customerDocument,
+            displayName: "gate-code.pdf",
+            localFilePath: "/tmp/gate-code.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+
+        let customerLevel = ServiceDocumentAttachment.customerLevelAttachments(
+            in: [directEquipmentPhoto, legacyJobPhoto, unlinkedCustomerFile],
+            equipmentProfiles: [equipment],
+            serviceCalls: [serviceCall]
+        )
+
+        #expect(customerLevel.map(\.displayName) == ["gate-code.pdf"])
+        #expect(directEquipmentPhoto.isLinkedToEquipment(equipmentProfiles: [equipment], serviceCalls: [serviceCall]))
+        #expect(legacyJobPhoto.isLinkedToEquipment(equipmentProfiles: [equipment], serviceCalls: [serviceCall]))
+    }
+
     @Test func customerEquipmentAttachmentGroupSummarizesFileTypes() async throws {
         let customer = Customer(name: "Equipment Summary Customer")
         let equipment = CustomerEquipment(customer: customer, name: "Main System")

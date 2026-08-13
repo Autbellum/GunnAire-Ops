@@ -1811,23 +1811,31 @@ private struct CustomerEditorView: View {
     }
 
     private var generatedServiceReportAttachments: [ServiceDocumentAttachment] {
-        filteredCustomerAttachments.filter { $0.kind == .serviceReport }
+        customerLevelFilteredAttachments.filter { $0.kind == .serviceReport }
     }
 
     private var customerPhotoAttachments: [ServiceDocumentAttachment] {
-        filteredCustomerAttachments.filter { $0.kind.isPhoto }
+        customerLevelFilteredAttachments.filter { $0.kind.isPhoto }
     }
 
     private var billingSupportAttachments: [ServiceDocumentAttachment] {
-        filteredCustomerAttachments.filter { [.invoiceSupport, .estimateSupport, .receipt].contains($0.kind) }
+        customerLevelFilteredAttachments.filter { [.invoiceSupport, .estimateSupport, .receipt].contains($0.kind) }
     }
 
     private var generalCustomerAttachments: [ServiceDocumentAttachment] {
-        filteredCustomerAttachments.filter { attachment in
+        customerLevelFilteredAttachments.filter { attachment in
             attachment.kind != .serviceReport &&
                 !attachment.kind.isPhoto &&
                 ![.invoiceSupport, .estimateSupport, .receipt].contains(attachment.kind)
         }
+    }
+
+    private var customerLevelFilteredAttachments: [ServiceDocumentAttachment] {
+        ServiceDocumentAttachment.customerLevelAttachments(
+            in: filteredCustomerAttachments,
+            equipmentProfiles: customerEquipmentProfiles,
+            serviceCalls: customerServiceCalls
+        )
     }
 
     private var equipmentAttachmentGroups: [EquipmentAttachmentGroup] {
