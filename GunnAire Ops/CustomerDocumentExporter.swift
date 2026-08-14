@@ -621,11 +621,10 @@ enum CustomerDocumentExporter {
         invoiceID: UUID?,
         estimateID: UUID?
     ) -> [ServiceDocumentAttachment] {
-        guard let serviceCallID = serviceCall?.id else { return [] }
-        return photoEvidenceAttachments(for: attachments)
+        guard let serviceCall else { return [] }
+        return photoEvidenceAttachments(for: reportEvidenceAttachments(for: attachments, serviceCall: serviceCall))
             .filter { attachment in
-                attachment.serviceCallID == serviceCallID &&
-                    billingTargetMatches(attachment: attachment, invoiceID: invoiceID, estimateID: estimateID)
+                billingTargetMatches(attachment: attachment, invoiceID: invoiceID, estimateID: estimateID)
             }
     }
 
