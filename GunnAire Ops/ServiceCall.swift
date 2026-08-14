@@ -894,6 +894,19 @@ struct InvoiceDocumentationStatus: Equatable {
         return "Invoice documentation ready"
     }
 
+    var sendReadinessLabel: String {
+        if linkedReportCount == 0 {
+            return "Generate onsite report before sending"
+        }
+        if failedQuickBooksAttachmentCount > 0 {
+            return "Retry QuickBooks attachment sync before sending"
+        }
+        if pendingQuickBooksAttachmentCount > 0 {
+            return "Sync QuickBooks attachments before sending"
+        }
+        return "Ready to send with documentation"
+    }
+
     var summary: String {
         var parts = [
             "\(linkedReportCount) onsite report\(linkedReportCount == 1 ? "" : "s")"
@@ -943,6 +956,19 @@ struct EstimateDocumentationStatus: Equatable {
             return "QuickBooks attachments pending"
         }
         return "Estimate documentation ready"
+    }
+
+    var sendReadinessLabel: String {
+        if linkedReportCount == 0 {
+            return "Generate onsite report before sending"
+        }
+        if failedQuickBooksAttachmentCount > 0 {
+            return "Retry QuickBooks attachment sync before sending"
+        }
+        if pendingQuickBooksAttachmentCount > 0 {
+            return "Sync QuickBooks attachments before sending"
+        }
+        return "Ready to send with documentation"
     }
 
     var summary: String {

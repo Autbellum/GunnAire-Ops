@@ -2744,6 +2744,7 @@ struct GunnAire_OpsTests {
         let missing = call.invoiceDocumentationStatus(invoice: invoice, attachments: [])
         #expect(missing.isReady == false)
         #expect(missing.statusLabel == "Onsite report missing")
+        #expect(missing.sendReadinessLabel == "Generate onsite report before sending")
 
         let pendingReport = ServiceDocumentAttachment(
             customer: customer,
@@ -2778,6 +2779,7 @@ struct GunnAire_OpsTests {
         let pending = call.invoiceDocumentationStatus(invoice: invoice, attachments: [pendingReport, linkedPhoto, linkedInvoicePDF])
         #expect(pending.isReady == false)
         #expect(pending.statusLabel == "QuickBooks attachments pending")
+        #expect(pending.sendReadinessLabel == "Sync QuickBooks attachments before sending")
         #expect(pending.linkedPhotoEvidenceCount == 1)
         #expect(pending.linkedBillingDocumentCount == 1)
         #expect(pending.pendingQuickBooksAttachmentCount == 3)
@@ -2789,6 +2791,7 @@ struct GunnAire_OpsTests {
         let failed = call.invoiceDocumentationStatus(invoice: invoice, attachments: [pendingReport, linkedPhoto, linkedInvoicePDF])
         #expect(failed.isReady == false)
         #expect(failed.statusLabel == "QuickBooks attachment sync failed")
+        #expect(failed.sendReadinessLabel == "Retry QuickBooks attachment sync before sending")
         #expect(failed.pendingQuickBooksAttachmentCount == 3)
         #expect(failed.failedQuickBooksAttachmentCount == 1)
         #expect(failed.summary.contains("1 failed"))
@@ -2800,6 +2803,7 @@ struct GunnAire_OpsTests {
         let synced = call.invoiceDocumentationStatus(invoice: invoice, attachments: [pendingReport, linkedPhoto, linkedInvoicePDF])
         #expect(synced.isReady)
         #expect(synced.statusLabel == "Invoice documentation ready")
+        #expect(synced.sendReadinessLabel == "Ready to send with documentation")
         #expect(synced.failedQuickBooksAttachmentCount == 0)
         #expect(synced.syncedQuickBooksAttachmentCount == 3)
     }
@@ -2865,6 +2869,7 @@ struct GunnAire_OpsTests {
         let missing = call.estimateDocumentationStatus(estimate: estimate, attachments: [])
         #expect(missing.isReady == false)
         #expect(missing.statusLabel == "Onsite report missing")
+        #expect(missing.sendReadinessLabel == "Generate onsite report before sending")
 
         let pendingReport = ServiceDocumentAttachment(
             customer: customer,
@@ -2899,6 +2904,7 @@ struct GunnAire_OpsTests {
         let pending = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport, linkedPhoto, linkedEstimatePDF])
         #expect(pending.isReady == false)
         #expect(pending.statusLabel == "QuickBooks attachments pending")
+        #expect(pending.sendReadinessLabel == "Sync QuickBooks attachments before sending")
         #expect(pending.linkedPhotoEvidenceCount == 1)
         #expect(pending.linkedBillingDocumentCount == 1)
         #expect(pending.pendingQuickBooksAttachmentCount == 3)
@@ -2910,6 +2916,7 @@ struct GunnAire_OpsTests {
         let failed = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport, linkedPhoto, linkedEstimatePDF])
         #expect(failed.isReady == false)
         #expect(failed.statusLabel == "QuickBooks attachment sync failed")
+        #expect(failed.sendReadinessLabel == "Retry QuickBooks attachment sync before sending")
         #expect(failed.pendingQuickBooksAttachmentCount == 3)
         #expect(failed.failedQuickBooksAttachmentCount == 1)
         #expect(failed.summary.contains("1 failed"))
@@ -2921,6 +2928,7 @@ struct GunnAire_OpsTests {
         let synced = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport, linkedPhoto, linkedEstimatePDF])
         #expect(synced.isReady)
         #expect(synced.statusLabel == "Estimate documentation ready")
+        #expect(synced.sendReadinessLabel == "Ready to send with documentation")
         #expect(synced.failedQuickBooksAttachmentCount == 0)
         #expect(synced.syncedQuickBooksAttachmentCount == 3)
     }

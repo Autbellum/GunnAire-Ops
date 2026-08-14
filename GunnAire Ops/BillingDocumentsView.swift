@@ -1962,11 +1962,26 @@ GunnAire
                                 .foregroundColor(.secondary)
                         } else {
                             ForEach(displayedEstimates) { estimate in
+                                let documentationStatus = serviceCall(for: estimate)?.estimateDocumentationStatus(
+                                    estimate: estimate,
+                                    attachments: attachments
+                                )
                                 DisclosureGroup {
                                     VStack(alignment: .leading, spacing: 8) {
                                         Text(estimate.lineItemSummary)
                                             .font(.caption)
                                             .foregroundColor(.secondary)
+                                        if let documentationStatus {
+                                            Label(
+                                                documentationStatus.sendReadinessLabel,
+                                                systemImage: documentationStatus.isReady ? "checkmark.seal.fill" : "exclamationmark.triangle.fill"
+                                            )
+                                            .font(.caption2)
+                                            .foregroundColor(documentationStatus.isReady ? .green : .orange)
+                                            Text(documentationStatus.summary)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
                                         if let quickBooksID = estimate.quickBooksID, !quickBooksID.isEmpty {
                                             Text("QuickBooks ID: \(quickBooksID)")
                                                 .font(.caption2)
@@ -1997,6 +2012,12 @@ GunnAire
                                             Text("\(estimate.status.capitalized) - \(estimate.createdAt.formatted(date: .abbreviated, time: .shortened))")
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
+                                            if let documentationStatus {
+                                                Text(documentationStatus.sendReadinessLabel)
+                                                    .font(.caption2)
+                                                    .foregroundColor(documentationStatus.isReady ? .green : .orange)
+                                                    .lineLimit(1)
+                                            }
                                         }
                                         Spacer()
                                         Text(estimate.amount, format: .currency(code: "USD"))
@@ -2015,11 +2036,26 @@ GunnAire
                                 .foregroundColor(.secondary)
                         } else {
                             ForEach(displayedInvoices) { invoice in
+                                let documentationStatus = serviceCall(for: invoice)?.invoiceDocumentationStatus(
+                                    invoice: invoice,
+                                    attachments: attachments
+                                )
                                 DisclosureGroup {
                                     VStack(alignment: .leading, spacing: 8) {
                                         Text(invoice.lineItemSummary)
                                             .font(.caption)
                                             .foregroundColor(.secondary)
+                                        if let documentationStatus {
+                                            Label(
+                                                documentationStatus.sendReadinessLabel,
+                                                systemImage: documentationStatus.isReady ? "checkmark.seal.fill" : "exclamationmark.triangle.fill"
+                                            )
+                                            .font(.caption2)
+                                            .foregroundColor(documentationStatus.isReady ? .green : .orange)
+                                            Text(documentationStatus.summary)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
                                         if let signatureName = invoice.customerSignatureName, !signatureName.isEmpty {
                                             Text("Signed by \(signatureName)")
                                                 .font(.caption2)
@@ -2059,6 +2095,12 @@ GunnAire
                                             Text("\(invoiceDisplayStatus(for: invoice)) - \(invoice.createdAt.formatted(date: .abbreviated, time: .shortened))")
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
+                                            if let documentationStatus {
+                                                Text(documentationStatus.sendReadinessLabel)
+                                                    .font(.caption2)
+                                                    .foregroundColor(documentationStatus.isReady ? .green : .orange)
+                                                    .lineLimit(1)
+                                            }
                                         }
                                         Spacer()
                                         if canViewFinancials {
