@@ -451,7 +451,7 @@ struct GunnAire_OpsTests {
             attendees: nil,
             extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
                 "gunnaireManaged": "true",
-                "gunnaireManagedVersion": "3",
+                "gunnaireManagedVersion": "4",
                 "gunnaireOrigin": "ios-app"
             ]),
             start: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T13:00:00Z", timeZone: nil),
@@ -510,7 +510,7 @@ struct GunnAire_OpsTests {
             attendees: nil,
             extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
                 "gunnaireManaged": "true",
-                "gunnaireManagedVersion": "3",
+                "gunnaireManagedVersion": "4",
                 "gunnaireOrigin": "ios-app"
             ]),
             start: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T13:00:00Z", timeZone: nil),
@@ -640,16 +640,16 @@ struct GunnAire_OpsTests {
             attendees: nil,
             extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
                 "gunnaireManaged": "true",
-                "gunnaireManagedVersion": "3",
+                "gunnaireManagedVersion": "4",
                 "gunnaireOrigin": "ios-app"
             ]),
             start: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T13:00:00Z", timeZone: nil),
             end: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T14:00:00Z", timeZone: nil)
         )
 
-        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) == true)
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) == false)
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: call) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: remoteEvent) == true)
+        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: remoteEvent) == false)
 
         let patch = GoogleCalendarScheduleSync.makeManagedEventPatch(for: call, remoteEvent: remoteEvent)
         let data = try JSONEncoder().encode(patch)
@@ -8497,7 +8497,7 @@ struct GunnAire_OpsTests {
         )
 
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: importedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall))
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: newAppCall) == true)
     }
 
@@ -8648,10 +8648,10 @@ struct GunnAire_OpsTests {
             notes: "App details"
         )
 
-        #expect(GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(appOwnedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall))
+        #expect(GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(appOwnedCall))
+        #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: appOwnedCall) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: appOwnedCall))
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: appOwnedCall) == false)
     }
 
@@ -8688,7 +8688,7 @@ struct GunnAire_OpsTests {
             attendees: nil,
             extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
                 "gunnaireManaged": "true",
-                "gunnaireManagedVersion": "3",
+                "gunnaireManagedVersion": "4",
                 "gunnaireOrigin": "ios-app"
             ]),
             start: start,
@@ -8709,11 +8709,11 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: nil) == false)
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: unmarkedRemoteEvent) == false)
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: legacyMarkedRemoteEvent) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent))
+        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent) == false)
         #expect(GoogleCalendarScheduleSync.shouldDeleteExistingGoogleCalendarEvent(for: call, remoteEvent: nil) == false)
         #expect(GoogleCalendarScheduleSync.shouldDeleteExistingGoogleCalendarEvent(for: call, remoteEvent: unmarkedRemoteEvent) == false)
         #expect(GoogleCalendarScheduleSync.shouldDeleteExistingGoogleCalendarEvent(for: call, remoteEvent: legacyMarkedRemoteEvent) == false)
-        #expect(GoogleCalendarScheduleSync.shouldDeleteExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent))
+        #expect(GoogleCalendarScheduleSync.shouldDeleteExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent) == false)
     }
 
     @Test func googleCalendarCreatePayloadMarksAppOwnershipWithoutDroppingVisibleDetails() async throws {
@@ -8902,7 +8902,7 @@ struct GunnAire_OpsTests {
             attendees: nil,
             extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
                 "gunnaireManaged": "true",
-                "gunnaireManagedVersion": "3",
+                "gunnaireManagedVersion": "4",
                 "gunnaireOrigin": "ios-app"
             ]),
             start: start,
@@ -9330,6 +9330,27 @@ struct GunnAire_OpsTests {
             method: "card"
         )
 
+        #expect(payment.needsSharedCompanyQueueUpload)
+        #expect(payment.needsQuickBooksAttention == false)
+    }
+
+    @Test func paymentSharedCompanyQueueStatusHelpersDriveRetryState() async throws {
+        let customer = Customer(name: "Queue Helper Customer")
+        let invoice = Invoice(customer: customer, amount: 250, status: "partial")
+        let payment = Payment(invoice: invoice, amount: 250, method: "card")
+
+        payment.markSharedCompanyQueueUnavailable()
+        #expect(payment.processorSyncStatus == "local_only")
+        #expect(payment.needsSharedCompanyQueueUpload)
+
+        payment.markSharedCompanyQueued()
+        #expect(payment.processorSyncStatus == "company_queued")
+        #expect(payment.needsSharedCompanyQueueUpload == false)
+        #expect(payment.needsQuickBooksAttention == false)
+
+        payment.markSharedCompanyQueueFailed("offline")
+        #expect(payment.processorSyncStatus == "needs_attention")
+        #expect(payment.processorSyncDetail == "Shared company payment queue upload failed: offline")
         #expect(payment.needsSharedCompanyQueueUpload)
         #expect(payment.needsQuickBooksAttention == false)
     }

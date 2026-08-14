@@ -5608,6 +5608,7 @@ private struct RecordInvoicePaymentView: View {
         invoice.customerSignedAt = invoice.customerSignatureName == nil ? nil : Date()
         invoice.completionNotes = trimmedCompletionNotes.isEmpty ? nil : trimmedCompletionNotes
         invoice.finalizedAt = Date()
+        var recordedPayment: Payment?
 
         if shouldRecordPayment {
             if method == "card", quickBooksPaymentsEnabled {
@@ -5642,22 +5643,22 @@ private struct RecordInvoicePaymentView: View {
                         resolvedCardLast4 = nil
                     }
 
-                    modelContext.insert(
-                        Payment(
-                            invoice: invoice,
-                            quickBooksID: result.accountingPayment?.Id,
-                            quickBooksChargeID: result.charge.id,
-                            quickBooksClientTransID: result.clientTransactionID,
-                            quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
-                            quickBooksAccountingSyncDetail: result.accountingError,
-                            amount: paidAmount,
-                            method: "card",
-                            cardLast4: resolvedCardLast4,
-                            authorizationReference: result.charge.authCode ?? (trimmedAuthorization.isEmpty ? nil : trimmedAuthorization),
-                            notes: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
-                            processor: OnsitePaymentProcessor.quickBooksPayments.rawValue
-                        )
+                    let payment = Payment(
+                        invoice: invoice,
+                        quickBooksID: result.accountingPayment?.Id,
+                        quickBooksChargeID: result.charge.id,
+                        quickBooksClientTransID: result.clientTransactionID,
+                        quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
+                        quickBooksAccountingSyncDetail: result.accountingError,
+                        amount: paidAmount,
+                        method: "card",
+                        cardLast4: resolvedCardLast4,
+                        authorizationReference: result.charge.authCode ?? (trimmedAuthorization.isEmpty ? nil : trimmedAuthorization),
+                        notes: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
+                        processor: OnsitePaymentProcessor.quickBooksPayments.rawValue
                     )
+                    modelContext.insert(payment)
+                    recordedPayment = payment
 
                     if let accountingError = result.accountingError {
                         tapToPayMessage = "Charge captured, but accounting sync still needs attention: \(accountingError)"
@@ -5685,21 +5686,21 @@ private struct RecordInvoicePaymentView: View {
                         note: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes
                     )
 
-                    modelContext.insert(
-                        Payment(
-                            invoice: invoice,
-                            quickBooksID: result.accountingPayment?.Id,
-                            quickBooksChargeID: result.charge.id,
-                            quickBooksClientTransID: result.clientTransactionID,
-                            quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
-                            quickBooksAccountingSyncDetail: result.accountingError,
-                            amount: paidAmount,
-                            method: "ach",
-                            authorizationReference: result.charge.authCode ?? (trimmedAuthorization.isEmpty ? nil : trimmedAuthorization),
-                            notes: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
-                            processor: OnsitePaymentProcessor.quickBooksPayments.rawValue
-                        )
+                    let payment = Payment(
+                        invoice: invoice,
+                        quickBooksID: result.accountingPayment?.Id,
+                        quickBooksChargeID: result.charge.id,
+                        quickBooksClientTransID: result.clientTransactionID,
+                        quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
+                        quickBooksAccountingSyncDetail: result.accountingError,
+                        amount: paidAmount,
+                        method: "ach",
+                        authorizationReference: result.charge.authCode ?? (trimmedAuthorization.isEmpty ? nil : trimmedAuthorization),
+                        notes: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
+                        processor: OnsitePaymentProcessor.quickBooksPayments.rawValue
                     )
+                    modelContext.insert(payment)
+                    recordedPayment = payment
 
                     if let accountingError = result.accountingError {
                         tapToPayMessage = "ACH payment submitted, but accounting sync still needs attention: \(accountingError)"
@@ -5716,19 +5717,19 @@ private struct RecordInvoicePaymentView: View {
                 recordedMethod = method
             }
 
-            modelContext.insert(
-                Payment(
-                    invoice: invoice,
-                    amount: paidAmount,
-                    method: recordedMethod,
-                    cardLast4: trimmedCardLast4.isEmpty ? nil : trimmedCardLast4,
-                    authorizationReference: trimmedAuthorization.isEmpty ? nil : trimmedAuthorization,
-                    notes: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
-                    processor: method == "card"
-                        ? (authorizationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "manual-entry" : selectedProcessor.rawValue)
-                        : "onsite-recorded"
-                )
+            let payment = Payment(
+                invoice: invoice,
+                amount: paidAmount,
+                method: recordedMethod,
+                cardLast4: trimmedCardLast4.isEmpty ? nil : trimmedCardLast4,
+                authorizationReference: trimmedAuthorization.isEmpty ? nil : trimmedAuthorization,
+                notes: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
+                processor: method == "card"
+                    ? (authorizationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "manual-entry" : selectedProcessor.rawValue)
+                    : "onsite-recorded"
             )
+            modelContext.insert(payment)
+            recordedPayment = payment
             }
         }
 
@@ -5755,7 +5756,27 @@ private struct RecordInvoicePaymentView: View {
             }
         }
 
+        if let recordedPayment {
+            await queueCloseoutPaymentWithBackend(recordedPayment)
+        }
+
         dismiss()
+    }
+
+    private func queueCloseoutPaymentWithBackend(_ payment: Payment) async {
+        guard GunnAireBackendService.isConfigured else {
+            payment.markSharedCompanyQueueUnavailable()
+            try? modelContext.save()
+            return
+        }
+        let signedInEmail = GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        do {
+            _ = try await GunnAireBackendService.uploadPaymentCollection(payment, collectedBy: signedInEmail)
+            payment.markSharedCompanyQueued()
+        } catch {
+            payment.markSharedCompanyQueueFailed(error.localizedDescription)
+        }
+        try? modelContext.save()
     }
 
     private func signatureImageBase64() -> String? {

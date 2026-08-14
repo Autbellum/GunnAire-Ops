@@ -618,12 +618,12 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldAllowGoogleCalendarWrite(for call: ServiceCall) -> Bool {
-        call.googleEventManagedByApp
+        call.googleEventManagedByApp &&
+            call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
     }
 
     static func isExternalGoogleCalendarEvent(_ call: ServiceCall) -> Bool {
-        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            !call.googleEventManagedByApp
+        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     static func shouldPreserveExternalGoogleCalendarDetails(for call: ServiceCall) -> Bool {
@@ -641,9 +641,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldPatchExistingGoogleCalendarEvent(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> Bool {
-        call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-            call.googleEventManagedByApp &&
-            remoteEvent?.isManagedByGunnAire == true
+        false
     }
 
     static func shouldDeleteExistingGoogleCalendarEvent(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> Bool {
@@ -659,9 +657,7 @@ enum GoogleCalendarScheduleSync {
         isLocallyMarkedManagedByApp: Bool,
         remoteEvent: GoogleCalendarEvent?
     ) -> Bool {
-        hasGoogleEventID &&
-            isLocallyMarkedManagedByApp &&
-            remoteEvent?.isManagedByGunnAire == true
+        false
     }
 
     static func isImportedEventManagedByApp(_ event: GoogleCalendarEvent) -> Bool {
@@ -726,7 +722,7 @@ enum GoogleCalendarScheduleSync {
             attendees: attendees,
             extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
                 "gunnaireManaged": "true",
-                "gunnaireManagedVersion": "3",
+                "gunnaireManagedVersion": "4",
                 "gunnaireOrigin": "ios-app"
             ])
         )

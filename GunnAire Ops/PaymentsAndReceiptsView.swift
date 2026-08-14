@@ -869,20 +869,17 @@ struct PaymentsAndReceiptsView: View {
 
     private func queueFieldPaymentWithBackend(_ payment: Payment) async {
         guard GunnAireBackendService.isConfigured else {
-            payment.processorSyncStatus = payment.processorSyncStatus ?? "local_only"
-            payment.processorSyncDetail = "Shared company payment queue is not configured on this build."
+            payment.markSharedCompanyQueueUnavailable()
             backendUploadMessage = "Payment saved locally. Shared company queue is not configured."
             return
         }
 
         do {
             _ = try await GunnAireBackendService.uploadPaymentCollection(payment, collectedBy: signedInEmail)
-            payment.processorSyncStatus = "company_queued"
-            payment.processorSyncDetail = "Payment record uploaded to shared company storage for admin QuickBooks reconciliation."
+            payment.markSharedCompanyQueued()
             backendUploadMessage = "Payment queued to shared company storage."
         } catch {
-            payment.processorSyncStatus = "needs_attention"
-            payment.processorSyncDetail = "Shared company payment queue upload failed: \(error.localizedDescription)"
+            payment.markSharedCompanyQueueFailed(error.localizedDescription)
             backendUploadMessage = "Payment saved locally, but company queue upload failed: \(error.localizedDescription)"
         }
     }

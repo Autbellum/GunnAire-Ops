@@ -123,4 +123,19 @@ extension Payment {
     var hasAccountingPayment: Bool {
         quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
+
+    func markSharedCompanyQueueUnavailable() {
+        processorSyncStatus = processorSyncStatus ?? "local_only"
+        processorSyncDetail = "Shared company payment queue is not configured on this build."
+    }
+
+    func markSharedCompanyQueued() {
+        processorSyncStatus = "company_queued"
+        processorSyncDetail = "Payment record uploaded to shared company storage for admin QuickBooks reconciliation."
+    }
+
+    func markSharedCompanyQueueFailed(_ errorDescription: String) {
+        processorSyncStatus = "needs_attention"
+        processorSyncDetail = "Shared company payment queue upload failed: \(errorDescription)"
+    }
 }

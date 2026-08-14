@@ -87,7 +87,7 @@ struct GoogleCalendarEvent: Codable, Identifiable {
     var isManagedByGunnAire: Bool {
         let properties = extendedProperties?.privateProperties
         return properties?["gunnaireManaged"] == "true" &&
-            properties?["gunnaireManagedVersion"] == "3" &&
+            properties?["gunnaireManagedVersion"] == "4" &&
             properties?["gunnaireOrigin"] == "ios-app"
     }
 }
