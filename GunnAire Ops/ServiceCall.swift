@@ -871,16 +871,22 @@ struct InvoiceDocumentationStatus: Equatable {
     let linkedPhotoEvidenceCount: Int
     let linkedBillingDocumentCount: Int
     let pendingQuickBooksAttachmentCount: Int
+    let failedQuickBooksAttachmentCount: Int
     let syncedQuickBooksAttachmentCount: Int
     let requiresQuickBooksAttachmentSync: Bool
 
     var isReady: Bool {
-        linkedReportCount > 0 && pendingQuickBooksAttachmentCount == 0
+        linkedReportCount > 0 &&
+            pendingQuickBooksAttachmentCount == 0 &&
+            failedQuickBooksAttachmentCount == 0
     }
 
     var statusLabel: String {
         if linkedReportCount == 0 {
             return "Onsite report missing"
+        }
+        if failedQuickBooksAttachmentCount > 0 {
+            return "QuickBooks attachment sync failed"
         }
         if pendingQuickBooksAttachmentCount > 0 {
             return "QuickBooks attachments pending"
@@ -900,6 +906,9 @@ struct InvoiceDocumentationStatus: Equatable {
         }
         if requiresQuickBooksAttachmentSync {
             parts.append("\(syncedQuickBooksAttachmentCount) synced")
+            if failedQuickBooksAttachmentCount > 0 {
+                parts.append("\(failedQuickBooksAttachmentCount) failed")
+            }
             if pendingQuickBooksAttachmentCount > 0 {
                 parts.append("\(pendingQuickBooksAttachmentCount) pending")
             }
@@ -913,16 +922,22 @@ struct EstimateDocumentationStatus: Equatable {
     let linkedPhotoEvidenceCount: Int
     let linkedBillingDocumentCount: Int
     let pendingQuickBooksAttachmentCount: Int
+    let failedQuickBooksAttachmentCount: Int
     let syncedQuickBooksAttachmentCount: Int
     let requiresQuickBooksAttachmentSync: Bool
 
     var isReady: Bool {
-        linkedReportCount > 0 && pendingQuickBooksAttachmentCount == 0
+        linkedReportCount > 0 &&
+            pendingQuickBooksAttachmentCount == 0 &&
+            failedQuickBooksAttachmentCount == 0
     }
 
     var statusLabel: String {
         if linkedReportCount == 0 {
             return "Onsite report missing"
+        }
+        if failedQuickBooksAttachmentCount > 0 {
+            return "QuickBooks attachment sync failed"
         }
         if pendingQuickBooksAttachmentCount > 0 {
             return "QuickBooks attachments pending"
@@ -942,6 +957,9 @@ struct EstimateDocumentationStatus: Equatable {
         }
         if requiresQuickBooksAttachmentSync {
             parts.append("\(syncedQuickBooksAttachmentCount) synced")
+            if failedQuickBooksAttachmentCount > 0 {
+                parts.append("\(failedQuickBooksAttachmentCount) failed")
+            }
             if pendingQuickBooksAttachmentCount > 0 {
                 parts.append("\(pendingQuickBooksAttachmentCount) pending")
             }
@@ -2190,11 +2208,16 @@ final class ServiceCall {
             if invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                 missing.append("QuickBooks invoice synced")
             } else {
-                let pendingQBAttachments = attachments.contains {
+                let pendingQBAttachments = attachments.filter {
                     $0.serviceCallID == id &&
                         $0.canBePendingQuickBooksInvoiceAttachment(for: invoice)
                 }
-                if pendingQBAttachments {
+                let failedQBAttachments = pendingQBAttachments.contains {
+                    $0.quickBooksSyncError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                }
+                if failedQBAttachments {
+                    missing.append("QuickBooks attachment sync failed")
+                } else if !pendingQBAttachments.isEmpty {
                     missing.append("QuickBooks attachments synced")
                 }
             }
@@ -2221,6 +2244,9 @@ final class ServiceCall {
         let pendingQuickBooksAttachments = hasQuickBooksInvoice
             ? jobAttachments.filter { $0.canBePendingQuickBooksInvoiceAttachment(for: invoice) }
             : []
+        let failedQuickBooksAttachments = pendingQuickBooksAttachments.filter {
+            $0.quickBooksSyncError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
         let syncedQuickBooksAttachments = jobAttachments.filter {
             guard isInvoiceDocumentationAttachment($0, for: invoice),
                   let reference = $0.quickBooksInvoiceReference(for: invoice) else {
@@ -2234,6 +2260,7 @@ final class ServiceCall {
             linkedPhotoEvidenceCount: linkedPhotoEvidence.count,
             linkedBillingDocumentCount: linkedBillingDocuments.count,
             pendingQuickBooksAttachmentCount: pendingQuickBooksAttachments.count,
+            failedQuickBooksAttachmentCount: failedQuickBooksAttachments.count,
             syncedQuickBooksAttachmentCount: syncedQuickBooksAttachments.count,
             requiresQuickBooksAttachmentSync: hasQuickBooksInvoice
         )
@@ -2274,6 +2301,9 @@ final class ServiceCall {
         let pendingQuickBooksAttachments = hasQuickBooksEstimate
             ? jobAttachments.filter { $0.canUploadToQuickBooksEstimate(estimate) }
             : []
+        let failedQuickBooksAttachments = pendingQuickBooksAttachments.filter {
+            $0.quickBooksSyncError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
         let syncedQuickBooksAttachments = jobAttachments.filter {
             guard $0.estimateID == estimate.id,
                   let reference = $0.quickBooksEstimateReference(for: estimate) else {
@@ -2287,6 +2317,7 @@ final class ServiceCall {
             linkedPhotoEvidenceCount: linkedPhotoEvidence.count,
             linkedBillingDocumentCount: linkedBillingDocuments.count,
             pendingQuickBooksAttachmentCount: pendingQuickBooksAttachments.count,
+            failedQuickBooksAttachmentCount: failedQuickBooksAttachments.count,
             syncedQuickBooksAttachmentCount: syncedQuickBooksAttachments.count,
             requiresQuickBooksAttachmentSync: hasQuickBooksEstimate
         )

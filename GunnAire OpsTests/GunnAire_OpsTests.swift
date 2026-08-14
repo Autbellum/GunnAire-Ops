@@ -2550,6 +2550,13 @@ struct GunnAire_OpsTests {
 
         #expect(readiness.isReady == false)
         #expect(readiness.missingItems.contains("QuickBooks attachments synced"))
+
+        report.quickBooksSyncError = "Upload rejected"
+        let failedReadiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [report])
+
+        #expect(failedReadiness.isReady == false)
+        #expect(failedReadiness.missingItems.contains("QuickBooks attachment sync failed"))
+        #expect(failedReadiness.missingItems.contains("QuickBooks attachments synced") == false)
     }
 
     @Test func invoiceDocumentationStatusTracksMissingPendingAndSyncedReports() async throws {
@@ -2609,15 +2616,26 @@ struct GunnAire_OpsTests {
         #expect(pending.linkedPhotoEvidenceCount == 1)
         #expect(pending.linkedBillingDocumentCount == 1)
         #expect(pending.pendingQuickBooksAttachmentCount == 3)
+        #expect(pending.failedQuickBooksAttachmentCount == 0)
         #expect(pending.summary.contains("1 photo"))
         #expect(pending.summary.contains("1 billing PDF"))
 
+        pendingReport.quickBooksSyncError = "Upload rejected"
+        let failed = call.invoiceDocumentationStatus(invoice: invoice, attachments: [pendingReport, linkedPhoto, linkedInvoicePDF])
+        #expect(failed.isReady == false)
+        #expect(failed.statusLabel == "QuickBooks attachment sync failed")
+        #expect(failed.pendingQuickBooksAttachmentCount == 3)
+        #expect(failed.failedQuickBooksAttachmentCount == 1)
+        #expect(failed.summary.contains("1 failed"))
+
+        pendingReport.quickBooksSyncError = nil
         pendingReport.quickBooksAttachableID = "ATTACH-1"
         linkedPhoto.quickBooksAttachableID = "ATTACH-2"
         linkedInvoicePDF.quickBooksAttachableID = "ATTACH-3"
         let synced = call.invoiceDocumentationStatus(invoice: invoice, attachments: [pendingReport, linkedPhoto, linkedInvoicePDF])
         #expect(synced.isReady)
         #expect(synced.statusLabel == "Invoice documentation ready")
+        #expect(synced.failedQuickBooksAttachmentCount == 0)
         #expect(synced.syncedQuickBooksAttachmentCount == 3)
     }
 
@@ -2719,15 +2737,26 @@ struct GunnAire_OpsTests {
         #expect(pending.linkedPhotoEvidenceCount == 1)
         #expect(pending.linkedBillingDocumentCount == 1)
         #expect(pending.pendingQuickBooksAttachmentCount == 3)
+        #expect(pending.failedQuickBooksAttachmentCount == 0)
         #expect(pending.summary.contains("1 photo"))
         #expect(pending.summary.contains("1 billing PDF"))
 
+        linkedEstimatePDF.quickBooksSyncError = "Upload rejected"
+        let failed = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport, linkedPhoto, linkedEstimatePDF])
+        #expect(failed.isReady == false)
+        #expect(failed.statusLabel == "QuickBooks attachment sync failed")
+        #expect(failed.pendingQuickBooksAttachmentCount == 3)
+        #expect(failed.failedQuickBooksAttachmentCount == 1)
+        #expect(failed.summary.contains("1 failed"))
+
+        linkedEstimatePDF.quickBooksSyncError = nil
         pendingReport.quickBooksAttachableID = "ATTACH-EST-1"
         linkedPhoto.quickBooksAttachableID = "ATTACH-EST-2"
         linkedEstimatePDF.quickBooksAttachableID = "ATTACH-EST-3"
         let synced = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport, linkedPhoto, linkedEstimatePDF])
         #expect(synced.isReady)
         #expect(synced.statusLabel == "Estimate documentation ready")
+        #expect(synced.failedQuickBooksAttachmentCount == 0)
         #expect(synced.syncedQuickBooksAttachmentCount == 3)
     }
 
@@ -5694,6 +5723,7 @@ struct GunnAire_OpsTests {
             linkedPhotoEvidenceCount: 2,
             linkedBillingDocumentCount: 1,
             pendingQuickBooksAttachmentCount: 1,
+            failedQuickBooksAttachmentCount: 0,
             syncedQuickBooksAttachmentCount: 0,
             requiresQuickBooksAttachmentSync: true
         )
@@ -5722,6 +5752,7 @@ struct GunnAire_OpsTests {
             linkedPhotoEvidenceCount: 0,
             linkedBillingDocumentCount: 0,
             pendingQuickBooksAttachmentCount: 1,
+            failedQuickBooksAttachmentCount: 0,
             syncedQuickBooksAttachmentCount: 0,
             requiresQuickBooksAttachmentSync: true
         )
