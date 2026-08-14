@@ -1444,12 +1444,33 @@ struct GunnAire_OpsTests {
         #expect(packageUnitDefinitions.first { $0.key == "economizer_sensor_status" }?.options.contains("Needs Repair") == true)
         #expect(packageUnitDefinitions.contains { $0.key == "flue_temp" })
         #expect(packageUnitDefinitions.contains { $0.key == "co_ppm" })
+        #expect(miniSplitDefinitions.first { $0.key == "mode_tested" }?.options.contains("Dry") == true)
         #expect(miniSplitDefinitions.contains { $0.key == "communication_voltage" })
         #expect(miniSplitDefinitions.contains { $0.key == "indoor_filter_condition" })
+        #expect(miniSplitDefinitions.first { $0.key == "outdoor_coil_condition" }?.options.contains("Needs Cleaning") == true)
+        #expect(miniSplitDefinitions.first { $0.key == "outdoor_fan_operation" }?.options.contains("Needs Repair") == true)
         #expect(iaqDefinitions.first { $0.key == "accessory_type" }?.options.contains("Humidifier") == true)
         #expect(iaqDefinitions.first { $0.key == "accessory_type" }?.options.contains("ERV") == true)
         #expect(iaqDefinitions.contains { $0.key == "uv_lamp_status" })
         #expect(iaqDefinitions.contains { $0.key == "return_humidity" })
+    }
+
+    @Test func miniSplitReportsRequireModeAndOutdoorUnitCondition() async throws {
+        let requiredKeys = Set(HVACEquipmentType.miniSplit.requiredReadingKeysForCompleteServiceReport)
+        let definitionKeys = Set(HVACEquipmentType.miniSplit.readingDefinitions.map(\.key))
+
+        #expect(requiredKeys.contains("mode_tested"))
+        #expect(requiredKeys.contains("outdoor_coil_condition"))
+        #expect(requiredKeys.contains("outdoor_fan_operation"))
+        #expect(requiredKeys.isSubset(of: definitionKeys))
+
+        let mode = try #require(HVACEquipmentType.miniSplit.readingDefinitions.first { $0.key == "mode_tested" })
+        let outdoorCoil = try #require(HVACEquipmentType.miniSplit.readingDefinitions.first { $0.key == "outdoor_coil_condition" })
+        let outdoorFan = try #require(HVACEquipmentType.miniSplit.readingDefinitions.first { $0.key == "outdoor_fan_operation" })
+
+        #expect(mode.inputHint?.contains("operating mode") == true)
+        #expect(outdoorCoil.inputHint?.contains("outdoor coil") == true)
+        #expect(outdoorFan.inputHint?.contains("outdoor fan") == true)
     }
 
     @Test func packageUnitReportsRequireCombustionSafetyReading() async throws {
@@ -3213,8 +3234,11 @@ struct GunnAire_OpsTests {
         #expect(packageRequiredKeys.contains("blower_amps"))
         #expect(packageRequiredKeys.contains("co_ppm"))
         #expect(packageRequiredKeys.contains("condenser_condition"))
+        #expect(miniSplitRequiredKeys.contains("mode_tested"))
         #expect(miniSplitRequiredKeys.contains("indoor_head_delta_t"))
         #expect(miniSplitRequiredKeys.contains("indoor_filter_condition"))
+        #expect(miniSplitRequiredKeys.contains("outdoor_coil_condition"))
+        #expect(miniSplitRequiredKeys.contains("outdoor_fan_operation"))
         #expect(miniSplitRequiredKeys.contains("remote_operation"))
     }
 

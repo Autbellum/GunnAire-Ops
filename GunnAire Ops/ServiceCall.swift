@@ -213,12 +213,15 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
             ]
         case .miniSplit:
             return common + coolingCircuitDefinitions + [
+                HVACTechnicalReadingDefinition(key: "mode_tested", label: "Mode Tested", unit: nil, options: ["Cooling", "Heating", "Both", "Dry", "Fan Only", "Other"]),
                 HVACTechnicalReadingDefinition(key: "indoor_head_delta_t", label: "Indoor Head Delta T", unit: "F"),
                 HVACTechnicalReadingDefinition(key: "communication_voltage", label: "Communication Voltage", unit: "V"),
                 HVACTechnicalReadingDefinition(key: "inverter_frequency", label: "Inverter Frequency", unit: "Hz"),
                 HVACTechnicalReadingDefinition(key: "indoor_fan_operation", label: "Indoor Fan", unit: nil, options: Self.conditionOptions),
                 HVACTechnicalReadingDefinition(key: "indoor_filter_condition", label: "Indoor Filter", unit: nil, options: Self.conditionOptions),
                 HVACTechnicalReadingDefinition(key: "indoor_coil_condition", label: "Indoor Coil", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "outdoor_coil_condition", label: "Outdoor Coil", unit: nil, options: Self.conditionOptions),
+                HVACTechnicalReadingDefinition(key: "outdoor_fan_operation", label: "Outdoor Fan", unit: nil, options: Self.conditionOptions),
                 HVACTechnicalReadingDefinition(key: "condensate_pump_status", label: "Condensate Pump", unit: nil, options: Self.conditionOptions),
                 HVACTechnicalReadingDefinition(key: "remote_operation", label: "Remote Operation", unit: nil, options: Self.conditionOptions)
             ]
@@ -370,13 +373,13 @@ enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
         case .miniSplit:
             return [
                 "return_air_temp", "supply_air_temp", "temperature_split",
-                "refrigerant_type", "suction_pressure", "liquid_pressure",
+                "refrigerant_type", "mode_tested", "suction_pressure", "liquid_pressure",
                 "suction_saturation_temp", "liquid_saturation_temp",
                 "suction_line_temp", "liquid_line_temp",
                 "superheat", "subcooling",
                 "line_voltage", "communication_voltage", "indoor_head_delta_t",
                 "indoor_fan_operation", "indoor_filter_condition", "indoor_coil_condition",
-                "condensate_pump_status", "remote_operation"
+                "outdoor_coil_condition", "outdoor_fan_operation", "condensate_pump_status", "remote_operation"
             ]
         case .gasFurnace:
             return [
@@ -708,6 +711,12 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
             return "Verify outdoor, return, or enthalpy sensor operation."
         case "inverter_frequency":
             return "Inverter operating frequency when available."
+        case "mode_tested":
+            return "Record the operating mode used for these readings."
+        case "outdoor_coil_condition":
+            return "Inspect outdoor coil face and clearance."
+        case "outdoor_fan_operation":
+            return "Verify outdoor fan starts, ramps, and runs normally."
         default:
             return nil
         }

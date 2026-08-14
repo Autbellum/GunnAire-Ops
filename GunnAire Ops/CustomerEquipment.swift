@@ -420,7 +420,7 @@ final class CustomerEquipment {
         case .packageUnit:
             return common + ["economizer_operation", "mixed_air_temp", "outdoor_air_damper_position", "economizer_sensor_status", "heat_exchanger_condition"]
         case .miniSplit:
-            return common + ["indoor_head_delta_t", "communication_voltage", "inverter_frequency", "indoor_filter_condition", "condensate_pump_status"]
+            return common + ["mode_tested", "indoor_head_delta_t", "communication_voltage", "inverter_frequency", "indoor_filter_condition", "indoor_coil_condition", "outdoor_coil_condition", "outdoor_fan_operation", "condensate_pump_status"]
         case .gasFurnace:
             return ["temperature_rise", "gas_pressure_inlet", "gas_pressure_manifold", "flame_sensor_microamps", "inducer_amps", "blower_amps", "draft_pressure", "co_ppm", "heat_exchanger_condition"]
         case .airHandler:
