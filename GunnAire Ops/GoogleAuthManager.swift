@@ -136,6 +136,12 @@ struct GoogleCalendarEventPatch: Codable {
         case end
     }
 
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(start, forKey: .start)
+        try container.encodeIfPresent(end, forKey: .end)
+    }
+
     static func unsafeDetailKeys(in encodedPatch: Data) -> [String] {
         guard let object = try? JSONSerialization.jsonObject(with: encodedPatch) as? [String: Any] else {
             return []
@@ -609,7 +615,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return
         }
-        authorizedJSONRequest(url: url, method: "PATCH", body: patch, completion: completion)
+        authorizedJSONDataRequest(url: url, method: "PATCH", body: encodedPatch, completion: completion)
     }
 
     func deleteCalendarEvent(calendarID: String = "primary", eventID: String, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -851,6 +857,55 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                     return
                 }
                 request.httpBody = data
+
+                URLSession.shared.dataTask(with: request) { data, response, error in
+                    if let error {
+                        completion(.failure(error))
+                        return
+                    }
+                    guard let http = response as? HTTPURLResponse else {
+                        completion(.failure(GoogleAuthError.unknown))
+                        return
+                    }
+                    guard let data else {
+                        completion(.failure(GoogleAuthError.noData))
+                        return
+                    }
+                    guard (200...299).contains(http.statusCode) else {
+                        completion(.failure(self.parseProviderError(data: data, fallbackStatus: http.statusCode)))
+                        return
+                    }
+                    guard let decoded = try? JSONDecoder().decode(T.self, from: data) else {
+                        completion(.failure(GoogleAuthError.decoding))
+                        return
+                    }
+                    completion(.success(decoded))
+                }.resume()
+            }
+        }
+    }
+
+    private func authorizedJSONDataRequest<T: Decodable>(
+        url: URL,
+        method: String,
+        body: Data,
+        completion: @escaping (Result<T, Error>) -> Void
+    ) {
+        refreshTokensIfNeeded { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success:
+                guard let token = self.accessToken else {
+                    completion(.failure(GoogleAuthError.notAuthenticated))
+                    return
+                }
+                var request = URLRequest(url: url)
+                request.httpMethod = method
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                request.setValue("application/json", forHTTPHeaderField: "Accept")
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = body
 
                 URLSession.shared.dataTask(with: request) { data, response, error in
                     if let error {
