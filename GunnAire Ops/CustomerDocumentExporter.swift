@@ -410,6 +410,9 @@ enum CustomerDocumentExporter {
         if !safetyAlerts.isEmpty {
             rows.append(("Safety Alerts", safetyAlerts.joined(separator: ", ")))
         }
+        if let nextAction = serviceCall.nextServiceReportActionLabel {
+            rows.append(("Next Required Action", nextAction))
+        }
         if !missing.isEmpty {
             rows.append(("Missing Required Items", missing.joined(separator: ", ")))
         }

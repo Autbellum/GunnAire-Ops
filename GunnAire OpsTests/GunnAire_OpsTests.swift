@@ -3125,6 +3125,7 @@ struct GunnAire_OpsTests {
 
         #expect(rows.contains { $0.label == "Completion" && $0.value == "Needs details" })
         #expect(rows.contains { $0.label == "Required Items" && $0.value == call.serviceReportReadinessSummary })
+        #expect(rows.contains { $0.label == "Next Required Action" && $0.value == "Complete Supply Air Temp (F)" })
         #expect(rows.contains { $0.label == "Missing Required Items" && $0.value.contains("Supply Air Temp (F)") })
         #expect(rows.contains { $0.label == "Missing Required Items" && $0.value.contains("Compressor Amps (A)") })
     }
@@ -3151,6 +3152,7 @@ struct GunnAire_OpsTests {
         #expect(rows.contains { $0.label == "Completion" && $0.value == "Needs details" })
         #expect(rows.contains { $0.label == "Required Items" && $0.value == call.serviceReportReadinessSummary })
         #expect(rows.contains { $0.label == "Required Items" && $0.value.contains("1 invalid") })
+        #expect(rows.contains { $0.label == "Next Required Action" && $0.value.hasPrefix("Review Line Voltage (V) outside expected range") })
         #expect(rows.contains { $0.label == "Missing Required Items" } == false)
         #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("Line Voltage") })
         #expect(rows.contains { $0.label == "Reading Validation" && $0.value.contains("90-600 V") })
@@ -5895,7 +5897,10 @@ struct GunnAire_OpsTests {
 
         let summaries = CustomerDocumentExporter.billingDocumentationSummaries(for: call)
         let hasOnsiteDocumentation = summaries.contains { summary in
-            summary.title == "Onsite Documentation"
+            summary.title == "Onsite Documentation" &&
+                summary.rows.contains { row in
+                    row.label == "Next Required Action" && row.value == "Complete Line Voltage (V)"
+                }
         }
         let hasFindingsSummary = summaries.contains { summary in
             summary.title == "Service Summary" &&
