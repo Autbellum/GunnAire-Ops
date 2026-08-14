@@ -1835,6 +1835,43 @@ struct GunnAire_OpsTests {
         #expect(call.markDocumentationCompleteIfReady())
     }
 
+    @Test func unableToTestCalculatedReadingMarksBlankSourceReadings() async throws {
+        let customer = Customer(name: "Calculated Unable Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        call.setTechnicalReading(HVACTechnicalReadingDefinition.unableToTestValue, for: "superheat")
+        call.setTechnicalReading(HVACTechnicalReadingDefinition.unableToTestValue, for: "subcooling")
+
+        #expect(call.technicalReading(for: "superheat") == HVACTechnicalReadingDefinition.unableToTestValue)
+        #expect(call.technicalReading(for: "suction_line_temp") == HVACTechnicalReadingDefinition.unableToTestValue)
+        #expect(call.technicalReading(for: "suction_saturation_temp") == HVACTechnicalReadingDefinition.unableToTestValue)
+        #expect(call.technicalReading(for: "subcooling") == HVACTechnicalReadingDefinition.unableToTestValue)
+        #expect(call.technicalReading(for: "liquid_line_temp") == HVACTechnicalReadingDefinition.unableToTestValue)
+        #expect(call.technicalReading(for: "liquid_saturation_temp") == HVACTechnicalReadingDefinition.unableToTestValue)
+    }
+
+    @Test func unableToTestCalculatedReadingDoesNotOverwriteMeasuredSourceReadings() async throws {
+        let customer = Customer(name: "Measured Source Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("48", for: "suction_line_temp")
+
+        call.setTechnicalReading(HVACTechnicalReadingDefinition.unableToTestValue, for: "superheat")
+
+        #expect(call.technicalReading(for: "superheat") == HVACTechnicalReadingDefinition.unableToTestValue)
+        #expect(call.technicalReading(for: "suction_line_temp") == "48")
+        #expect(call.technicalReading(for: "suction_saturation_temp") == HVACTechnicalReadingDefinition.unableToTestValue)
+    }
+
     @Test func invalidTechnicalReadingsBlockReportCompletion() async throws {
         let customer = Customer(name: "Validation Customer")
         let call = ServiceCall(

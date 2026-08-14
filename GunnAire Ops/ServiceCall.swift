@@ -586,6 +586,21 @@ struct HVACTechnicalReadingDefinition: Identifiable, Hashable {
         }
     }
 
+    var calculationSourceKeys: [String] {
+        switch key {
+        case "temperature_split", "temperature_rise":
+            return ["return_air_temp", "supply_air_temp"]
+        case "superheat":
+            return ["suction_line_temp", "suction_saturation_temp"]
+        case "subcooling":
+            return ["liquid_line_temp", "liquid_saturation_temp"]
+        case "total_external_static":
+            return ["static_pressure_return", "static_pressure_supply"]
+        default:
+            return []
+        }
+    }
+
     var expectedRange: ClosedRange<Double>? {
         switch key {
         case "return_air_temp", "supply_air_temp", "outdoor_ambient_temp", "indoor_dry_bulb", "indoor_wet_bulb", "mixed_air_temp":
@@ -1481,6 +1496,16 @@ final class ServiceCall {
         } else {
             readings[key] = trimmed
             diagnosticsCaptured = true
+        }
+        if let definition = technicalReadingDefinitions.first(where: { $0.key == key }),
+           definition.isCalculated,
+           Self.isNonApplicableTechnicalStatus(trimmed) {
+            for sourceKey in definition.calculationSourceKeys where allowedKeys.contains(sourceKey) {
+                let existingSourceValue = readings[sourceKey]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if existingSourceValue.isEmpty {
+                    readings[sourceKey] = trimmed
+                }
+            }
         }
         Self.applyDerivedTechnicalReadings(to: &readings, afterChanging: key)
         writeTechnicalReadings(readings.filter { allowedKeys.contains($0.key) })
