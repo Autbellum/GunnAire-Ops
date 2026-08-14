@@ -78,8 +78,12 @@ struct EquipmentAttachmentGroup: Identifiable {
         attachments.filter { $0.kind == .serviceReport }.count
     }
 
+    var dataPlatePhotoCount: Int {
+        attachments.filter { $0.kind == .equipmentDataPlatePhoto }.count
+    }
+
     var photoCount: Int {
-        attachments.filter { $0.kind.isPhoto }.count
+        attachments.filter { $0.kind.isPhoto && $0.kind != .equipmentDataPlatePhoto }.count
     }
 
     var billingDocumentCount: Int {
@@ -97,6 +101,7 @@ struct EquipmentAttachmentGroup: Identifiable {
     var summary: String {
         let parts = [
             countedLabel(serviceReportCount, singular: "report", plural: "reports"),
+            countedLabel(dataPlatePhotoCount, singular: "data plate", plural: "data plates"),
             countedLabel(photoCount, singular: "photo", plural: "photos"),
             countedLabel(billingDocumentCount, singular: "billing file", plural: "billing files"),
             countedLabel(otherDocumentCount, singular: "file", plural: "files")

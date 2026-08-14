@@ -5518,6 +5518,17 @@ struct GunnAire_OpsTests {
             fileSizeBytes: 1024,
             createdAt: Date(timeIntervalSince1970: 20)
         )
+        let dataPlate = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            customerEquipmentID: equipment.id,
+            kind: .equipmentDataPlatePhoto,
+            displayName: "data-plate.jpg",
+            localFilePath: "/tmp/data-plate.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024,
+            createdAt: Date(timeIntervalSince1970: 25)
+        )
         let invoice = ServiceDocumentAttachment(
             customer: customer,
             serviceCallID: UUID(),
@@ -5541,14 +5552,15 @@ struct GunnAire_OpsTests {
             createdAt: Date(timeIntervalSince1970: 40)
         )
 
-        let group = EquipmentAttachmentGroup(equipment: equipment, attachments: [report, photo, invoice, manual])
+        let group = EquipmentAttachmentGroup(equipment: equipment, attachments: [report, photo, dataPlate, invoice, manual])
 
         #expect(group.serviceReportCount == 1)
+        #expect(group.dataPlatePhotoCount == 1)
         #expect(group.photoCount == 1)
         #expect(group.billingDocumentCount == 1)
         #expect(group.otherDocumentCount == 1)
         #expect(group.latestAttachmentDate == manual.createdAt)
-        #expect(group.summary == "1 report - 1 photo - 1 billing file - 1 file")
+        #expect(group.summary == "1 report - 1 data plate - 1 photo - 1 billing file - 1 file")
     }
 
     @Test func equipmentAttachmentsIncludeDirectAndLinkedJobFiles() async throws {
