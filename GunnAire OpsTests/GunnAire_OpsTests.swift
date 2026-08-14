@@ -4089,6 +4089,61 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
+    @Test func quickBooksAttachmentSyncUsesServiceCallBillingLinksWhenBillingBackReferencesAreMissing() async throws {
+        let customer = Customer(name: "Linked Customer")
+        let invoice = Invoice(
+            customer: customer,
+            quickBooksID: "INV-456",
+            amount: 450
+        )
+        let estimate = Estimate(
+            customer: customer,
+            quickBooksID: "EST-456",
+            amount: 450
+        )
+        let call = ServiceCall(
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer,
+            linkedEstimateID: estimate.id,
+            linkedInvoiceID: invoice.id
+        )
+        let serviceReport = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .serviceReport,
+            displayName: "onsite-report.pdf",
+            localFilePath: "/tmp/onsite-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
+        let diagnosticPhoto = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .diagnosticPhoto,
+            displayName: "diagnostic.jpg",
+            localFilePath: "/tmp/diagnostic.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 1024
+        )
+
+        let changedCount = QuickBooksInvoiceAttachmentSync.linkServiceCallAttachmentsToBillingDocuments(
+            estimates: [estimate],
+            invoices: [invoice],
+            serviceCalls: [call],
+            attachments: [serviceReport, diagnosticPhoto]
+        )
+
+        #expect(changedCount == 4)
+        #expect(serviceReport.invoiceID == invoice.id)
+        #expect(serviceReport.estimateID == estimate.id)
+        #expect(diagnosticPhoto.invoiceID == invoice.id)
+        #expect(diagnosticPhoto.estimateID == estimate.id)
+        #expect(invoice.serviceCallID == nil)
+        #expect(estimate.serviceCallID == nil)
+    }
+
+    @MainActor
     @Test func quickBooksAttachmentSyncTracksSpecificAttachedBillingTargets() async throws {
         let customer = Customer(name: "Targeted Attachment Customer")
         let serviceCallID = UUID()

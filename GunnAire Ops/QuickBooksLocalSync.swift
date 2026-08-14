@@ -280,15 +280,18 @@ enum QuickBooksLocalSync {
         QuickBooksInvoiceAttachmentSync.linkServiceCallAttachmentsToBillingDocuments(
             estimates: reconciledEstimates,
             invoices: reconciledInvoices,
+            serviceCalls: reconciledServiceCalls,
             attachments: reconciledAttachments
         )
         try? modelContext.save()
         let syncedEstimates = try modelContext.fetch(FetchDescriptor<Estimate>())
         let syncedInvoices = try modelContext.fetch(FetchDescriptor<Invoice>())
+        let syncedServiceCalls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
         let serviceAttachments = try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())
         QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
             estimates: syncedEstimates,
             invoices: syncedInvoices,
+            serviceCalls: syncedServiceCalls,
             attachments: serviceAttachments,
             modelContext: modelContext
         )

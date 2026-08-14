@@ -37,12 +37,14 @@ enum QuickBooksInvoiceAttachmentSync {
     static func syncPendingServiceReports(
         estimates: [Estimate] = [],
         invoices: [Invoice],
+        serviceCalls: [ServiceCall] = [],
         attachments: [ServiceDocumentAttachment],
         modelContext: ModelContext
     ) {
         syncPendingServiceReports(
             estimates: estimates,
             invoices: invoices,
+            serviceCalls: serviceCalls,
             attachments: attachments,
             modelContext: modelContext,
             api: QuickBooksDataAPI.shared
@@ -52,6 +54,7 @@ enum QuickBooksInvoiceAttachmentSync {
     static func syncPendingServiceReports(
         estimates: [Estimate] = [],
         invoices: [Invoice],
+        serviceCalls: [ServiceCall] = [],
         attachments: [ServiceDocumentAttachment],
         modelContext: ModelContext,
         api: QuickBooksDataAPI
@@ -61,6 +64,7 @@ enum QuickBooksInvoiceAttachmentSync {
         if linkServiceCallAttachmentsToBillingDocuments(
             estimates: estimates,
             invoices: invoices,
+            serviceCalls: serviceCalls,
             attachments: attachments
         ) > 0 {
             try? modelContext.save()
@@ -137,6 +141,7 @@ enum QuickBooksInvoiceAttachmentSync {
     static func linkServiceCallAttachmentsToBillingDocuments(
         estimates: [Estimate],
         invoices: [Invoice],
+        serviceCalls: [ServiceCall] = [],
         attachments: [ServiceDocumentAttachment]
     ) -> Int {
         let invoicesByServiceCallID = Dictionary(
@@ -157,14 +162,18 @@ enum QuickBooksInvoiceAttachmentSync {
                 existing.createdAt >= candidate.createdAt ? existing : candidate
             }
         )
+        let invoicesByID = Dictionary(invoices.map { ($0.id, $0) }, uniquingKeysWith: { existing, _ in existing })
+        let estimatesByID = Dictionary(estimates.map { ($0.id, $0) }, uniquingKeysWith: { existing, _ in existing })
+        let serviceCallsByID = Dictionary(serviceCalls.map { ($0.id, $0) }, uniquingKeysWith: { existing, _ in existing })
 
         var changed = 0
         for attachment in attachments where attachment.canLinkToQuickBooksInvoiceAttachment {
             guard let serviceCallID = attachment.serviceCallID else { continue }
+            let linkedCall = serviceCallsByID[serviceCallID]
 
             if attachment.canLinkToQuickBooksInvoiceDocument,
                attachment.invoiceID == nil,
-               let invoice = invoicesByServiceCallID[serviceCallID],
+               let invoice = invoicesByServiceCallID[serviceCallID] ?? linkedCall?.linkedInvoiceID.flatMap({ invoicesByID[$0] }),
                attachment.customerMatches(invoice.customer) {
                 attachment.linkToInvoiceIfNeeded(invoice)
                 changed += 1
@@ -172,7 +181,7 @@ enum QuickBooksInvoiceAttachmentSync {
 
             if attachment.canLinkToQuickBooksEstimateDocument,
                attachment.estimateID == nil,
-               let estimate = estimatesByServiceCallID[serviceCallID],
+               let estimate = estimatesByServiceCallID[serviceCallID] ?? linkedCall?.linkedEstimateID.flatMap({ estimatesByID[$0] }),
                attachment.customerMatches(estimate.customer) {
                 attachment.linkToEstimateIfNeeded(estimate)
                 changed += 1
