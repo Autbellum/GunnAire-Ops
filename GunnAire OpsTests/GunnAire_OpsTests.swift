@@ -9391,6 +9391,56 @@ struct GunnAire_OpsTests {
         #expect(snapshot.actions.contains { $0.destination == .sync })
     }
 
+    @Test func businessSuiteSurfacesTechnicalReportActionsAndOpenConcerns() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let customer = Customer(name: "Documentation Command Customer", address: "700 Report Ave")
+        let incompleteReportCall = ServiceCall(
+            equipmentName: "Main AC",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-60 * 60),
+            customer: customer,
+            status: .inProgress
+        )
+        incompleteReportCall.setTechnicalReading("72", for: "return_air_temp")
+
+        let concernCall = ServiceCall(
+            equipmentName: "Attic Furnace",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(60 * 60),
+            customer: customer,
+            status: .completed
+        )
+        concernCall.setServiceActionStatus(.needsService, for: "heat_exchanger_checked")
+
+        let snapshot = BusinessSuiteIntelligence.snapshot(
+            customers: [customer],
+            serviceCalls: [incompleteReportCall, concernCall],
+            technicians: [],
+            contracts: [],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            timeEntries: [],
+            googleConnected: true,
+            quickBooksConnected: true,
+            onsitePaymentsReady: true,
+            now: now
+        )
+
+        let documentation = try #require(snapshot.workstreams.first { $0.id == .documentation })
+        let reportAction = try #require(snapshot.actions.first { $0.title == "Complete service report" })
+
+        #expect(documentation.score < 100)
+        #expect(documentation.detail.contains("1 report action"))
+        #expect(documentation.detail.contains("1 concern"))
+        #expect(documentation.destination == .documentation(incompleteReportCall.id))
+        #expect(reportAction.destination == .documentation(incompleteReportCall.id))
+        #expect(reportAction.detail.contains("Documentation Command Customer"))
+        #expect(reportAction.detail.contains("Complete"))
+    }
+
     @Test func businessSuiteScoresStaleCalendarRoutesAsIntegrationGaps() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let customer = Customer(name: "Route Customer", address: "510 Integration Ave")

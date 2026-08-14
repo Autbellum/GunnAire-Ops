@@ -136,6 +136,12 @@ enum BusinessSuiteIntelligence {
         let documentationInProgressCalls = serviceCalls.filter {
             $0.documentationStartedAt != nil && $0.documentationCompletedAt == nil
         }
+        let serviceReportActionCalls = serviceCalls.filter {
+            $0.status != .cancelled && $0.serviceReportActionSummary != nil
+        }
+        let openServiceConcernCalls = serviceCalls.filter {
+            $0.status != .cancelled && !$0.openServiceConcernRows.isEmpty
+        }
         let invoicesAwaitingCloseout = invoices.filter {
             $0.finalizedAt == nil || CustomerIntelligence.outstandingBalance(for: $0, payments: payments) > 0
         }
@@ -228,6 +234,8 @@ enum BusinessSuiteIntelligence {
         let documentationScore = score(
             readyToBillCalls.count * 10 +
             documentationInProgressCalls.count * 5 +
+            serviceReportActionCalls.count * 8 +
+            openServiceConcernCalls.count * 5 +
             invoicesAwaitingCloseout.count * 4 +
             acceptedEstimateCalls.count * 6
         )
@@ -290,11 +298,20 @@ enum BusinessSuiteIntelligence {
                 title: "Documentation",
                 value: "\(readyToBillCalls.count)",
                 status: statusLabel(for: documentationScore),
-                detail: "\(documentationInProgressCalls.count) active, \(invoicesAwaitingCloseout.count) closeout",
+                detail: documentationDetail(
+                    activeCount: documentationInProgressCalls.count,
+                    reportActionCount: serviceReportActionCalls.count,
+                    concernCount: openServiceConcernCalls.count,
+                    closeoutCount: invoicesAwaitingCloseout.count
+                ),
                 systemImage: "doc.text.viewfinder",
                 score: documentationScore,
                 severity: severity(for: documentationScore),
-                destination: .documentation(readyToBillCalls.first?.id ?? documentationInProgressCalls.first?.id)
+                destination: .documentation(
+                    readyToBillCalls.first?.id ??
+                        serviceReportActionCalls.first?.id ??
+                        documentationInProgressCalls.first?.id
+                )
             ),
             BusinessSuiteWorkstream(
                 id: .revenue,
@@ -397,6 +414,8 @@ enum BusinessSuiteIntelligence {
                 overdueInvoices: overdueInvoices,
                 openInvoiceBalances: openInvoiceBalances,
                 readyToBillCalls: readyToBillCalls,
+                serviceReportActionCalls: serviceReportActionCalls,
+                openServiceConcernCalls: openServiceConcernCalls,
                 unassignedUpcomingCalls: unassignedUpcomingCalls,
                 acceptedEstimateCalls: acceptedEstimateCalls,
                 maintenanceAlerts: maintenanceAlerts,
@@ -420,6 +439,8 @@ enum BusinessSuiteIntelligence {
         overdueInvoices: [(invoice: Invoice, balance: Double)],
         openInvoiceBalances: [(invoice: Invoice, balance: Double)],
         readyToBillCalls: [ServiceCall],
+        serviceReportActionCalls: [ServiceCall],
+        openServiceConcernCalls: [ServiceCall],
         unassignedUpcomingCalls: [ServiceCall],
         acceptedEstimateCalls: [ServiceCall],
         maintenanceAlerts: [RecurringMaintenanceContract],
@@ -472,6 +493,33 @@ enum BusinessSuiteIntelligence {
                     value: "Ready",
                     systemImage: "doc.badge.plus",
                     severity: .warning,
+                    destination: .documentation(call.id)
+                )
+            )
+        }
+
+        if let call = serviceReportActionCalls.sorted(by: { $0.scheduledDate < $1.scheduledDate }).first {
+            actions.append(
+                BusinessSuiteAction(
+                    id: "service-report-action-\(call.id.uuidString)",
+                    title: "Complete service report",
+                    detail: "\(call.customer.name) - \(call.nextServiceReportActionLabel ?? "Review required report items")",
+                    value: call.type.displayName,
+                    systemImage: "checklist.checked",
+                    severity: .warning,
+                    destination: .documentation(call.id)
+                )
+            )
+        } else if let call = openServiceConcernCalls.sorted(by: { $0.scheduledDate < $1.scheduledDate }).first,
+                  let concern = call.openServiceConcernRows.first {
+            actions.append(
+                BusinessSuiteAction(
+                    id: "service-concern-\(call.id.uuidString)",
+                    title: "Review open service concern",
+                    detail: "\(call.customer.name) - \(concern.label): \(concern.value)",
+                    value: call.type.displayName,
+                    systemImage: "exclamationmark.triangle",
+                    severity: .notice,
                     destination: .documentation(call.id)
                 )
             )
@@ -749,6 +797,25 @@ enum BusinessSuiteIntelligence {
         }
         let gaps = unpricedCount + lowMarginCount + missingCostCount
         return "\(catalogItemCount) items, \(gaps) pricing gaps"
+    }
+
+    private static func documentationDetail(
+        activeCount: Int,
+        reportActionCount: Int,
+        concernCount: Int,
+        closeoutCount: Int
+    ) -> String {
+        var details = [
+            "\(activeCount) active",
+            "\(closeoutCount) closeout"
+        ]
+        if reportActionCount > 0 {
+            details.append("\(reportActionCount) report action\(reportActionCount == 1 ? "" : "s")")
+        }
+        if concernCount > 0 {
+            details.append("\(concernCount) concern\(concernCount == 1 ? "" : "s")")
+        }
+        return details.joined(separator: ", ")
     }
 
     private static func grossMargin(for item: Item) -> Double {
