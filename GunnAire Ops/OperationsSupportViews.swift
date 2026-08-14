@@ -1608,6 +1608,7 @@ struct OnsiteDocumentationView: View {
             QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
                 estimates: estimates,
                 invoices: invoices,
+                serviceCalls: serviceCalls,
                 attachments: documentAttachments + [attachment],
                 modelContext: modelContext
             )
@@ -1766,6 +1767,7 @@ struct OnsiteDocumentationView: View {
             QuickBooksInvoiceAttachmentSync.syncPendingServiceReports(
                 estimates: estimates,
                 invoices: invoices,
+                serviceCalls: serviceCalls,
                 attachments: documentAttachments + [attachment],
                 modelContext: modelContext
             )

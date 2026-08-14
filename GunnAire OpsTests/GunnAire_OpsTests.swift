@@ -4727,6 +4727,37 @@ struct GunnAire_OpsTests {
         #expect(legacyReport.quickBooksSyncError == nil)
     }
 
+    @Test func regeneratedGeneratedDocumentClearsQuickBooksAttachmentTargetState() async throws {
+        let customer = Customer(name: "Regenerated Attachment Customer")
+        let invoice = Invoice(customer: customer, quickBooksID: "INV-REGEN", amount: 500)
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: UUID(),
+            invoiceID: invoice.id,
+            kind: .invoiceSupport,
+            displayName: "old-invoice.pdf",
+            localFilePath: "/tmp/old-invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 128,
+            quickBooksAttachableID: "ATTACH-OLD"
+        )
+        let reference = try #require(attachment.quickBooksInvoiceReference(for: invoice))
+        attachment.markQuickBooksAttached(to: [reference])
+
+        attachment.replaceGeneratedFile(
+            displayName: "new-invoice.pdf",
+            localFilePath: "/tmp/new-invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 256,
+            caption: "Regenerated invoice PDF"
+        )
+
+        #expect(attachment.quickBooksAttachableID == nil)
+        #expect(attachment.quickBooksSyncError == nil)
+        #expect(attachment.quickBooksAttachedEntityKeys.isEmpty)
+        #expect(attachment.canUploadToQuickBooksInvoice(invoice))
+    }
+
     @MainActor
     @Test func quickBooksAttachmentSyncFindsPendingEstimateAttachments() async throws {
         let customer = Customer(name: "Estimate Attachment Customer")

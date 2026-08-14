@@ -921,6 +921,7 @@ final class ServiceDocumentAttachment {
         self.caption = caption
         self.quickBooksAttachableID = nil
         self.quickBooksSyncError = nil
+        self.quickBooksAttachedEntityKeysRaw = nil
         self.createdAt = Date()
     }
 }
