@@ -3539,6 +3539,8 @@ GunnAire
                         contentType: attachment.contentType,
                         kind: attachment.kindRaw,
                         serviceCallID: attachment.serviceCallID,
+                        invoiceID: attachment.invoiceID,
+                        estimateID: attachment.estimateID,
                         customerEquipmentID: attachment.customerEquipmentID,
                         equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
                         customerName: attachment.customer?.name

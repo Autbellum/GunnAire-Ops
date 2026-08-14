@@ -5242,6 +5242,8 @@ struct GunnAire_OpsTests {
     @Test func backendDocumentCreatesLinkedLocalAttachmentForSharedDownload() async throws {
         let customer = Customer(name: "Shared Download Customer")
         let serviceCallID = UUID()
+        let invoiceID = UUID()
+        let estimateID = UUID()
         let equipmentID = UUID()
         let document = BackendDocumentRecord(
             id: "backend-doc-1",
@@ -5249,6 +5251,8 @@ struct GunnAire_OpsTests {
             contentType: "application/pdf",
             kind: ServiceDocumentAttachmentKind.serviceReport.rawValue,
             serviceCallID: serviceCallID.uuidString,
+            invoiceID: invoiceID.uuidString,
+            estimateID: estimateID.uuidString,
             customerEquipmentID: equipmentID.uuidString,
             equipmentName: "Downstairs AC",
             customerName: customer.name,
@@ -5268,6 +5272,8 @@ struct GunnAire_OpsTests {
 
         #expect(attachment.customer?.id == customer.id)
         #expect(attachment.serviceCallID == serviceCallID)
+        #expect(attachment.invoiceID == invoiceID)
+        #expect(attachment.estimateID == estimateID)
         #expect(attachment.customerEquipmentID == equipmentID)
         #expect(attachment.kind == .serviceReport)
         #expect(attachment.displayName == "shared-report.pdf")
@@ -5280,6 +5286,8 @@ struct GunnAire_OpsTests {
     @Test func backendDocumentDownloadUpdatesExistingLocalAttachmentInsteadOfDuplicating() async throws {
         let customer = Customer(name: "Shared Existing Customer")
         let serviceCallID = UUID()
+        let invoiceID = UUID()
+        let estimateID = UUID()
         let equipmentID = UUID()
         let existing = ServiceDocumentAttachment(
             customer: customer,
@@ -5298,6 +5306,8 @@ struct GunnAire_OpsTests {
             contentType: "application/pdf",
             kind: ServiceDocumentAttachmentKind.serviceReport.rawValue,
             serviceCallID: serviceCallID.uuidString,
+            invoiceID: invoiceID.uuidString,
+            estimateID: estimateID.uuidString,
             customerEquipmentID: equipmentID.uuidString,
             equipmentName: "Main Furnace",
             customerName: customer.name,
@@ -5318,6 +5328,9 @@ struct GunnAire_OpsTests {
         #expect(hydrated === existing)
         #expect(existing.kind == .serviceReport)
         #expect(existing.displayName == "updated-report.pdf")
+        #expect(existing.invoiceID == invoiceID)
+        #expect(existing.estimateID == estimateID)
+        #expect(existing.customerEquipmentID == equipmentID)
         #expect(existing.localFilePath == "/tmp/updated-report.pdf")
         #expect(existing.fileSizeBytes == 2048)
         #expect(existing.caption == "Main Furnace")
@@ -9414,6 +9427,8 @@ struct GunnAire_OpsTests {
               "contentType": "application/pdf",
               "kind": "service_report",
               "serviceCallID": "call-1",
+              "invoiceID": "11111111-1111-1111-1111-111111111111",
+              "estimateID": "22222222-2222-2222-2222-222222222222",
               "customerName": "Shared Customer",
               "storedPath": "/storage/service-report.pdf",
               "createdAt": "2026-08-13T14:01:00Z"
@@ -9429,6 +9444,10 @@ struct GunnAire_OpsTests {
         #expect(records[0].filename == "service-report.pdf")
         #expect(records[0].kind == "service_report")
         #expect(records[0].customerName == "Shared Customer")
+        #expect(records[0].invoiceID == "11111111-1111-1111-1111-111111111111")
+        #expect(records[0].estimateID == "22222222-2222-2222-2222-222222222222")
+        #expect(records[0].invoiceUUID == UUID(uuidString: "11111111-1111-1111-1111-111111111111"))
+        #expect(records[0].estimateUUID == UUID(uuidString: "22222222-2222-2222-2222-222222222222"))
         #expect(records[0].customerEquipmentID == nil)
         #expect(records[0].equipmentName == nil)
     }
@@ -9444,6 +9463,8 @@ struct GunnAire_OpsTests {
               "contentType": "image/jpeg",
               "kind": "equipment_data_plate_photo",
               "serviceCallID": "call-1",
+              "invoiceID": null,
+              "estimateID": null,
               "customerEquipmentID": "\(equipmentID.uuidString)",
               "equipmentName": "Roof RTU 1",
               "customerName": "Shared Customer",
@@ -9468,6 +9489,8 @@ struct GunnAire_OpsTests {
             contentType: "image/jpeg",
             kind: "equipment_data_plate_photo",
             serviceCallID: "call-1",
+            invoiceID: "invoice-1111",
+            estimateID: "estimate-2222",
             customerEquipmentID: "11111111-2222-3333-4444-555555555555",
             equipmentName: "Roof RTU 1",
             customerName: "Shared Customer",
@@ -9479,6 +9502,8 @@ struct GunnAire_OpsTests {
         #expect(document.matchesCustomerName("Other Customer") == false)
         #expect(document.matchesCustomerDocumentSearch("roof rtu"))
         #expect(document.matchesCustomerDocumentSearch("55555555"))
+        #expect(document.matchesCustomerDocumentSearch("invoice-1111"))
+        #expect(document.matchesCustomerDocumentSearch("estimate-2222"))
         #expect(document.matchesCustomerDocumentSearch("data plate"))
         #expect(document.matchesCustomerDocumentSearch("compressor") == false)
     }

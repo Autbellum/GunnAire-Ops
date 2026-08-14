@@ -431,6 +431,8 @@ final class ServiceDocumentAttachment {
         self.customer = customer
         self.serviceCallID = serviceCallID
         self.customerEquipmentID = customerEquipmentID
+        invoiceID = document.invoiceUUID
+        estimateID = document.estimateUUID
         kindRaw = document.kind
         displayName = document.filename
         caption = Self.normalizedBackendText(document.equipmentName)
@@ -451,11 +453,15 @@ final class ServiceDocumentAttachment {
     ) -> ServiceDocumentAttachment {
         let serviceCallID = document.serviceCallUUID ?? fallbackServiceCallID
         let customerEquipmentID = document.customerEquipmentUUID ?? fallbackCustomerEquipmentID
+        let invoiceID = document.invoiceUUID
+        let estimateID = document.estimateUUID
         let existing = existingAttachments.first { attachment in
             attachment.backendDocumentID == document.id ||
                 (
                     attachment.backendDocumentID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
                     attachment.serviceCallID == serviceCallID &&
+                    attachment.invoiceID == invoiceID &&
+                    attachment.estimateID == estimateID &&
                     attachment.customerEquipmentID == customerEquipmentID &&
                     attachment.displayName == document.filename &&
                     attachment.kindRaw == document.kind
@@ -477,6 +483,8 @@ final class ServiceDocumentAttachment {
             customer: customer,
             serviceCallID: serviceCallID,
             customerEquipmentID: customerEquipmentID,
+            invoiceID: invoiceID,
+            estimateID: estimateID,
             kind: ServiceDocumentAttachmentKind(rawValue: document.kind) ?? .other,
             displayName: document.filename,
             caption: normalizedBackendText(document.equipmentName),

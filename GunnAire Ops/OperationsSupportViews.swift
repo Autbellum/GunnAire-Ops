@@ -1634,6 +1634,8 @@ struct OnsiteDocumentationView: View {
                     contentType: attachment.contentType,
                     kind: attachment.kindRaw,
                     serviceCallID: attachment.serviceCallID,
+                    invoiceID: attachment.invoiceID,
+                    estimateID: attachment.estimateID,
                     customerEquipmentID: attachment.customerEquipmentID,
                     equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
                     customerName: attachment.customer?.name
@@ -1783,6 +1785,8 @@ struct OnsiteDocumentationView: View {
                     contentType: attachment.contentType,
                     kind: attachment.kindRaw,
                     serviceCallID: attachment.serviceCallID,
+                    invoiceID: attachment.invoiceID,
+                    estimateID: attachment.estimateID,
                     customerEquipmentID: attachment.customerEquipmentID,
                     equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
                     customerName: attachment.customer?.name
@@ -2753,6 +2757,8 @@ private struct CustomerEditorView: View {
                     contentType: attachment.contentType,
                     kind: attachment.kindRaw,
                     serviceCallID: nil,
+                    invoiceID: nil,
+                    estimateID: nil,
                     customerEquipmentID: attachment.customerEquipmentID,
                     equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
                     customerName: customer.name
@@ -2858,6 +2864,18 @@ private struct CustomerEditorView: View {
                 }
                 if let serviceCallID = document.serviceCallID, !serviceCallID.isEmpty {
                     Text("Job file: \(serviceCallID.prefix(8))")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                if let invoiceID = document.invoiceID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !invoiceID.isEmpty {
+                    Text("Invoice file: \(invoiceID.prefix(8))")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                if let estimateID = document.estimateID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !estimateID.isEmpty {
+                    Text("Estimate file: \(estimateID.prefix(8))")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }

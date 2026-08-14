@@ -23,6 +23,8 @@ struct BackendDocumentRecord: Codable, Identifiable {
     let contentType: String
     let kind: String
     let serviceCallID: String?
+    let invoiceID: String?
+    let estimateID: String?
     let customerEquipmentID: String?
     let equipmentName: String?
     let customerName: String?
@@ -31,6 +33,14 @@ struct BackendDocumentRecord: Codable, Identifiable {
 
     var serviceCallUUID: UUID? {
         serviceCallID.flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
+    var invoiceUUID: UUID? {
+        invoiceID.flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
+    var estimateUUID: UUID? {
+        estimateID.flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
     var customerEquipmentUUID: UUID? {
@@ -51,6 +61,8 @@ struct BackendDocumentRecord: Codable, Identifiable {
             contentType,
             kind,
             serviceCallID,
+            invoiceID,
+            estimateID,
             customerEquipmentID,
             equipmentName,
             storedPath,
@@ -130,6 +142,8 @@ enum GunnAireBackendService {
         let contentType: String
         let kind: String
         let serviceCallID: String?
+        let invoiceID: String?
+        let estimateID: String?
         let customerEquipmentID: String?
         let equipmentName: String?
         let customerName: String?
@@ -267,6 +281,8 @@ enum GunnAireBackendService {
         contentType: String,
         kind: String,
         serviceCallID: UUID?,
+        invoiceID: UUID? = nil,
+        estimateID: UUID? = nil,
         customerEquipmentID: UUID? = nil,
         equipmentName: String? = nil,
         customerName: String?
@@ -276,6 +292,8 @@ enum GunnAireBackendService {
             contentType: contentType,
             kind: kind,
             serviceCallID: serviceCallID?.uuidString,
+            invoiceID: invoiceID?.uuidString,
+            estimateID: estimateID?.uuidString,
             customerEquipmentID: customerEquipmentID?.uuidString,
             equipmentName: equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank,
             customerName: customerName,

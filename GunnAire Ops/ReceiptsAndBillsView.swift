@@ -647,6 +647,8 @@ private extension ReceiptsAndBillsView {
                 contentType: contentType,
                 kind: "receipt",
                 serviceCallID: selectedServiceCallID,
+                invoiceID: nil,
+                estimateID: nil,
                 customerEquipmentID: selectedServiceCall?.customerEquipmentID,
                 equipmentName: selectedServiceCall?.equipmentSummary,
                 customerName: selectedServiceCall?.customer.name
