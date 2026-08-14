@@ -617,6 +617,48 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: nil) == false)
     }
 
+    @Test func appManagedGoogleCalendarEventsPublishScheduleOnlyAfterLocalSave() async throws {
+        let customer = Customer(name: "Calendar Customer", address: "123 Main St")
+        let call = ServiceCall(
+            googleCalendarID: "primary",
+            googleEventID: "app-owned-event",
+            googleEventManagedByApp: true,
+            eventTitle: "Keep this Google title",
+            siteAddress: "Keep this Google location",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3_600,
+            customer: customer,
+            notes: "Keep this Google body"
+        )
+        let remoteEvent = GoogleCalendarEvent(
+            id: "app-owned-event",
+            summary: "Existing Google title",
+            description: "Existing Google body",
+            location: "Existing Google location",
+            htmlLink: nil,
+            attendees: nil,
+            extendedProperties: GoogleCalendarExtendedProperties(privateProperties: [
+                "gunnaireManaged": "true",
+                "gunnaireManagedVersion": "3",
+                "gunnaireOrigin": "ios-app"
+            ]),
+            start: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T13:00:00Z", timeZone: nil),
+            end: GoogleCalendarEventDate(date: nil, dateTime: "2027-01-15T14:00:00Z", timeZone: nil)
+        )
+
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) == true)
+        #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: call) == false)
+        #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: remoteEvent) == true)
+
+        let patch = GoogleCalendarScheduleSync.makeManagedEventPatch(for: call, remoteEvent: remoteEvent)
+        let data = try JSONEncoder().encode(patch)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(Set(object.keys) == ["start", "end"])
+        #expect(GoogleCalendarEventPatch.unsafeDetailKeys(in: data).isEmpty)
+    }
+
     @Test func externalGoogleCalendarImportDoesNotReplaceLocalDetailsWithBlankRemoteFields() async throws {
         #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
             remoteValue: " ",
@@ -666,12 +708,17 @@ struct GunnAire_OpsTests {
         ) == "Customer asked to move this to the afternoon.")
     }
 
-    @Test func appManagedGoogleCalendarImportAllowsBlankRemoteFieldsToClearLocalMirror() async throws {
+    @Test func appManagedGoogleCalendarImportDoesNotScrubLocalMirrorWithBlankRemoteFields() async throws {
         #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
             remoteValue: nil,
             existingValue: "Old local location",
             isManagedByApp: true
-        ) == nil)
+        ) == "Old local location")
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarBody(
+            remoteValue: " ",
+            existingValue: "Existing local body",
+            isManagedByApp: true
+        ) == "Existing local body")
         #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
             remoteValue: " Updated remote body ",
             existingValue: "Old local body",

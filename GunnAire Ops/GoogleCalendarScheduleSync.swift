@@ -631,7 +631,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldPublishAfterLocalSave(for call: ServiceCall) -> Bool {
-        shouldCreateGoogleCalendarEvent(for: call)
+        shouldAllowGoogleCalendarWrite(for: call)
     }
 
     static func shouldCreateGoogleCalendarEvent(for call: ServiceCall) -> Bool {
@@ -1006,10 +1006,11 @@ enum GoogleCalendarScheduleSync {
 
     static func mergedImportedCalendarText(remoteValue: String?, existingValue: String?, isManagedByApp: Bool) -> String? {
         let remote = normalizedOptional(remoteValue)
+        let existing = normalizedOptional(existingValue)
         if isManagedByApp {
-            return remote
+            return remote ?? existing
         }
-        return remote ?? normalizedOptional(existingValue)
+        return remote ?? existing
     }
 
     static func mergedImportedCalendarTitle(remoteValue: String?, existingValue: String?, isManagedByApp: Bool) -> String? {
@@ -1031,7 +1032,7 @@ enum GoogleCalendarScheduleSync {
         let remote = normalizedOptional(remoteValue)
         let existing = normalizedOptional(existingValue)
         if isManagedByApp {
-            return remote
+            return remote ?? existing
         }
         guard let remote else { return existing }
         if let existing,
