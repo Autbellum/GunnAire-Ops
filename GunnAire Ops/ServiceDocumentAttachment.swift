@@ -553,6 +553,59 @@ final class ServiceDocumentAttachment {
             .contains(normalizedQuery)
     }
 
+    func matchesJobAttachmentSearch(
+        _ query: String,
+        serviceCall: ServiceCall?,
+        equipmentProfiles: [CustomerEquipment]
+    ) -> Bool {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedQuery.isEmpty else { return true }
+
+        let equipment = linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCall.map { [$0] } ?? [])
+        let concernRows = serviceCall?.openServiceConcernRows.map { "\($0.label) \($0.value)" } ?? []
+        let haystack = [
+            displayName,
+            caption,
+            kind.label,
+            kind.customerProfileGroupTitle,
+            contentType,
+            backendDocumentID == nil ? nil : "company storage",
+            quickBooksAttachableID == nil ? nil : "quickbooks",
+            quickBooksSyncError == nil ? nil : "sync error",
+            equipment?.name,
+            equipment?.displayName,
+            equipment?.equipmentType?.displayName,
+            equipment?.manufacturer,
+            equipment?.modelNumber,
+            equipment?.serialNumber,
+            equipment?.location,
+            equipment?.filterSize,
+            serviceCall?.eventTitle,
+            serviceCall?.siteAddress,
+            serviceCall?.equipmentName,
+            serviceCall?.equipmentManufacturer,
+            serviceCall?.equipmentModel,
+            serviceCall?.equipmentSerialNumber,
+            serviceCall?.equipmentLocation,
+            serviceCall?.filterSize,
+            serviceCall?.serviceReportSummary,
+            serviceCall?.recommendedWorkSummary,
+            serviceCall?.findingsSummary,
+            serviceCall?.followUpAction,
+            serviceCall?.nextServiceReportActionLabel,
+            serviceCall?.serviceReportActionSummary,
+            serviceCall?.serviceReportReadinessSummary,
+            serviceCall?.technicalReadingServiceHistorySummary,
+            serviceCall?.serviceActionServiceHistorySummary
+        ] + concernRows
+
+        return haystack
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .contains(normalizedQuery)
+    }
+
     private static func formattedFileSize(_ bytes: Int) -> String {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file

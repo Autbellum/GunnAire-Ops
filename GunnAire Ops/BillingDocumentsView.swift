@@ -784,18 +784,13 @@ GunnAire
     private var filteredActiveJobAttachments: [ServiceDocumentAttachment] {
         let query = attachmentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return activeJobAttachments }
+        let call = activeServiceCall
         return activeJobAttachments.filter { attachment in
-            [
-                attachment.displayName,
-                attachment.caption,
-                attachment.kind.label,
-                attachment.contentType,
-                attachment.backendDocumentID == nil ? nil : "company storage",
-                attachment.quickBooksAttachableID == nil ? nil : "quickbooks",
-                attachment.quickBooksSyncError == nil ? nil : "sync error"
-            ]
-                .compactMap { $0?.lowercased() }
-                .contains { $0.contains(query) }
+            attachment.matchesJobAttachmentSearch(
+                query,
+                serviceCall: call,
+                equipmentProfiles: equipmentProfiles
+            )
         }
     }
 

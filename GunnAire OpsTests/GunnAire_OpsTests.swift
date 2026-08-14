@@ -5054,6 +5054,72 @@ struct GunnAire_OpsTests {
         ))
     }
 
+    @Test func jobAttachmentSearchMatchesOperationalContext() async throws {
+        let customer = Customer(name: "Job Attachment Search Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            manufacturer: "Carrier",
+            modelNumber: "24ABC6",
+            serialNumber: "AC123",
+            location: "Basement mechanical room",
+            filterSize: "16x25x1"
+        )
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Replaced weak capacitor and verified cooling.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            followUpRequired: true,
+            followUpAction: "Return to replace weak capacitor."
+        )
+        call.setTechnicalReading("12", for: "superheat")
+        call.setServiceActionStatus(.needsService, for: "condenser_coil_serviced")
+        let attachment = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            customerEquipmentID: equipment.id,
+            kind: .diagnosticPhoto,
+            displayName: "after-repair.jpg",
+            caption: "Outdoor unit after cleaning",
+            localFilePath: "/tmp/after-repair.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 2048
+        )
+
+        #expect(attachment.matchesJobAttachmentSearch(
+            "basement mechanical",
+            serviceCall: call,
+            equipmentProfiles: [equipment]
+        ))
+        #expect(attachment.matchesJobAttachmentSearch(
+            "superheat",
+            serviceCall: call,
+            equipmentProfiles: [equipment]
+        ))
+        #expect(attachment.matchesJobAttachmentSearch(
+            "condenser coil",
+            serviceCall: call,
+            equipmentProfiles: [equipment]
+        ))
+        #expect(attachment.matchesJobAttachmentSearch(
+            "weak capacitor",
+            serviceCall: call,
+            equipmentProfiles: [equipment]
+        ))
+        #expect(attachment.matchesJobAttachmentSearch(
+            "unrelated boiler",
+            serviceCall: call,
+            equipmentProfiles: [equipment]
+        ) == false)
+    }
+
     @Test func customerProfileAttachmentSearchRespectsFinancialVisibility() async throws {
         let customer = Customer(name: "Private Billing Customer")
         let invoice = Invoice(customer: customer, quickBooksID: "INV-123", amount: 500, status: "unpaid")
