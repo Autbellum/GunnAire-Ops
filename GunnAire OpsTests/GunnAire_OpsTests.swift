@@ -7766,7 +7766,7 @@ struct GunnAire_OpsTests {
         )
 
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: importedCall) == false)
-        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall))
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: newAppCall) == true)
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: importedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: appOwnedCall) == false)
@@ -7878,7 +7878,7 @@ struct GunnAire_OpsTests {
 
         #expect(GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: appOwnedCall))
-        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall))
+        #expect(GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: appOwnedCall) == false)
         #expect(GoogleCalendarScheduleSync.shouldCreateGoogleCalendarEvent(for: appOwnedCall) == false)
     }

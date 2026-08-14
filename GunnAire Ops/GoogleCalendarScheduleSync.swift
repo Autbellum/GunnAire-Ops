@@ -631,9 +631,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldPublishAfterLocalSave(for call: ServiceCall) -> Bool {
-        shouldCreateGoogleCalendarEvent(for: call) ||
-            (call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
-                call.googleEventManagedByApp)
+        shouldCreateGoogleCalendarEvent(for: call)
     }
 
     static func shouldCreateGoogleCalendarEvent(for call: ServiceCall) -> Bool {
