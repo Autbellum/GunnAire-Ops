@@ -27,6 +27,7 @@ struct ScheduleView: View {
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
     @State private var deleteConfirmationCall: ServiceCall?
+    @State private var jobSearchText = ""
 
     private var selectedDayCalls: [ServiceCall] {
         callsForSignedInUser
@@ -44,6 +45,19 @@ struct ScheduleView: View {
 
     private var snapshotCalls: [ServiceCall] {
         Array(upcomingJobs.prefix(3))
+    }
+
+    private var searchedJobs: [ServiceCall] {
+        let query = jobSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        return callsForSignedInUser
+            .filter { $0.matchesOperationalSearch(query) }
+            .sorted { lhs, rhs in
+                let lhsOpen = lhs.status != .completed && lhs.status != .cancelled
+                let rhsOpen = rhs.status != .completed && rhs.status != .cancelled
+                if lhsOpen != rhsOpen { return lhsOpen && !rhsOpen }
+                return lhs.scheduledDate > rhs.scheduledDate
+            }
     }
 
     private var followUpCalls: [ServiceCall] {
@@ -176,6 +190,8 @@ struct ScheduleView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         snapshotSection
+
+                        jobSearchSection
 
                         VStack(alignment: .leading, spacing: 10) {
                             sectionTitle("Calendar")
@@ -690,6 +706,73 @@ struct ScheduleView: View {
                         }
                         .buttonStyle(.bordered)
                         .tint(Color.brandGold)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var jobSearchSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                sectionTitle("Find Jobs")
+                Spacer()
+                if !searchedJobs.isEmpty {
+                    Text("\(searchedJobs.count) match\(searchedJobs.count == 1 ? "" : "es")")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            TextField("Search customer, equipment, report, concern, follow-up", text: $jobSearchText)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+                .textFieldStyle(.roundedBorder)
+
+            if !jobSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if searchedJobs.isEmpty {
+                    Text("No jobs match that search.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(searchedJobs.prefix(6))) { job in
+                        Button {
+                            selectedDate = Calendar.current.startOfDay(for: job.scheduledDate)
+                            navigationPath.append(job)
+                        } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(displayTitle(for: job))
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                    Text(displaySubtitle(for: job))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    if let action = job.nextServiceReportActionLabel {
+                                        Text(action)
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.orange)
+                                            .lineLimit(1)
+                                    } else if let concern = job.openServiceConcernRows.first {
+                                        Text("\(concern.label): \(concern.value)")
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.orange)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer()
+                                Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        if job.id != searchedJobs.prefix(6).last?.id {
+                            Divider()
+                        }
                     }
                 }
             }

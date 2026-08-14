@@ -1247,6 +1247,48 @@ final class ServiceCall {
         return ([title] + details).joined(separator: " - ")
     }
 
+    func matchesOperationalSearch(_ query: String) -> Bool {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedQuery.isEmpty else { return true }
+        let concernRows = openServiceConcernRows.map { "\($0.label) \($0.value)" }
+        let values = [
+            customer.name,
+            customer.phone,
+            customer.email,
+            customer.address,
+            eventTitle,
+            siteAddress,
+            type.displayName,
+            status.rawValue,
+            assignedTechnician?.name,
+            assignedTechnician?.contactInfo,
+            equipmentSummary,
+            equipmentName,
+            equipmentManufacturer,
+            equipmentModel,
+            equipmentSerialNumber,
+            equipmentLocation,
+            filterSize,
+            filterCondition,
+            serviceReportSummary,
+            findingsSummary,
+            recommendedWorkSummary,
+            followUpAction,
+            notes,
+            nextServiceReportActionLabel,
+            serviceReportActionSummary,
+            serviceReportReadinessSummary,
+            technicalReadingServiceHistorySummary,
+            serviceActionServiceHistorySummary
+        ] + concernRows
+
+        return values
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .contains(normalizedQuery)
+    }
+
     private static func shortHistoryID(_ id: UUID) -> String {
         String(id.uuidString.prefix(8)).uppercased()
     }

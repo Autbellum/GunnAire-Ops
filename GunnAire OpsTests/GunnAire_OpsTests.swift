@@ -1114,6 +1114,43 @@ struct GunnAire_OpsTests {
         #expect(rows.contains { $0.label == "Thermostat operation verified" } == false)
     }
 
+    @Test func serviceCallOperationalSearchMatchesDocumentationEquipmentAndConcernContext() async throws {
+        let customer = Customer(
+            name: "Schedule Search Customer",
+            phone: "555-1122",
+            email: "schedule@example.com",
+            address: "123 Schedule Way"
+        )
+        let technician = Technician(name: "Alex Tech", contactInfo: "alex@example.com")
+        let call = ServiceCall(
+            eventTitle: "Cooling diagnostic",
+            siteAddress: "456 Roof Access",
+            equipmentName: "Roof RTU",
+            equipmentManufacturer: "Carrier",
+            equipmentModel: "48TC",
+            equipmentSerialNumber: "RTU123",
+            equipmentLocation: "Roof curb 2",
+            equipmentTypeRaw: HVACEquipmentType.packageUnit.rawValue,
+            serviceReportSummary: "Economizer operation needs follow-up.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            assignedTechnician: technician,
+            customer: customer,
+            notes: "Access through north ladder.",
+            followUpRequired: true,
+            followUpAction: "Return with economizer sensor."
+        )
+        call.setTechnicalReading("325", for: "flue_temp")
+        call.setServiceActionStatus(HVACServiceActionStatus.needsService, for: "economizer_checked")
+
+        #expect(call.matchesOperationalSearch("roof curb"))
+        #expect(call.matchesOperationalSearch("economizer sensor"))
+        #expect(call.matchesOperationalSearch("flue temp"))
+        #expect(call.matchesOperationalSearch("alex tech"))
+        #expect(call.matchesOperationalSearch("north ladder"))
+        #expect(call.matchesOperationalSearch("unrelated boiler") == false)
+    }
+
     @Test func customerEquipmentLatestServiceContextSummarizesReportAndReadings() async throws {
         let customer = Customer(name: "Equipment Context Customer")
         let equipment = CustomerEquipment(
