@@ -1210,6 +1210,69 @@ struct GunnAire_OpsTests {
         #expect(summary.contains("Condenser coil inspected/washed: Needs Service") == false)
     }
 
+    @Test func customerEquipmentOpenFollowUpSummaryPrioritizesDueActions() async throws {
+        let customer = Customer(name: "Equipment Follow Up Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            serialNumber: "AC123"
+        )
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let overdueCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400 * 10),
+            customer: customer,
+            followUpRequired: true,
+            followUpAction: "Return to replace weak capacitor.",
+            followUpDueDate: now.addingTimeInterval(-86_400)
+        )
+        let upcomingCall = ServiceCall(
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .service,
+            scheduledDate: now.addingTimeInterval(-86_400 * 2),
+            customer: customer,
+            followUpRequired: true,
+            followUpAction: "Verify condensate drain after cleaning.",
+            followUpDueDate: now.addingTimeInterval(86_400 * 3)
+        )
+        let cancelledCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .service,
+            scheduledDate: now,
+            customer: customer,
+            status: .cancelled,
+            followUpRequired: true,
+            followUpAction: "Do not show cancelled action.",
+            followUpDueDate: now.addingTimeInterval(-86_400 * 2)
+        )
+        let blankActionCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .service,
+            scheduledDate: now,
+            customer: customer,
+            followUpRequired: true,
+            followUpAction: " ",
+            followUpDueDate: now.addingTimeInterval(-86_400 * 3)
+        )
+
+        let summary = try #require(equipment.openFollowUpSummary(
+            in: [upcomingCall, cancelledCall, overdueCall, blankActionCall],
+            now: now
+        ))
+
+        #expect(summary.contains("Overdue"))
+        #expect(summary.contains("Return to replace weak capacitor."))
+        #expect(summary.contains("Due"))
+        #expect(summary.contains("Verify condensate drain after cleaning."))
+        #expect(summary.contains("Do not show cancelled action") == false)
+    }
+
     @Test func serviceCallCopiesCompatiblePreviousTechnicalReadingsWithoutOverwritingCurrentValues() async throws {
         let customer = Customer(name: "Reading Copy Customer")
         let previousCall = ServiceCall(

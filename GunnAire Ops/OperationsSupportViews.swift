@@ -2187,6 +2187,12 @@ private struct CustomerEditorView: View {
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                 }
+                                if let followUp = equipment.openFollowUpSummary(in: customerServiceCalls) {
+                                    Text("Follow-up: \(followUp)")
+                                        .font(.caption2)
+                                        .foregroundColor(followUp.localizedCaseInsensitiveContains("overdue") ? .red : .orange)
+                                        .lineLimit(3)
+                                }
                                 if let concerns = equipment.unresolvedServiceConcernSummary(in: customerServiceCalls) {
                                     Text("Open concerns: \(concerns)")
                                         .font(.caption2)

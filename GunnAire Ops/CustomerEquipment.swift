@@ -199,6 +199,43 @@ final class CustomerEquipment {
         return parts.joined(separator: " • ")
     }
 
+    func openFollowUpSummary(in serviceCalls: [ServiceCall], now: Date = Date()) -> String? {
+        let followUps = matchingServiceCalls(in: serviceCalls)
+            .filter { call in
+                call.status != .cancelled &&
+                    call.followUpRequired &&
+                    call.followUpAction?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            }
+            .sorted { lhs, rhs in
+                switch (lhs.followUpDueDate, rhs.followUpDueDate) {
+                case (.some(let lhsDate), .some(let rhsDate)):
+                    return lhsDate < rhsDate
+                case (.some, .none):
+                    return true
+                case (.none, .some):
+                    return false
+                case (.none, .none):
+                    return lhs.scheduledDate > rhs.scheduledDate
+                }
+            }
+            .prefix(3)
+            .compactMap { call -> String? in
+                guard let action = call.followUpAction?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !action.isEmpty else { return nil }
+                let dueLabel: String
+                if let dueDate = call.followUpDueDate {
+                    let prefix = dueDate < Calendar.current.startOfDay(for: now) ? "Overdue" : "Due"
+                    dueLabel = "\(prefix) \(dueDate.formatted(date: .abbreviated, time: .omitted))"
+                } else {
+                    dueLabel = "No due date"
+                }
+                return "\(dueLabel): \(action)"
+            }
+
+        guard !followUps.isEmpty else { return nil }
+        return followUps.joined(separator: "; ")
+    }
+
     func latestCompletedServiceCall(in serviceCalls: [ServiceCall], now: Date = Date()) -> ServiceCall? {
         matchingServiceCalls(in: serviceCalls)
             .filter { $0.scheduledDate <= now && $0.status != .cancelled }
