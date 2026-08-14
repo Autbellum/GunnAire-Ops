@@ -2080,6 +2080,16 @@ final class ServiceCall {
         return "\(base) • \(invalidCount) invalid"
     }
 
+    var nextServiceReportActionLabel: String? {
+        if let missingItem = serviceReportMissingRequiredItemLabels.first {
+            return "Complete \(missingItem)"
+        }
+        if let validationIssue = serviceReportReadingValidationIssueLabels.first {
+            return "Review \(validationIssue)"
+        }
+        return nil
+    }
+
     var requiresTechnicalServiceReportCompletion: Bool {
         switch type {
         case .service, .install, .maintenance:

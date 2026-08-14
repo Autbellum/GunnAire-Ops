@@ -1598,6 +1598,44 @@ struct GunnAire_OpsTests {
         #expect(attentionKeys.contains("control_voltage") == false)
     }
 
+    @Test func serviceReportNextActionPrioritizesMissingRequiredItem() async throws {
+        let customer = Customer(name: "Next Action Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("12", for: "line_voltage")
+
+        #expect(call.nextServiceReportActionLabel == "Complete Refrigerant Type")
+    }
+
+    @Test func serviceReportNextActionFallsBackToValidationIssueWhenRequiredItemsAreComplete() async throws {
+        let customer = Customer(name: "Validation Action Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "System checked.",
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        call.setTechnicalReading("12", for: "line_voltage")
+
+        #expect(call.serviceReportMissingRequiredItemLabels.isEmpty)
+        #expect(call.nextServiceReportActionLabel?.hasPrefix("Review Line Voltage (V) outside expected range") == true)
+    }
+
     @Test func technicalReadingGroupCanMarkBlankFieldsUnableToTestWithoutOverwritingMeasurements() async throws {
         let customer = Customer(name: "Unable To Test Customer")
         let call = ServiceCall(

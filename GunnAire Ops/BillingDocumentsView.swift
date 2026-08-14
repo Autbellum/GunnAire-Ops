@@ -2657,6 +2657,12 @@ GunnAire
             }
 
             if !missingLabels.isEmpty {
+                if let nextAction = call.nextServiceReportActionLabel {
+                    Label(nextAction, systemImage: "arrow.forward.circle.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.orange)
+                }
+
                 DisclosureGroup("Missing required report items") {
                     ForEach(missingLabels, id: \.self) { label in
                         Label(label, systemImage: "circle")
