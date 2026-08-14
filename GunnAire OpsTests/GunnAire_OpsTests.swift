@@ -9036,6 +9036,76 @@ struct GunnAire_OpsTests {
         #expect(snapshots.first?.customer.id == risky.id)
     }
 
+    @Test func customerOperationalSearchMatchesEquipmentReportAndFollowUpContext() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let customer = Customer(
+            name: "Searchable Service Customer",
+            phone: "555-0199",
+            email: "search@example.com",
+            address: "900 Field Search Rd"
+        )
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            manufacturer: "Carrier",
+            modelNumber: "24ABC6",
+            serialNumber: "AC123",
+            location: "Basement mechanical room",
+            filterSize: "16x25x1"
+        )
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Cooling service completed.",
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400),
+            customer: customer,
+            followUpRequired: true,
+            followUpAction: "Return to replace weak capacitor.",
+            followUpDueDate: now.addingTimeInterval(86_400 * 2)
+        )
+        call.setServiceActionStatus(.needsService, for: "condenser_coil_serviced")
+
+        #expect(CustomerIntelligence.matchesOperationalSearch(
+            customer: customer,
+            query: "basement mechanical",
+            serviceCalls: [call],
+            equipmentProfiles: [equipment],
+            now: now
+        ))
+        #expect(CustomerIntelligence.matchesOperationalSearch(
+            customer: customer,
+            query: "weak capacitor",
+            serviceCalls: [call],
+            equipmentProfiles: [equipment],
+            now: now
+        ))
+        #expect(CustomerIntelligence.matchesOperationalSearch(
+            customer: customer,
+            query: "condenser coil",
+            serviceCalls: [call],
+            equipmentProfiles: [equipment],
+            now: now
+        ))
+        #expect(CustomerIntelligence.matchesOperationalSearch(
+            customer: customer,
+            query: "16x25x1",
+            serviceCalls: [call],
+            equipmentProfiles: [equipment],
+            now: now
+        ))
+        #expect(CustomerIntelligence.matchesOperationalSearch(
+            customer: customer,
+            query: "unrelated boiler",
+            serviceCalls: [call],
+            equipmentProfiles: [equipment],
+            now: now
+        ) == false)
+    }
+
     @Test func businessSuitePrioritizesOverdueCollectionsAcrossModules() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let customer = Customer(

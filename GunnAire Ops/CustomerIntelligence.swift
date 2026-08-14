@@ -75,6 +75,87 @@ struct CustomerIntelligenceSnapshot: Identifiable {
 }
 
 enum CustomerIntelligence {
+    static func matchesOperationalSearch(
+        customer: Customer,
+        query: String,
+        serviceCalls: [ServiceCall],
+        equipmentProfiles: [CustomerEquipment],
+        contracts: [RecurringMaintenanceContract] = [],
+        now: Date = Date()
+    ) -> Bool {
+        let search = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !search.isEmpty else { return true }
+
+        let customerCalls = serviceCalls.filter { $0.customer.id == customer.id }
+        let customerEquipment = equipmentProfiles.filter { $0.customer?.id == customer.id }
+        let customerContracts = contracts.filter { $0.customer.id == customer.id && $0.active }
+
+        var values: [String?] = [
+            customer.name,
+            customer.phone,
+            customer.email,
+            customer.address
+        ]
+
+        for equipment in customerEquipment {
+            values.append(contentsOf: [
+                equipment.name,
+                equipment.displayName,
+                equipment.equipmentType?.displayName,
+                equipment.manufacturer,
+                equipment.modelNumber,
+                equipment.serialNumber,
+                equipment.location,
+                equipment.filterSize,
+                equipment.notes,
+                equipment.serviceHistorySummary(in: customerCalls, now: now),
+                equipment.openFollowUpSummary(in: customerCalls, now: now),
+                equipment.unresolvedServiceConcernSummary(in: customerCalls, now: now),
+                equipment.latestServiceContextSummary(in: customerCalls, now: now)
+            ])
+        }
+
+        for call in customerCalls {
+            values.append(contentsOf: [
+                call.type.displayName,
+                call.status.rawValue,
+                call.eventTitle,
+                call.siteAddress,
+                call.equipmentName,
+                call.equipmentManufacturer,
+                call.equipmentModel,
+                call.equipmentSerialNumber,
+                call.equipmentLocation,
+                call.filterSize,
+                call.serviceReportSummary,
+                call.recommendedWorkSummary,
+                call.findingsSummary,
+                call.notes,
+                call.followUpAction,
+                call.nextServiceReportActionLabel,
+                call.serviceReportActionSummary,
+                call.serviceReportReadinessSummary,
+                call.technicalReadingServiceHistorySummary,
+                call.serviceActionServiceHistorySummary
+            ])
+            values.append(contentsOf: call.openServiceConcernRows.map { "\($0.label) \($0.value)" })
+        }
+
+        for contract in customerContracts {
+            values.append(contentsOf: [
+                contract.schedulePattern,
+                "maintenance agreement",
+                "service agreement"
+            ])
+        }
+
+        return values
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .contains(search)
+    }
+
     static func snapshots(
         customers: [Customer],
         serviceCalls: [ServiceCall],

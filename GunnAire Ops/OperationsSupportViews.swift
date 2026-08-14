@@ -197,10 +197,13 @@ struct CustomersView: View {
         let visibleCustomers = customers.filter { !CustomerDataMaintenance.isSystemCalendarCustomer($0) }
         guard !search.isEmpty else { return visibleCustomers }
         return visibleCustomers.filter { customer in
-            customer.name.localizedCaseInsensitiveContains(search) ||
-            (customer.email?.localizedCaseInsensitiveContains(search) ?? false) ||
-            (customer.phone?.localizedCaseInsensitiveContains(search) ?? false) ||
-            (customer.address?.localizedCaseInsensitiveContains(search) ?? false)
+            CustomerIntelligence.matchesOperationalSearch(
+                customer: customer,
+                query: search,
+                serviceCalls: serviceCalls,
+                equipmentProfiles: equipmentProfiles,
+                contracts: recurringContracts
+            )
         }
     }
 
