@@ -8855,4 +8855,29 @@ struct GunnAire_OpsTests {
         #expect(pricebook.score == 100)
     }
 
+    @Test func catalogVendorSelectionBuildsSearchableOptionsAndPreservesQuickBooksID() async throws {
+        let johnstone = Vendor(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            quickBooksID: "987",
+            name: "Johnstone Supply",
+            contactInfo: "parts@johnstone.example"
+        )
+        let amazon = Vendor(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            quickBooksID: "123",
+            name: "Amazon Business",
+            contactInfo: nil
+        )
+
+        let vendors = [johnstone, amazon]
+        let options = CatalogVendorSelection.options(for: vendors)
+
+        #expect(options.map(\.title) == ["Amazon Business", "Johnstone Supply"])
+        #expect(options.first?.subtitle == "QBO 123")
+        #expect(options.last?.subtitle == "parts@johnstone.example")
+        #expect(CatalogVendorSelection.selectedVendorID(vendorName: " johnstone supply ", vendors: vendors) == johnstone.id.uuidString)
+        #expect(CatalogVendorSelection.quickBooksID(vendorName: "JOHNSTONE SUPPLY", vendors: vendors) == "987")
+        #expect(CatalogVendorSelection.quickBooksID(vendorName: "Manual Supply House", vendors: vendors) == nil)
+    }
+
 }

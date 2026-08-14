@@ -166,6 +166,30 @@ struct BillingDocumentsView: View {
         )
     }
 
+    private var newItemVendorDropdownOptions: [SearchableDropdownOption] {
+        CatalogVendorSelection.options(for: vendors)
+    }
+
+    private var selectedNewItemVendorDropdownID: Binding<String?> {
+        Binding(
+            get: {
+                CatalogVendorSelection.selectedVendorID(
+                    vendorName: newItemPreferredVendor,
+                    vendors: vendors
+                )
+            },
+            set: { selectedID in
+                guard let selectedID else {
+                    newItemPreferredVendor = ""
+                    return
+                }
+                if let vendor = vendors.first(where: { $0.id.uuidString == selectedID }) {
+                    newItemPreferredVendor = vendor.name
+                }
+            }
+        )
+    }
+
     private var selectedLineItems: [Item] {
         var selectedByID: [UUID: Item] = [:]
         for item in items where selectedItems.contains(item.id) {
@@ -1788,13 +1812,13 @@ GunnAire
                             }
                             TextField("Typical purchase source", text: $newItemPreferredVendor)
                             if !vendors.isEmpty {
-                                Menu("Use Saved Vendor") {
-                                    ForEach(vendors) { vendor in
-                                        Button(vendor.name) {
-                                            newItemPreferredVendor = vendor.name
-                                        }
-                                    }
-                                }
+                                SearchableDropdownPicker(
+                                    title: "Saved Vendor",
+                                    options: newItemVendorDropdownOptions,
+                                    selectedID: selectedNewItemVendorDropdownID,
+                                    placeholder: "Manual / none",
+                                    showsClearButton: true
+                                )
                             }
                             TextField("Vendor part #", text: $newItemVendorPartNumber)
                             TextField("Purchase URL", text: $newItemPurchaseURL)
@@ -3819,9 +3843,10 @@ GunnAire
         guard let price = CatalogItemAmountParser.parseRequiredOrZero(newItemPrice) else { return }
         let cost = CatalogItemAmountParser.parseOptional(newItemCost)
         let preferredVendorName = nonBlank(newItemPreferredVendor)
-        let preferredVendorQuickBooksID = preferredVendorName.flatMap { vendorName in
-            vendors.first { $0.name.caseInsensitiveCompare(vendorName) == .orderedSame }?.quickBooksID
-        }
+        let preferredVendorQuickBooksID = CatalogVendorSelection.quickBooksID(
+            vendorName: preferredVendorName,
+            vendors: vendors
+        )
         let item = Item(
             name: newItemName.trimmingCharacters(in: .whitespacesAndNewlines),
             itemType: newItemType,
@@ -5812,6 +5837,34 @@ private enum CatalogItemAmountParser {
     }
 }
 
+enum CatalogVendorSelection {
+    static func options(for vendors: [Vendor]) -> [SearchableDropdownOption] {
+        vendors
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .map { vendor in
+                let contactInfo = vendor.contactInfo?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return SearchableDropdownOption(
+                    id: vendor.id.uuidString,
+                    title: vendor.name,
+                    subtitle: contactInfo?.isEmpty == false ? contactInfo :
+                        vendor.quickBooksID.map { "QBO \($0)" }
+                )
+            }
+    }
+
+    static func selectedVendorID(vendorName: String?, vendors: [Vendor]) -> String? {
+        guard let vendorName = vendorName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !vendorName.isEmpty else { return nil }
+        return vendors.first { $0.name.caseInsensitiveCompare(vendorName) == .orderedSame }?.id.uuidString
+    }
+
+    static func quickBooksID(vendorName: String?, vendors: [Vendor]) -> String? {
+        guard let vendorName = vendorName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !vendorName.isEmpty else { return nil }
+        return vendors.first { $0.name.caseInsensitiveCompare(vendorName) == .orderedSame }?.quickBooksID
+    }
+}
+
 private struct DocumentationItemCreatorView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -5831,6 +5884,30 @@ private struct DocumentationItemCreatorView: View {
     @State private var purchaseDescription = ""
     @State private var isTaxable = false
     @State private var creationMessage = ""
+
+    private var vendorDropdownOptions: [SearchableDropdownOption] {
+        CatalogVendorSelection.options(for: vendors)
+    }
+
+    private var selectedVendorDropdownID: Binding<String?> {
+        Binding(
+            get: {
+                CatalogVendorSelection.selectedVendorID(
+                    vendorName: preferredVendor,
+                    vendors: vendors
+                )
+            },
+            set: { selectedID in
+                guard let selectedID else {
+                    preferredVendor = ""
+                    return
+                }
+                if let vendor = vendors.first(where: { $0.id.uuidString == selectedID }) {
+                    preferredVendor = vendor.name
+                }
+            }
+        )
+    }
 
     init(initialName: String = "", vendors: [Vendor] = [], onCreated: @escaping (Item) -> Void) {
         self.vendors = vendors
@@ -5863,12 +5940,13 @@ private struct DocumentationItemCreatorView: View {
                         .keyboardType(.decimalPad)
                     TextField("Typical purchase source", text: $preferredVendor)
                     if !vendors.isEmpty {
-                        Picker("Saved vendor", selection: $preferredVendor) {
-                            Text("Manual / none").tag("")
-                            ForEach(vendors) { vendor in
-                                Text(vendor.name).tag(vendor.name)
-                            }
-                        }
+                        SearchableDropdownPicker(
+                            title: "Saved Vendor",
+                            options: vendorDropdownOptions,
+                            selectedID: selectedVendorDropdownID,
+                            placeholder: "Manual / none",
+                            showsClearButton: true
+                        )
                     }
                     TextField("Vendor part #", text: $vendorPartNumber)
                     TextField("Purchase URL", text: $purchaseURL)
@@ -5906,9 +5984,10 @@ private struct DocumentationItemCreatorView: View {
     private func saveItem() {
         guard let salesPrice = CatalogItemAmountParser.parseRequiredOrZero(price) else { return }
         let preferredVendorName = nonBlank(preferredVendor)
-        let preferredVendorQuickBooksID = preferredVendorName.flatMap { vendorName in
-            vendors.first { $0.name.caseInsensitiveCompare(vendorName) == .orderedSame }?.quickBooksID
-        }
+        let preferredVendorQuickBooksID = CatalogVendorSelection.quickBooksID(
+            vendorName: preferredVendorName,
+            vendors: vendors
+        )
         let item = Item(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             itemType: itemType,
