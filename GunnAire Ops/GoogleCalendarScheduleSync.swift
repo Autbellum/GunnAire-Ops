@@ -705,7 +705,7 @@ enum GoogleCalendarScheduleSync {
         let attendees = !preserveExternalDetails && customerEmail?.isEmpty == false
             ? [GoogleWritableCalendarAttendee(email: customerEmail!, displayName: call.customer.name)]
             : nil
-        let eventDescription = preserveExternalDetails ? nil : calendarEventDescription(for: call)
+        let eventDescription = preserveExternalDetails ? nil : calendarEventUserDescription(for: call)
         let eventLocation = preserveExternalDetails ? nil : calendarEventLocation(for: call)
         return GoogleWritableCalendarEvent(
             summary: summary,
@@ -753,46 +753,8 @@ enum GoogleCalendarScheduleSync {
         normalizedOptional(call.siteAddress) ?? normalizedOptional(call.customer.address)
     }
 
-    private static func calendarEventDescription(for call: ServiceCall) -> String? {
-        var lines: [String] = []
-        if !CustomerDataMaintenance.isSystemCalendarCustomer(call.customer) {
-            lines.append("Customer: \(call.customer.name)")
-            if let phone = normalizedOptional(call.customer.phone) {
-                lines.append("Phone: \(phone)")
-            }
-            if let email = normalizedOptional(call.customer.email) {
-                lines.append("Email: \(email)")
-            }
-        }
-        if let address = calendarEventLocation(for: call) {
-            lines.append("Service Address: \(address)")
-        }
-        lines.append("Call Type: \(call.type.displayName)")
-        if let technician = call.assignedTechnician {
-            lines.append("Technician: \(technician.name)")
-        }
-        let equipment = [
-            call.equipmentName,
-            call.equipmentManufacturer,
-            call.equipmentModel,
-            call.equipmentSerialNumber
-        ]
-            .compactMap(normalizedOptional)
-            .joined(separator: " ")
-        if !equipment.isEmpty {
-            lines.append("Equipment: \(equipment)")
-        }
-        if let equipmentLocation = normalizedOptional(call.equipmentLocation) {
-            lines.append("Equipment Location: \(equipmentLocation)")
-        }
-        if let notes = normalizedOptional(call.notes) {
-            if !lines.isEmpty {
-                lines.append("")
-            }
-            lines.append(notes)
-        }
-        let description = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return description.isEmpty ? nil : description
+    private static func calendarEventUserDescription(for call: ServiceCall) -> String? {
+        normalizedOptional(call.notes)
     }
 
     static func isGeneratedCalendarTitle(_ title: String) -> Bool {

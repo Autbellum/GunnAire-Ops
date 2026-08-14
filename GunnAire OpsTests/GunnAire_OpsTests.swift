@@ -530,7 +530,7 @@ struct GunnAire_OpsTests {
         #expect(Set(object.keys) == ["start", "end"])
     }
 
-    @Test func googleCalendarCreatePayloadIncludesStructuredVisibleDetails() async throws {
+    @Test func googleCalendarCreatePayloadDoesNotGenerateBodyWhenNotesAreBlank() async throws {
         let customer = Customer(name: "Calendar Customer", address: "")
         let call = ServiceCall(
             eventTitle: "Site reminder",
@@ -547,7 +547,7 @@ struct GunnAire_OpsTests {
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         #expect(object["summary"] as? String == "Site reminder")
-        #expect(object["description"] as? String == "Customer: Calendar Customer\nCall Type: Reminder")
+        #expect(object["description"] == nil)
         #expect(object["location"] == nil)
         #expect(object["start"] != nil)
         #expect(object["end"] != nil)
@@ -573,9 +573,9 @@ struct GunnAire_OpsTests {
 
         #expect(object["summary"] as? String == "Bid due reminder")
         #expect(object["location"] as? String == "789 Customer Site Rd")
-        #expect(description.contains("Service Address: 789 Customer Site Rd"))
-        #expect(description.contains("Call Type: Reminder"))
-        #expect(description.contains("Submit bid package before noon."))
+        #expect(description == "Submit bid package before noon.")
+        #expect(!description.contains("Service Address:"))
+        #expect(!description.contains("Call Type:"))
     }
 
     @Test func olderGoogleCalendarManagedMarkersAreTreatedAsExternal() async throws {
