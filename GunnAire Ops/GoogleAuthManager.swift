@@ -566,6 +566,16 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         }
     }
 
+    func fetchCalendarEvent(calendarID: String = "primary", eventID: String, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
+        let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
+        let encodedEventID = eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID
+        guard let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events/\(encodedEventID)") else {
+            completion(.failure(GoogleAuthError.invalidEndpoint))
+            return
+        }
+        authorizedGET(url.absoluteString, completion: completion)
+    }
+
     func createCalendarEvent(calendarID: String = "primary", event: GoogleWritableCalendarEvent, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
         let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
         guard let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events") else {

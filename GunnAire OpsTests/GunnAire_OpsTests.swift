@@ -7853,6 +7853,10 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: unmarkedRemoteEvent) == false)
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: legacyMarkedRemoteEvent) == false)
         #expect(GoogleCalendarScheduleSync.shouldPatchExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent))
+        #expect(GoogleCalendarScheduleSync.shouldDeleteExistingGoogleCalendarEvent(for: call, remoteEvent: nil) == false)
+        #expect(GoogleCalendarScheduleSync.shouldDeleteExistingGoogleCalendarEvent(for: call, remoteEvent: unmarkedRemoteEvent) == false)
+        #expect(GoogleCalendarScheduleSync.shouldDeleteExistingGoogleCalendarEvent(for: call, remoteEvent: legacyMarkedRemoteEvent) == false)
+        #expect(GoogleCalendarScheduleSync.shouldDeleteExistingGoogleCalendarEvent(for: call, remoteEvent: managedRemoteEvent))
     }
 
     @Test func googleCalendarCreatePayloadMarksAppOwnershipWithoutDroppingVisibleDetails() async throws {

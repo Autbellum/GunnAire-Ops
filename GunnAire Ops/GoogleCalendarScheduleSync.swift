@@ -648,6 +648,24 @@ enum GoogleCalendarScheduleSync {
             remoteEvent?.isManagedByGunnAire == true
     }
 
+    static func shouldDeleteExistingGoogleCalendarEvent(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> Bool {
+        shouldDeleteExistingGoogleCalendarEvent(
+            hasGoogleEventID: call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+            isLocallyMarkedManagedByApp: call.googleEventManagedByApp,
+            remoteEvent: remoteEvent
+        )
+    }
+
+    static func shouldDeleteExistingGoogleCalendarEvent(
+        hasGoogleEventID: Bool,
+        isLocallyMarkedManagedByApp: Bool,
+        remoteEvent: GoogleCalendarEvent?
+    ) -> Bool {
+        hasGoogleEventID &&
+            isLocallyMarkedManagedByApp &&
+            remoteEvent?.isManagedByGunnAire == true
+    }
+
     static func isImportedEventManagedByApp(_ event: GoogleCalendarEvent) -> Bool {
         event.isManagedByGunnAire
     }

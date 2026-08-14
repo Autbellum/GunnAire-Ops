@@ -922,31 +922,52 @@ struct ScheduleView: View {
     }
 
     private func deleteCall(_ call: ServiceCall) {
-        let shouldDeleteGoogleEvent = GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call)
+        let shouldTryGoogleDelete = GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call)
         if call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             GoogleCalendarScheduleSync.markCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: call.googleEventID)
         }
 
         let calendarID = call.googleCalendarID
         let eventID = call.googleEventID
+        let hasGoogleEventID = eventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let isLocallyMarkedManagedByApp = call.googleEventManagedByApp
         modelContext.delete(call)
         try? modelContext.save()
         syncMessage = "Event deleted from the app."
 
-        guard shouldDeleteGoogleEvent,
+        guard shouldTryGoogleDelete,
               googleAuth.isAuthenticated,
               let eventID,
               !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return
         }
 
-        googleAuth.deleteCalendarEvent(calendarID: calendarID ?? "primary", eventID: eventID) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success:
-                    syncMessage = "Event deleted from the app and Google Calendar."
-                case .failure(let error):
-                    syncMessage = "Event deleted from the app. Google Calendar did not delete it: \(error.localizedDescription)"
+        googleAuth.fetchCalendarEvent(calendarID: calendarID ?? "primary", eventID: eventID) { fetchResult in
+            switch fetchResult {
+            case .failure(let error):
+                DispatchQueue.main.async {
+                    syncMessage = "Event deleted from the app. Google Calendar was not changed: \(error.localizedDescription)"
+                }
+            case .success(let remoteEvent):
+                guard GoogleCalendarScheduleSync.shouldDeleteExistingGoogleCalendarEvent(
+                    hasGoogleEventID: hasGoogleEventID,
+                    isLocallyMarkedManagedByApp: isLocallyMarkedManagedByApp,
+                    remoteEvent: remoteEvent
+                ) else {
+                    DispatchQueue.main.async {
+                        syncMessage = "Event deleted from the app. Google-owned calendar details were left unchanged."
+                    }
+                    return
+                }
+                googleAuth.deleteCalendarEvent(calendarID: calendarID ?? "primary", eventID: eventID) { result in
+                    DispatchQueue.main.async {
+                        switch result {
+                        case .success:
+                            syncMessage = "Event deleted from the app and Google Calendar."
+                        case .failure(let error):
+                            syncMessage = "Event deleted from the app. Google Calendar did not delete it: \(error.localizedDescription)"
+                        }
+                    }
                 }
             }
         }
