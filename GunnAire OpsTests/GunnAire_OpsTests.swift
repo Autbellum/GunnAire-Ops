@@ -5239,6 +5239,90 @@ struct GunnAire_OpsTests {
         #expect(lines.contains("Synced to company storage"))
     }
 
+    @Test func backendDocumentCreatesLinkedLocalAttachmentForSharedDownload() async throws {
+        let customer = Customer(name: "Shared Download Customer")
+        let serviceCallID = UUID()
+        let equipmentID = UUID()
+        let document = BackendDocumentRecord(
+            id: "backend-doc-1",
+            filename: "shared-report.pdf",
+            contentType: "application/pdf",
+            kind: ServiceDocumentAttachmentKind.serviceReport.rawValue,
+            serviceCallID: serviceCallID.uuidString,
+            customerEquipmentID: equipmentID.uuidString,
+            equipmentName: "Downstairs AC",
+            customerName: customer.name,
+            storedPath: "/documents/shared-report.pdf",
+            createdAt: "2026-08-13T20:00:00Z"
+        )
+
+        let attachment = ServiceDocumentAttachment.localAttachment(
+            from: document,
+            existingAttachments: [],
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: nil,
+            localFilePath: "/tmp/shared-report.pdf",
+            fileSizeBytes: 4096
+        )
+
+        #expect(attachment.customer?.id == customer.id)
+        #expect(attachment.serviceCallID == serviceCallID)
+        #expect(attachment.customerEquipmentID == equipmentID)
+        #expect(attachment.kind == .serviceReport)
+        #expect(attachment.displayName == "shared-report.pdf")
+        #expect(attachment.localFilePath == "/tmp/shared-report.pdf")
+        #expect(attachment.fileSizeBytes == 4096)
+        #expect(attachment.backendDocumentID == "backend-doc-1")
+        #expect(attachment.caption == "Downstairs AC")
+    }
+
+    @Test func backendDocumentDownloadUpdatesExistingLocalAttachmentInsteadOfDuplicating() async throws {
+        let customer = Customer(name: "Shared Existing Customer")
+        let serviceCallID = UUID()
+        let equipmentID = UUID()
+        let existing = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            customerEquipmentID: equipmentID,
+            kind: .customerDocument,
+            displayName: "old-name.pdf",
+            localFilePath: "/tmp/old-name.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 128,
+            backendDocumentID: "backend-doc-2"
+        )
+        let document = BackendDocumentRecord(
+            id: "backend-doc-2",
+            filename: "updated-report.pdf",
+            contentType: "application/pdf",
+            kind: ServiceDocumentAttachmentKind.serviceReport.rawValue,
+            serviceCallID: serviceCallID.uuidString,
+            customerEquipmentID: equipmentID.uuidString,
+            equipmentName: "Main Furnace",
+            customerName: customer.name,
+            storedPath: "/documents/updated-report.pdf",
+            createdAt: "2026-08-13T20:00:00Z"
+        )
+
+        let hydrated = ServiceDocumentAttachment.localAttachment(
+            from: document,
+            existingAttachments: [existing],
+            customer: customer,
+            serviceCallID: nil,
+            customerEquipmentID: nil,
+            localFilePath: "/tmp/updated-report.pdf",
+            fileSizeBytes: 2048
+        )
+
+        #expect(hydrated === existing)
+        #expect(existing.kind == .serviceReport)
+        #expect(existing.displayName == "updated-report.pdf")
+        #expect(existing.localFilePath == "/tmp/updated-report.pdf")
+        #expect(existing.fileSizeBytes == 2048)
+        #expect(existing.caption == "Main Furnace")
+    }
+
     @Test func customerProfileAttachmentSearchMatchesReportEquipmentAndReadingContext() async throws {
         let customer = Customer(name: "Search Customer")
         let equipment = CustomerEquipment(

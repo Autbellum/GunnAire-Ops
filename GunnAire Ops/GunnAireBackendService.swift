@@ -29,6 +29,14 @@ struct BackendDocumentRecord: Codable, Identifiable {
     let storedPath: String?
     let createdAt: String?
 
+    var serviceCallUUID: UUID? {
+        serviceCallID.flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
+    var customerEquipmentUUID: UUID? {
+        customerEquipmentID.flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
     func matchesCustomerName(_ customerName: String) -> Bool {
         let expected = customerName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !expected.isEmpty else { return false }

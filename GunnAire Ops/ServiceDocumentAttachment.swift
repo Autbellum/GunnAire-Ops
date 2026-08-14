@@ -420,9 +420,81 @@ final class ServiceDocumentAttachment {
         return estimates.first { $0.id == estimateID }
     }
 
+    func refreshFromBackendDocument(
+        _ document: BackendDocumentRecord,
+        customer: Customer?,
+        serviceCallID: UUID?,
+        customerEquipmentID: UUID?,
+        localFilePath: String,
+        fileSizeBytes: Int
+    ) {
+        self.customer = customer
+        self.serviceCallID = serviceCallID
+        self.customerEquipmentID = customerEquipmentID
+        kindRaw = document.kind
+        displayName = document.filename
+        caption = Self.normalizedBackendText(document.equipmentName)
+        self.localFilePath = localFilePath
+        contentType = document.contentType
+        self.fileSizeBytes = fileSizeBytes
+        backendDocumentID = document.id
+    }
+
+    static func localAttachment(
+        from document: BackendDocumentRecord,
+        existingAttachments: [ServiceDocumentAttachment],
+        customer: Customer?,
+        serviceCallID fallbackServiceCallID: UUID?,
+        customerEquipmentID fallbackCustomerEquipmentID: UUID?,
+        localFilePath: String,
+        fileSizeBytes: Int
+    ) -> ServiceDocumentAttachment {
+        let serviceCallID = document.serviceCallUUID ?? fallbackServiceCallID
+        let customerEquipmentID = document.customerEquipmentUUID ?? fallbackCustomerEquipmentID
+        let existing = existingAttachments.first { attachment in
+            attachment.backendDocumentID == document.id ||
+                (
+                    attachment.backendDocumentID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+                    attachment.serviceCallID == serviceCallID &&
+                    attachment.customerEquipmentID == customerEquipmentID &&
+                    attachment.displayName == document.filename &&
+                    attachment.kindRaw == document.kind
+                )
+        }
+        if let existing {
+            existing.refreshFromBackendDocument(
+                document,
+                customer: customer,
+                serviceCallID: serviceCallID,
+                customerEquipmentID: customerEquipmentID,
+                localFilePath: localFilePath,
+                fileSizeBytes: fileSizeBytes
+            )
+            return existing
+        }
+
+        return ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: serviceCallID,
+            customerEquipmentID: customerEquipmentID,
+            kind: ServiceDocumentAttachmentKind(rawValue: document.kind) ?? .other,
+            displayName: document.filename,
+            caption: normalizedBackendText(document.equipmentName),
+            localFilePath: localFilePath,
+            contentType: document.contentType,
+            fileSizeBytes: fileSizeBytes,
+            backendDocumentID: document.id
+        )
+    }
+
     func customerMatches(_ billingCustomer: Customer) -> Bool {
         guard let customer else { return true }
         return customer.id == billingCustomer.id
+    }
+
+    private static func normalizedBackendText(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
     }
 
     func customerProfileDetailLines(

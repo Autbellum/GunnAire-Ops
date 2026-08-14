@@ -2890,6 +2890,7 @@ private struct CustomerEditorView: View {
         do {
             let data = try await GunnAireBackendService.downloadDocument(id: document.id)
             let cachedURL = try persistSharedCustomerDocument(data, document: document)
+            hydrateSharedCustomerDocumentAttachment(document, cachedURL: cachedURL, fileSizeBytes: data.count)
             customerAttachmentPreviewURL = cachedURL
             sharedCustomerDocumentsMessage = "Downloaded \(document.filename)."
         } catch {
@@ -2909,6 +2910,26 @@ private struct CustomerEditorView: View {
         let fileURL = folderURL.appendingPathComponent("\(document.id)-\(sanitizeAttachmentFilename(document.filename))")
         try data.write(to: fileURL, options: .atomic)
         return fileURL
+    }
+
+    private func hydrateSharedCustomerDocumentAttachment(
+        _ document: BackendDocumentRecord,
+        cachedURL: URL,
+        fileSizeBytes: Int
+    ) {
+        let attachment = ServiceDocumentAttachment.localAttachment(
+            from: document,
+            existingAttachments: documentAttachments,
+            customer: customer,
+            serviceCallID: document.serviceCallUUID,
+            customerEquipmentID: document.customerEquipmentUUID,
+            localFilePath: cachedURL.path,
+            fileSizeBytes: fileSizeBytes
+        )
+        if attachment.modelContext == nil {
+            modelContext.insert(attachment)
+        }
+        try? modelContext.save()
     }
 
     private func sharedDocumentKindLabel(_ kind: String) -> String {

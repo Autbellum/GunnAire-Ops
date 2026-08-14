@@ -3317,6 +3317,7 @@ GunnAire
         do {
             let data = try await GunnAireBackendService.downloadDocument(id: document.id)
             let cachedURL = try persistSharedJobDocument(data, document: document)
+            hydrateSharedJobDocumentAttachment(document, cachedURL: cachedURL, fileSizeBytes: data.count)
             attachmentPreviewURL = cachedURL
             sharedJobDocumentsMessage = "Downloaded \(document.filename)."
         } catch {
@@ -3333,6 +3334,27 @@ GunnAire
         let url = folder.appendingPathComponent("\(document.id)-\(sanitizeAttachmentFilename(document.filename))")
         try data.write(to: url, options: .atomic)
         return url
+    }
+
+    private func hydrateSharedJobDocumentAttachment(
+        _ document: BackendDocumentRecord,
+        cachedURL: URL,
+        fileSizeBytes: Int
+    ) {
+        guard let call = activeServiceCall else { return }
+        let attachment = ServiceDocumentAttachment.localAttachment(
+            from: document,
+            existingAttachments: attachments,
+            customer: call.customer,
+            serviceCallID: call.id,
+            customerEquipmentID: call.customerEquipmentID,
+            localFilePath: cachedURL.path,
+            fileSizeBytes: fileSizeBytes
+        )
+        if attachment.modelContext == nil {
+            modelContext.insert(attachment)
+        }
+        try? modelContext.save()
     }
 
     private func sharedJobDocumentKindLabel(_ kind: String) -> String {
