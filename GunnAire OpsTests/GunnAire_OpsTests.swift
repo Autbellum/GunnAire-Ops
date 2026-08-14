@@ -8449,6 +8449,51 @@ struct GunnAire_OpsTests {
         #expect(Invoice.resolvedStatus(for: displayed.first!, payments: []) == "paid")
     }
 
+    @Test func billingInvoiceQueuesDoNotRepeatCollectionInvoicesInOverdueSection() async throws {
+        let customer = Customer(name: "Queue Customer")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let oldDate = Calendar.current.date(byAdding: .day, value: -45, to: now) ?? now
+        let recentDate = Calendar.current.date(byAdding: .day, value: -10, to: now) ?? now
+        let overdueInvoices = (0..<10).map { index in
+            Invoice(
+                customer: customer,
+                amount: Double(100 + index),
+                status: "unpaid",
+                createdAt: oldDate.addingTimeInterval(Double(index))
+            )
+        }
+        let recentOpenInvoice = Invoice(
+            customer: customer,
+            amount: 300,
+            status: "unpaid",
+            createdAt: recentDate
+        )
+        let paidInvoice = Invoice(
+            customer: customer,
+            amount: 500,
+            status: "paid",
+            createdAt: oldDate
+        )
+        let displayed = overdueInvoices + [recentOpenInvoice, paidInvoice]
+
+        let collectible = BillingInvoiceQueueBuilder.collectibleInvoices(from: displayed, payments: [])
+        let collectionsQueue = BillingInvoiceQueueBuilder.collectionsQueue(from: collectible, limit: 8)
+        let overdue = BillingInvoiceQueueBuilder.overdueInvoices(from: collectible, payments: [], now: now)
+        let overdueOutsideCollections = BillingInvoiceQueueBuilder.overdueQueueExcludingCollections(
+            overdueInvoices: overdue,
+            collectionsQueue: collectionsQueue
+        )
+
+        #expect(collectible.count == 11)
+        #expect(collectionsQueue.count == 8)
+        #expect(overdue.count == 10)
+        #expect(overdueOutsideCollections.count == 2)
+        #expect(Set(overdueOutsideCollections.map(\.id)).isDisjoint(with: Set(collectionsQueue.map(\.id))))
+        #expect(overdueOutsideCollections.allSatisfy { BillingInvoiceQueueBuilder.isOverdue($0, payments: [], now: now) })
+        #expect(overdueOutsideCollections.contains { $0.id == recentOpenInvoice.id } == false)
+        #expect(collectible.contains { $0.id == paidInvoice.id } == false)
+    }
+
     @Test func estimateDisplayDeduplicationPrefersQuickBooksRecord() async throws {
         let customer = Customer(name: "Estimate Display Customer")
         let serviceCallID = UUID()

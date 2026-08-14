@@ -294,13 +294,22 @@ struct BillingDocumentsView: View {
     }
 
     private var collectibleInvoices: [Invoice] {
-        displayedInvoices.filter { invoice in
-            invoiceBalanceDue(for: invoice) > 0.009
-        }
+        BillingInvoiceQueueBuilder.collectibleInvoices(from: displayedInvoices, payments: payments)
     }
 
     private var overdueInvoices: [Invoice] {
-        collectibleInvoices.filter(isInvoiceOverdue)
+        BillingInvoiceQueueBuilder.overdueInvoices(from: collectibleInvoices, payments: payments)
+    }
+
+    private var collectionQueueInvoices: [Invoice] {
+        BillingInvoiceQueueBuilder.collectionsQueue(from: collectibleInvoices)
+    }
+
+    private var overdueInvoicesOutsideCollectionsQueue: [Invoice] {
+        BillingInvoiceQueueBuilder.overdueQueueExcludingCollections(
+            overdueInvoices: overdueInvoices,
+            collectionsQueue: collectionQueueInvoices
+        )
     }
 
     private var displayedEstimates: [Estimate] {
@@ -1528,9 +1537,9 @@ GunnAire
                     }
                 }
 
-                if canViewFinancials && !isJobDocumentationMode && workspaceMode.showsInvoices && !collectibleInvoices.isEmpty {
+                if canViewFinancials && !isJobDocumentationMode && workspaceMode.showsInvoices && !collectionQueueInvoices.isEmpty {
                     Section("Collections Queue") {
-                        ForEach(collectibleInvoices.prefix(8)) { invoice in
+                        ForEach(collectionQueueInvoices) { invoice in
                             let linkedCall = serviceCall(for: invoice)
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack {
@@ -1581,9 +1590,9 @@ GunnAire
                     }
                 }
 
-                if canViewFinancials && !isJobDocumentationMode && workspaceMode.showsInvoices && !overdueInvoices.isEmpty {
+                if canViewFinancials && !isJobDocumentationMode && workspaceMode.showsInvoices && !overdueInvoicesOutsideCollectionsQueue.isEmpty {
                     Section("Overdue Invoices") {
-                        ForEach(overdueInvoices.prefix(6)) { invoice in
+                        ForEach(overdueInvoicesOutsideCollectionsQueue.prefix(6)) { invoice in
                             let linkedCall = serviceCall(for: invoice)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(invoice.customer.name)
@@ -4453,9 +4462,7 @@ GunnAire
     }
 
     private func isInvoiceOverdue(_ invoice: Invoice) -> Bool {
-        guard invoiceBalanceDue(for: invoice) > 0.009 else { return false }
-        let daysOpen = Calendar.current.dateComponents([.day], from: invoice.createdAt, to: Date()).day ?? 0
-        return daysOpen >= 30
+        BillingInvoiceQueueBuilder.isOverdue(invoice, payments: payments)
     }
 
     private func invoiceDisplayStatus(for invoice: Invoice) -> String {
@@ -5862,6 +5869,60 @@ enum CatalogVendorSelection {
         guard let vendorName = vendorName?.trimmingCharacters(in: .whitespacesAndNewlines),
               !vendorName.isEmpty else { return nil }
         return vendors.first { $0.name.caseInsensitiveCompare(vendorName) == .orderedSame }?.quickBooksID
+    }
+}
+
+enum BillingInvoiceQueueBuilder {
+    static let defaultCollectionsLimit = 8
+
+    static func collectibleInvoices(from invoices: [Invoice], payments: [Payment]) -> [Invoice] {
+        invoices.filter { invoice in
+            Invoice.outstandingBalance(for: invoice, payments: payments) > 0.009
+        }
+    }
+
+    static func collectionsQueue(
+        from invoices: [Invoice],
+        payments: [Payment],
+        limit: Int = defaultCollectionsLimit
+    ) -> [Invoice] {
+        collectionsQueue(
+            from: collectibleInvoices(from: invoices, payments: payments),
+            limit: limit
+        )
+    }
+
+    static func collectionsQueue(
+        from collectibleInvoices: [Invoice],
+        limit: Int = defaultCollectionsLimit
+    ) -> [Invoice] {
+        Array(collectibleInvoices.prefix(max(0, limit)))
+    }
+
+    static func overdueInvoices(
+        from invoices: [Invoice],
+        payments: [Payment],
+        now: Date = Date()
+    ) -> [Invoice] {
+        invoices.filter { isOverdue($0, payments: payments, now: now) }
+    }
+
+    static func overdueQueueExcludingCollections(
+        overdueInvoices: [Invoice],
+        collectionsQueue: [Invoice]
+    ) -> [Invoice] {
+        let collectionIDs = Set(collectionsQueue.map(\.id))
+        return overdueInvoices.filter { !collectionIDs.contains($0.id) }
+    }
+
+    static func isOverdue(
+        _ invoice: Invoice,
+        payments: [Payment],
+        now: Date = Date()
+    ) -> Bool {
+        guard Invoice.outstandingBalance(for: invoice, payments: payments) > 0.009 else { return false }
+        let daysOpen = Calendar.current.dateComponents([.day], from: invoice.createdAt, to: now).day ?? 0
+        return daysOpen >= 30
     }
 }
 
