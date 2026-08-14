@@ -244,12 +244,11 @@ enum CustomerDocumentExporter {
         if let estimate {
             sections.append(DocumentSection(
                 title: "Estimate",
-                rows: [
-                    row("Status", estimate.status.capitalized),
-                    row("Amount", currency(estimate.amount)),
-                    row("Items", estimate.lineItemSummary),
-                    row("Notes", estimate.notes)
-                ]
+                rows: estimateDetailRows(for: estimate)
+                    .filter { $0.label != "Created" && $0.label != "QuickBooks ID" }
+                    .map { detailRow in
+                        row(detailRow.label == "Total" ? "Amount" : detailRow.label, detailRow.value)
+                    }
             ))
         }
 
@@ -817,24 +816,30 @@ enum CustomerDocumentExporter {
         }
 
         let documentationStatus = serviceCall?.estimateDocumentationStatus(estimate: estimate, attachments: attachments)
-        var estimateRows = [
-            row("Created", formattedDateTime(estimate.createdAt)),
-            row("Status", estimate.status.capitalized),
-            row("QuickBooks ID", estimate.quickBooksID),
-            row("Items", estimate.lineItemSummary),
-            row("Notes", estimate.notes),
-            row("Total", currency(estimate.amount))
-        ]
-        if let documentationStatus {
-            estimateRows.append(row("Documentation Status", documentationStatus.statusLabel))
-            estimateRows.append(row("Documentation Summary", documentationStatus.summary))
-        }
-
         sections.append(DocumentSection(
             title: "Estimate Detail",
-            rows: estimateRows
+            rows: estimateDetailRows(for: estimate, documentationStatus: documentationStatus).map { row($0.label, $0.value) }
         ))
         return sections
+    }
+
+    static func estimateDetailRows(
+        for estimate: Estimate,
+        documentationStatus: EstimateDocumentationStatus? = nil
+    ) -> [(label: String, value: String)] {
+        var rows = [
+            ("Created", formattedDateTime(estimate.createdAt)),
+            ("Status", estimate.status.capitalized),
+            ("QuickBooks ID", estimate.quickBooksID ?? ""),
+            ("Items", estimate.lineItemSummary),
+            ("Notes", estimate.notes ?? ""),
+            ("Total", currency(estimate.amount))
+        ]
+        if let documentationStatus {
+            rows.append(("Documentation Status", documentationStatus.statusLabel))
+            rows.append(("Documentation Summary", documentationStatus.summary))
+        }
+        return rows
     }
 
     private static func invoiceSections(

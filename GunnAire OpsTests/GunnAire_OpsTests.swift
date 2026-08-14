@@ -5623,6 +5623,50 @@ struct GunnAire_OpsTests {
         #expect(rows.contains { $0.label == "Balance Due" && $0.value == "$125.00" })
     }
 
+    @Test func estimateDetailRowsIncludeEachCustomerFacingFieldOnce() async throws {
+        let customer = Customer(name: "Estimate Detail Customer")
+        let estimate = Estimate(
+            customer: customer,
+            quickBooksID: "QBO-EST-100",
+            lineItemSummary: "Replace condenser fan motor",
+            amount: 625,
+            status: "accepted",
+            notes: "Customer approved repair."
+        )
+
+        let rows = CustomerDocumentExporter.estimateDetailRows(for: estimate)
+
+        #expect(rows.filter { $0.label == "Items" }.count == 1)
+        #expect(rows.contains { $0.label == "Status" && $0.value == "Accepted" })
+        #expect(rows.contains { $0.label == "QuickBooks ID" && $0.value == "QBO-EST-100" })
+        #expect(rows.contains { $0.label == "Items" && $0.value == "Replace condenser fan motor" })
+        #expect(rows.contains { $0.label == "Notes" && $0.value == "Customer approved repair." })
+        #expect(rows.contains { $0.label == "Total" && $0.value == "$625.00" })
+    }
+
+    @Test func estimateDetailRowsIncludeDocumentationReadinessWhenAvailable() async throws {
+        let customer = Customer(name: "Estimate Documentation Customer")
+        let estimate = Estimate(customer: customer, amount: 850, status: "pending")
+        let documentationStatus = EstimateDocumentationStatus(
+            linkedReportCount: 1,
+            linkedPhotoEvidenceCount: 2,
+            linkedBillingDocumentCount: 1,
+            pendingQuickBooksAttachmentCount: 1,
+            syncedQuickBooksAttachmentCount: 0,
+            requiresQuickBooksAttachmentSync: true
+        )
+
+        let rows = CustomerDocumentExporter.estimateDetailRows(
+            for: estimate,
+            documentationStatus: documentationStatus
+        )
+
+        #expect(rows.contains { $0.label == "Documentation Status" && $0.value == "QuickBooks attachments pending" })
+        #expect(rows.contains { $0.label == "Documentation Summary" && $0.value.contains("1 onsite report") })
+        #expect(rows.contains { $0.label == "Documentation Summary" && $0.value.contains("2 photos") })
+        #expect(rows.contains { $0.label == "Documentation Summary" && $0.value.contains("1 pending") })
+    }
+
     @Test func invoiceDetailRowsIncludeDocumentationReadinessWhenAvailable() async throws {
         let customer = Customer(name: "Documentation Invoice Customer")
         let invoice = Invoice(
