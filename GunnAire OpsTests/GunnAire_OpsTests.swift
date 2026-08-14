@@ -4852,6 +4852,8 @@ struct GunnAire_OpsTests {
         for definition in call.requiredTechnicalReadingDefinitions {
             call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
         }
+        call.setServiceActionStatus(.needsService, for: "heat_exchanger_checked")
+        call.setServiceActionStatus(.completed, for: "filter_checked")
         let invoice = Invoice(customer: customer, quickBooksID: "123", amount: 250, status: "paid")
         let estimate = Estimate(customer: customer, quickBooksID: "456", amount: 250, status: "accepted")
         let attachment = ServiceDocumentAttachment(
@@ -4878,6 +4880,8 @@ struct GunnAire_OpsTests {
 
         #expect(lines.contains("Job: Maintenance - Completed"))
         #expect(lines.contains("Report: Ready"))
+        #expect(lines.contains { $0.contains("Open Service Concerns:") && $0.contains("Heat exchanger inspected: Needs Service") })
+        #expect(lines.contains { $0.contains("Filter checked/replaced") } == false)
         #expect(lines.contains("Invoice: Paid - QuickBooks synced"))
         #expect(lines.contains("Estimate: Accepted - QuickBooks synced"))
         #expect(lines.contains("Attached to QuickBooks invoice"))
@@ -4907,6 +4911,7 @@ struct GunnAire_OpsTests {
         call.setTechnicalReading("72", for: "return_air_temp")
         call.setTechnicalReading("54", for: "supply_air_temp")
         call.setTechnicalReading("12", for: "superheat")
+        call.setServiceActionStatus(.needsService, for: "condenser_coil_serviced")
         let attachment = ServiceDocumentAttachment(
             customer: customer,
             serviceCallID: call.id,
@@ -4937,6 +4942,14 @@ struct GunnAire_OpsTests {
         ))
         #expect(attachment.matchesCustomerProfileSearch(
             "superheat",
+            serviceCalls: [call],
+            invoices: [],
+            estimates: [],
+            equipmentProfiles: [equipment],
+            canViewFinancials: false
+        ))
+        #expect(attachment.matchesCustomerProfileSearch(
+            "condenser coil",
             serviceCalls: [call],
             invoices: [],
             estimates: [],

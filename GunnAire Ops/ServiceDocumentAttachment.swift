@@ -467,6 +467,13 @@ final class ServiceDocumentAttachment {
                    !actions.isEmpty {
                     lines.append("Actions: \(actions)")
                 }
+                let openConcerns = call.openServiceConcernRows
+                if !openConcerns.isEmpty {
+                    let summary = openConcerns
+                        .map { "\($0.label): \($0.value)" }
+                        .joined(separator: "; ")
+                    lines.append("Open Service Concerns: \(summary)")
+                }
             }
         }
         if canViewFinancials, let invoice = linkedInvoice(in: invoices) {
