@@ -2704,6 +2704,12 @@ GunnAire
                         .font(.caption.weight(.semibold))
                         .foregroundColor(.orange)
                 }
+                if let actionSummary = call.serviceReportActionSummary {
+                    Text(actionSummary)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
 
                 DisclosureGroup("Missing required report items") {
                     ForEach(missingLabels, id: \.self) { label in

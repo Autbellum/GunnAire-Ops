@@ -1742,6 +1742,29 @@ struct GunnAire_OpsTests {
         #expect(call.nextServiceReportActionLabel == "Complete Refrigerant Type")
     }
 
+    @Test func serviceReportActionSummaryShowsTopMissingAndInvalidItems() async throws {
+        let customer = Customer(name: "Action Summary Customer")
+        let call = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setTechnicalReading("12", for: "line_voltage")
+
+        let summary = try #require(call.serviceReportActionSummary)
+
+        #expect(summary.contains("Refrigerant Type"))
+        #expect(summary.contains("Supply Air Temp (F)"))
+        #expect(summary.contains("Temperature Split (F)"))
+        #expect(summary.contains("Compressor Amps (A)"))
+        #expect(summary.contains("+ "))
+        #expect(summary.contains("Line Voltage") == false)
+    }
+
     @Test func serviceReportNextActionFallsBackToValidationIssueWhenRequiredItemsAreComplete() async throws {
         let customer = Customer(name: "Validation Action Customer")
         let call = ServiceCall(
@@ -3261,6 +3284,8 @@ struct GunnAire_OpsTests {
         #expect(rows.contains { $0.label == "Completion" && $0.value == "Needs details" })
         #expect(rows.contains { $0.label == "Required Items" && $0.value == call.serviceReportReadinessSummary })
         #expect(rows.contains { $0.label == "Next Required Action" && $0.value == "Complete Supply Air Temp (F)" })
+        #expect(rows.contains { $0.label == "Action Summary" && $0.value.contains("Supply Air Temp (F)") })
+        #expect(rows.contains { $0.label == "Action Summary" && $0.value.contains("+ ") })
         #expect(rows.contains { $0.label == "Missing Required Items" && $0.value.contains("Supply Air Temp (F)") })
         #expect(rows.contains { $0.label == "Missing Required Items" && $0.value.contains("Compressor Amps (A)") })
     }

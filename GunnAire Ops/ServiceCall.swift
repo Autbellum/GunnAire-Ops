@@ -2124,6 +2124,18 @@ final class ServiceCall {
         return "\(base) • \(invalidCount) invalid"
     }
 
+    var serviceReportActionSummary: String? {
+        let issues = serviceReportMissingRequirementLabels
+        guard !issues.isEmpty else { return nil }
+        let visibleIssues = issues.prefix(4)
+        var summary = visibleIssues.joined(separator: ", ")
+        let remainingCount = issues.count - visibleIssues.count
+        if remainingCount > 0 {
+            summary += " + \(remainingCount) more"
+        }
+        return summary
+    }
+
     var nextServiceReportActionLabel: String? {
         if let missingItem = serviceReportMissingRequiredItemLabels.first {
             return "Complete \(missingItem)"

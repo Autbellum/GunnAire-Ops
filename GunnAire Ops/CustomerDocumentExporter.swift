@@ -413,6 +413,9 @@ enum CustomerDocumentExporter {
         if let nextAction = serviceCall.nextServiceReportActionLabel {
             rows.append(("Next Required Action", nextAction))
         }
+        if let actionSummary = serviceCall.serviceReportActionSummary {
+            rows.append(("Action Summary", actionSummary))
+        }
         if !missing.isEmpty {
             rows.append(("Missing Required Items", missing.joined(separator: ", ")))
         }
