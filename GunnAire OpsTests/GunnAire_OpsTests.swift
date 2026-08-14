@@ -1092,6 +1092,28 @@ struct GunnAire_OpsTests {
         #expect(summary.contains("Condenser coil inspected/washed") == false)
     }
 
+    @Test func serviceCallOpenConcernRowsExposeNeedsServiceAndMonitorActions() async throws {
+        let customer = Customer(name: "Current Concern Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        call.setServiceActionStatus(.monitor, for: "condensate_drain_checked")
+        call.setServiceActionStatus(.needsService, for: "condenser_coil_serviced")
+        call.setServiceActionStatus(.completed, for: "electrical_connections_checked")
+        call.setServiceActionStatus(.notApplicable, for: "thermostat_verified")
+
+        let rows = call.openServiceConcernRows
+
+        #expect(rows.first?.label == "Condenser coil inspected/washed")
+        #expect(rows.first?.value == "Needs Service")
+        #expect(rows.contains { $0.label == "Condensate drain checked/treated" && $0.value == "Monitor" })
+        #expect(rows.contains { $0.label == "Electrical connections checked" } == false)
+        #expect(rows.contains { $0.label == "Thermostat operation verified" } == false)
+    }
+
     @Test func customerEquipmentLatestServiceContextSummarizesReportAndReadings() async throws {
         let customer = Customer(name: "Equipment Context Customer")
         let equipment = CustomerEquipment(
@@ -5965,11 +5987,21 @@ struct GunnAire_OpsTests {
                     row.label == "Electrical connections checked" && row.value == "Completed"
                 }
         }
+        let hasOpenConcerns = summaries.contains { summary in
+            summary.title == "Open Service Concerns" &&
+                summary.rows.contains { row in
+                    row.label == "Condenser coil inspected/washed" && row.value == "Needs Service"
+                } &&
+                summary.rows.contains { row in
+                    row.label == "Electrical connections checked"
+                } == false
+        }
 
         #expect(hasOnsiteDocumentation)
         #expect(hasFindingsSummary)
         #expect(hasTechnicalSnapshot)
         #expect(hasServiceActions)
+        #expect(hasOpenConcerns)
     }
 
     @Test func billingDocumentationSummariesIncludeAllCapturedTechnicalRowsAndActions() async throws {

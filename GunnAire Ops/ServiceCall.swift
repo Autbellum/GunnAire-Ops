@@ -1290,6 +1290,24 @@ final class ServiceCall {
             .joined(separator: "; ")
     }
 
+    var openServiceConcernRows: [(label: String, value: String)] {
+        serviceActionDefinitions.compactMap { definition -> (label: String, value: String)? in
+            let status = serviceActionStatus(for: definition.key)
+            switch status {
+            case .needsService, .monitor:
+                return (definition.label, status.label)
+            case .notChecked, .completed, .notApplicable:
+                return nil
+            }
+        }
+        .sorted { lhs, rhs in
+            if lhs.value == rhs.value {
+                return lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+            }
+            return lhs.value == HVACServiceActionStatus.needsService.label
+        }
+    }
+
     private func serviceActionHistoryRank(_ status: HVACServiceActionStatus) -> Int {
         switch status {
         case .needsService:

@@ -986,6 +986,10 @@ enum CustomerDocumentExporter {
         if !serviceActionRows.isEmpty {
             summaries.append(("Service Actions", serviceActionRows))
         }
+        let openConcernRows = serviceCall.openServiceConcernRows
+        if !openConcernRows.isEmpty {
+            summaries.append(("Open Service Concerns", openConcernRows))
+        }
         return summaries
     }
 
