@@ -1296,9 +1296,51 @@ struct GunnAire_OpsTests {
 
         #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("package_heat_type"))
         #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("co_ppm") == false)
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("gas_pressure_inlet") == false)
         #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("gas_pressure_manifold") == false)
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("flue_temp") == false)
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("heat_strip_amps") == false)
         #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("heat_exchanger_condition") == false)
         #expect(call.requiredTechnicalReadingDefinitions.contains { $0.key == "co_ppm" } == false)
+    }
+
+    @Test func packageUnitHeatTypeDrivesHeatingSpecificRequiredReadings() async throws {
+        let customer = Customer(name: "Dynamic RTU Customer")
+        let call = ServiceCall(
+            equipmentTypeRaw: HVACEquipmentType.packageUnit.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        call.setTechnicalReading("Gas Heat", for: "package_heat_type")
+
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("gas_pressure_inlet"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("gas_pressure_manifold"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("flue_temp"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("o2_percent"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("co2_percent"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("co_ppm"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("heat_exchanger_condition"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("heat_strip_amps") == false)
+
+        call.setTechnicalReading("Electric Heat", for: "package_heat_type")
+
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("heat_strip_amps"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("gas_pressure_inlet") == false)
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("gas_pressure_manifold") == false)
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("flue_temp") == false)
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("co_ppm") == false)
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("heat_exchanger_condition") == false)
+
+        call.setTechnicalReading("Dual Fuel", for: "package_heat_type")
+
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("gas_pressure_inlet"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("gas_pressure_manifold"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("flue_temp"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("co_ppm"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("heat_exchanger_condition"))
+        #expect(call.effectiveRequiredReadingKeysForCompleteServiceReport.contains("heat_strip_amps"))
     }
 
     @Test func packageUnitEconomizerReportsRequireEconomizerDiagnosticsWhenPresent() async throws {

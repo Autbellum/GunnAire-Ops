@@ -1699,15 +1699,39 @@ final class ServiceCall {
         var requiredKeys = Set(equipmentType.requiredReadingKeysForCompleteServiceReport)
         guard equipmentType == .packageUnit else { return requiredKeys }
 
-        if normalizedTechnicalReading("package_heat_type") == "cooling only" {
+        let combustionRequiredKeys: Set<String> = [
+            "gas_pressure_inlet",
+            "gas_pressure_manifold",
+            "flue_temp",
+            "o2_percent",
+            "co2_percent",
+            "co_ppm",
+            "heat_exchanger_condition"
+        ]
+        let electricHeatRequiredKeys: Set<String> = [
+            "heat_strip_amps"
+        ]
+
+        switch normalizedTechnicalReading("package_heat_type") {
+        case "cooling only":
+            requiredKeys.subtract(combustionRequiredKeys)
+            requiredKeys.subtract(electricHeatRequiredKeys)
+        case "electric heat", "heat pump":
+            requiredKeys.subtract(combustionRequiredKeys)
+            requiredKeys.formUnion(electricHeatRequiredKeys)
+        case "gas heat":
+            requiredKeys.formUnion(combustionRequiredKeys)
+            requiredKeys.subtract(electricHeatRequiredKeys)
+        case "dual fuel":
+            requiredKeys.formUnion(combustionRequiredKeys)
+            requiredKeys.formUnion(electricHeatRequiredKeys)
+        default:
             requiredKeys.subtract([
                 "gas_pressure_inlet",
                 "gas_pressure_manifold",
                 "flue_temp",
                 "o2_percent",
-                "co2_percent",
-                "co_ppm",
-                "heat_exchanger_condition"
+                "co2_percent"
             ])
         }
 
