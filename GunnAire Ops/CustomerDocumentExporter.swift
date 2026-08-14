@@ -844,6 +844,7 @@ enum CustomerDocumentExporter {
         if let documentationStatus {
             rows.append(("Documentation Status", documentationStatus.statusLabel))
             rows.append(("Documentation Summary", documentationStatus.summary))
+            rows.append(("Documentation Action", documentationStatus.actionSummary))
         }
         return rows
     }
@@ -915,6 +916,7 @@ enum CustomerDocumentExporter {
         if let documentationStatus {
             rows.append(("Documentation Status", documentationStatus.statusLabel))
             rows.append(("Documentation Summary", documentationStatus.summary))
+            rows.append(("Documentation Action", documentationStatus.actionSummary))
         }
         return rows
     }

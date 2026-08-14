@@ -2836,6 +2836,7 @@ struct GunnAire_OpsTests {
         #expect(missing.isReady == false)
         #expect(missing.statusLabel == "Onsite report missing")
         #expect(missing.sendReadinessLabel == "Generate onsite report before sending")
+        #expect(missing.actionSummary == "Create or attach the onsite service report for this invoice.")
 
         let pendingReport = ServiceDocumentAttachment(
             customer: customer,
@@ -2871,6 +2872,7 @@ struct GunnAire_OpsTests {
         #expect(pending.isReady == false)
         #expect(pending.statusLabel == "QuickBooks attachments pending")
         #expect(pending.sendReadinessLabel == "Sync QuickBooks attachments before sending")
+        #expect(pending.actionSummary == "Upload 3 invoice attachments to QuickBooks before emailing.")
         #expect(pending.linkedPhotoEvidenceCount == 1)
         #expect(pending.linkedBillingDocumentCount == 1)
         #expect(pending.pendingQuickBooksAttachmentCount == 3)
@@ -2883,6 +2885,7 @@ struct GunnAire_OpsTests {
         #expect(failed.isReady == false)
         #expect(failed.statusLabel == "QuickBooks attachment sync failed")
         #expect(failed.sendReadinessLabel == "Retry QuickBooks attachment sync before sending")
+        #expect(failed.actionSummary == "Retry 1 failed QuickBooks attachment upload before emailing.")
         #expect(failed.pendingQuickBooksAttachmentCount == 3)
         #expect(failed.failedQuickBooksAttachmentCount == 1)
         #expect(failed.summary.contains("1 failed"))
@@ -2895,6 +2898,7 @@ struct GunnAire_OpsTests {
         #expect(synced.isReady)
         #expect(synced.statusLabel == "Invoice documentation ready")
         #expect(synced.sendReadinessLabel == "Ready to send with documentation")
+        #expect(synced.actionSummary == "Ready to email with onsite report and linked job photos.")
         #expect(synced.failedQuickBooksAttachmentCount == 0)
         #expect(synced.syncedQuickBooksAttachmentCount == 3)
     }
@@ -2961,6 +2965,7 @@ struct GunnAire_OpsTests {
         #expect(missing.isReady == false)
         #expect(missing.statusLabel == "Onsite report missing")
         #expect(missing.sendReadinessLabel == "Generate onsite report before sending")
+        #expect(missing.actionSummary == "Create or attach the onsite service report for this estimate.")
 
         let pendingReport = ServiceDocumentAttachment(
             customer: customer,
@@ -2996,6 +3001,7 @@ struct GunnAire_OpsTests {
         #expect(pending.isReady == false)
         #expect(pending.statusLabel == "QuickBooks attachments pending")
         #expect(pending.sendReadinessLabel == "Sync QuickBooks attachments before sending")
+        #expect(pending.actionSummary == "Upload 3 estimate attachments to QuickBooks before emailing.")
         #expect(pending.linkedPhotoEvidenceCount == 1)
         #expect(pending.linkedBillingDocumentCount == 1)
         #expect(pending.pendingQuickBooksAttachmentCount == 3)
@@ -3008,6 +3014,7 @@ struct GunnAire_OpsTests {
         #expect(failed.isReady == false)
         #expect(failed.statusLabel == "QuickBooks attachment sync failed")
         #expect(failed.sendReadinessLabel == "Retry QuickBooks attachment sync before sending")
+        #expect(failed.actionSummary == "Retry 1 failed QuickBooks attachment upload before emailing.")
         #expect(failed.pendingQuickBooksAttachmentCount == 3)
         #expect(failed.failedQuickBooksAttachmentCount == 1)
         #expect(failed.summary.contains("1 failed"))
@@ -3020,6 +3027,7 @@ struct GunnAire_OpsTests {
         #expect(synced.isReady)
         #expect(synced.statusLabel == "Estimate documentation ready")
         #expect(synced.sendReadinessLabel == "Ready to send with documentation")
+        #expect(synced.actionSummary == "Ready to email with onsite report and linked job photos.")
         #expect(synced.failedQuickBooksAttachmentCount == 0)
         #expect(synced.syncedQuickBooksAttachmentCount == 3)
     }
@@ -6151,6 +6159,7 @@ struct GunnAire_OpsTests {
         #expect(rows.contains { $0.label == "Documentation Summary" && $0.value.contains("1 onsite report") })
         #expect(rows.contains { $0.label == "Documentation Summary" && $0.value.contains("2 photos") })
         #expect(rows.contains { $0.label == "Documentation Summary" && $0.value.contains("1 pending") })
+        #expect(rows.contains { $0.label == "Documentation Action" && $0.value == "Upload 1 estimate attachment to QuickBooks before emailing." })
     }
 
     @Test func invoiceDetailRowsIncludeDocumentationReadinessWhenAvailable() async throws {
@@ -6180,6 +6189,7 @@ struct GunnAire_OpsTests {
         #expect(rows.contains { $0.label == "Documentation Status" && $0.value == "QuickBooks attachments pending" })
         #expect(rows.contains { $0.label == "Documentation Summary" && $0.value.contains("1 onsite report") })
         #expect(rows.contains { $0.label == "Documentation Summary" && $0.value.contains("1 pending") })
+        #expect(rows.contains { $0.label == "Documentation Action" && $0.value == "Upload 1 invoice attachment to QuickBooks before emailing." })
     }
 
     @Test func billingDocumentsIncludeLinkedOnsiteDocumentationSummary() async throws {

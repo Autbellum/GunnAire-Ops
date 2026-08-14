@@ -1976,6 +1976,9 @@ GunnAire
                                             Text(documentationStatus.summary)
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
+                                            Text(documentationStatus.actionSummary)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
                                         }
                                         if let quickBooksID = estimate.quickBooksID, !quickBooksID.isEmpty {
                                             Text("QuickBooks ID: \(quickBooksID)")
@@ -2048,6 +2051,9 @@ GunnAire
                                             .font(.caption2)
                                             .foregroundColor(documentationStatus.isReady ? .green : .orange)
                                             Text(documentationStatus.summary)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                            Text(documentationStatus.actionSummary)
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
                                         }
@@ -5337,6 +5343,9 @@ private struct RecordInvoicePaymentView: View {
                         )
                         .foregroundColor(invoiceDocumentationStatus.isReady ? .green : .orange)
                         Text(invoiceDocumentationStatus.summary)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(invoiceDocumentationStatus.actionSummary)
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }

@@ -907,6 +907,22 @@ struct InvoiceDocumentationStatus: Equatable {
         return "Ready to send with documentation"
     }
 
+    var actionSummary: String {
+        if linkedReportCount == 0 {
+            return "Create or attach the onsite service report for this invoice."
+        }
+        if failedQuickBooksAttachmentCount > 0 {
+            return "Retry \(failedQuickBooksAttachmentCount) failed QuickBooks attachment upload\(failedQuickBooksAttachmentCount == 1 ? "" : "s") before emailing."
+        }
+        if pendingQuickBooksAttachmentCount > 0 {
+            return "Upload \(pendingQuickBooksAttachmentCount) invoice attachment\(pendingQuickBooksAttachmentCount == 1 ? "" : "s") to QuickBooks before emailing."
+        }
+        if linkedPhotoEvidenceCount == 0 {
+            return "Ready to email; no job photo evidence is linked."
+        }
+        return "Ready to email with onsite report and linked job photos."
+    }
+
     var summary: String {
         var parts = [
             "\(linkedReportCount) onsite report\(linkedReportCount == 1 ? "" : "s")"
@@ -969,6 +985,22 @@ struct EstimateDocumentationStatus: Equatable {
             return "Sync QuickBooks attachments before sending"
         }
         return "Ready to send with documentation"
+    }
+
+    var actionSummary: String {
+        if linkedReportCount == 0 {
+            return "Create or attach the onsite service report for this estimate."
+        }
+        if failedQuickBooksAttachmentCount > 0 {
+            return "Retry \(failedQuickBooksAttachmentCount) failed QuickBooks attachment upload\(failedQuickBooksAttachmentCount == 1 ? "" : "s") before emailing."
+        }
+        if pendingQuickBooksAttachmentCount > 0 {
+            return "Upload \(pendingQuickBooksAttachmentCount) estimate attachment\(pendingQuickBooksAttachmentCount == 1 ? "" : "s") to QuickBooks before emailing."
+        }
+        if linkedPhotoEvidenceCount == 0 {
+            return "Ready to email; no job photo evidence is linked."
+        }
+        return "Ready to email with onsite report and linked job photos."
     }
 
     var summary: String {
