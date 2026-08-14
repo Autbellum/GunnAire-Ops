@@ -7332,6 +7332,69 @@ struct GunnAire_OpsTests {
         #expect(secondCall.linkedEstimateID == nil)
     }
 
+    @MainActor
+    @Test func quickBooksLocalSyncRepairsExistingBillingDocumentLinksAndReportTargets() async throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(quickBooksID: "QB-CUST-REPAIR-1", name: "Repair Linked Customer")
+        let scheduled = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 8, day: 16, hour: 9)))
+        let call = ServiceCall(
+            type: .service,
+            scheduledDate: scheduled,
+            customer: customer
+        )
+        let estimate = Estimate(
+            customer: customer,
+            quickBooksID: "QB-EST-REPAIR-1",
+            amount: 450,
+            status: "accepted"
+        )
+        let invoice = Invoice(
+            serviceCallID: call.id,
+            customer: customer,
+            quickBooksID: "QB-INV-REPAIR-1",
+            amount: 450,
+            status: "paid"
+        )
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            kind: .serviceReport,
+            displayName: "service-report.pdf",
+            localFilePath: "/tmp/service-report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 12
+        )
+        call.linkedEstimateID = estimate.id
+        context.insert(customer)
+        context.insert(call)
+        context.insert(estimate)
+        context.insert(invoice)
+        context.insert(report)
+        try context.save()
+
+        try QuickBooksLocalSync.importSnapshot(
+            customers: [],
+            items: [],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            vendors: [],
+            into: context
+        )
+
+        #expect(estimate.serviceCallID == call.id)
+        #expect(call.linkedInvoiceID == invoice.id)
+        #expect(invoice.serviceCallID == call.id)
+        #expect(call.status == .invoiced)
+        #expect(report.estimateID == estimate.id)
+        #expect(report.invoiceID == invoice.id)
+    }
+
     @Test func technicianCalendarAssessmentDetectsWritableCalendar() async throws {
         let calendars = [
             GoogleCalendar(id: "tech@example.com", summary: "Tech Schedule", timeZone: "America/New_York", accessRole: "writer")

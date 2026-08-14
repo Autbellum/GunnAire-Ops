@@ -268,6 +268,20 @@ enum QuickBooksLocalSync {
             invoice.status = Invoice.resolvedStatus(for: invoice, payments: invoicePayments)
         }
 
+        let reconciledEstimates = try modelContext.fetch(FetchDescriptor<Estimate>())
+        let reconciledInvoices = try modelContext.fetch(FetchDescriptor<Invoice>())
+        let reconciledServiceCalls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
+        let reconciledAttachments = try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())
+        reconcileBillingServiceCallLinks(
+            estimates: reconciledEstimates,
+            invoices: reconciledInvoices,
+            serviceCalls: reconciledServiceCalls
+        )
+        QuickBooksInvoiceAttachmentSync.linkServiceCallAttachmentsToBillingDocuments(
+            estimates: reconciledEstimates,
+            invoices: reconciledInvoices,
+            attachments: reconciledAttachments
+        )
         try? modelContext.save()
         let syncedEstimates = try modelContext.fetch(FetchDescriptor<Estimate>())
         let syncedInvoices = try modelContext.fetch(FetchDescriptor<Invoice>())
@@ -492,6 +506,62 @@ enum QuickBooksLocalSync {
             attachment.invoiceID = invoice.id
         }
         modelContext.delete(duplicate)
+    }
+
+    private static func reconcileBillingServiceCallLinks(
+        estimates: [Estimate],
+        invoices: [Invoice],
+        serviceCalls: [ServiceCall]
+    ) {
+        let estimatesByID = Dictionary(estimates.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let invoicesByID = Dictionary(invoices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let serviceCallsByID = Dictionary(serviceCalls.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        for estimate in estimates {
+            if let serviceCallID = estimate.serviceCallID,
+               let call = serviceCallsByID[serviceCallID],
+               sameCustomer(call.customer, estimate.customer),
+               isMissingOrStaleLinkedEstimate(call.linkedEstimateID, estimatesByID: estimatesByID) {
+                call.linkedEstimateID = estimate.id
+            }
+        }
+
+        for invoice in invoices {
+            if let serviceCallID = invoice.serviceCallID,
+               let call = serviceCallsByID[serviceCallID],
+               sameCustomer(call.customer, invoice.customer),
+               isMissingOrStaleLinkedInvoice(call.linkedInvoiceID, invoicesByID: invoicesByID) {
+                call.linkedInvoiceID = invoice.id
+                if call.status != .cancelled {
+                    call.status = .invoiced
+                }
+            }
+        }
+
+        for call in serviceCalls {
+            if let linkedEstimateID = call.linkedEstimateID,
+               let estimate = estimatesByID[linkedEstimateID],
+               sameCustomer(call.customer, estimate.customer),
+               estimate.serviceCallID == nil {
+                estimate.serviceCallID = call.id
+            }
+            if let linkedInvoiceID = call.linkedInvoiceID,
+               let invoice = invoicesByID[linkedInvoiceID],
+               sameCustomer(call.customer, invoice.customer),
+               invoice.serviceCallID == nil {
+                invoice.serviceCallID = call.id
+            }
+        }
+    }
+
+    private static func isMissingOrStaleLinkedEstimate(_ estimateID: UUID?, estimatesByID: [UUID: Estimate]) -> Bool {
+        guard let estimateID else { return true }
+        return estimatesByID[estimateID] == nil
+    }
+
+    private static func isMissingOrStaleLinkedInvoice(_ invoiceID: UUID?, invoicesByID: [UUID: Invoice]) -> Bool {
+        guard let invoiceID else { return true }
+        return invoicesByID[invoiceID] == nil
     }
 
     private static func sameCustomer(_ lhs: Customer, _ rhs: Customer) -> Bool {
