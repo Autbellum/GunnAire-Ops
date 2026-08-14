@@ -1660,7 +1660,13 @@ struct OnsiteDocumentationView: View {
             return
         }
         do {
-            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: call, attachments: documentAttachments)
+            let url = try CustomerDocumentExporter.exportEstimate(
+                estimate,
+                serviceCall: call,
+                attachments: documentAttachments,
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
+            )
             generatedCustomerDocumentURL = url
             persistGeneratedBillingDocument(
                 url,
@@ -1685,7 +1691,9 @@ struct OnsiteDocumentationView: View {
                 invoice,
                 serviceCall: linkedCall,
                 payments: invoicePayments,
-                attachments: documentAttachments
+                attachments: documentAttachments,
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
             )
             generatedCustomerDocumentURL = url
             let documentLabel = CustomerDocumentExporter.invoiceDocumentLabel(for: invoice, payments: invoicePayments)

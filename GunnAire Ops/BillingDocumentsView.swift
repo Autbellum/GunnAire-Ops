@@ -521,7 +521,9 @@ GunnAire
             let url = try CustomerDocumentExporter.exportEstimate(
                 estimate,
                 serviceCall: serviceCall,
-                attachments: attachments
+                attachments: attachments,
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
             )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
@@ -616,11 +618,16 @@ GunnAire
         do {
             let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
             let serviceCall = serviceCall(for: invoice)
+            if let serviceCall {
+                saveCurrentEquipmentProfile(for: serviceCall, announce: false)
+            }
             let url = try CustomerDocumentExporter.exportInvoice(
                 invoice,
                 serviceCall: serviceCall,
                 payments: invoicePayments,
-                attachments: attachments
+                attachments: attachments,
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
             )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
@@ -3617,7 +3624,13 @@ GunnAire
                 saveCurrentEquipmentProfile(for: linkedCall, announce: false)
                 linkExistingEstimateAttachments(to: estimate, serviceCallID: linkedCall.id)
             }
-            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: linkedCall, attachments: attachments)
+            let url = try CustomerDocumentExporter.exportEstimate(
+                estimate,
+                serviceCall: linkedCall,
+                attachments: attachments,
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
+            )
             let data = try Data(contentsOf: url)
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
@@ -3817,7 +3830,9 @@ GunnAire
                 invoice,
                 serviceCall: serviceCall,
                 payments: invoicePayments,
-                attachments: attachments
+                attachments: attachments,
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
             )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id
@@ -4235,7 +4250,16 @@ GunnAire
     private func generateEstimateDocument(_ estimate: Estimate) {
         do {
             let serviceCall = serviceCall(for: estimate)
-            let url = try CustomerDocumentExporter.exportEstimate(estimate, serviceCall: serviceCall, attachments: attachments)
+            if let serviceCall {
+                saveCurrentEquipmentProfile(for: serviceCall, announce: false)
+            }
+            let url = try CustomerDocumentExporter.exportEstimate(
+                estimate,
+                serviceCall: serviceCall,
+                attachments: attachments,
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
+            )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = estimate.customer.id
             generatedCustomerDocumentServiceCallID = serviceCall?.id
@@ -4261,11 +4285,16 @@ GunnAire
         do {
             let invoicePayments = payments.filter { $0.invoice.id == invoice.id }
             let serviceCall = serviceCall(for: invoice)
+            if let serviceCall {
+                saveCurrentEquipmentProfile(for: serviceCall, announce: false)
+            }
             let url = try CustomerDocumentExporter.exportInvoice(
                 invoice,
                 serviceCall: serviceCall,
                 payments: invoicePayments,
-                attachments: attachments
+                attachments: attachments,
+                equipmentProfiles: equipmentProfiles,
+                serviceCalls: serviceCalls
             )
             generatedCustomerDocumentURL = url
             generatedCustomerDocumentRecipientID = invoice.customer.id

@@ -6276,6 +6276,53 @@ struct GunnAire_OpsTests {
         #expect(caption.contains("$") == false)
     }
 
+    @Test func billingJobContextIncludesEquipmentHistoryAndReadingTrends() async throws {
+        let customer = Customer(name: "Billing Equipment Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            modelNumber: "24ABC6",
+            serialNumber: "AC-100"
+        )
+        let pastCall = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC-100",
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Previous cooling maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer,
+            status: .completed
+        )
+        pastCall.setTechnicalReading("11", for: "superheat")
+        pastCall.setTechnicalReading("238", for: "line_voltage")
+        let currentCall = ServiceCall(
+            equipmentName: "Downstairs AC",
+            equipmentModel: "24ABC6",
+            equipmentSerialNumber: "AC-100",
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_086_400),
+            customer: customer
+        )
+
+        let rows = CustomerDocumentExporter.billingJobContextSummaries(
+            for: currentCall,
+            equipmentProfiles: [equipment],
+            serviceCalls: [pastCall, currentCall]
+        )
+
+        #expect(rows.contains { $0.label == "Equipment Profile" && $0.value.contains("Downstairs AC") })
+        #expect(rows.contains { $0.label == "Service History" && $0.value.contains("1 job") })
+        #expect(rows.contains { $0.label == "Previous Service Context" && $0.value.contains("Previous cooling maintenance completed.") })
+        #expect(rows.contains { $0.label == "Reading Trends" && $0.value.contains("Superheat") })
+        #expect(rows.contains { $0.label == "Reading Trends" && $0.value.contains("Line Voltage") })
+    }
+
     @Test func invoiceDetailRowsUseQuickBooksBalanceWhenAvailable() async throws {
         let customer = Customer(name: "QBO Invoice Customer")
         let invoice = Invoice(

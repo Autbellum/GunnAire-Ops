@@ -117,10 +117,18 @@ enum CustomerDocumentExporter {
     static func exportEstimate(
         _ estimate: Estimate,
         serviceCall: ServiceCall?,
-        attachments: [ServiceDocumentAttachment] = []
+        attachments: [ServiceDocumentAttachment] = [],
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = []
     ) throws -> URL {
         let fileName = makeFileName(prefix: "GunnAire-Estimate", customerName: estimate.customer.name)
-        let sections = estimateSections(estimate: estimate, serviceCall: serviceCall, attachments: attachments)
+        let sections = estimateSections(
+            estimate: estimate,
+            serviceCall: serviceCall,
+            attachments: attachments,
+            equipmentProfiles: equipmentProfiles,
+            serviceCalls: serviceCalls
+        )
         return try renderPDF(
             title: "Estimate",
             customer: estimate.customer,
@@ -139,11 +147,20 @@ enum CustomerDocumentExporter {
         _ invoice: Invoice,
         serviceCall: ServiceCall?,
         payments: [Payment],
-        attachments: [ServiceDocumentAttachment] = []
+        attachments: [ServiceDocumentAttachment] = [],
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = []
     ) throws -> URL {
         let paid = isInvoicePaid(invoice, payments: payments)
         let fileName = makeFileName(prefix: paid ? "GunnAire-Paid-Invoice" : "GunnAire-Invoice", customerName: invoice.customer.name)
-        let sections = invoiceSections(invoice: invoice, serviceCall: serviceCall, payments: payments, attachments: attachments)
+        let sections = invoiceSections(
+            invoice: invoice,
+            serviceCall: serviceCall,
+            payments: payments,
+            attachments: attachments,
+            equipmentProfiles: equipmentProfiles,
+            serviceCalls: serviceCalls
+        )
         return try renderPDF(
             title: paid ? "Paid Invoice" : "Invoice",
             customer: invoice.customer,
@@ -162,9 +179,18 @@ enum CustomerDocumentExporter {
         _ invoice: Invoice,
         serviceCall: ServiceCall?,
         payments: [Payment],
-        attachments: [ServiceDocumentAttachment] = []
+        attachments: [ServiceDocumentAttachment] = [],
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = []
     ) throws -> URL {
-        try exportInvoice(invoice, serviceCall: serviceCall, payments: payments, attachments: attachments)
+        try exportInvoice(
+            invoice,
+            serviceCall: serviceCall,
+            payments: payments,
+            attachments: attachments,
+            equipmentProfiles: equipmentProfiles,
+            serviceCalls: serviceCalls
+        )
     }
 
     private static func onsiteReportSections(
@@ -809,13 +835,19 @@ enum CustomerDocumentExporter {
     private static func estimateSections(
         estimate: Estimate,
         serviceCall: ServiceCall?,
-        attachments: [ServiceDocumentAttachment] = []
+        attachments: [ServiceDocumentAttachment] = [],
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = []
     ) -> [DocumentSection] {
         var sections: [DocumentSection] = []
         if let serviceCall {
             sections.append(DocumentSection(
                 title: "Job",
-                rows: billingJobContextRows(for: serviceCall)
+                rows: billingJobContextRows(
+                    for: serviceCall,
+                    equipmentProfiles: equipmentProfiles,
+                    serviceCalls: serviceCalls
+                )
             ))
             sections.append(contentsOf: billingDocumentationSections(for: serviceCall))
         }
@@ -853,13 +885,19 @@ enum CustomerDocumentExporter {
         serviceCall: ServiceCall?,
         payments: [Payment],
         attachments: [ServiceDocumentAttachment] = [],
-        includeCustomerHeader: Bool = true
+        includeCustomerHeader: Bool = true,
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = []
     ) -> [DocumentSection] {
         var sections: [DocumentSection] = []
         if includeCustomerHeader, let serviceCall {
             sections.append(DocumentSection(
                 title: "Job",
-                rows: billingJobContextRows(for: serviceCall)
+                rows: billingJobContextRows(
+                    for: serviceCall,
+                    equipmentProfiles: equipmentProfiles,
+                    serviceCalls: serviceCalls
+                )
             ))
             sections.append(contentsOf: billingDocumentationSections(for: serviceCall))
         }
@@ -921,7 +959,20 @@ enum CustomerDocumentExporter {
     }
 
     static func billingJobContextSummaries(for serviceCall: ServiceCall) -> [(label: String, value: String)] {
-        billingJobContextRows(for: serviceCall).map { ($0.label, $0.value) }
+        billingJobContextSummaries(for: serviceCall, equipmentProfiles: [], serviceCalls: [])
+    }
+
+    static func billingJobContextSummaries(
+        for serviceCall: ServiceCall,
+        equipmentProfiles: [CustomerEquipment],
+        serviceCalls: [ServiceCall]
+    ) -> [(label: String, value: String)] {
+        billingJobContextRows(
+            for: serviceCall,
+            equipmentProfiles: equipmentProfiles,
+            serviceCalls: serviceCalls
+        )
+        .map { ($0.label, $0.value) }
     }
 
     static func invoicePaymentHistoryRows(for payments: [Payment]) -> [(label: String, value: String)] {
@@ -949,8 +1000,12 @@ enum CustomerDocumentExporter {
         Invoice.isPaid(invoice, payments: payments)
     }
 
-    private static func billingJobContextRows(for serviceCall: ServiceCall) -> [DocumentRow] {
-        [
+    private static func billingJobContextRows(
+        for serviceCall: ServiceCall,
+        equipmentProfiles: [CustomerEquipment] = [],
+        serviceCalls: [ServiceCall] = []
+    ) -> [DocumentRow] {
+        var rows = [
             row("Job ID", shortID(serviceCall.id)),
             row("Customer", serviceCall.customer.name),
             row("Customer Phone", serviceCall.customer.phone),
@@ -963,6 +1018,13 @@ enum CustomerDocumentExporter {
             row("Equipment Location", serviceCall.equipmentLocation),
             row("Equipment Notes", serviceCall.equipmentNotes)
         ]
+        let historyRows = equipmentHistoryRows(
+            serviceCall: serviceCall,
+            equipmentProfiles: equipmentProfiles,
+            serviceCalls: serviceCalls
+        )
+        rows.append(contentsOf: historyRows.map { row($0.label, $0.value) })
+        return rows
     }
 
     static func billingDocumentationSummaries(for serviceCall: ServiceCall) -> [(title: String, rows: [(label: String, value: String)])] {
