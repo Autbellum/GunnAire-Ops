@@ -2427,37 +2427,48 @@ GunnAire
 
             reportReadinessView(for: call)
 
-            TextField("Equipment Name", text: optionalServiceCallTextBinding(call, \.equipmentName))
-            TextField("Manufacturer", text: optionalServiceCallTextBinding(call, \.equipmentManufacturer))
-            TextField("Model", text: optionalServiceCallTextBinding(call, \.equipmentModel))
-            TextField("Serial Number", text: optionalServiceCallTextBinding(call, \.equipmentSerialNumber))
-            TextField("Equipment Location", text: optionalServiceCallTextBinding(call, \.equipmentLocation))
-            if call.equipmentInstallDate == nil {
-                Button("Set Install Date") {
-                    call.equipmentInstallDate = Date()
-                    call.diagnosticsCaptured = true
+            DisclosureGroup {
+                TextField("Equipment Name", text: optionalServiceCallTextBinding(call, \.equipmentName))
+                TextField("Manufacturer", text: optionalServiceCallTextBinding(call, \.equipmentManufacturer))
+                TextField("Model", text: optionalServiceCallTextBinding(call, \.equipmentModel))
+                TextField("Serial Number", text: optionalServiceCallTextBinding(call, \.equipmentSerialNumber))
+                TextField("Equipment Location", text: optionalServiceCallTextBinding(call, \.equipmentLocation))
+                if call.equipmentInstallDate == nil {
+                    Button("Set Install Date") {
+                        call.equipmentInstallDate = Date()
+                        call.diagnosticsCaptured = true
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    DatePicker(
+                        "Install Date",
+                        selection: optionalServiceCallDateBinding(call, \.equipmentInstallDate),
+                        displayedComponents: .date
+                    )
+                    Button("Clear Install Date") {
+                        call.equipmentInstallDate = nil
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
-            } else {
-                DatePicker(
-                    "Install Date",
-                    selection: optionalServiceCallDateBinding(call, \.equipmentInstallDate),
-                    displayedComponents: .date
-                )
-                Button("Clear Install Date") {
-                    call.equipmentInstallDate = nil
-                }
-                .buttonStyle(.bordered)
-            }
 
-            Button(call.customerEquipmentID == nil ? "Save as Customer Equipment" : "Update Customer Equipment") {
-                saveCurrentEquipmentProfile(for: call)
+                Button(call.customerEquipmentID == nil ? "Save as Customer Equipment" : "Update Customer Equipment") {
+                    saveCurrentEquipmentProfile(for: call)
+                }
+                .buttonStyle(.bordered)
+                .disabled(
+                    call.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false ||
+                        call.equipmentType == nil
+                )
+            } label: {
+                HStack {
+                    Label("Equipment Profile", systemImage: "wrench.and.screwdriver")
+                    Spacer()
+                    Text(equipmentProfileSummary(for: call))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
             }
-            .buttonStyle(.bordered)
-            .disabled(
-                call.equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false ||
-                    call.equipmentType == nil
-            )
 
             technicalReadingAttentionSection(for: call)
 
@@ -2687,6 +2698,22 @@ GunnAire
             placeholder: "Not Checked",
             showsClearButton: true
         )
+    }
+
+    private func equipmentProfileSummary(for call: ServiceCall) -> String {
+        let parts = [
+            call.equipmentName,
+            call.equipmentManufacturer,
+            call.equipmentModel,
+            call.equipmentSerialNumber.map { "S/N \($0)" }
+        ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        if !parts.isEmpty {
+            return parts.joined(separator: " • ")
+        }
+        return call.equipmentType?.displayName ?? "Not set"
     }
 
     @ViewBuilder

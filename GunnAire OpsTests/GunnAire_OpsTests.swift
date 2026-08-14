@@ -156,6 +156,19 @@ struct GunnAire_OpsTests {
         #expect(requiredKeys.contains("compressor_rla"))
     }
 
+    @Test func equipmentSpecificTechnicalReadingsExposeDropdownOptions() async throws {
+        let splitDefinitions = Dictionary(uniqueKeysWithValues: HVACEquipmentType.splitSystemAC.readingDefinitions.map { ($0.key, $0) })
+        let furnaceDefinitions = Dictionary(uniqueKeysWithValues: HVACEquipmentType.gasFurnace.readingDefinitions.map { ($0.key, $0) })
+        let miniSplitDefinitions = Dictionary(uniqueKeysWithValues: HVACEquipmentType.miniSplit.readingDefinitions.map { ($0.key, $0) })
+
+        #expect(splitDefinitions["refrigerant_type"]?.options.contains("R-410A") == true)
+        #expect(splitDefinitions["metering_device"]?.options.contains("TXV") == true)
+        #expect(splitDefinitions["contactor_condition"]?.options.isEmpty == false)
+        #expect(furnaceDefinitions["fuel_type"]?.options.contains("Natural Gas") == true)
+        #expect(furnaceDefinitions["ignition_type"]?.options.contains("Hot Surface Ignition") == true)
+        #expect(miniSplitDefinitions["mode_tested"]?.options.contains("Dry") == true)
+    }
+
     @Test func technicalServiceReportFlagsCompressorAmpDrawAboveRLA() async throws {
         let customer = Customer(name: "Amp Customer")
         let call = ServiceCall(
