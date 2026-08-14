@@ -886,6 +886,7 @@ struct InvoiceDocumentationStatus: Equatable {
 
     var isReady: Bool {
         linkedReportCount > 0 &&
+            linkedBillingDocumentCount > 0 &&
             pendingQuickBooksAttachmentCount == 0 &&
             failedQuickBooksAttachmentCount == 0
     }
@@ -893,6 +894,9 @@ struct InvoiceDocumentationStatus: Equatable {
     var statusLabel: String {
         if linkedReportCount == 0 {
             return "Onsite report missing"
+        }
+        if linkedBillingDocumentCount == 0 {
+            return "Invoice PDF missing"
         }
         if failedQuickBooksAttachmentCount > 0 {
             return "QuickBooks attachment sync failed"
@@ -907,6 +911,9 @@ struct InvoiceDocumentationStatus: Equatable {
         if linkedReportCount == 0 {
             return "Generate onsite report before sending"
         }
+        if linkedBillingDocumentCount == 0 {
+            return "Generate invoice PDF before sending"
+        }
         if failedQuickBooksAttachmentCount > 0 {
             return "Retry QuickBooks attachment sync before sending"
         }
@@ -919,6 +926,9 @@ struct InvoiceDocumentationStatus: Equatable {
     var actionSummary: String {
         if linkedReportCount == 0 {
             return "Create or attach the onsite service report for this invoice."
+        }
+        if linkedBillingDocumentCount == 0 {
+            return "Generate and save the customer-facing invoice PDF before emailing."
         }
         if failedQuickBooksAttachmentCount > 0 {
             return "Retry \(failedQuickBooksAttachmentCount) failed QuickBooks attachment upload\(failedQuickBooksAttachmentCount == 1 ? "" : "s") before emailing."
@@ -966,6 +976,7 @@ struct EstimateDocumentationStatus: Equatable {
 
     var isReady: Bool {
         linkedReportCount > 0 &&
+            linkedBillingDocumentCount > 0 &&
             pendingQuickBooksAttachmentCount == 0 &&
             failedQuickBooksAttachmentCount == 0
     }
@@ -973,6 +984,9 @@ struct EstimateDocumentationStatus: Equatable {
     var statusLabel: String {
         if linkedReportCount == 0 {
             return "Onsite report missing"
+        }
+        if linkedBillingDocumentCount == 0 {
+            return "Estimate PDF missing"
         }
         if failedQuickBooksAttachmentCount > 0 {
             return "QuickBooks attachment sync failed"
@@ -987,6 +1001,9 @@ struct EstimateDocumentationStatus: Equatable {
         if linkedReportCount == 0 {
             return "Generate onsite report before sending"
         }
+        if linkedBillingDocumentCount == 0 {
+            return "Generate estimate PDF before sending"
+        }
         if failedQuickBooksAttachmentCount > 0 {
             return "Retry QuickBooks attachment sync before sending"
         }
@@ -999,6 +1016,9 @@ struct EstimateDocumentationStatus: Equatable {
     var actionSummary: String {
         if linkedReportCount == 0 {
             return "Create or attach the onsite service report for this estimate."
+        }
+        if linkedBillingDocumentCount == 0 {
+            return "Generate and save the customer-facing estimate PDF before emailing."
         }
         if failedQuickBooksAttachmentCount > 0 {
             return "Retry \(failedQuickBooksAttachmentCount) failed QuickBooks attachment upload\(failedQuickBooksAttachmentCount == 1 ? "" : "s") before emailing."
@@ -2301,6 +2321,7 @@ final class ServiceCall {
         }
         if let invoice {
             requiredItems.append("Invoice finalized")
+            requiredItems.append("Customer invoice PDF generated")
             requiredItems.append("Customer signed")
             requiredItems.append("Payment resolved")
             requiredItems.append("QuickBooks invoice synced")
@@ -2343,6 +2364,15 @@ final class ServiceCall {
         if let invoice {
             if invoice.finalizedAt == nil {
                 missing.append("Invoice finalized")
+            }
+            let hasInvoicePDF = attachments.contains {
+                $0.serviceCallID == id &&
+                    $0.kind == .invoiceSupport &&
+                    $0.invoiceID == invoice.id &&
+                    $0.localFilePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            }
+            if !hasInvoicePDF {
+                missing.append("Customer invoice PDF generated")
             }
             if invoice.customerSignedAt == nil {
                 missing.append("Customer signed")

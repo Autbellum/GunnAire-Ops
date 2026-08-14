@@ -2869,14 +2869,24 @@ struct GunnAire_OpsTests {
             contentType: "application/pdf",
             fileSizeBytes: 1024
         )
+        let invoicePDF = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .invoiceSupport,
+            displayName: "invoice.pdf",
+            localFilePath: "/tmp/invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
 
-        let readiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [report])
+        let readiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [report, invoicePDF])
 
         #expect(readiness.isReady == false)
         #expect(readiness.missingItems.contains("QuickBooks attachments synced"))
 
         report.quickBooksSyncError = "Upload rejected"
-        let failedReadiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [report])
+        let failedReadiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [report, invoicePDF])
 
         #expect(failedReadiness.isReady == false)
         #expect(failedReadiness.missingItems.contains("QuickBooks attachment sync failed"))
@@ -2936,6 +2946,12 @@ struct GunnAire_OpsTests {
             contentType: "application/pdf",
             fileSizeBytes: 2048
         )
+        let missingInvoicePDF = call.invoiceDocumentationStatus(invoice: invoice, attachments: [pendingReport, linkedPhoto])
+        #expect(missingInvoicePDF.isReady == false)
+        #expect(missingInvoicePDF.statusLabel == "Invoice PDF missing")
+        #expect(missingInvoicePDF.sendReadinessLabel == "Generate invoice PDF before sending")
+        #expect(missingInvoicePDF.actionSummary == "Generate and save the customer-facing invoice PDF before emailing.")
+
         let pending = call.invoiceDocumentationStatus(invoice: invoice, attachments: [pendingReport, linkedPhoto, linkedInvoicePDF])
         #expect(pending.isReady == false)
         #expect(pending.statusLabel == "QuickBooks attachments pending")
@@ -3003,13 +3019,28 @@ struct GunnAire_OpsTests {
             contentType: "image/jpeg",
             fileSizeBytes: 1024
         )
+        let invoicePDF = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .invoiceSupport,
+            displayName: "invoice.pdf",
+            localFilePath: "/tmp/invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
 
-        let status = call.invoiceDocumentationStatus(invoice: invoice, attachments: [estimateReport, estimatePhoto])
+        let withoutInvoicePDF = call.invoiceDocumentationStatus(invoice: invoice, attachments: [estimateReport, estimatePhoto])
+        #expect(withoutInvoicePDF.isReady == false)
+        #expect(withoutInvoicePDF.statusLabel == "Invoice PDF missing")
+
+        let status = call.invoiceDocumentationStatus(invoice: invoice, attachments: [estimateReport, estimatePhoto, invoicePDF])
 
         #expect(status.isReady)
         #expect(status.statusLabel == "Invoice documentation ready")
         #expect(status.linkedReportCount == 1)
         #expect(status.linkedPhotoEvidenceCount == 1)
+        #expect(status.linkedBillingDocumentCount == 1)
     }
 
     @Test func estimateDocumentationStatusTracksMissingPendingAndSyncedReports() async throws {
@@ -3065,6 +3096,12 @@ struct GunnAire_OpsTests {
             contentType: "application/pdf",
             fileSizeBytes: 2048
         )
+        let missingEstimatePDF = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport, linkedPhoto])
+        #expect(missingEstimatePDF.isReady == false)
+        #expect(missingEstimatePDF.statusLabel == "Estimate PDF missing")
+        #expect(missingEstimatePDF.sendReadinessLabel == "Generate estimate PDF before sending")
+        #expect(missingEstimatePDF.actionSummary == "Generate and save the customer-facing estimate PDF before emailing.")
+
         let pending = call.estimateDocumentationStatus(estimate: estimate, attachments: [pendingReport, linkedPhoto, linkedEstimatePDF])
         #expect(pending.isReady == false)
         #expect(pending.statusLabel == "QuickBooks attachments pending")
@@ -3129,17 +3166,29 @@ struct GunnAire_OpsTests {
             fileSizeBytes: 1024,
             quickBooksAttachableID: "ATTACH-2"
         )
+        let invoicePDF = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .invoiceSupport,
+            displayName: "invoice.pdf",
+            localFilePath: "/tmp/invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "ATTACH-3"
+        )
 
         let summary = try #require(call.billingDocumentationPackageSummary(
             invoice: invoice,
             estimate: estimate,
-            attachments: [report, photo]
+            attachments: [report, photo, invoicePDF]
         ))
 
         #expect(summary.contains("Invoice documentation ready"))
         #expect(summary.contains("1 onsite report"))
         #expect(summary.contains("1 photo"))
-        #expect(summary.contains("2 synced"))
+        #expect(summary.contains("1 billing PDF"))
+        #expect(summary.contains("3 synced"))
     }
 
     @Test func billingDocumentationPackageSummaryFallsBackToEstimatePackage() async throws {
@@ -3156,16 +3205,27 @@ struct GunnAire_OpsTests {
             contentType: "application/pdf",
             fileSizeBytes: 1024
         )
+        let estimatePDF = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            estimateID: estimate.id,
+            kind: .estimateSupport,
+            displayName: "estimate.pdf",
+            localFilePath: "/tmp/estimate.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024
+        )
 
         let summary = try #require(call.billingDocumentationPackageSummary(
             invoice: nil,
             estimate: estimate,
-            attachments: [report]
+            attachments: [report, estimatePDF]
         ))
 
         #expect(summary.contains("QuickBooks attachments pending"))
         #expect(summary.contains("1 onsite report"))
-        #expect(summary.contains("1 pending"))
+        #expect(summary.contains("1 billing PDF"))
+        #expect(summary.contains("2 pending"))
     }
 
     @Test func jobCloseoutReadinessRequiresQuickBooksInvoiceSync() async throws {
@@ -3213,6 +3273,54 @@ struct GunnAire_OpsTests {
         #expect(readiness.requiredItems.contains("QuickBooks invoice synced"))
         #expect(readiness.missingItems.contains("QuickBooks invoice synced"))
         #expect(readiness.missingItems.contains("QuickBooks attachments synced") == false)
+    }
+
+    @Test func jobCloseoutReadinessRequiresGeneratedCustomerInvoicePDF() async throws {
+        let customer = Customer(name: "Closeout PDF Customer")
+        let call = ServiceCall(
+            equipmentName: "Main Furnace",
+            equipmentModel: "59TN6",
+            equipmentSerialNumber: "FURN123",
+            equipmentTypeRaw: HVACEquipmentType.gasFurnace.rawValue,
+            serviceReportSummary: "Heating maintenance completed.",
+            type: .maintenance,
+            scheduledDate: Date(),
+            customer: customer,
+            status: .invoiced,
+            workCompletedChecklist: true,
+            documentationChecklist: true,
+            paymentCollectedChecklist: true
+        )
+        for definition in call.requiredTechnicalReadingDefinitions {
+            call.setTechnicalReading(definition.options.first ?? "1", for: definition.key)
+        }
+        let invoice = Invoice(
+            serviceCallID: call.id,
+            customer: customer,
+            quickBooksID: "QB-INV-200",
+            amount: 500,
+            status: "paid",
+            customerSignatureName: "Customer",
+            customerSignedAt: Date(),
+            finalizedAt: Date()
+        )
+        let report = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            kind: .serviceReport,
+            displayName: "report.pdf",
+            localFilePath: "/tmp/report.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1024,
+            quickBooksAttachableID: "ATTACH-REPORT"
+        )
+
+        let readiness = call.closeoutReadiness(invoice: invoice, payments: [], attachments: [report])
+
+        #expect(readiness.isReady == false)
+        #expect(readiness.requiredItems.contains("Customer invoice PDF generated"))
+        #expect(readiness.missingItems.contains("Customer invoice PDF generated"))
     }
 
     @Test func generalCalendarAppointmentsDoNotRequireTechnicalServiceReportForCompletion() async throws {
