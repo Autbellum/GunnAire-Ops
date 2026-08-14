@@ -1143,7 +1143,49 @@ struct GunnAire_OpsTests {
         #expect(summary.contains("8"))
         #expect(summary.contains("Actions:"))
         #expect(summary.contains("Condensate drain checked/treated: Monitor"))
+        #expect(summary.contains("Open Concerns:"))
+        #expect(summary.contains("Condensate drain checked/treated: Monitor"))
         #expect(excludingCurrentSummary.contains("999") == false)
+    }
+
+    @Test func customerEquipmentLatestServiceContextCarriesOpenConcernsUntilResolved() async throws {
+        let customer = Customer(name: "Open Concern Customer")
+        let equipment = CustomerEquipment(
+            customer: customer,
+            equipmentType: .splitSystemAC,
+            name: "Downstairs AC",
+            serialNumber: "AC123"
+        )
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let olderCall = ServiceCall(
+            equipmentSerialNumber: "AC123",
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400 * 45),
+            customer: customer,
+            status: .completed
+        )
+        olderCall.setServiceActionStatus(.needsService, for: "condenser_coil_serviced")
+        olderCall.setServiceActionStatus(.monitor, for: "condensate_drain_checked")
+        let latestCall = ServiceCall(
+            customerEquipmentID: equipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            serviceReportSummary: "Returned for follow-up.",
+            type: .maintenance,
+            scheduledDate: now.addingTimeInterval(-86_400 * 3),
+            customer: customer,
+            status: .completed
+        )
+        latestCall.setServiceActionStatus(.completed, for: "condenser_coil_serviced")
+
+        let summary = try #require(equipment.latestServiceContextSummary(
+            in: [olderCall, latestCall],
+            now: now
+        ))
+
+        #expect(summary.contains("Open Concerns:"))
+        #expect(summary.contains("Condensate drain checked/treated: Monitor"))
+        #expect(summary.contains("Condenser coil inspected/washed: Needs Service") == false)
     }
 
     @Test func serviceCallCopiesCompatiblePreviousTechnicalReadingsWithoutOverwritingCurrentValues() async throws {

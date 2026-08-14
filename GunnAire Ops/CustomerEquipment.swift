@@ -309,7 +309,8 @@ final class CustomerEquipment {
             call.serviceReportSummary.map { "Report: \($0)" },
             call.technicalReadingServiceHistorySummary.map { "Readings: \($0)" },
             recentTechnicalTrendSummary(in: serviceCalls, now: now).map { "Trends: \($0)" },
-            call.serviceActionServiceHistorySummary.map { "Actions: \($0)" }
+            call.serviceActionServiceHistorySummary.map { "Actions: \($0)" },
+            unresolvedServiceConcernSummary(in: serviceCalls, now: now).map { "Open Concerns: \($0)" }
         ]
             .compactMap { value -> String? in
                 let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
