@@ -635,6 +635,37 @@ struct GunnAire_OpsTests {
         ) == "Existing calendar body")
     }
 
+    @Test func externalGoogleCalendarImportDoesNotReplaceCorrectedTitleWithGeneratedCallType() async throws {
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarTitle(
+            remoteValue: "Service",
+            existingValue: "Bid package due for Oak Street",
+            isManagedByApp: false
+        ) == "Bid package due for Oak Street")
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarTitle(
+            remoteValue: "Holidays",
+            existingValue: "Bid package due for Oak Street",
+            isManagedByApp: false
+        ) == "Holidays")
+    }
+
+    @Test func externalGoogleCalendarImportDoesNotReplaceCorrectedBodyWithGeneratedGunnAireText() async throws {
+        let generatedBody = """
+        Customer: GunnAire Calendar Import
+        Service Address: 123 Main St
+        Call Type: Service
+        """
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarBody(
+            remoteValue: generatedBody,
+            existingValue: "Original Google notes with the real job context.",
+            isManagedByApp: false
+        ) == "Original Google notes with the real job context.")
+        #expect(GoogleCalendarScheduleSync.mergedImportedCalendarBody(
+            remoteValue: "Customer asked to move this to the afternoon.",
+            existingValue: "Original Google notes with the real job context.",
+            isManagedByApp: false
+        ) == "Customer asked to move this to the afternoon.")
+    }
+
     @Test func appManagedGoogleCalendarImportAllowsBlankRemoteFieldsToClearLocalMirror() async throws {
         #expect(GoogleCalendarScheduleSync.mergedImportedCalendarText(
             remoteValue: nil,

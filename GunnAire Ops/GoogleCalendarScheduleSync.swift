@@ -288,7 +288,7 @@ enum GoogleCalendarScheduleSync {
             call.googleEventID = event.id
             call.googleEventManagedByApp = isManagedByApp
             clearCalendarCallLocallyEdited(call)
-            call.eventTitle = mergedImportedCalendarText(
+            call.eventTitle = mergedImportedCalendarTitle(
                 remoteValue: event.summary,
                 existingValue: call.eventTitle,
                 isManagedByApp: isManagedByApp
@@ -308,7 +308,7 @@ enum GoogleCalendarScheduleSync {
                 existingValue: call.siteAddress,
                 isManagedByApp: isManagedByApp
             )
-            call.notes = mergedImportedCalendarText(
+            call.notes = mergedImportedCalendarBody(
                 remoteValue: eventNotes,
                 existingValue: call.notes,
                 isManagedByApp: isManagedByApp
@@ -1007,9 +1007,61 @@ enum GoogleCalendarScheduleSync {
     static func mergedImportedCalendarText(remoteValue: String?, existingValue: String?, isManagedByApp: Bool) -> String? {
         let remote = normalizedOptional(remoteValue)
         if isManagedByApp {
-            return remote ?? normalizedOptional(existingValue)
+            return remote
         }
         return remote ?? normalizedOptional(existingValue)
+    }
+
+    static func mergedImportedCalendarTitle(remoteValue: String?, existingValue: String?, isManagedByApp: Bool) -> String? {
+        let remote = normalizedOptional(remoteValue)
+        let existing = normalizedOptional(existingValue)
+        if isManagedByApp {
+            return remote
+        }
+        guard let remote else { return existing }
+        if let existing,
+           !isGeneratedTypeTitle(existing),
+           isGeneratedTypeTitle(remote) {
+            return existing
+        }
+        return remote
+    }
+
+    static func mergedImportedCalendarBody(remoteValue: String?, existingValue: String?, isManagedByApp: Bool) -> String? {
+        let remote = normalizedOptional(remoteValue)
+        let existing = normalizedOptional(existingValue)
+        if isManagedByApp {
+            return remote
+        }
+        guard let remote else { return existing }
+        if let existing,
+           !isGeneratedGunnAireCalendarBody(existing),
+           isGeneratedGunnAireCalendarBody(remote) {
+            return existing
+        }
+        return remote
+    }
+
+    private static func isGeneratedGunnAireCalendarBody(_ value: String) -> Bool {
+        let lines = value
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return false }
+        let generatedPrefixes = [
+            "customer:",
+            "phone:",
+            "email:",
+            "service address:",
+            "call type:",
+            "technician:",
+            "equipment:",
+            "equipment location:"
+        ]
+        let generatedLineCount = lines.filter { line in
+            generatedPrefixes.contains { line.hasPrefix($0) }
+        }.count
+        return generatedLineCount >= 2 || lines.first?.hasPrefix("call type:") == true
     }
 
     private static func firstMeaningfulLine(from notes: String?) -> String? {
