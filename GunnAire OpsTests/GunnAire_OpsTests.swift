@@ -282,6 +282,15 @@ struct GunnAire_OpsTests {
         #expect(PaymentsWorkspace.history.guidance.localizedCaseInsensitiveContains("QuickBooks"))
     }
 
+    @Test func receiptsBillsWorkspacesSeparateDocumentsProcurementStockAndRecovery() {
+        #expect(ReceiptsBillsWorkspace.allCases.map(\.label) == ["Documents", "Purchasing", "Inventory", "Recovery"])
+        #expect(ReceiptsBillsWorkspace.available(isAdminUser: false) == [.documents])
+        #expect(ReceiptsBillsWorkspace.available(isAdminUser: true) == ReceiptsBillsWorkspace.allCases)
+        #expect(ReceiptsBillsWorkspace.purchasing.guidance.localizedCaseInsensitiveContains("supplier"))
+        #expect(ReceiptsBillsWorkspace.inventory.guidance.localizedCaseInsensitiveContains("traceable"))
+        #expect(ReceiptsBillsWorkspace.recovery.guidance.localizedCaseInsensitiveContains("unsynced"))
+    }
+
     @Test func fieldPaymentPromptQueueAnnouncesEveryPendingTaskOnce() {
         let first = BackendFieldPaymentAssignmentRecord(
             id: "assignment-1",

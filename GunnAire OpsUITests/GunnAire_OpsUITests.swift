@@ -262,6 +262,45 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testReceiptsBillsUsesRoleAwareOperationalWorkspaces() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin"
+        ]
+        app.launch()
+
+        let receiptsBills = app.staticTexts["Receipts & Bills"]
+        XCTAssertTrue(receiptsBills.waitForExistence(timeout: 5))
+        receiptsBills.tap()
+        XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 3))
+
+        let workspacePicker = app.segmentedControls["ReceiptsBillsWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.exists)
+        XCTAssertTrue(workspacePicker.buttons["Documents"].isSelected)
+        XCTAssertTrue(app.staticTexts["Upload Receipts"].exists)
+        XCTAssertTrue(app.staticTexts["Sync and Transactions"].exists)
+        XCTAssertFalse(app.staticTexts["Purchase Orders"].exists)
+
+        workspacePicker.buttons["Purchasing"].tap()
+        XCTAssertTrue(workspacePicker.buttons["Purchasing"].isSelected)
+        XCTAssertTrue(app.staticTexts["Purchase Orders"].exists)
+        XCTAssertFalse(app.staticTexts["Upload Receipts"].exists)
+
+        workspacePicker.buttons["Inventory"].tap()
+        XCTAssertTrue(workspacePicker.buttons["Inventory"].isSelected)
+        XCTAssertTrue(app.staticTexts["Stock & Replenishment"].exists)
+        XCTAssertFalse(app.staticTexts["Purchase Orders"].exists)
+
+        workspacePicker.buttons["Recovery"].tap()
+        XCTAssertTrue(workspacePicker.buttons["Recovery"].isSelected)
+        XCTAssertTrue(app.staticTexts["Failed Upload Queue"].exists)
+        XCTAssertFalse(app.staticTexts["Stock & Replenishment"].exists)
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         let app = XCUIApplication()

@@ -57,6 +57,7 @@ struct ReceiptsAndBillsView: View {
 
     @State private var receiptImportMessage: String? = nil
     @State private var billImportMessage: String? = nil
+    @State private var selectedWorkspace: ReceiptsBillsWorkspace = .documents
     @State private var isSyncing = false
     @State private var syncMessage: String?
     @State private var selectedAttachEntityType: QuickBooksAttachableEntityType = .invoice
@@ -69,6 +70,8 @@ struct ReceiptsAndBillsView: View {
     @State private var attachLookupMessage: String?
     @State private var pendingUploads: [PendingUploadRecord] = []
     @State private var selectedPendingUploadForDetail: PendingUploadRecord?
+    @State private var pendingUploadForDeletion: PendingUploadRecord?
+    @State private var showingClearQueueConfirmation = false
     @State private var queueFilter: QueueFilter = .all
     @State private var queueSort: QueueSort = .nextRetry
     @State private var isUploadingReceiptToBackend = false
@@ -201,6 +204,38 @@ struct ReceiptsAndBillsView: View {
             WatermarkBackground()
             NavigationStack {
                 Form {
+                    Section("Receipts & Bills Workspace") {
+                        let workspaces = ReceiptsBillsWorkspace.available(isAdminUser: isAdminUser)
+                        if workspaces.count > 1 {
+                            Picker("Workspace", selection: $selectedWorkspace) {
+                                ForEach(workspaces) { workspace in
+                                    Text(workspace.label).tag(workspace)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .accessibilityIdentifier("ReceiptsBillsWorkspacePicker")
+                        }
+
+                        Label(selectedWorkspace.guidance, systemImage: selectedWorkspace.systemImage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        if !isAdminUser {
+                            Text("Purchasing, stock adjustments, and QuickBooks recovery require an administrator account.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if let syncMessage, !syncMessage.isEmpty {
+                        Section("Action Status") {
+                            Text(syncMessage)
+                                .font(.caption)
+                                .foregroundStyle(syncMessage.localizedCaseInsensitiveContains("failed") ? .orange : .secondary)
+                        }
+                    }
+
+                    if selectedWorkspace == .documents {
                     Section(header: Text("Upload Receipts")
                         .font(.headline)
                         .foregroundColor(Color.brandGold)) {
@@ -276,12 +311,17 @@ struct ReceiptsAndBillsView: View {
                             }
                         }
                     }
+                    }
 
-                    if isAdminUser {
+                    if selectedWorkspace == .purchasing, isAdminUser {
                         purchaseOrdersSection
+                    }
+
+                    if selectedWorkspace == .inventory, isAdminUser {
                         inventorySection
                     }
 
+                    if selectedWorkspace == .documents {
                     Section(header: Text("Sync and Transactions")
                         .font(.headline)
                         .foregroundColor(Color.brandGold)) {
@@ -376,14 +416,10 @@ struct ReceiptsAndBillsView: View {
                             ProgressView("Syncing...")
                                 .tint(Color.brandGold)
                         }
-                        if let syncMessage {
-                            Text(syncMessage)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
+                    }
                     }
 
-                    if isAdminUser {
+                    if selectedWorkspace == .recovery, isAdminUser {
                         Section(header: Text("Failed Upload Queue")
                             .font(.headline)
                             .foregroundColor(Color.brandGold)) {
@@ -456,7 +492,7 @@ struct ReceiptsAndBillsView: View {
                                             .disabled(isSyncing)
 
                                             Button("Delete", role: .destructive) {
-                                                removePendingUpload(pending.id)
+                                                pendingUploadForDeletion = pending
                                             }
                                             .buttonStyle(.bordered)
                                             .disabled(isSyncing)
@@ -472,8 +508,7 @@ struct ReceiptsAndBillsView: View {
                             .disabled(isSyncing || pendingUploads.isEmpty)
 
                             Button("Clear Queue", role: .destructive) {
-                                pendingUploads = []
-                                savePendingUploads()
+                                showingClearQueueConfirmation = true
                             }
                             .disabled(isSyncing || pendingUploads.isEmpty)
 
@@ -484,6 +519,7 @@ struct ReceiptsAndBillsView: View {
                         }
                     }
 
+                    if selectedWorkspace == .documents {
                     Section(header: Text("Selected Files")
                         .font(.headline)
                         .foregroundColor(Color.brandGold)) {
@@ -498,8 +534,9 @@ struct ReceiptsAndBillsView: View {
                         if receiptURL == nil && (!isAdminUser || billURL == nil) {
                             Text("No files selected.")
                                 .foregroundColor(.secondary)
-                                .italic()
+                            .italic()
                         }
+                    }
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -548,6 +585,42 @@ struct ReceiptsAndBillsView: View {
         } message: {
             Text("This device/simulator does not provide camera capture.")
         }
+        .confirmationDialog(
+            "Delete queued upload?",
+            isPresented: Binding(
+                get: { pendingUploadForDeletion != nil },
+                set: { if !$0 { pendingUploadForDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Queue Entry", role: .destructive) {
+                if requireAdministrator(for: "Deleting QuickBooks retry records"),
+                   let pendingUploadForDeletion {
+                    removePendingUpload(pendingUploadForDeletion.id)
+                }
+                pendingUploadForDeletion = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingUploadForDeletion = nil
+            }
+        } message: {
+            Text("This removes the retry record for \(pendingUploadForDeletion?.displayName ?? "this file"). The source file is not deleted, but it will no longer retry automatically.")
+        }
+        .confirmationDialog(
+            "Clear the failed upload queue?",
+            isPresented: $showingClearQueueConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clear \(pendingUploads.count) Queue Entries", role: .destructive) {
+                if requireAdministrator(for: "Clearing the QuickBooks retry queue") {
+                    pendingUploads = []
+                    savePendingUploads()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes every QuickBooks retry record. Source files are not deleted, but failed uploads will no longer retry automatically.")
+        }
         .onChange(of: selectedAttachEntityType) { _, _ in
             attachTargetOptions = []
             selectedAttachTargetID = ""
@@ -556,8 +629,25 @@ struct ReceiptsAndBillsView: View {
         .onChange(of: selectedServiceCallID) { _, _ in
             applyLinkedServiceCallDefaults()
         }
+        .onChange(of: isAdminUser) { _, newIsAdminUser in
+            if !ReceiptsBillsWorkspace.available(isAdminUser: newIsAdminUser).contains(selectedWorkspace) {
+                selectedWorkspace = .documents
+            }
+            if newIsAdminUser {
+                loadPendingUploads()
+            } else {
+                pendingUploads = []
+                selectedPendingUploadForDetail = nil
+                pendingUploadForDeletion = nil
+            }
+        }
         .onAppear {
-            loadPendingUploads()
+            if !ReceiptsBillsWorkspace.available(isAdminUser: isAdminUser).contains(selectedWorkspace) {
+                selectedWorkspace = .documents
+            }
+            if isAdminUser {
+                loadPendingUploads()
+            }
             applyLinkedServiceCallDefaults()
         }
         .sheet(item: $selectedPendingUploadForDetail) { pending in
@@ -565,6 +655,7 @@ struct ReceiptsAndBillsView: View {
                 pending: refreshPendingUploadDetails(for: pending),
                 isSyncing: isSyncing,
                 onRetryNow: {
+                    guard requireAdministrator(for: "Retrying QuickBooks uploads") else { return }
                     retryPendingUpload(pending, ignoreBackoff: true)
                     if pendingUploads.contains(where: { $0.id == pending.id }) {
                         selectedPendingUploadForDetail = refreshPendingUploadDetails(for: pending)
@@ -573,10 +664,13 @@ struct ReceiptsAndBillsView: View {
                     }
                 },
                 onDelete: {
-                    removePendingUpload(pending.id)
+                    if requireAdministrator(for: "Deleting QuickBooks retry records") {
+                        pendingUploadForDeletion = refreshPendingUploadDetails(for: pending)
+                    }
                     selectedPendingUploadForDetail = nil
                 },
                 onToggleTerminal: {
+                    guard requireAdministrator(for: "Changing QuickBooks retry state") else { return }
                     setPendingUploadTerminalStatus(
                         id: pending.id,
                         isTerminal: !refreshPendingUploadDetails(for: pending).isTerminalFailure
@@ -943,6 +1037,16 @@ private extension ReceiptsAndBillsView {
         case bill
     }
 
+    @discardableResult
+    func requireAdministrator(for action: String) -> Bool {
+        guard isAdminUser else {
+            selectedWorkspace = .documents
+            syncMessage = "\(action) requires an active administrator account. No changes were made."
+            return false
+        }
+        return true
+    }
+
     @MainActor
     func uploadReceiptToBackend() async {
         guard let receiptURL else {
@@ -1029,6 +1133,7 @@ private extension ReceiptsAndBillsView {
     }
 
     func syncDocuments() {
+        guard requireAdministrator(for: "QuickBooks document sync") else { return }
         let selectedFiles = [receiptURL, billURL].compactMap { $0 }
         guard !selectedFiles.isEmpty else {
             syncMessage = "Select at least one file before syncing."
@@ -1121,6 +1226,7 @@ private extension ReceiptsAndBillsView {
     }
 
     func retryPendingUploads() {
+        guard requireAdministrator(for: "Retrying QuickBooks uploads") else { return }
         guard !pendingUploads.isEmpty else { return }
         guard QuickBooksDataAPI.shared.isAuthenticated else {
             syncMessage = "Connect QuickBooks before retrying queued uploads."
@@ -1212,6 +1318,7 @@ private extension ReceiptsAndBillsView {
     }
 
     func retryPendingUpload(_ pending: PendingUploadRecord, ignoreBackoff: Bool) {
+        guard requireAdministrator(for: "Retrying QuickBooks uploads") else { return }
         guard !isSyncing else { return }
         guard QuickBooksDataAPI.shared.isAuthenticated else {
             syncMessage = "Connect QuickBooks before retrying queued uploads."
@@ -1318,6 +1425,7 @@ private extension ReceiptsAndBillsView {
     }
 
     func setPendingUploadTerminalStatus(id: UUID, isTerminal: Bool) {
+        guard requireAdministrator(for: "Changing QuickBooks retry state") else { return }
         guard let index = pendingUploads.firstIndex(where: { $0.id == id }) else { return }
         pendingUploads[index].isTerminalFailure = isTerminal
         if isTerminal {
@@ -1334,6 +1442,7 @@ private extension ReceiptsAndBillsView {
     }
 
     func purgeMissingFileEntries() {
+        guard requireAdministrator(for: "Purging QuickBooks retry records") else { return }
         let before = pendingUploads.count
         pendingUploads.removeAll { !FileManager.default.fileExists(atPath: $0.filePath) }
         sortPendingUploads()
@@ -1400,6 +1509,7 @@ private extension ReceiptsAndBillsView {
     }
 
     func loadAttachableTargets() {
+        guard requireAdministrator(for: "Loading QuickBooks attachment targets") else { return }
         isLoadingAttachTargets = true
         attachLookupMessage = nil
         attachTargetOptions = []
@@ -1595,6 +1705,7 @@ private extension ReceiptsAndBillsView {
     }
 
     func recordInventoryMovement() {
+        guard requireAdministrator(for: "Recording inventory movements") else { return }
         guard let item = selectedInventoryItem, item.tracksInventory else {
             inventoryMessage = "Choose a tracked pricebook item before recording stock."
             return
@@ -1668,6 +1779,7 @@ private extension ReceiptsAndBillsView {
     }
 
     func createPurchaseOrder() {
+        guard requireAdministrator(for: "Creating purchase orders") else { return }
         guard let vendor = selectedPurchaseOrderVendor,
               let quantity = Double(newPurchaseOrderQuantity), quantity > 0,
               let unitCost = Double(newPurchaseOrderUnitCost), unitCost >= 0 else {
@@ -1710,6 +1822,7 @@ private extension ReceiptsAndBillsView {
     }
 
     func updatePurchaseOrder(_ order: PurchaseOrder, to status: PurchaseOrderStatus) {
+        guard requireAdministrator(for: "Updating purchase orders") else { return }
         order.status = status
         do {
             try modelContext.save()
@@ -1727,6 +1840,7 @@ private extension ReceiptsAndBillsView {
     }
 
     func receivePurchaseOrder(_ order: PurchaseOrder) {
+        guard requireAdministrator(for: "Receiving purchase orders") else { return }
         let actorEmail = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
         let receipt = PurchaseOrderReceiving.receive(order, catalogItems: catalogItems, actorEmail: actorEmail)
         if let receipt {
@@ -1756,6 +1870,50 @@ private extension ReceiptsAndBillsView {
         }
         selectedServiceCall.documentationChecklist = true
         selectedServiceCall.documentationStartedAt = selectedServiceCall.documentationStartedAt ?? Date()
+    }
+}
+
+enum ReceiptsBillsWorkspace: String, CaseIterable, Identifiable {
+    case documents
+    case purchasing
+    case inventory
+    case recovery
+
+    var id: String { rawValue }
+
+    static func available(isAdminUser: Bool) -> [ReceiptsBillsWorkspace] {
+        isAdminUser ? allCases : [.documents]
+    }
+
+    var label: String {
+        switch self {
+        case .documents: "Documents"
+        case .purchasing: "Purchasing"
+        case .inventory: "Inventory"
+        case .recovery: "Recovery"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .documents: "doc.viewfinder"
+        case .purchasing: "cart"
+        case .inventory: "shippingbox"
+        case .recovery: "arrow.triangle.2.circlepath"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .documents:
+            "Capture receipts and bills, link them to jobs, and attach approved files to QuickBooks."
+        case .purchasing:
+            "Create supplier orders, preserve job and vendor context, and receive approved purchases."
+        case .inventory:
+            "Review low stock and record traceable receipts, transfers, reservations, use, returns, or adjustments."
+        case .recovery:
+            "Resolve deferred or failed QuickBooks uploads without discarding unsynced document work."
+        }
     }
 }
 
