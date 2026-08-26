@@ -225,6 +225,43 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testPaymentsUsesFocusedCollectionWorkspaces() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        let payments = app.staticTexts["Payments"]
+        XCTAssertTrue(payments.waitForExistence(timeout: 5))
+        payments.tap()
+        XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 3))
+
+        let workspacePicker = app.segmentedControls["PaymentsWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.exists)
+        XCTAssertTrue(workspacePicker.buttons["Overview"].isSelected)
+        XCTAssertTrue(app.staticTexts["Collections Dashboard"].exists)
+        XCTAssertTrue(app.staticTexts["Payment Status"].exists)
+        XCTAssertFalse(app.staticTexts["Outstanding Invoices"].exists)
+
+        workspacePicker.buttons["Collect"].tap()
+        XCTAssertTrue(workspacePicker.buttons["Collect"].isSelected)
+        XCTAssertTrue(app.staticTexts["Outstanding Invoices"].exists)
+        XCTAssertTrue(app.staticTexts["Record Payment"].exists)
+        XCTAssertFalse(app.staticTexts["Collections Dashboard"].exists)
+
+        workspacePicker.buttons["History"].tap()
+        XCTAssertTrue(workspacePicker.buttons["History"].isSelected)
+        XCTAssertTrue(app.staticTexts["Shared Field Collections"].exists)
+        XCTAssertTrue(app.staticTexts["Payment History"].exists)
+        XCTAssertFalse(app.staticTexts["Outstanding Invoices"].exists)
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         let app = XCUIApplication()

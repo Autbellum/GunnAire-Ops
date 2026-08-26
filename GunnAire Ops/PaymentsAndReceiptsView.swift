@@ -22,6 +22,7 @@ struct PaymentsAndReceiptsView: View {
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
 
     @StateObject private var onsitePaymentManager = OnsitePaymentManager.shared
+    @State private var selectedWorkspace: PaymentsWorkspace = .overview
     @State private var showingRecordPaymentSheet = false
     @State private var showingRefundSheet = false
     @State private var selectedInvoiceID: UUID?
@@ -173,6 +174,36 @@ struct PaymentsAndReceiptsView: View {
             WatermarkBackground()
             NavigationStack {
                 List {
+                    Section("Payments Workspace") {
+                        Picker("Workspace", selection: $selectedWorkspace) {
+                            ForEach(PaymentsWorkspace.allCases) { workspace in
+                                Text(workspace.label).tag(workspace)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityIdentifier("PaymentsWorkspacePicker")
+
+                        Label(selectedWorkspace.guidance, systemImage: selectedWorkspace.systemImage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if !actionMessage.isEmpty || !fieldHandoffMessage.isEmpty {
+                        Section("Action Status") {
+                            if !actionMessage.isEmpty {
+                                Text(actionMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(actionMessage.localizedCaseInsensitiveContains("failed") ? .orange : .secondary)
+                            }
+                            if !fieldHandoffMessage.isEmpty {
+                                Text(fieldHandoffMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(fieldHandoffMessage.localizedCaseInsensitiveContains("could not") ? .red : .secondary)
+                            }
+                        }
+                    }
+
+                    if selectedWorkspace == .overview {
                     Section("Collections Dashboard") {
                         metricRow(title: isAdminUser ? "Outstanding Balance" : "Assigned Balance", value: totalOutstandingBalance.formatted(.currency(code: "USD")))
                         metricRow(title: isAdminUser ? "Overdue Invoices" : "Assigned Overdue", value: "\(overdueInvoiceCount)")
@@ -204,7 +235,9 @@ struct PaymentsAndReceiptsView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
+                    }
 
+                    if selectedWorkspace == .collect {
                     if GunnAireBackendService.isConfigured {
                         fieldPaymentAssignmentSection
                     }
@@ -322,11 +355,6 @@ struct PaymentsAndReceiptsView: View {
                                         }
                                     }
 
-                                    if !fieldHandoffMessage.isEmpty {
-                                        Text(fieldHandoffMessage)
-                                            .font(.caption)
-                                            .foregroundColor(fieldHandoffMessage.localizedCaseInsensitiveContains("could not") ? .red : .secondary)
-                                    }
                                 }
                                 .padding(.vertical, 4)
                             }
@@ -349,11 +377,6 @@ struct PaymentsAndReceiptsView: View {
                                 .foregroundColor(.secondary)
                         }
 
-                        if !actionMessage.isEmpty {
-                            Text(actionMessage)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
                         if !backendUploadMessage.isEmpty {
                             Text(backendUploadMessage)
                                 .font(.caption)
@@ -373,7 +396,9 @@ struct PaymentsAndReceiptsView: View {
                                 .foregroundColor(.orange)
                         }
                     }
+                    }
 
+                    if selectedWorkspace == .history {
                     if isAdminUser {
                         Section("Shared Field Collections") {
                             HStack {
@@ -435,7 +460,7 @@ struct PaymentsAndReceiptsView: View {
                         }
                     }
 
-                    Section("Payments") {
+                    Section("Payment History") {
                         if visiblePayments.isEmpty {
                             Text("No payments recorded yet.")
                                 .foregroundColor(.secondary)
@@ -603,6 +628,7 @@ struct PaymentsAndReceiptsView: View {
                             }
                         }
                     }
+                    }
                 }
                 .navigationTitle("Payments")
             }
@@ -614,6 +640,9 @@ struct PaymentsAndReceiptsView: View {
             refundSheet
         }
         .onAppear {
+            if !isAdminUser, selectedWorkspace == .overview {
+                selectedWorkspace = .collect
+            }
             applyPendingIntentInvoiceIfNeeded()
             if isAdminUser, GunnAireBackendService.isConfigured, sharedPaymentCollections.isEmpty {
                 Task {
@@ -963,6 +992,7 @@ struct PaymentsAndReceiptsView: View {
         guard let pendingInvoiceID = GunnAireAppIntentRouter.consumePendingInvoiceCollectionID() else {
             return
         }
+        selectedWorkspace = .collect
         guard let invoice = visibleInvoices.first(where: { $0.id == pendingInvoiceID }) else {
             actionMessage = "This payment request is not assigned to your business account. Ask dispatch to assign the job before collecting payment."
             return
@@ -1683,6 +1713,41 @@ GunnAire
             Text(value)
                 .fontWeight(.semibold)
                 .foregroundColor(Color.brandGold)
+        }
+    }
+}
+
+enum PaymentsWorkspace: String, CaseIterable, Identifiable {
+    case overview
+    case collect
+    case history
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .overview: "Overview"
+        case .collect: "Collect"
+        case .history: "History"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview: "gauge.with.dots.needle.50percent"
+        case .collect: "dollarsign.arrow.circlepath"
+        case .history: "clock.arrow.circlepath"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .overview:
+            "Review outstanding balances, overdue work, collection totals, and payment readiness."
+        case .collect:
+            "Work assigned field tasks, open unpaid invoices, and start a guarded collection."
+        case .history:
+            "Review payment records, company uploads, receipts, refunds, and QuickBooks follow-up."
         }
     }
 }

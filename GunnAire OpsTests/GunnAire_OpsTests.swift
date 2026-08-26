@@ -274,6 +274,14 @@ struct GunnAire_OpsTests {
         #expect(QuickBooksManagementWorkspace.payments.guidance.localizedCaseInsensitiveContains("refunds"))
     }
 
+    @Test func paymentWorkspacesKeepCollectionAndReconciliationFocused() {
+        #expect(PaymentsWorkspace.allCases.map(\.label) == ["Overview", "Collect", "History"])
+        #expect(Set(PaymentsWorkspace.allCases.map(\.guidance)).count == 3)
+        #expect(PaymentsWorkspace.overview.guidance.localizedCaseInsensitiveContains("readiness"))
+        #expect(PaymentsWorkspace.collect.guidance.localizedCaseInsensitiveContains("assigned"))
+        #expect(PaymentsWorkspace.history.guidance.localizedCaseInsensitiveContains("QuickBooks"))
+    }
+
     @Test func fieldPaymentPromptQueueAnnouncesEveryPendingTaskOnce() {
         let first = BackendFieldPaymentAssignmentRecord(
             id: "assignment-1",
