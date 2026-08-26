@@ -24,6 +24,7 @@ from urllib.parse import unquote, urlparse
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
+SERVICE_VERSION = "2026.08.26.2"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -538,7 +539,7 @@ def record_audit_event(actor_email: str | None, action: str, subject_type: str, 
 
 
 class GunnAireBackendHandler(BaseHTTPRequestHandler):
-    server_version = "GunnAireBackend/1.0"
+    server_version = f"GunnAireBackend/{SERVICE_VERSION}"
 
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
@@ -548,7 +549,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/health":
-            self.write_json({"status": "ok", "time": utc_now()}, status=HTTPStatus.OK, require_auth=False)
+            self.write_json(
+                {"status": "ok", "serviceVersion": SERVICE_VERSION, "time": utc_now()},
+                status=HTTPStatus.OK,
+                require_auth=False,
+            )
             return
         if parsed.path.startswith("/portal/"):
             self.render_customer_portal(unquote(parsed.path.removeprefix("/portal/")).strip())
@@ -1662,6 +1667,7 @@ def main() -> None:
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer((HOST, PORT), GunnAireBackendHandler)
     print(f"GunnAire backend listening on http://{HOST}:{PORT}")
+    print(f"Service version: {SERVICE_VERSION}")
     print(f"Database: {DB_PATH}")
     print(f"Storage: {STORAGE_ROOT}")
     server.serve_forever()

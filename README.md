@@ -1,115 +1,30 @@
-# GunnAire Ops Mac Studio Backend
+# GunnAire Ops
 
-This is a small backend for sharing app users, roles, uploaded field receipts, and field payment records across iPads.
+GunnAire Ops is the native iPad, iPhone, and Mac Catalyst HVAC field-service
+suite in [`GunnAire Ops.xcodeproj`](GunnAire%20Ops.xcodeproj).
 
-## Start It On The Mac Studio
+## Backend deployment
 
-```sh
-cd "/Users/gunnaire/Library/Mobile Documents/com~apple~CloudDocs/GunnAire-Ops/Backend"
-export GUNNAIRE_BACKEND_API_TOKEN="replace-with-a-long-random-token"
-export GUNNAIRE_BACKEND_PORT=8787
-# QBO confidential credentials belong here, never in the iOS app or xcconfig.
-export GUNNAIRE_QBO_CLIENT_ID="your-intuit-client-id"
-export GUNNAIRE_QBO_CLIENT_SECRET="your-intuit-client-secret"
-export GUNNAIRE_QBO_REDIRECT_URI="https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback"
-# Optional browser clients only; native iPad/Mac requests do not need CORS.
-export GUNNAIRE_ALLOWED_CORS_ORIGINS="https://ops.gunnaire.com"
-# Default is 12 MiB; set within the supported 1–25 MiB range if needed.
-export GUNNAIRE_MAX_DOCUMENT_BYTES=$((12 * 1024 * 1024))
-python3 gunnaire_backend.py
-```
-
-Use the Mac Studio LAN name or IP address in the iOS app config:
-
-```xcconfig
-GUNNAIRE_BACKEND_BASE_URL = http://macstudio.local:8787
-GUNNAIRE_BACKEND_API_TOKEN = replace-with-a-long-random-token
-```
-
-The token in the backend environment and the app config must match.
-
-## Production identity mode
-
-`api-token` mode is retained only for a physically controlled LAN/development server. It grants the holder of the shared token administrator-equivalent backend access and must not be exposed outside that environment.
-
-For a deployed multi-user server, terminate TLS before the backend and use Google ID-token verification:
+The canonical shared-service implementation, configuration guide, and local
+test commands are in [`Backend/`](Backend/README.md). The repository-root
+`gunnaire_backend.py` and `requirements.txt` files are deliberately small
+Render compatibility shims:
 
 ```sh
 python3 -m pip install -r requirements.txt
-export GUNNAIRE_BACKEND_AUTH_MODE="google-id-token"
-export GUNNAIRE_GOOGLE_CLIENT_ID="your-iOS-google-client-id.apps.googleusercontent.com"
-export GUNNAIRE_GOOGLE_ALLOWED_DOMAIN="gunnaire.com"
 python3 gunnaire_backend.py
 ```
 
-Then set `GUNNAIRE_BACKEND_AUTH_MODE = google-id-token` in the app build configuration, use an HTTPS `GUNNAIRE_BACKEND_BASE_URL`, and omit the shared API token. The backend verifies the signed-in Google identity, requires an approved active user, and enforces backend roles: only administrators manage users or customer-email/QBO operations; administrators and field technicians can submit payment metadata.
+Do not copy service code into the root launcher. Keeping one implementation in
+`Backend/gunnaire_backend.py` ensures Render uses the same encrypted,
+realm-bound QuickBooks OAuth flow and role policies covered by backend tests.
 
-## Render deployment
+## Product and release evidence
 
-Deploy this directory as a Python **Web Service** with the start command:
-
-```sh
-python3 gunnaire_backend.py
-```
-
-Render provides `PORT` automatically. Attach a persistent disk at `/var/data` and set `GUNNAIRE_BACKEND_DATA_DIR=/var/data`; this keeps both the SQLite database and uploaded field documents outside Render's ephemeral filesystem. Configure the following as encrypted Render environment variables, never in the repository:
-
-```sh
-GUNNAIRE_BACKEND_AUTH_MODE=google-id-token
-GUNNAIRE_GOOGLE_CLIENT_ID=your-iOS-google-client-id.apps.googleusercontent.com
-GUNNAIRE_GOOGLE_ALLOWED_DOMAIN=gunnaire.com
-GUNNAIRE_QBO_CLIENT_ID=your-intuit-client-id
-GUNNAIRE_QBO_CLIENT_SECRET=your-intuit-client-secret
-GUNNAIRE_QBO_REDIRECT_URI=https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback
-GUNNAIRE_BACKEND_DATA_DIR=/var/data
-```
-
-Use `api.gunnaire.com` as the custom HTTPS domain after Render provides its DNS target. Do not enable the public booking or customer portal flags until their customer-facing web routes, privacy notices, and rate-limit testing are ready. Establish an off-host backup of the mounted data before production use.
-
-## What It Stores
-
-- Approved GunnAire app users and roles.
-- Active/inactive access state.
-- Uploaded receipt/document files under `Backend/storage`, retaining their service call, invoice, estimate, customer-equipment, equipment-name, and customer links for cross-device retrieval.
-- Field payment collection records for admin QuickBooks reconciliation.
-- Transactional email audit records, linked to the customer, job, estimate/invoice, and attachment names.
-- Administrator-only server activity events for role changes, shared-document uploads, payment metadata, customer-communication records, booking claims, and QuickBooks authorization lifecycle actions. Tokens, card data, and customer-content fields are intentionally not recorded.
-- An optional public online-booking request inbox. It never creates a job directly: dispatch imports, qualifies, and schedules each request.
-- Backend metadata in `gunnaire_backend.sqlite3`.
-
-The primary admin `eric.gunn@gunnaire.com` is seeded automatically and cannot be deactivated.
-
-Shared-document uploads validate all metadata before a file is written and reject files above `GUNNAIRE_MAX_DOCUMENT_BYTES` (12 MiB by default). Browser CORS is deny-by-default; configure only the specific HTTPS origins that need it with `GUNNAIRE_ALLOWED_CORS_ORIGINS`. Native GunnAire Ops clients are unaffected.
-
-## Online booking handoff
-
-Keep public intake disabled by default. When a reviewed website form and HTTPS deployment are ready, set `GUNNAIRE_PUBLIC_BOOKING_ENABLED=true`. The form posts JSON to `POST /api/public/service-requests` with `customerName`, a `phone` or `email`, `summary`, `requestedServiceType` (`service`, `estimate`, `install`, or `maintenance`), `urgency`, and explicit `contactConsent: true`. An empty `website` honeypot may be included.
-
-The endpoint is rate-limited per source IP (default: five requests/hour), stores only request data, and returns an acknowledgement. It does not expose availability or create a customer/job. Dispatchers import requests from **Schedule → Incoming Requests → Import Online**, qualify them, and create the appointment; scheduling claims the server request so it cannot be imported again. Add website-specific bot protection, terms/privacy links, and a contact-consent notice before enabling it publicly.
-
-## Customer portal handoff
-
-The customer portal is intentionally disabled by default. It is not a general customer-login system or a public business API. When the business is ready to publish it behind HTTPS, set:
-
-```sh
-export GUNNAIRE_CUSTOMER_PORTAL_ENABLED=true
-export GUNNAIRE_CUSTOMER_PORTAL_BASE_URL="https://portal.gunnaire.com"
-export GUNNAIRE_CUSTOMER_PORTAL_MAX_DAYS=30
-```
-
-An administrator can then create an expiring, revocable link from a job in GunnAire Ops. The link shows only the sanitized appointment and linked-invoice snapshot provided at creation time. It cannot browse customer data, change scheduling, download files, or take a payment. Tokens are random, only their SHA-256 hashes are retained by the server, and create/revoke actions enter the server audit log. Staff must still explicitly share the link; no email is sent automatically. Host the public route on the configured HTTPS domain, set a customer-facing privacy policy, and test expiry and revocation before enabling it for customers.
-
-## QuickBooks OAuth bridge
-
-`POST /api/qbo/exchange`, `/api/qbo/refresh`, and `/api/qbo/revoke` are administrator-only backend operations used by the app after the registered HTTPS callback hands the authorization code back to `gunnaireops://`. The bridge sends the client secret to Intuit and returns only the necessary token result to the authenticated app. Run this backend behind HTTPS and in Google ID-token mode before connecting a production QBO company.
-
-## Quick Checks
-
-```sh
-curl http://macstudio.local:8787/health
-curl -H "Authorization: Bearer replace-with-a-long-random-token" http://macstudio.local:8787/api/users
-```
-
-Field payment records are accepted at `POST /api/payments`. The app sends metadata only: amount, method, customer/invoice references, last four digits, authorization reference, notes, and collector email. Full card numbers, CVC values, and bank account numbers are not stored by this backend.
-
-Administrators can review recent shared-server activity from **Settings → Integrations → Shared Server Activity**, or request `GET /api/audit-events`. This log supports operational review; it is not a replacement for an immutable compliance archive or tested backup policy.
+- [`CAPABILITY_AUDIT.md`](CAPABILITY_AUDIT.md) — field-service benchmark and
+  implemented workflow inventory.
+- [`COMPLETION_EVIDENCE_MATRIX.md`](COMPLETION_EVIDENCE_MATRIX.md) — verified
+  product requirements and external gates.
+- [`RELEASE_READINESS.md`](RELEASE_READINESS.md) — Apple, backend, OAuth, and
+  physical-device release requirements.
+- [`AppStoreAssets/`](AppStoreAssets/) — verified App Store screenshot assets.
