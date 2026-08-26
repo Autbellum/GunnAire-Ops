@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import sqlite3
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,7 +25,7 @@ from urllib.parse import unquote, urlparse
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.26.2"
+SERVICE_VERSION = "2026.08.26.3"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -47,6 +48,13 @@ STORAGE_ROOT = Path(
         str(DATA_ROOT / "storage") if DATA_ROOT else "storage",
     )
 ).expanduser()
+BACKUP_STATUS_PATH = Path(
+    os.environ.get(
+        "GUNNAIRE_BACKUP_STATUS_FILE",
+        str(DATA_ROOT / "backup_status.json") if DATA_ROOT else "backup_status.json",
+    )
+).expanduser()
+BACKUP_MAX_AGE_HOURS = min(max(int(os.environ.get("GUNNAIRE_BACKUP_MAX_AGE_HOURS", "24")), 1), 24 * 30)
 QBO_CLIENT_ID = os.environ.get("GUNNAIRE_QBO_CLIENT_ID", "").strip()
 QBO_CLIENT_SECRET = os.environ.get("GUNNAIRE_QBO_CLIENT_SECRET", "").strip()
 QBO_REDIRECT_URI = os.environ.get("GUNNAIRE_QBO_REDIRECT_URI", "").strip()
@@ -208,6 +216,116 @@ def db() -> sqlite3.Connection:
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     return connection
+
+
+def path_is_within(path: Path, root: Path) -> bool:
+    try:
+        resolved_path = path.resolve()
+        resolved_root = root.resolve()
+    except OSError:
+        return False
+    return resolved_path == resolved_root or resolved_root in resolved_path.parents
+
+
+def readiness_component(component_id: str, title: str, status: str, detail: str) -> dict[str, str]:
+    return {"id": component_id, "title": title, "status": status, "detail": detail}
+
+
+def database_readiness_component() -> dict[str, str]:
+    try:
+        with db() as connection:
+            result = connection.execute("PRAGMA quick_check").fetchone()
+            if result is None or str(result[0]).lower() != "ok":
+                return readiness_component("database", "Database", "error", "SQLite integrity check did not pass.")
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("ROLLBACK")
+        return readiness_component("database", "Database", "ready", "SQLite is readable, writable, and internally consistent.")
+    except sqlite3.Error:
+        return readiness_component("database", "Database", "error", "SQLite is unavailable or not writable.")
+
+
+def storage_readiness_component() -> dict[str, str]:
+    try:
+        STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(prefix=".gunnaire-readiness-", dir=STORAGE_ROOT, delete=True) as probe:
+            probe.write(b"ready")
+            probe.flush()
+            os.fsync(probe.fileno())
+        return readiness_component("storage", "Document Storage", "ready", "Shared document storage is readable and writable.")
+    except OSError:
+        return readiness_component("storage", "Document Storage", "error", "Shared document storage is unavailable or not writable.")
+
+
+def persistent_data_readiness_component() -> dict[str, str]:
+    configured = DATA_ROOT is not None and path_is_within(DB_PATH, DATA_ROOT) and path_is_within(STORAGE_ROOT, DATA_ROOT)
+    if configured:
+        return readiness_component("persistent-data", "Persistent Data", "ready", "Database and documents are rooted in the configured persistent data directory.")
+    return readiness_component("persistent-data", "Persistent Data", "attention", "Configure one persistent data root for both the database and shared documents.")
+
+
+def authentication_readiness_component() -> dict[str, str]:
+    if AUTH_MODE == "google-id-token":
+        return readiness_component("authentication", "Authentication", "ready", "Google business identity mode is active.")
+    return readiness_component("authentication", "Authentication", "attention", "Shared API-token mode is for a physically controlled development server only.")
+
+
+def quickbooks_readiness_component() -> dict[str, str]:
+    if not qbo_is_configured() or not qbo_token_storage_is_configured():
+        return readiness_component("quickbooks", "QuickBooks Bridge", "attention", "Configure Intuit credentials, redirect URI, and encrypted refresh-token storage.")
+    try:
+        with db() as connection:
+            row = connection.execute(
+                "SELECT realm_id, environment, refresh_token_ciphertext, client_id_fingerprint FROM qbo_connections WHERE id = 1"
+            ).fetchone()
+    except sqlite3.Error:
+        return readiness_component("quickbooks", "QuickBooks Bridge", "error", "QuickBooks connection storage is unavailable.")
+    if row is None:
+        return readiness_component("quickbooks", "QuickBooks Bridge", "attention", "Bridge configuration is present; authorize the approved QuickBooks company realm.")
+    expected_fingerprint = hashlib.sha256(QBO_CLIENT_ID.encode("utf-8")).hexdigest()
+    if row["environment"] != QBO_ENVIRONMENT or row["client_id_fingerprint"] != expected_fingerprint:
+        return readiness_component("quickbooks", "QuickBooks Bridge", "error", "Saved QuickBooks authorization does not match this client or environment.")
+    if not decrypt_qbo_refresh_token(row["refresh_token_ciphertext"]):
+        return readiness_component("quickbooks", "QuickBooks Bridge", "error", "Saved QuickBooks authorization cannot be decrypted; reconnect safely.")
+    return readiness_component("quickbooks", "QuickBooks Bridge", "ready", f"Encrypted authorization is available for the {QBO_ENVIRONMENT} company realm.")
+
+
+def backup_readiness_component(now: datetime | None = None) -> dict[str, str]:
+    checked_at = now or datetime.now(timezone.utc)
+    try:
+        if not BACKUP_STATUS_PATH.is_file() or BACKUP_STATUS_PATH.stat().st_size > 64 * 1024:
+            raise ValueError("missing backup status")
+        payload = json.loads(BACKUP_STATUS_PATH.read_text(encoding="utf-8"))
+        verified_at_raw = payload.get("verifiedAt") if isinstance(payload, dict) else None
+        artifact_id = payload.get("artifactID") if isinstance(payload, dict) else None
+        if not isinstance(verified_at_raw, str) or not isinstance(artifact_id, str):
+            raise ValueError("invalid backup status")
+        verified_at = datetime.fromisoformat(verified_at_raw.replace("Z", "+00:00"))
+        if verified_at.tzinfo is None:
+            raise ValueError("backup status lacks timezone")
+        age_hours = max((checked_at - verified_at.astimezone(timezone.utc)).total_seconds() / 3600, 0)
+        if age_hours > BACKUP_MAX_AGE_HOURS:
+            return readiness_component("backup", "Verified Backup", "attention", f"Latest verified backup is {age_hours:.1f} hours old; target is {BACKUP_MAX_AGE_HOURS} hours or less.")
+        return readiness_component("backup", "Verified Backup", "ready", f"Backup {artifact_id[:12]} was verified {age_hours:.1f} hours ago; retain a copy off-host.")
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return readiness_component("backup", "Verified Backup", "attention", "No recent verified backup record is available; create and retain an off-host backup.")
+
+
+def backend_readiness_snapshot(now: datetime | None = None) -> dict[str, object]:
+    components = [
+        persistent_data_readiness_component(),
+        database_readiness_component(),
+        storage_readiness_component(),
+        authentication_readiness_component(),
+        quickbooks_readiness_component(),
+        backup_readiness_component(now=now),
+    ]
+    overall = "ready" if all(component["status"] == "ready" for component in components) else "attention"
+    return {
+        "status": overall,
+        "serviceVersion": SERVICE_VERSION,
+        "checkedAt": (now or datetime.now(timezone.utc)).isoformat(),
+        "components": components,
+    }
 
 
 def ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -563,6 +681,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/session":
             self.write_json({"user": self.principal()})
+            return
+        if parsed.path == "/api/readiness":
+            if not self.require_admin():
+                return
+            self.write_json(backend_readiness_snapshot())
             return
         if parsed.path == "/api/users":
             if not self.require_admin():

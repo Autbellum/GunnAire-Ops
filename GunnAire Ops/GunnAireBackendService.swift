@@ -201,6 +201,26 @@ struct BackendAuditEventRecord: Codable, Identifiable {
     }
 }
 
+struct BackendReadinessComponent: Codable, Identifiable, Equatable {
+    let id: String
+    let title: String
+    let status: String
+    let detail: String
+
+    var isReady: Bool { status.caseInsensitiveCompare("ready") == .orderedSame }
+    var isError: Bool { status.caseInsensitiveCompare("error") == .orderedSame }
+}
+
+struct BackendReadinessSnapshot: Codable, Equatable {
+    let status: String
+    let serviceVersion: String
+    let checkedAt: String
+    let components: [BackendReadinessComponent]
+
+    var isReady: Bool { status.caseInsensitiveCompare("ready") == .orderedSame }
+    var attentionCount: Int { components.filter { !$0.isReady }.count }
+}
+
 struct BackendCustomerPortalLink: Codable, Identifiable {
     let id: String
     let url: String
@@ -501,6 +521,15 @@ enum GunnAireBackendService {
     static func fetchAuditEvents() async throws -> [BackendAuditEventRecord] {
         let data = try await send(path: "/api/audit-events", method: "GET")
         return try JSONDecoder().decode(AuditEventsResponse.self, from: data).events
+    }
+
+    static func fetchReadiness() async throws -> BackendReadinessSnapshot {
+        let data = try await send(path: "/api/readiness", method: "GET")
+        return try decodeReadiness(from: data)
+    }
+
+    static func decodeReadiness(from data: Data) throws -> BackendReadinessSnapshot {
+        try JSONDecoder().decode(BackendReadinessSnapshot.self, from: data)
     }
 
     static func claimServiceRequest(id: String) async throws {

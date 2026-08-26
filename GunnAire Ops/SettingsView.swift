@@ -34,6 +34,10 @@ struct SettingsView: View {
     @State private var backendAuditEvents: [BackendAuditEventRecord] = []
     @State private var isLoadingBackendAudit = false
     @State private var backendAuditMessage: String?
+    @State private var backendReadiness: BackendReadinessSnapshot?
+    @State private var isLoadingBackendReadiness = false
+    @State private var backendReadinessMessage: String?
+    @State private var showingBackendReadinessDetails = false
     @State private var showingFieldFormTemplates = false
     @State private var showingCustomerPortalLinks = false
     @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness = .couldNotDetermine
@@ -572,6 +576,57 @@ struct SettingsView: View {
         }
 
         if isAdminUser {
+            Section("Shared Server Readiness") {
+                Button {
+                    refreshBackendReadiness()
+                } label: {
+                    Label(
+                        isLoadingBackendReadiness ? "Checking Shared Server..." : "Refresh Readiness",
+                        systemImage: "server.rack"
+                    )
+                }
+                .disabled(isLoadingBackendReadiness || !GunnAireBackendService.isConfigured)
+                .accessibilityIdentifier("BackendReadinessRefreshButton")
+
+                if !GunnAireBackendService.isConfigured {
+                    Label("Shared server is not configured for this build.", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else if let backendReadiness {
+                    LabeledContent("Overall") {
+                        Label(
+                            backendReadiness.isReady ? "Ready" : "(backendReadiness.attentionCount) need attention",
+                            systemImage: backendReadiness.isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                        )
+                        .foregroundStyle(backendReadiness.isReady ? .green : .orange)
+                    }
+                    LabeledContent("Service Version", value: backendReadiness.serviceVersion)
+
+                    DisclosureGroup("Readiness Details", isExpanded: $showingBackendReadinessDetails) {
+                        ForEach(backendReadiness.components) { component in
+                            backendReadinessRow(component)
+                        }
+                    }
+
+                    Text("Checked (readinessCheckTime(backendReadiness.checkedAt)). A verified backup record proves the artifact passed integrity checks; operations must still retain a copy off-host.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Readiness verifies persistent data placement, database and document writes, business authentication, encrypted QuickBooks authorization, and recent backup evidence.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let backendReadinessMessage {
+                    Text(backendReadinessMessage)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .task {
+                if backendReadiness == nil { refreshBackendReadiness() }
+            }
+
             Section("Customer Portal") {
                 Button {
                     showingCustomerPortalLinks = true
@@ -698,6 +753,49 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private func refreshBackendReadiness() {
+        guard GunnAireBackendService.isConfigured, !isLoadingBackendReadiness else { return }
+        isLoadingBackendReadiness = true
+        backendReadinessMessage = nil
+        Task {
+            do {
+                let snapshot = try await GunnAireBackendService.fetchReadiness()
+                await MainActor.run {
+                    backendReadiness = snapshot
+                    showingBackendReadinessDetails = !snapshot.isReady
+                    isLoadingBackendReadiness = false
+                }
+            } catch {
+                await MainActor.run {
+                    backendReadinessMessage = "Unable to verify shared-server readiness: \(error.localizedDescription)"
+                    isLoadingBackendReadiness = false
+                }
+            }
+        }
+    }
+
+    private func backendReadinessRow(_ component: BackendReadinessComponent) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: component.isReady ? "checkmark.circle.fill" : component.isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(component.isReady ? .green : component.isError ? .red : .orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(component.title)
+                    .font(.subheadline.weight(.semibold))
+                Text(component.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func readinessCheckTime(_ value: String) -> String {
+        guard let date = ISO8601DateFormatter().date(from: value) else { return value }
+        return date.formatted(date: .abbreviated, time: .shortened)
     }
 
     @MainActor

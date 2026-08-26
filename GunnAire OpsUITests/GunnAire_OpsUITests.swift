@@ -140,6 +140,45 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdministratorSettingsKeepsServerReadinessFocusedAndDiscoverable() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin"
+        ]
+        app.launch()
+
+        let settings = app.buttons["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 3))
+
+        let settingsArea = app.segmentedControls.firstMatch
+        XCTAssertTrue(settingsArea.waitForExistence(timeout: 3))
+        settingsArea.buttons["Sync"].tap()
+
+        let settingsForm = app.collectionViews.allElementsBoundByIndex.last!
+        func reveal(_ element: XCUIElement, maximumSwipes: Int = 4) -> Bool {
+            if element.waitForExistence(timeout: 1) {
+                return true
+            }
+            for _ in 0..<maximumSwipes {
+                settingsForm.swipeUp()
+                if element.waitForExistence(timeout: 1) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        XCTAssertTrue(reveal(app.staticTexts["Shared Server Readiness"]))
+        XCTAssertTrue(app.buttons["BackendReadinessRefreshButton"].exists)
+        XCTAssertTrue(reveal(app.staticTexts["Customer Portal"], maximumSwipes: 2))
+        XCTAssertTrue(reveal(app.staticTexts["Shared Server Activity"], maximumSwipes: 2))
+    }
+
+    @MainActor
     func testDispatchWeekBoardOpensAsDedicatedIPadWorkspace() throws {
         let app = XCUIApplication()
         app.launchArguments = [

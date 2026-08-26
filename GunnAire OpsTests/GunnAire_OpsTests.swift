@@ -10550,6 +10550,40 @@ struct GunnAire_OpsTests {
         #expect(records[0].collectedBy == "tech@gunnaire.com")
     }
 
+    @Test func backendReadinessDecodesActionableAdminStatusWithoutSecrets() async throws {
+        let json = Data("""
+        {
+          "status": "attention",
+          "serviceVersion": "2026.08.26.3",
+          "checkedAt": "2026-08-26T20:00:00+00:00",
+          "components": [
+            {
+              "id": "database",
+              "title": "Database",
+              "status": "ready",
+              "detail": "SQLite is readable, writable, and internally consistent."
+            },
+            {
+              "id": "backup",
+              "title": "Verified Backup",
+              "status": "attention",
+              "detail": "No recent verified backup record is available."
+            }
+          ]
+        }
+        """.utf8)
+
+        let snapshot = try GunnAireBackendService.decodeReadiness(from: json)
+
+        #expect(snapshot.isReady == false)
+        #expect(snapshot.attentionCount == 1)
+        #expect(snapshot.serviceVersion == "2026.08.26.3")
+        #expect(snapshot.components.first?.isReady == true)
+        #expect(snapshot.components.last?.id == "backup")
+        #expect(String(decoding: json, as: UTF8.self).contains("refresh_token") == false)
+        #expect(String(decoding: json, as: UTF8.self).contains("client_secret") == false)
+    }
+
     @Test func backendDocumentsDecodeSharedDocumentInventoryResponse() async throws {
         let json = Data("""
         {

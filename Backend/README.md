@@ -130,4 +130,16 @@ before treating the deployment as current.
 
 Field payment records are accepted at `POST /api/payments`. The app sends metadata only: amount, method, customer/invoice references, last four digits, authorization reference, notes, and collector email. Full card numbers, CVC values, and bank account numbers are not stored by this backend.
 
-Administrators can review recent shared-server activity from **Settings → Integrations → Shared Server Activity**, or request `GET /api/audit-events`. This log supports operational review; it is not a replacement for an immutable compliance archive or tested backup policy.
+Administrators can review recent shared-server activity from **Settings → Sync → Shared Server Activity**, or request `GET /api/audit-events`. This log supports operational review; it is not a replacement for an immutable compliance archive or tested backup policy.
+
+Administrators can request `GET /api/readiness` or use **Settings → Sync →
+Shared Server Readiness** to verify persistent data placement, SQLite integrity
+and write access, document-storage write access, business authentication mode,
+encrypted QBO authorization, and recent backup evidence. Details never include
+paths, tokens, secrets, or customer content.
+
+Use `Backend/backup_backend.py` for manifest-backed backup creation,
+verification, and a non-overwriting restore drill. See
+`BACKEND_OPERATIONS_RUNBOOK.md` for the production procedure and ownership
+gates. A `backup_status.json` record proves local verification only; retain the
+artifact outside Render and its persistent disk.
