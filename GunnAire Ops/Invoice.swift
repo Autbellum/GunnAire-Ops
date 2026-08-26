@@ -32,6 +32,9 @@ final class Invoice {
     @Relationship(originalName: "payments", inverse: \Payment.invoice) private var storedPayments: [Payment]?
     var quickBooksID: String?
     var quickBooksBalanceDue: Double?
+    var quickBooksSyncStatus: String = "pending"
+    var quickBooksSyncDetail: String?
+    var quickBooksLastSyncedAt: Date?
     var workTypeRaw: String = InvoiceWorkType.service.rawValue
     var lineItemSummary: String = ""
     var catalogSnapshotJSON: String?
@@ -51,6 +54,9 @@ final class Invoice {
         customer: Customer,
         quickBooksID: String? = nil,
         quickBooksBalanceDue: Double? = nil,
+        quickBooksSyncStatus: String? = nil,
+        quickBooksSyncDetail: String? = nil,
+        quickBooksLastSyncedAt: Date? = nil,
         workType: InvoiceWorkType = .service,
         lineItemSummary: String = "",
         catalogSnapshotJSON: String? = nil,
@@ -69,6 +75,9 @@ final class Invoice {
         self.customer = customer
         self.quickBooksID = quickBooksID
         self.quickBooksBalanceDue = quickBooksBalanceDue
+        self.quickBooksSyncStatus = quickBooksSyncStatus ?? (quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? "synced" : "pending")
+        self.quickBooksSyncDetail = quickBooksSyncDetail
+        self.quickBooksLastSyncedAt = quickBooksLastSyncedAt
         self.workTypeRaw = workType.rawValue
         self.lineItemSummary = lineItemSummary
         self.catalogSnapshotJSON = catalogSnapshotJSON
@@ -109,6 +118,18 @@ final class Invoice {
 
     var hasQuickBooksBalance: Bool {
         quickBooksBalanceDue != nil && quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    var quickBooksSyncState: String {
+        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+           quickBooksSyncStatus == "synced" {
+            return "synced"
+        }
+        return quickBooksSyncStatus
+    }
+
+    var needsQuickBooksAttention: Bool {
+        quickBooksSyncState == "needs_attention"
     }
 
     static func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {

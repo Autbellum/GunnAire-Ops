@@ -67,17 +67,27 @@ private enum GunnAireUITestFixtures {
     private static let serviceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000002")!
     private static let invoiceID = UUID(uuidString: "A1000000-0000-4000-8000-000000000003")!
     private static let standardUserID = UUID(uuidString: "A1000000-0000-4000-8000-000000000004")!
+    private static let technicianUserID = UUID(uuidString: "A1000000-0000-4000-8000-000000000005")!
+    private static let technicianID = UUID(uuidString: "A1000000-0000-4000-8000-000000000006")!
+    private static let catalogItemID = UUID(uuidString: "A1000000-0000-4000-8000-000000000007")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
         guard arguments.contains("-disableCloudKitForTesting") else { return }
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
-        for user in appUsers where user.id == standardUserID || user.email == GunnAireUITestIdentity.standardEmail {
+        for user in appUsers where
+            user.id == standardUserID ||
+            user.id == technicianUserID ||
+            user.email == GunnAireUITestIdentity.standardEmail ||
+            user.email == GunnAireUITestIdentity.technicianEmail {
             context.delete(user)
         }
         if arguments.contains("-uiTestAuthenticatedStandard") {
             context.insert(AppUser(id: standardUserID, email: GunnAireUITestIdentity.standardEmail, role: .standard))
+        }
+        if arguments.contains("-uiTestAuthenticatedTechnician") {
+            context.insert(AppUser(id: technicianUserID, email: GunnAireUITestIdentity.technicianEmail, role: .fieldTechnician))
         }
 
         let payments = try context.fetch(FetchDescriptor<Payment>())
@@ -96,6 +106,14 @@ private enum GunnAireUITestFixtures {
         for customer in customers where customer.id == customerID {
             context.delete(customer)
         }
+        let technicians = try context.fetch(FetchDescriptor<Technician>())
+        for technician in technicians where technician.id == technicianID || technician.contactInfo == GunnAireUITestIdentity.technicianEmail {
+            context.delete(technician)
+        }
+        let catalogItems = try context.fetch(FetchDescriptor<Item>())
+        for item in catalogItems where item.id == catalogItemID || item.name == "UI Test Added Repair" {
+            context.delete(item)
+        }
         try context.save()
 
         guard arguments.contains("-uiTestSeedCollectibleJob") else { return }
@@ -106,6 +124,19 @@ private enum GunnAireUITestFixtures {
             phone: "555-0100",
             email: "uitest@gunnaire.com",
             address: "100 Test Air Way"
+        )
+        let technician = Technician(
+            id: technicianID,
+            name: "UI Test Technician",
+            contactInfo: GunnAireUITestIdentity.technicianEmail
+        )
+        let catalogItem = Item(
+            id: catalogItemID,
+            name: "HVAC Diagnostic Service",
+            itemType: .service,
+            unitPrice: 189,
+            purchaseCost: 42,
+            itemDescription: "Diagnostic visit and system evaluation"
         )
         let scheduledDate = Calendar.current.date(
             bySettingHour: 9,
@@ -124,6 +155,7 @@ private enum GunnAireUITestFixtures {
             equipmentSerialNumber: "UITEST100",
             type: .service,
             scheduledDate: scheduledDate,
+            assignedTechnician: technician,
             customer: customer,
             status: .invoiced,
             workCompletedChecklist: true,
@@ -135,11 +167,14 @@ private enum GunnAireUITestFixtures {
             serviceCallID: serviceCallID,
             customer: customer,
             workType: .service,
-            lineItemSummary: "HVAC diagnostic service",
+            lineItemSummary: "HVAC Diagnostic Service - $189.00",
+            catalogSnapshotJSON: CatalogLineItemSnapshot.encoded(from: [catalogItem]),
             amount: 189,
             status: "unpaid"
         )
         context.insert(customer)
+        context.insert(technician)
+        context.insert(catalogItem)
         context.insert(call)
         context.insert(invoice)
         try context.save()

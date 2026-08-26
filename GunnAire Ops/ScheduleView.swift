@@ -254,7 +254,7 @@ struct ScheduleView: View {
                                                 .tint(.green)
                                             }
 
-                                            if isAdminUser {
+                                            if isAdminUser || canCollectFieldPayments {
                                                 Button {
                                                     openDocumentationInCloseout = false
                                                     openDocumentationInTapToPay = false
@@ -1081,7 +1081,7 @@ struct ScheduleView: View {
                     .buttonStyle(.bordered)
                 }
 
-                if isAdminUser {
+                if isAdminUser || canCollectFieldPayments {
                     Button(documentationActionTitle(for: call, compact: true)) {
                         openDocumentationInCloseout = false
                         openDocumentationInTapToPay = false

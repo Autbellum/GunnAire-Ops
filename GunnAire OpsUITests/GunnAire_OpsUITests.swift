@@ -196,6 +196,71 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAssignedTechnicianAddsInvoiceItemAndUpdatesExistingInvoice() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
+        for _ in 0..<6 {
+            if documentation.exists && documentation.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(documentation.waitForExistence(timeout: 3))
+        documentation.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        XCTAssertTrue(stagePicker.buttons["Billing"].isSelected)
+        XCTAssertFalse(app.buttons["Create Invoice"].exists)
+        XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].exists)
+
+        let addLineItems = app.buttons["Add Line Items"]
+        XCTAssertTrue(addLineItems.exists)
+        let createNewItem = app.buttons["Create New Item"]
+        XCTAssertTrue(createNewItem.exists)
+        createNewItem.tap()
+
+        XCTAssertTrue(app.navigationBars["Create Item"].waitForExistence(timeout: 3))
+        let itemName = app.textFields["Item name"]
+        XCTAssertTrue(itemName.exists)
+        itemName.tap()
+        itemName.typeText("UI Test Added Repair")
+        let salesPrice = app.textFields["Sales price (optional)"]
+        XCTAssertTrue(salesPrice.exists)
+        salesPrice.tap()
+        salesPrice.typeText("100")
+        app.buttons["Save"].tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["UI Test Added Repair"].waitForExistence(timeout: 3))
+        let updateInvoice = app.buttons["Update Invoice"]
+        for _ in 0..<5 {
+            if updateInvoice.exists && updateInvoice.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(updateInvoice.waitForExistence(timeout: 3))
+        XCTAssertTrue(updateInvoice.isEnabled)
+        updateInvoice.tap()
+
+        XCTAssertTrue(
+            app.staticTexts["Invoice updated locally. QuickBooks publication is pending."].waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(app.buttons["Update Invoice"].exists)
+    }
+
+    @MainActor
     func testServiceCallDetailUsesStateAwareOperationalWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

@@ -182,6 +182,9 @@ enum QuickBooksLocalSync {
                 modelContext.insert(invoice)
             }
             invoice.quickBooksID = quickBooksInvoice.Id
+            invoice.quickBooksSyncStatus = "synced"
+            invoice.quickBooksSyncDetail = nil
+            invoice.quickBooksLastSyncedAt = Date()
             invoice.customer = customer
             invoice.amount = quickBooksInvoice.TotalAmt
             invoice.lineItemSummary = quickBooksInvoice.DocNumber ?? "QuickBooks Invoice"

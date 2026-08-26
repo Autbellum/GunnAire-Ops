@@ -310,6 +310,46 @@ struct BillingDocumentsView: View {
         return payments.filter { $0.invoice.id == invoice.id }
     }
 
+    private var invoiceMutationBlockedMessage: String? {
+        guard selectedDocumentKind == .invoice, let invoice = currentJobInvoice else { return nil }
+        return BillingInvoiceMutationPolicy.blockedMessage(for: invoice, payments: currentJobPayments)
+    }
+
+    private var invoiceWorkflowBlockedMessage: String? {
+        if currentJobInvoice != nil {
+            return invoiceMutationBlockedMessage
+        }
+        return activeServiceCall?.invoiceCreationBlockedMessage
+    }
+
+    private var invoiceActionTitle: String {
+        if isCreatingDocument {
+            return currentJobInvoice == nil ? "Creating Invoice..." : "Updating Invoice..."
+        }
+        return currentJobInvoice == nil ? "Create Invoice" : "Update Invoice"
+    }
+
+    private var documentActionTitle: String {
+        if selectedDocumentKind == .invoice {
+            return invoiceActionTitle
+        }
+        return isCreatingDocument ? "Creating Estimate..." : "Create Estimate"
+    }
+
+    private var documentActionIsDisabled: Bool {
+        isCreatingDocument ||
+            customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            selectedItems.isEmpty ||
+            (selectedDocumentKind == .invoice && invoiceWorkflowBlockedMessage != nil)
+    }
+
+    private var invoiceActionIsDisabled: Bool {
+        isCreatingDocument ||
+            customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            selectedItems.isEmpty ||
+            invoiceWorkflowBlockedMessage != nil
+    }
+
     private var currentJobProposalOptions: [Estimate] {
         guard let serviceCallID = activeServiceCall?.id,
               let groupID = currentJobEstimate?.proposalGroupID else { return [] }
@@ -1117,16 +1157,20 @@ GunnAire
                                 .foregroundColor(.secondary)
                         }
 
-                        Menu {
-                            Button("Select Existing Items") {
+                        HStack(spacing: 10) {
+                            Button {
                                 showingItemSelector = true
+                            } label: {
+                                Label("Add Line Items", systemImage: "plus.circle")
                             }
-                            Button("Create New Item") {
+
+                            Button {
                                 showingItemCreator = true
+                            } label: {
+                                Label("Create New Item", systemImage: "plus.square.on.square")
                             }
-                        } label: {
-                            Label("Items", systemImage: "chevron.down.circle")
                         }
+                        .buttonStyle(.bordered)
                         .foregroundStyle(Color.brandGold)
 
                         if !selectedLineItems.isEmpty {
@@ -1145,10 +1189,27 @@ GunnAire
                                         }
                                     }
                                     Spacer()
-                                    Text(item.unitPrice * lineItemQuantity(for: item), format: .currency(code: "USD"))
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
+                                    VStack(alignment: .trailing, spacing: 4) {
+                                        Text(item.unitPrice * lineItemQuantity(for: item), format: .currency(code: "USD"))
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        Stepper(
+                                            "Qty \(lineItemQuantity(for: item).formatted(.number.precision(.fractionLength(0...2))))",
+                                            value: lineItemQuantityBinding(for: item),
+                                            in: 0.25...100,
+                                            step: 0.25
+                                        )
+                                        .labelsHidden()
+                                        .accessibilityLabel("Quantity for \(item.name)")
+                                        .accessibilityValue(lineItemQuantity(for: item).formatted(.number.precision(.fractionLength(0...2))))
+                                    }
                                 }
+                            }
+
+                            if selectedLineItems.count > 5 {
+                                Text("\(selectedLineItems.count - 5) more selected line item\(selectedLineItems.count - 5 == 1 ? "" : "s")")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
                             }
 
                             Button("Clear Selected Items") {
@@ -1163,6 +1224,21 @@ GunnAire
                             Spacer()
                             Text(selectedTotal, format: .currency(code: "USD"))
                                 .font(.headline)
+                        }
+
+                        if let invoice = currentJobInvoice,
+                           invoice.quickBooksSyncState != "synced" {
+                            Label(
+                                invoice.needsQuickBooksAttention ? "QuickBooks needs attention" : "QuickBooks update pending",
+                                systemImage: invoice.needsQuickBooksAttention ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(invoice.needsQuickBooksAttention ? Color.orange : Color.secondary)
+                            if let detail = invoice.quickBooksSyncDetail, !detail.isEmpty {
+                                Text(detail)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
                         }
 
                         if selectedLineItems.isEmpty {
@@ -1183,14 +1259,15 @@ GunnAire
                         }
 
                         if workspaceMode.showsInvoiceBuilder {
-                            Button(isCreatingDocument && selectedDocumentKind == .invoice ? "Creating Invoice..." : "Create Invoice") {
+                            Button(invoiceActionTitle) {
                                 selectedDocumentKind = .invoice
                                 createDocument()
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(.green)
-                            .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty || activeServiceCall?.canCreateInvoiceDocument == false)
-                            if let message = activeServiceCall?.invoiceCreationBlockedMessage {
+                            .disabled(invoiceActionIsDisabled)
+                            .accessibilityIdentifier("InvoicePrimaryAction")
+                            if let message = invoiceWorkflowBlockedMessage {
                                 Text(message)
                                     .font(.caption)
                                     .foregroundColor(.orange)
@@ -2164,16 +2241,16 @@ GunnAire
                         Toggle("Open Invoice Builder After Estimate", isOn: $openInvoiceAfterEstimateCreation)
                     }
 
-                    Button(isCreatingDocument ? "Creating..." : "Create \(selectedDocumentKind.rawValue)") {
+                    Button(documentActionTitle) {
                         createDocument()
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Color.brandGold)
                     .foregroundStyle(Color.primaryBlack)
-                    .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty || (selectedDocumentKind == .invoice && activeServiceCall?.canCreateInvoiceDocument == false))
+                    .disabled(documentActionIsDisabled)
 
                     if selectedDocumentKind == .invoice,
-                       let message = activeServiceCall?.invoiceCreationBlockedMessage {
+                       let message = invoiceWorkflowBlockedMessage {
                         Text(message)
                             .font(.caption)
                             .foregroundColor(.orange)
@@ -5319,36 +5396,68 @@ GunnAire
             }
 
         case .invoice:
-            if let activeServiceCall,
+            if currentJobInvoice == nil,
+               let activeServiceCall,
                !activeServiceCall.canCreateInvoiceDocument {
                 actionMessage = activeServiceCall.invoiceCreationBlockedMessage ?? "Complete required field documentation before creating an invoice."
                 isCreatingDocument = false
                 return
             }
-            let invoice = Invoice(
-                serviceCallID: activeServiceCall?.id,
-                customer: customer,
-                workType: InvoiceWorkType.inferred(from: activeServiceCall),
-                lineItemSummary: selectedSummary,
-                catalogSnapshotJSON: selectedCatalogSnapshotJSON,
-                amount: selectedTotal,
-                status: "unpaid",
-                notes: trimmedNotes.isEmpty ? nil : trimmedNotes
-            )
-            modelContext.insert(invoice)
-            activeServiceCall?.linkedInvoiceID = invoice.id
-            activeServiceCall?.markDocumentationCompleteIfReady()
-            activeServiceCall?.status = .invoiced
-            let reportErrorMessage = prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: activeServiceCall)
-            actionMessage = reportErrorMessage ?? (isQuickBooksConnected ? "Invoice created locally with onsite report. Syncing to QuickBooks..." : "Invoice created locally with onsite report.")
-            guard saveBillingContext(failureMessage: "Could not save invoice locally") else {
+            let invoice: Invoice
+            let isUpdatingExistingInvoice: Bool
+            if let currentJobInvoice {
+                if let blockedMessage = BillingInvoiceMutationPolicy.blockedMessage(
+                    for: currentJobInvoice,
+                    payments: currentJobPayments
+                ) {
+                    actionMessage = blockedMessage
+                    isCreatingDocument = false
+                    return
+                }
+                invoice = currentJobInvoice
+                isUpdatingExistingInvoice = true
+                invoice.customer = customer
+                invoice.workType = InvoiceWorkType.inferred(from: activeServiceCall)
+                invoice.lineItemSummary = selectedSummary
+                invoice.catalogSnapshotJSON = selectedCatalogSnapshotJSON
+                invoice.amount = selectedTotal
+                invoice.notes = trimmedNotes.isEmpty ? nil : trimmedNotes
+                invoice.quickBooksSyncStatus = "pending"
+                invoice.quickBooksSyncDetail = isQuickBooksConnected
+                    ? "Invoice update is waiting for QuickBooks confirmation."
+                    : "Invoice changed while QuickBooks was unavailable. Reconnect and update this invoice again to publish it."
+                actionMessage = isQuickBooksConnected
+                    ? "Invoice updated locally. Syncing the complete line-item set to QuickBooks..."
+                    : "Invoice updated locally. QuickBooks publication is pending."
+            } else {
+                invoice = Invoice(
+                    serviceCallID: activeServiceCall?.id,
+                    customer: customer,
+                    workType: InvoiceWorkType.inferred(from: activeServiceCall),
+                    lineItemSummary: selectedSummary,
+                    catalogSnapshotJSON: selectedCatalogSnapshotJSON,
+                    amount: selectedTotal,
+                    status: "unpaid",
+                    notes: trimmedNotes.isEmpty ? nil : trimmedNotes
+                )
+                isUpdatingExistingInvoice = false
+                modelContext.insert(invoice)
+                activeServiceCall?.linkedInvoiceID = invoice.id
+                activeServiceCall?.markDocumentationCompleteIfReady()
+                activeServiceCall?.status = .invoiced
+                let reportErrorMessage = prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: activeServiceCall)
+                actionMessage = reportErrorMessage ?? (isQuickBooksConnected ? "Invoice created locally with onsite report. Syncing to QuickBooks..." : "Invoice created locally with onsite report.")
+            }
+            guard saveBillingContext(failureMessage: isUpdatingExistingInvoice ? "Could not update invoice locally" : "Could not save invoice locally") else {
                 isCreatingDocument = false
                 return
             }
             syncInvoiceIfNeeded(invoice, customer: customer, items: selectedLineItems)
-            selectedItems.removeAll()
-            selectedItemQuantities.removeAll()
-            notes = ""
+            if !isUpdatingExistingInvoice {
+                selectedItems.removeAll()
+                selectedItemQuantities.removeAll()
+                notes = ""
+            }
         }
         isCreatingDocument = false
     }
@@ -5415,32 +5524,125 @@ GunnAire
     }
 
     private func syncInvoiceIfNeeded(_ invoice: Invoice, customer: Customer, items: [Item]) {
-        guard isQuickBooksConnected else { return }
+        guard isQuickBooksConnected else {
+            invoice.quickBooksSyncStatus = "pending"
+            invoice.quickBooksSyncDetail = "QuickBooks is not connected. Reconnect and update this invoice again to publish its current line items."
+            saveQuickBooksSyncState()
+            return
+        }
         ensureQuickBooksDocumentInputs(customer: customer, items: items) { result in
             switch result {
             case .failure(let error):
+                markQuickBooksInvoiceSyncFailure(invoice, error: error)
                 actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
             case .success(let syncedItems):
-                let payload = QuickBooksInvoiceCreate(
-                    CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
-                    Line: quickBooksLineItems(for: syncedItems, snapshotJSON: invoice.catalogSnapshotJSON),
-                    PrivateNote: invoice.notes
-                )
-                liveAPI.createInvoice(payload) { apiResult in
-                    DispatchQueue.main.async {
-                        switch apiResult {
-                        case .success(let quickBooksInvoice):
-                            invoice.quickBooksID = quickBooksInvoice.Id
-                            saveQuickBooksSyncState()
-                            syncLinkedServiceReportsToQuickBooks(invoice)
-                            actionMessage = "Invoice created and synced to QuickBooks."
-                        case .failure(let error):
-                            actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
+                let lines = quickBooksLineItems(for: syncedItems, snapshotJSON: invoice.catalogSnapshotJSON)
+                guard lines.count == syncedItems.count else {
+                    let error = QuickBooksDataAPI.QBError.noData
+                    markQuickBooksInvoiceSyncFailure(invoice, error: error)
+                    actionMessage = "Invoice saved locally. QuickBooks sync stopped because one or more line items did not have a QuickBooks ID."
+                    return
+                }
+                if let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !quickBooksID.isEmpty {
+                    updateQuickBooksInvoice(
+                        invoice,
+                        quickBooksID: quickBooksID,
+                        customer: customer,
+                        lines: lines
+                    )
+                } else {
+                    createQuickBooksInvoice(invoice, customer: customer, lines: lines)
+                }
+            }
+        }
+    }
+
+    private func createQuickBooksInvoice(
+        _ invoice: Invoice,
+        customer: Customer,
+        lines: [QuickBooksLineItem]
+    ) {
+        let payload = QuickBooksInvoiceCreate(
+            CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
+            Line: lines,
+            PrivateNote: invoice.notes,
+            BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) }
+        )
+        liveAPI.createInvoice(payload) { apiResult in
+            DispatchQueue.main.async {
+                switch apiResult {
+                case .success(let quickBooksInvoice):
+                    applyQuickBooksInvoiceSync(quickBooksInvoice, to: invoice)
+                    syncLinkedServiceReportsToQuickBooks(invoice)
+                    actionMessage = "Invoice created and synced to QuickBooks."
+                case .failure(let error):
+                    markQuickBooksInvoiceSyncFailure(invoice, error: error)
+                    actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func updateQuickBooksInvoice(
+        _ invoice: Invoice,
+        quickBooksID: String,
+        customer: Customer,
+        lines: [QuickBooksLineItem]
+    ) {
+        liveAPI.fetchInvoice(id: quickBooksID) { fetchResult in
+            DispatchQueue.main.async {
+                switch fetchResult {
+                case .failure(let error):
+                    markQuickBooksInvoiceSyncFailure(invoice, error: error)
+                    actionMessage = "Invoice updated locally. QuickBooks refresh failed: \(error.localizedDescription)"
+                case .success(let currentQuickBooksInvoice):
+                    guard let syncToken = currentQuickBooksInvoice.SyncToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !syncToken.isEmpty else {
+                        let error = QuickBooksDataAPI.QBError.missingSyncToken(entity: "invoice \(quickBooksID)")
+                        markQuickBooksInvoiceSyncFailure(invoice, error: error)
+                        actionMessage = "Invoice updated locally. \(error.localizedDescription)"
+                        return
+                    }
+                    let payload = QuickBooksInvoiceUpdate(
+                        Id: quickBooksID,
+                        SyncToken: syncToken,
+                        CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
+                        Line: lines,
+                        PrivateNote: invoice.notes,
+                        BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) }
+                    )
+                    liveAPI.updateInvoice(payload) { updateResult in
+                        DispatchQueue.main.async {
+                            switch updateResult {
+                            case .success(let quickBooksInvoice):
+                                applyQuickBooksInvoiceSync(quickBooksInvoice, to: invoice)
+                                syncLinkedServiceReportsToQuickBooks(invoice)
+                                actionMessage = "Invoice line items updated and synced to QuickBooks."
+                            case .failure(let error):
+                                markQuickBooksInvoiceSyncFailure(invoice, error: error)
+                                actionMessage = "Invoice updated locally. QuickBooks update failed: \(error.localizedDescription)"
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    private func applyQuickBooksInvoiceSync(_ quickBooksInvoice: QuickBooksInvoice, to invoice: Invoice) {
+        invoice.quickBooksID = quickBooksInvoice.Id
+        invoice.quickBooksBalanceDue = quickBooksInvoice.Balance
+        invoice.quickBooksSyncStatus = "synced"
+        invoice.quickBooksSyncDetail = nil
+        invoice.quickBooksLastSyncedAt = Date()
+        saveQuickBooksSyncState()
+    }
+
+    private func markQuickBooksInvoiceSyncFailure(_ invoice: Invoice, error: Error) {
+        invoice.quickBooksSyncStatus = "needs_attention"
+        invoice.quickBooksSyncDetail = error.localizedDescription
+        saveQuickBooksSyncState()
     }
 
     private func ensureQuickBooksDocumentInputs(
@@ -6650,6 +6852,37 @@ enum CatalogVendorSelection {
         guard let vendorName = vendorName?.trimmingCharacters(in: .whitespacesAndNewlines),
               !vendorName.isEmpty else { return nil }
         return vendors.first { $0.name.caseInsensitiveCompare(vendorName) == .orderedSame }?.quickBooksID
+    }
+}
+
+enum BillingInvoiceMutationPolicy {
+    static func blockedMessage(for invoice: Invoice, payments: [Payment]) -> String? {
+        if invoice.finalizedAt != nil || invoice.customerSignedAt != nil {
+            return "This invoice is finalized or customer-signed. Create an approved adjustment instead of changing its line items."
+        }
+
+        let relatedPayments = payments.filter { $0.invoice.id == invoice.id }
+        let netPaymentAmount = relatedPayments.reduce(0.0) { partial, payment in
+            partial + (payment.isRefund ? -payment.amount : payment.amount)
+        }
+        let normalizedStatus = invoice.normalizedStatus
+        let quickBooksShowsPartialPayment: Bool
+        if let balance = invoice.quickBooksBalanceDue,
+           invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+           invoice.quickBooksSyncState == "synced" {
+            quickBooksShowsPartialPayment = balance < invoice.amount - 0.009
+        } else {
+            quickBooksShowsPartialPayment = false
+        }
+
+        if abs(netPaymentAmount) > 0.009 ||
+            normalizedStatus == "paid" ||
+            normalizedStatus == "partial" ||
+            quickBooksShowsPartialPayment {
+            return "This invoice has payment activity. Add a separate adjustment or change order so payment and reconciliation history stay intact."
+        }
+
+        return nil
     }
 }
 

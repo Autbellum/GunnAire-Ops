@@ -759,10 +759,44 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
+    func fetchInvoice(id: String, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
+        let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty,
+              let encodedID = trimmedID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            completion(.failure(QBError.noData))
+            return
+        }
+        performAuthorizedDecodingRequest(
+            { self.authorizedRequest(path: "invoice/\(encodedID)") },
+            decode: QuickBooksInvoiceResponse.self
+        ) { result in
+            completion(result.map(\.Invoice))
+        }
+    }
+
     func createInvoice(_ invoice: QuickBooksInvoiceCreate, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
         let body = try? JSONEncoder().encode(invoice)
         performAuthorizedDecodingRequest(
             { self.authorizedRequest(path: "invoice", method: "POST", body: body, contentType: "application/json") },
+            decode: QuickBooksInvoiceResponse.self
+        ) { result in
+            completion(result.map(\.Invoice))
+        }
+    }
+
+    func updateInvoice(_ invoice: QuickBooksInvoiceUpdate, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
+        let body = try? JSONEncoder().encode(invoice)
+        let requestID = UUID().uuidString
+        performAuthorizedDecodingRequest(
+            {
+                self.authorizedRequest(
+                    path: "invoice",
+                    queryItems: [URLQueryItem(name: "requestid", value: requestID)],
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
             decode: QuickBooksInvoiceResponse.self
         ) { result in
             completion(result.map(\.Invoice))
@@ -1281,6 +1315,7 @@ final class QuickBooksDataAPI: ObservableObject {
         case paymentsAuthorizationFailed(statusCode: Int, detail: String)
         case paymentsScopeDisabled
         case missingDefaultIncomeAccountRef
+        case missingSyncToken(entity: String)
         case rateLimited(detail: String)
         case missingCustomerIDForStoredCards
 
@@ -1319,6 +1354,8 @@ final class QuickBooksDataAPI: ObservableObject {
                 return "QuickBooks Payments scope is disabled for this build. Enable QB_ENABLE_PAYMENTS_SCOPE, authorize the Payments permission in Intuit, then reconnect QuickBooks before using live payment endpoints."
             case .missingDefaultIncomeAccountRef:
                 return "QuickBooks needs an income account before the app can create new Products and Services. Set QB_DEFAULT_INCOME_ACCOUNT_REF to a valid QBO income Account.Id, or sync a default QuickBooks item that already has an IncomeAccountRef."
+            case .missingSyncToken(let entity):
+                return "QuickBooks did not return the current SyncToken for \(entity). Refresh accounting data, then retry so the app does not overwrite a newer change."
             case .rateLimited(let detail):
                 return detail
             case .missingCustomerIDForStoredCards:
@@ -1886,6 +1923,7 @@ struct QuickBooksInvoiceList: Codable {
 
 struct QuickBooksInvoice: Codable, Identifiable {
     let Id: String
+    let SyncToken: String?
     let DocNumber: String?
     let CustomerRef: QuickBooksReference
     let TotalAmt: Double
@@ -1898,12 +1936,13 @@ struct QuickBooksInvoice: Codable, Identifiable {
     var id: String { Id }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, PrivateNote, BillEmail, EmailStatus
+        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, PrivateNote, BillEmail, EmailStatus
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
+        SyncToken = try container.decodeIfPresent(String.self, forKey: .SyncToken)
         DocNumber = try container.decodeIfPresent(String.self, forKey: .DocNumber)
         CustomerRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .CustomerRef)
             ?? QuickBooksReference(value: "", name: "Unknown Customer")
@@ -1941,6 +1980,33 @@ struct QuickBooksInvoiceCreate: Codable {
         PrivateNote: String?,
         BillEmail: QuickBooksEmailAddress? = nil
     ) {
+        self.CustomerRef = CustomerRef
+        self.Line = Line
+        self.PrivateNote = PrivateNote
+        self.BillEmail = BillEmail
+    }
+}
+
+struct QuickBooksInvoiceUpdate: Codable {
+    let Id: String
+    let SyncToken: String
+    let sparse: Bool
+    let CustomerRef: QuickBooksReference
+    let Line: [QuickBooksLineItem]
+    let PrivateNote: String?
+    let BillEmail: QuickBooksEmailAddress?
+
+    init(
+        Id: String,
+        SyncToken: String,
+        CustomerRef: QuickBooksReference,
+        Line: [QuickBooksLineItem],
+        PrivateNote: String?,
+        BillEmail: QuickBooksEmailAddress? = nil
+    ) {
+        self.Id = Id
+        self.SyncToken = SyncToken
+        self.sparse = true
         self.CustomerRef = CustomerRef
         self.Line = Line
         self.PrivateNote = PrivateNote

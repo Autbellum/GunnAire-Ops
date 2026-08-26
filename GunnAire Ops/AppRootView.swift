@@ -39,6 +39,8 @@ struct AppRootView: View {
         let email: String
         if arguments.contains("-uiTestAuthenticatedAdmin") {
             email = AppAccess.primaryAdminEmail
+        } else if arguments.contains("-uiTestAuthenticatedTechnician") {
+            email = GunnAireUITestIdentity.technicianEmail
         } else if arguments.contains("-uiTestAuthenticatedStandard") {
             email = GunnAireUITestIdentity.standardEmail
         } else {
@@ -53,6 +55,7 @@ struct AppRootView: View {
 #if DEBUG
 enum GunnAireUITestIdentity {
     static let standardEmail = "standard-ui-test@gunnaire.com"
+    static let technicianEmail = "technician-ui-test@gunnaire.com"
 }
 #endif
 

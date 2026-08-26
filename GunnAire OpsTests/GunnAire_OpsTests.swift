@@ -11070,6 +11070,88 @@ struct GunnAire_OpsTests {
         #expect((detail["ItemRef"] as? [String: String])?["value"] == "QBO-ITEM-42")
     }
 
+    @Test func quickBooksInvoiceSparseUpdateCarriesConcurrencyTokenAndCompleteLines() throws {
+        let lines = [
+            QuickBooksLineItem(
+                Amount: 189,
+                DetailType: "SalesItemLineDetail",
+                Description: "Diagnostic service",
+                SalesItemLineDetail: QuickBooksSalesItemLineDetail(
+                    ItemRef: QuickBooksReference(value: "QBO-1", name: "Diagnostic"),
+                    Qty: 1,
+                    UnitPrice: 189
+                )
+            ),
+            QuickBooksLineItem(
+                Amount: 250,
+                DetailType: "SalesItemLineDetail",
+                Description: "Repair",
+                SalesItemLineDetail: QuickBooksSalesItemLineDetail(
+                    ItemRef: QuickBooksReference(value: "QBO-2", name: "Repair"),
+                    Qty: 2,
+                    UnitPrice: 125
+                )
+            )
+        ]
+        let update = QuickBooksInvoiceUpdate(
+            Id: "INV-42",
+            SyncToken: "7",
+            CustomerRef: QuickBooksReference(value: "CUST-1", name: "Customer"),
+            Line: lines,
+            PrivateNote: "Field revision"
+        )
+
+        let payload = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(update)) as? [String: Any]
+        )
+        #expect(payload["Id"] as? String == "INV-42")
+        #expect(payload["SyncToken"] as? String == "7")
+        #expect(payload["sparse"] as? Bool == true)
+        #expect((payload["Line"] as? [[String: Any]])?.count == 2)
+    }
+
+    @Test func invoiceMutationPolicyAllowsDraftEditsAndProtectsSignedOrPaidHistory() {
+        let customer = Customer(name: "Invoice Policy Customer")
+        let draft = Invoice(customer: customer, amount: 189)
+        #expect(BillingInvoiceMutationPolicy.blockedMessage(for: draft, payments: []) == nil)
+
+        draft.finalizedAt = Date()
+        #expect(BillingInvoiceMutationPolicy.blockedMessage(for: draft, payments: [])?.contains("finalized") == true)
+
+        let partiallyPaid = Invoice(customer: customer, amount: 400)
+        let payment = Payment(invoice: partiallyPaid, amount: 100, method: "card")
+        #expect(BillingInvoiceMutationPolicy.blockedMessage(for: partiallyPaid, payments: [payment])?.contains("payment activity") == true)
+
+        let quickBooksPartial = Invoice(
+            customer: customer,
+            quickBooksID: "QB-88",
+            quickBooksBalanceDue: 50,
+            amount: 200
+        )
+        #expect(BillingInvoiceMutationPolicy.blockedMessage(for: quickBooksPartial, payments: [])?.contains("payment activity") == true)
+
+        quickBooksPartial.quickBooksSyncStatus = "pending"
+        #expect(BillingInvoiceMutationPolicy.blockedMessage(for: quickBooksPartial, payments: []) == nil)
+    }
+
+    @Test func invoiceQuickBooksSyncStatePersistsPendingAndAttentionWork() {
+        let customer = Customer(name: "Sync State Customer")
+        let localInvoice = Invoice(customer: customer, amount: 90)
+        #expect(localInvoice.quickBooksSyncState == "pending")
+
+        localInvoice.quickBooksSyncStatus = "needs_attention"
+        localInvoice.quickBooksSyncDetail = "Stale SyncToken"
+        #expect(localInvoice.needsQuickBooksAttention)
+
+        let importedInvoice = Invoice(
+            customer: customer,
+            quickBooksID: "QB-99",
+            quickBooksSyncStatus: "synced",
+            amount: 90
+        )
+        #expect(importedInvoice.quickBooksSyncState == "synced")
+    }
+
     @Test func catalogItemRetainsQuickBooksPublishStateAcrossOfflineRetries() {
         let offlineItem = Item(name: "Emergency Drain Clearing", unitPrice: 249)
         #expect(offlineItem.quickBooksCatalogSyncState == "pending")
