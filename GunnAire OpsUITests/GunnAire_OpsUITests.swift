@@ -414,7 +414,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         app.launchArguments = [
             "-enableSplashVideo", "NO",
             "-disableCloudKitForTesting",
-            "-uiTestAuthenticatedAdmin"
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
         ]
         app.launch()
 
@@ -431,6 +432,11 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         workspacePicker.buttons["Sales"].tap()
         XCTAssertTrue(workspacePicker.buttons["Sales"].isSelected)
+        XCTAssertTrue(app.staticTexts["Local Invoice Publication"].exists)
+        XCTAssertTrue(app.staticTexts["UI Test Collectible Customer"].exists)
+        XCTAssertTrue(app.buttons["Retry Publication"].exists)
+        XCTAssertFalse(app.buttons["Retry Publication"].isEnabled)
+        XCTAssertTrue(app.buttons["Open Job Billing"].exists)
         XCTAssertTrue(app.staticTexts["Customers"].exists)
         XCTAssertTrue(app.staticTexts["Product Catalog"].exists)
         XCTAssertFalse(app.staticTexts["Sync Health"].exists)

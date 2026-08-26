@@ -10881,6 +10881,40 @@ struct GunnAire_OpsTests {
         #expect(snapshot.actions.contains { $0.title == "Tighten sync coverage" })
     }
 
+    @Test func businessSuiteKeepsFailedQuickBooksInvoiceUpdatesVisible() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let customer = Customer(name: "Invoice Recovery Customer", address: "530 Integration Ave")
+        let invoice = Invoice(
+            customer: customer,
+            quickBooksID: "INV-530",
+            amount: 640,
+            status: "unpaid"
+        )
+        invoice.quickBooksSyncStatus = "needs_attention"
+        invoice.quickBooksSyncDetail = "QuickBooks rejected the last line-item update."
+
+        let snapshot = BusinessSuiteIntelligence.snapshot(
+            customers: [customer],
+            serviceCalls: [],
+            technicians: [],
+            contracts: [],
+            estimates: [],
+            invoices: [invoice],
+            payments: [],
+            timeEntries: [],
+            googleConnected: true,
+            quickBooksConnected: true,
+            onsitePaymentsReady: true,
+            now: now
+        )
+
+        let integrations = try #require(snapshot.workstreams.first { $0.id == .integrations })
+
+        #expect(snapshot.syncAttentionCount == 1)
+        #expect(integrations.detail.contains("1 QuickBooks"))
+        #expect(snapshot.actions.contains { $0.destination == .sync })
+    }
+
     @Test func businessSuiteFlagsPricebookMarginAndCostGaps() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let unpricedItem = Item(name: "Emergency Diagnostic", unitPrice: 0)
@@ -11150,6 +11184,90 @@ struct GunnAire_OpsTests {
             amount: 90
         )
         #expect(importedInvoice.quickBooksSyncState == "synced")
+    }
+
+    @Test func quickBooksInvoicePublicationRecoveryBuildsTheCompleteDurableLineSet() throws {
+        let customer = Customer(quickBooksID: "QBO-CUSTOMER-1", name: "Recovery Customer")
+        let diagnostic = Item(
+            quickBooksID: "QBO-ITEM-1",
+            name: "HVAC Diagnostic",
+            unitPrice: 189,
+            itemDescription: "Diagnostic visit"
+        )
+        let repair = Item(
+            quickBooksID: "QBO-ITEM-2",
+            name: "Contactor Repair",
+            unitPrice: 125
+        )
+        let invoice = Invoice(
+            customer: customer,
+            catalogSnapshotJSON: CatalogLineItemSnapshot.encoded(
+                from: [diagnostic, repair],
+                quantities: [diagnostic.id: 1, repair.id: 2]
+            ),
+            amount: 439
+        )
+
+        let inputs = try QuickBooksInvoicePublicationRecovery.publicationInputs(
+            for: invoice,
+            catalogItems: [diagnostic, repair],
+            payments: []
+        )
+
+        #expect(inputs.customerRef.value == "QBO-CUSTOMER-1")
+        #expect(inputs.lines.count == 2)
+        #expect(inputs.lines.reduce(0) { $0 + $1.Amount } == 439)
+        let repairLine = try #require(inputs.lines.first { $0.SalesItemLineDetail.ItemRef.value == "QBO-ITEM-2" })
+        #expect(repairLine.SalesItemLineDetail.Qty == 2)
+        #expect(repairLine.SalesItemLineDetail.UnitPrice == 125)
+    }
+
+    @Test func quickBooksInvoicePublicationRecoveryPrioritizesAttentionAndProtectsExistingPaymentHistory() throws {
+        let customer = Customer(quickBooksID: "QBO-CUSTOMER-2", name: "Queue Customer")
+        let item = Item(quickBooksID: "QBO-ITEM-3", name: "Service", unitPrice: 100)
+        let snapshot = CatalogLineItemSnapshot.encoded(from: [item])
+        let synced = Invoice(
+            customer: customer,
+            quickBooksID: "QBO-SYNCED",
+            quickBooksSyncStatus: "synced",
+            catalogSnapshotJSON: snapshot,
+            amount: 100
+        )
+        let pending = Invoice(customer: customer, catalogSnapshotJSON: snapshot, amount: 100)
+        let attention = Invoice(
+            customer: customer,
+            quickBooksSyncStatus: "needs_attention",
+            catalogSnapshotJSON: snapshot,
+            amount: 100
+        )
+
+        let queue = QuickBooksInvoicePublicationRecovery.queuedInvoices(from: [pending, synced, attention])
+        #expect(queue.map(\.id) == [attention.id, pending.id])
+
+        let existing = Invoice(
+            customer: customer,
+            quickBooksID: "QBO-EXISTING",
+            quickBooksSyncStatus: "pending",
+            catalogSnapshotJSON: snapshot,
+            amount: 100
+        )
+        let payment = Payment(invoice: existing, amount: 25, method: "card")
+        #expect(throws: QuickBooksInvoicePublicationRecoveryError.self) {
+            try QuickBooksInvoicePublicationRecovery.publicationInputs(
+                for: existing,
+                catalogItems: [item],
+                payments: [payment]
+            )
+        }
+
+        let localOnly = Invoice(customer: customer, catalogSnapshotJSON: snapshot, amount: 100)
+        let localPayment = Payment(invoice: localOnly, amount: 25, method: "card")
+        let localInputs = try QuickBooksInvoicePublicationRecovery.publicationInputs(
+            for: localOnly,
+            catalogItems: [item],
+            payments: [localPayment]
+        )
+        #expect(localInputs.lines.count == 1)
     }
 
     @Test func catalogItemRetainsQuickBooksPublishStateAcrossOfflineRetries() {

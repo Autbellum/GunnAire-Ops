@@ -251,7 +251,8 @@ enum CustomerIntelligence {
             .sorted { $0.scheduledDate > $1.scheduledDate }
             .first
 
-        let syncAttentionCount = customerPayments.filter(\.needsQuickBooksAttention).count
+        let syncAttentionCount = customerPayments.filter(\.needsQuickBooksAttention).count +
+            customerInvoices.filter { $0.quickBooksSyncState != "synced" }.count
         let missingContactDetailCount = missingContactDetails(for: customer)
 
         let healthScore = healthScore(

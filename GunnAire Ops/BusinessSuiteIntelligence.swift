@@ -688,7 +688,8 @@ enum BusinessSuiteIntelligence {
     private static func quickBooksGapCount(estimates: [Estimate], invoices: [Invoice], attachments: [ServiceDocumentAttachment]) -> Int {
         let billingDocumentGaps = estimates.filter { isOpenEstimate($0) && $0.quickBooksID?.isEmpty != false }.count +
             invoices.filter {
-            CustomerIntelligence.outstandingBalance(for: $0, payments: []) > 0 && $0.quickBooksID?.isEmpty != false
+            CustomerIntelligence.outstandingBalance(for: $0, payments: []) > 0 &&
+                ($0.quickBooksID?.isEmpty != false || $0.quickBooksSyncState != "synced")
         }.count
         let attachmentGaps = attachments.filter { attachment in
             guard attachment.quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {

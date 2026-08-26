@@ -128,6 +128,14 @@ struct OperationsDashboardView: View {
             .sorted { $0.date > $1.date }
     }
 
+    private var quickBooksAttentionInvoices: [Invoice] {
+        QuickBooksInvoicePublicationRecovery.queuedInvoices(from: invoices)
+    }
+
+    private var quickBooksAttentionCount: Int {
+        quickBooksAttentionInvoices.count + quickBooksAttentionPayments.count
+    }
+
     private var openTimeEntries: [TimeEntry] {
         timeEntries.filter(\.isOpen)
     }
@@ -164,6 +172,7 @@ struct OperationsDashboardView: View {
             overdueInvoices.first != nil,
             maintenanceAlerts.first != nil,
             acceptedEstimateCalls.first != nil,
+            quickBooksAttentionInvoices.first != nil,
             quickBooksAttentionPayments.first != nil,
             followUpCalls.first != nil,
             upcomingCalls.first != nil
@@ -427,10 +436,10 @@ struct OperationsDashboardView: View {
             if canViewFinancials {
                 metricCard(
                     title: "Sync Risk",
-                    value: "\(quickBooksAttentionPayments.count)",
-                    detail: "\(linkedCalendarJobCount) calendar-linked",
+                    value: "\(quickBooksAttentionCount)",
+                    detail: "\(quickBooksAttentionInvoices.count) invoice\(quickBooksAttentionInvoices.count == 1 ? "" : "s") • \(quickBooksAttentionPayments.count) payment\(quickBooksAttentionPayments.count == 1 ? "" : "s")",
                     systemImage: "exclamationmark.arrow.triangle.2.circlepath",
-                    tint: quickBooksAttentionPayments.isEmpty ? Color.brandGold : .red
+                    tint: quickBooksAttentionCount == 0 ? Color.brandGold : .red
                 )
             }
         }
@@ -532,6 +541,19 @@ struct OperationsDashboardView: View {
                         actionTitle: "Open Job"
                     ) {
                         GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
+                    }
+                }
+
+                if canViewFinancials, let invoice = quickBooksAttentionInvoices.first {
+                    priorityRow(
+                        title: invoice.needsQuickBooksAttention ? "QuickBooks invoice needs attention" : "QuickBooks invoice pending",
+                        subtitle: invoice.customer.name,
+                        value: currency(invoice.amount),
+                        systemImage: "doc.badge.arrow.up",
+                        tint: invoice.needsQuickBooksAttention ? .red : .orange,
+                        actionTitle: "Review"
+                    ) {
+                        GunnAireAppIntentRouter.store(.quickBooks)
                     }
                 }
 

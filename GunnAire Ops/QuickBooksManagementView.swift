@@ -40,11 +40,105 @@ private struct QuickBooksSyncResourceStatus: Identifiable {
     var updatedAt: Date?
 }
 
+struct QuickBooksInvoicePublicationInputs {
+    let customerRef: QuickBooksReference
+    let lines: [QuickBooksLineItem]
+    let billEmail: QuickBooksEmailAddress?
+}
+
+enum QuickBooksInvoicePublicationRecoveryError: LocalizedError, Equatable {
+    case protectedHistory(String)
+    case missingCustomerMapping
+    case missingCatalogSnapshot
+    case missingCatalogItem(String)
+    case missingQuickBooksItemMapping(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .protectedHistory(let detail):
+            return detail
+        case .missingCustomerMapping:
+            return "Publish this invoice from Job Billing first so the customer can be linked to QuickBooks."
+        case .missingCatalogSnapshot:
+            return "This legacy invoice has no durable catalog snapshot. Open Job Billing, review its line items, and update it before retrying."
+        case .missingCatalogItem(let name):
+            return "The local catalog item for \(name) is missing. Open Job Billing and replace that line before retrying."
+        case .missingQuickBooksItemMapping(let name):
+            return "\(name) is not linked to a QuickBooks product or service. Open Job Billing to publish the item first."
+        }
+    }
+}
+
+enum QuickBooksInvoicePublicationRecovery {
+    static func queuedInvoices(from invoices: [Invoice]) -> [Invoice] {
+        invoices
+            .filter { $0.quickBooksSyncState != "synced" }
+            .sorted { lhs, rhs in
+                if lhs.needsQuickBooksAttention != rhs.needsQuickBooksAttention {
+                    return lhs.needsQuickBooksAttention && !rhs.needsQuickBooksAttention
+                }
+                return lhs.createdAt > rhs.createdAt
+            }
+    }
+
+    static func publicationInputs(
+        for invoice: Invoice,
+        catalogItems: [Item],
+        payments: [Payment]
+    ) throws -> QuickBooksInvoicePublicationInputs {
+        if invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+           let blockedMessage = BillingInvoiceMutationPolicy.blockedMessage(for: invoice, payments: payments) {
+            throw QuickBooksInvoicePublicationRecoveryError.protectedHistory(blockedMessage)
+        }
+
+        guard let customerID = invoice.customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !customerID.isEmpty else {
+            throw QuickBooksInvoicePublicationRecoveryError.missingCustomerMapping
+        }
+
+        let snapshots = CatalogLineItemSnapshot.decoded(from: invoice.catalogSnapshotJSON)
+        guard !snapshots.isEmpty else {
+            throw QuickBooksInvoicePublicationRecoveryError.missingCatalogSnapshot
+        }
+
+        let itemsByID = Dictionary(catalogItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let lines = try snapshots.map { snapshot in
+            guard let item = itemsByID[snapshot.catalogItemID] else {
+                throw QuickBooksInvoicePublicationRecoveryError.missingCatalogItem(snapshot.name)
+            }
+            guard let quickBooksItemID = item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !quickBooksItemID.isEmpty else {
+                throw QuickBooksInvoicePublicationRecoveryError.missingQuickBooksItemMapping(snapshot.name)
+            }
+            return QuickBooksLineItem(
+                Amount: snapshot.unitPrice * snapshot.quantity,
+                DetailType: "SalesItemLineDetail",
+                Description: snapshot.description ?? snapshot.name,
+                SalesItemLineDetail: QuickBooksSalesItemLineDetail(
+                    ItemRef: QuickBooksReference(value: quickBooksItemID, name: snapshot.name),
+                    Qty: snapshot.quantity,
+                    UnitPrice: snapshot.unitPrice
+                )
+            )
+        }
+
+        return QuickBooksInvoicePublicationInputs(
+            customerRef: QuickBooksReference(value: customerID, name: invoice.customer.name),
+            lines: lines,
+            billEmail: invoice.customer.email.flatMap { email in
+                let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
+            }
+        )
+    }
+}
+
 struct QuickBooksManagementView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var quickBooksDataAPI = QuickBooksDataAPI.shared
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Customer.name, order: .forward) private var localCustomers: [Customer]
+    @Query(sort: \Item.name, order: .forward) private var localCatalogItems: [Item]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var localInvoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var localPayments: [Payment]
     private let liveAPI = QuickBooksAPI.shared
@@ -85,6 +179,7 @@ struct QuickBooksManagementView: View {
     @State private var activePaymentInvoiceID: String?
     @State private var activeEmailEstimateID: String?
     @State private var activeEmailInvoiceID: String?
+    @State private var activeLocalInvoicePublicationID: UUID?
     @State private var paymentToRefund: Payment?
     @State private var quickBooksReconnectRequired = false
     @State private var showCustomersList = false
@@ -192,6 +287,10 @@ struct QuickBooksManagementView: View {
 
     private var collectibleLocalInvoices: [Invoice] {
         localInvoices.filter { localOutstandingBalance(for: $0) > 0 }
+    }
+
+    private var localInvoicePublicationQueue: [Invoice] {
+        QuickBooksInvoicePublicationRecovery.queuedInvoices(from: localInvoices)
     }
 
     private var filteredCustomers: [QuickBooksCustomer] {
@@ -398,6 +497,73 @@ struct QuickBooksManagementView: View {
                     }
 
                     if selectedWorkspace == .sales {
+                    Section(header: Text("Local Invoice Publication").foregroundColor(Color.brandGold)) {
+                        if localInvoicePublicationQueue.isEmpty {
+                            Label("All local invoices are published to QuickBooks.", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Text("Review local invoices that are pending or need attention before relying on QuickBooks balances and reporting.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            ForEach(localInvoicePublicationQueue) { invoice in
+                                VStack(alignment: .leading, spacing: 7) {
+                                    HStack(alignment: .firstTextBaseline) {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(invoice.customer.name)
+                                                .font(.headline)
+                                            Text(invoice.lineItemSummary.isEmpty ? "Invoice \(invoice.id.uuidString.prefix(8))" : invoice.lineItemSummary)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(2)
+                                        }
+                                        Spacer()
+                                        Text(invoice.amount, format: .currency(code: "USD"))
+                                            .font(.subheadline.weight(.semibold))
+                                    }
+
+                                    Label(
+                                        invoice.needsQuickBooksAttention ? "Needs attention" : "Publication pending",
+                                        systemImage: invoice.needsQuickBooksAttention ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath"
+                                    )
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(invoice.needsQuickBooksAttention ? Color.orange : Color.secondary)
+
+                                    if let detail = invoice.quickBooksSyncDetail?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                       !detail.isEmpty {
+                                        Text(detail)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    HStack {
+                                        Button(activeLocalInvoicePublicationID == invoice.id ? "Retrying..." : "Retry Publication") {
+                                            retryLocalInvoicePublication(invoice)
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .tint(Color.brandGold)
+                                        .foregroundStyle(Color.primaryBlack)
+                                        .disabled(!isAuthenticated || activeLocalInvoicePublicationID != nil)
+
+                                        if let call = localServiceCall(for: invoice) {
+                                            Button("Open Job Billing") {
+                                                GunnAireAppIntentRouter.storeInvoiceBuilderRoute(call.id)
+                                            }
+                                            .buttonStyle(.bordered)
+                                        } else {
+                                            Button("Open Invoices") {
+                                                GunnAireAppIntentRouter.store(.invoices)
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                    }
+                                }
+                                .padding(.vertical, 3)
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("QuickBooksLocalInvoicePublicationQueue")
+
                     Section(header: Text("Customers").foregroundColor(Color.brandGold)) {
                         DisclosureGroup("Customers (\(customers.count))", isExpanded: $showCustomersList) {
                             if customers.isEmpty {
@@ -1863,6 +2029,133 @@ struct QuickBooksManagementView: View {
         localInvoices.first {
             ($0.quickBooksID == quickBooksInvoice.Id) ||
             (($0.quickBooksID == quickBooksInvoice.DocNumber) && !(quickBooksInvoice.DocNumber ?? "").isEmpty)
+        }
+    }
+
+    private func retryLocalInvoicePublication(_ invoice: Invoice) {
+        guard isAuthenticated else {
+            actionMessage = "Reconnect QuickBooks before retrying local invoice publication."
+            return
+        }
+        guard activeLocalInvoicePublicationID == nil else { return }
+
+        let inputs: QuickBooksInvoicePublicationInputs
+        do {
+            inputs = try QuickBooksInvoicePublicationRecovery.publicationInputs(
+                for: invoice,
+                catalogItems: localCatalogItems,
+                payments: localPayments
+            )
+        } catch {
+            markLocalInvoicePublicationFailure(invoice, error: error)
+            actionMessage = error.localizedDescription
+            return
+        }
+
+        activeLocalInvoicePublicationID = invoice.id
+        actionMessage = "Retrying QuickBooks publication for \(invoice.customer.name)..."
+
+        if let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !quickBooksID.isEmpty {
+            quickBooksDataAPI.fetchInvoice(id: quickBooksID) { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .failure(let error):
+                        markLocalInvoicePublicationFailure(invoice, error: error)
+                        actionMessage = "QuickBooks invoice refresh failed: \(error.localizedDescription)"
+                        activeLocalInvoicePublicationID = nil
+                    case .success(let currentInvoice):
+                        guard let syncToken = currentInvoice.SyncToken?.trimmingCharacters(in: .whitespacesAndNewlines),
+                              !syncToken.isEmpty else {
+                            let error = QuickBooksDataAPI.QBError.missingSyncToken(entity: "invoice \(quickBooksID)")
+                            markLocalInvoicePublicationFailure(invoice, error: error)
+                            actionMessage = error.localizedDescription
+                            activeLocalInvoicePublicationID = nil
+                            return
+                        }
+                        let payload = QuickBooksInvoiceUpdate(
+                            Id: quickBooksID,
+                            SyncToken: syncToken,
+                            CustomerRef: inputs.customerRef,
+                            Line: inputs.lines,
+                            PrivateNote: invoice.notes,
+                            BillEmail: inputs.billEmail
+                        )
+                        quickBooksDataAPI.updateInvoice(payload) { updateResult in
+                            DispatchQueue.main.async {
+                                completeLocalInvoicePublication(updateResult, localInvoice: invoice, wasUpdate: true)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            let payload = QuickBooksInvoiceCreate(
+                CustomerRef: inputs.customerRef,
+                Line: inputs.lines,
+                PrivateNote: invoice.notes,
+                BillEmail: inputs.billEmail
+            )
+            quickBooksDataAPI.createInvoice(payload) { result in
+                DispatchQueue.main.async {
+                    completeLocalInvoicePublication(result, localInvoice: invoice, wasUpdate: false)
+                }
+            }
+        }
+    }
+
+    private func completeLocalInvoicePublication(
+        _ result: Result<QuickBooksInvoice, Error>,
+        localInvoice: Invoice,
+        wasUpdate: Bool
+    ) {
+        defer { activeLocalInvoicePublicationID = nil }
+        switch result {
+        case .failure(let error):
+            markLocalInvoicePublicationFailure(localInvoice, error: error)
+            actionMessage = "QuickBooks invoice publication failed: \(error.localizedDescription)"
+        case .success(let quickBooksInvoice):
+            localInvoice.quickBooksID = quickBooksInvoice.Id
+            localInvoice.quickBooksBalanceDue = quickBooksInvoice.Balance
+            localInvoice.quickBooksSyncStatus = "synced"
+            localInvoice.quickBooksSyncDetail = nil
+            localInvoice.quickBooksLastSyncedAt = Date()
+
+            if let call = localServiceCall(for: localInvoice) {
+                let actor = GoogleAuthManager.shared.signedInEmail
+                    ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+                ServiceCallActivity.record(
+                    for: call,
+                    action: wasUpdate ? "QuickBooks invoice republished" : "QuickBooks invoice published",
+                    detail: "QuickBooks invoice \(quickBooksInvoice.DocNumber ?? quickBooksInvoice.Id) confirmed from the local publication queue.",
+                    actorEmail: actor,
+                    in: modelContext
+                )
+            }
+
+            if let index = invoices.firstIndex(where: { $0.Id == quickBooksInvoice.Id }) {
+                invoices[index] = quickBooksInvoice
+            } else {
+                invoices.insert(quickBooksInvoice, at: 0)
+            }
+            saveLocalInvoicePublicationState()
+            actionMessage = wasUpdate
+                ? "Invoice line items updated and confirmed in QuickBooks."
+                : "Invoice created and confirmed in QuickBooks."
+        }
+    }
+
+    private func markLocalInvoicePublicationFailure(_ invoice: Invoice, error: Error) {
+        invoice.quickBooksSyncStatus = "needs_attention"
+        invoice.quickBooksSyncDetail = error.localizedDescription
+        saveLocalInvoicePublicationState()
+    }
+
+    private func saveLocalInvoicePublicationState() {
+        do {
+            try modelContext.save()
+        } catch {
+            actionMessage = "QuickBooks responded, but the local publication state could not be saved: \(error.localizedDescription)"
         }
     }
 
