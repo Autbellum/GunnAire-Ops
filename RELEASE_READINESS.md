@@ -30,7 +30,13 @@ The iOS target builds for the configured iPhone and iPad simulators and launches
 3. Validate the new Google iOS OAuth client on physical devices. The production client is registered for bundle ID `com.gunnaire.businesssuite` and Apple Team ID `7C4B3RR7RD`; the app and Render backend use the same public client ID. Verify sign-in, Gmail send, Calendar create/update/delete, and backend role denial with production business accounts. Existing sessions created with the superseded client may need to sign in again. Intuit Development and Production already contain the exact `https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback` redirect; still verify token refresh and QBO company selection end to end.
 4. Validate Universal Links on physical devices. The app has `applinks:gunnaire.com`, and the live Apple App Site Association file now lists `7C4B3RR7RD.com.gunnaire.businesssuite` while retaining the superseded identifier during migration. Confirm the QBO and Google callback paths open the installed release candidate as expected.
 5. Complete App Store Connect privacy answers using the actual deployed app and every third-party service. The app processes contact details, customer HVAC/equipment records, documents/photos, emails, invoice/payment information, and user identity. Provide public privacy-policy and customer data/deletion URLs; this repository does not contain those public policy pages.
-6. Create the App Store Connect record, confirm the bundle identifier `com.gunnaire.businesssuite`, signing team, App ID capabilities, age rating, export-compliance response, screenshots, support URL, and privacy URLs. Do not upload a build until steps 1-5 are complete and the full test suite is rerun against the release candidate.
+6. Complete the existing App Store Connect record for Apple ID `6758308973`:
+   confirm App ID capabilities, export compliance, Content Rights, DSA status,
+   pricing and private availability; replace the broken support URL; publish
+   privacy and data-deletion pages; add screenshots and copyright; and complete
+   privacy/accessibility declarations from verified behavior. Do not upload a
+   build until steps 1-5 are complete and the full test suite is rerun against
+   the release candidate.
 7. For external TestFlight, provide beta description, test instructions, demo/approved business-account access if required, and a monitored feedback email. Include instructions that exercise a technician, dispatcher, accounting user, and administrator without exposing a production customer account.
 8. Before distributing a Mac build, create/select the Mac Catalyst distribution profile, signing configuration, and Mac App Store Connect availability. The project has `SUPPORTS_MACCATALYST=YES`; a signed development build now succeeds with Apple Development and the generated `Mac Catalyst Team Provisioning Profile: com.gunnaire.businesssuite`, but that does not prove App Store distribution readiness.
 
@@ -42,6 +48,39 @@ The iOS target builds for the configured iPhone and iPad simulators and launches
 - File timestamps (`C617.1`) for metadata of files held in the app container.
 
 The release manager must still confirm these declarations against the deployed backend, QBO, Google, and any subsequently enabled vendor SDKs before upload. App Store Connect privacy responses must describe the real collection and transmission performed by the deployed app and its services.
+
+## Live Apple distribution audit
+
+The Apple account and App Store Connect record were inspected read-only on
+2026-08-26:
+
+- App Store Connect already contains **GunnAire Ops** (Apple ID `6758308973`),
+  version `1.0`, bundle ID `com.gunnaire.businesssuite`, in **Prepare for
+  Submission**.
+- Distribution is configured as **Private** for Apple Business Manager / Apple
+  School Manager custom-app delivery, which matches the employee-only intent.
+  Do not change this irreversible choice without an explicit business decision.
+- The Free Apps Agreement and U.S. W-9 are active. The Paid Apps Agreement is
+  `Pending User Info`; DSA trader status is not complete. No agreement or legal
+  attestation was accepted during this audit.
+- The Apple Developer account has a valid managed Distribution certificate
+  through 2027-06-01. The local Keychain currently has only the Apple
+  Development identity, and the portal lists no manual provisioning profiles.
+  Xcode has cached iOS development and App Store profiles, but both profiles
+  omit the app's iCloud/CloudKit entitlements; the development profile also
+  omits push notifications. A local archive therefore stops safely during
+  provisioning validation. Xcode must refresh the managed iOS profiles against
+  the enabled App ID capabilities before a signed archive can be produced.
+  That credential-management step requires an explicit confirmation immediately
+  before it runs.
+- App Privacy, accessibility declarations, pricing, availability, screenshots,
+  build selection, copyright, Content Rights, and DSA setup are incomplete.
+  The existing support URL returns HTTP 404, and no public privacy-policy or
+  data-deletion page was found on `gunnaire.com`.
+- The source now declares `ITSAppUsesNonExemptEncryption = false` for the
+  app's exempt use of Apple platform encryption and uses a valid empty
+  `UILaunchScreen` dictionary. Both values were verified in the compiled iOS
+  and Mac Catalyst Release products.
 
 ## Verification commands
 

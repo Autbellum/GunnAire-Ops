@@ -50,6 +50,8 @@
 	<true/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.business</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>MinimumOSVersion</key>
 	<string>$(IPHONEOS_DEPLOYMENT_TARGET)</string>
 	<key>NSAppTransportSecurity</key>
@@ -97,10 +99,7 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchScreen</key>
-	<dict>
-		<key>UILaunchScreen</key>
-		<dict/>
-	</dict>
+	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
