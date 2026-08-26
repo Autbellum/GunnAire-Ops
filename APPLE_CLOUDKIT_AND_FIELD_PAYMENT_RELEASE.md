@@ -11,8 +11,13 @@ and schema status as of 2026-08-26:
 2. A signed Mac Catalyst development build succeeds using the regenerated team
    provisioning profile.
 3. All 21 SwiftData production record types were initialized in Development,
-   reviewed in CloudKit Console, deployed, and verified in Production. The
-   bootstrap records were then removed from the development store.
+   reviewed in CloudKit Console, deployed, and verified in Production. On
+   2026-08-26 the follow-up deployment also verified 36 `CD_ServiceCall`
+   fields, including `CD_correctiveWorkReasonRaw`,
+   `CD_originatingServiceCallID`, and
+   `CD_scheduledFollowUpServiceCallID`, plus the 16-field `CD_Invoice` type
+   containing `CD_quickBooksSyncStatus`. The temporary bootstrap records were
+   then removed and the local development store was verified marker-free.
 4. Sign the company iPad and Mac into the same approved business iCloud account
    and sign every staff member into GunnAire Ops with their own business login.
 5. Verify offline edits made on each physical device merge after reconnection before
