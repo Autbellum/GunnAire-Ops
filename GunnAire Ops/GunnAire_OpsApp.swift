@@ -70,6 +70,8 @@ private enum GunnAireUITestFixtures {
     private static let technicianUserID = UUID(uuidString: "A1000000-0000-4000-8000-000000000005")!
     private static let technicianID = UUID(uuidString: "A1000000-0000-4000-8000-000000000006")!
     private static let catalogItemID = UUID(uuidString: "A1000000-0000-4000-8000-000000000007")!
+    private static let correctiveSourceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000008")!
+    private static let correctiveFollowUpCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000009")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -99,7 +101,7 @@ private enum GunnAireUITestFixtures {
             context.delete(invoice)
         }
         let calls = try context.fetch(FetchDescriptor<ServiceCall>())
-        for call in calls where call.id == serviceCallID {
+        for call in calls where call.id == serviceCallID || call.id == correctiveSourceCallID || call.id == correctiveFollowUpCallID {
             context.delete(call)
         }
         let customers = try context.fetch(FetchDescriptor<Customer>())
@@ -177,6 +179,56 @@ private enum GunnAireUITestFixtures {
         context.insert(catalogItem)
         context.insert(call)
         context.insert(invoice)
+
+        if arguments.contains("-uiTestSeedCorrectiveLineage") {
+            let sourceDate = Calendar.current.date(
+                bySettingHour: 11,
+                minute: 0,
+                second: 0,
+                of: Date()
+            ) ?? Date()
+            let followUpDate = Calendar.current.date(
+                bySettingHour: 14,
+                minute: 0,
+                second: 0,
+                of: Date()
+            ) ?? Date()
+            let source = ServiceCall(
+                id: correctiveSourceCallID,
+                googleEventManagedByApp: true,
+                eventTitle: "Corrective source job",
+                siteAddress: customer.address,
+                equipmentName: "Test Heat Pump",
+                equipmentSerialNumber: "UITEST100",
+                type: .service,
+                scheduledDate: sourceDate,
+                assignedTechnician: technician,
+                customer: customer,
+                status: .completed,
+                visitDisposition: .callback,
+                visitDispositionNotes: "Original repair concern returned.",
+                scheduledFollowUpServiceCallID: correctiveFollowUpCallID,
+                correctiveWorkReason: .workmanship
+            )
+            let followUp = ServiceCall(
+                id: correctiveFollowUpCallID,
+                googleEventManagedByApp: true,
+                eventTitle: "Corrective follow-up job",
+                siteAddress: customer.address,
+                equipmentName: "Test Heat Pump",
+                equipmentSerialNumber: "UITEST100",
+                type: .service,
+                scheduledDate: followUpDate,
+                assignedTechnician: technician,
+                customer: customer,
+                status: .scheduled,
+                visitDisposition: .callback,
+                originatingServiceCallID: correctiveSourceCallID,
+                correctiveWorkReason: .workmanship
+            )
+            context.insert(source)
+            context.insert(followUp)
+        }
         try context.save()
     }
 }

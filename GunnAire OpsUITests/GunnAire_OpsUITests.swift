@@ -313,6 +313,51 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testCorrectiveVisitLinksOriginalAndFollowUpJobs() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedCorrectiveLineage"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let sourceJob = app.buttons["OpenServiceCall-A1000000-0000-4000-8000-000000000008"]
+        for _ in 0..<6 {
+            if sourceJob.exists && sourceJob.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(sourceJob.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["CorrectiveStatus-A1000000-0000-4000-8000-000000000008"].exists)
+        sourceJob.tap()
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+
+        let workspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Overview"].tap()
+        XCTAssertTrue(app.staticTexts["Corrective Work"].exists)
+        XCTAssertTrue(app.staticTexts["Reason: Workmanship"].exists)
+
+        let openFollowUp = app.buttons["OpenScheduledFollowUpServiceCall"]
+        XCTAssertTrue(openFollowUp.waitForExistence(timeout: 3))
+        openFollowUp.tap()
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+
+        let followUpPicker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        followUpPicker.buttons["Overview"].tap()
+        XCTAssertTrue(app.buttons["OpenOriginatingServiceCall"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Reason: Workmanship"].exists)
+    }
+
+    @MainActor
     func testCustomerRecordUsesFocusedOperationalWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

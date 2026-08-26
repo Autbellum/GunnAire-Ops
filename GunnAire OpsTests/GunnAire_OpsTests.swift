@@ -756,6 +756,105 @@ struct GunnAire_OpsTests {
         #expect(call.followUpAction == "Confirm access window")
     }
 
+    @Test func callbackFollowUpRetainsCorrectiveLineageWithoutReusingFieldEvidence() async throws {
+        let customer = Customer(name: "Corrective Work Customer", address: "44 Recall Way")
+        let equipmentID = UUID()
+        let dueDate = Date(timeIntervalSince1970: 1_800_086_400)
+        let source = ServiceCall(
+            equipmentName: "Main Heat Pump",
+            equipmentModel: "XP21",
+            equipmentSerialNumber: "CALLBACK-21",
+            customerEquipmentID: equipmentID,
+            equipmentTypeRaw: HVACEquipmentType.heatPump.rawValue,
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer,
+            status: .completed,
+            notes: "Customer reports intermittent shutdown.",
+            findingsSummary: "Control board stopped responding.",
+            visitDisposition: .callback,
+            visitDispositionNotes: "The original concern returned overnight.",
+            followUpRequired: true,
+            followUpAction: "Return with a replacement control board",
+            followUpDueDate: dueDate,
+            correctiveWorkReason: .partFailure
+        )
+        source.setTechnicalReading("114", for: "line_voltage")
+        source.setServiceActionStatus(.needsService, for: "reversing_valve_tested")
+
+        let followUp = source.makeFollowUpVisit()
+
+        #expect(source.scheduledFollowUpServiceCallID == followUp.id)
+        #expect(source.followUpRequired == false)
+        #expect(source.followUpAction == nil)
+        #expect(source.followUpDueDate == nil)
+        #expect(followUp.originatingServiceCallID == source.id)
+        #expect(followUp.visitDisposition == .callback)
+        #expect(followUp.correctiveWorkReason == .partFailure)
+        #expect(followUp.scheduledDate == dueDate)
+        #expect(followUp.customerEquipmentID == equipmentID)
+        #expect(followUp.equipmentSerialNumber == "CALLBACK-21")
+        #expect(followUp.notes?.contains("Return with a replacement control board") == true)
+        #expect(followUp.notes?.contains("Original visit outcome") == true)
+        #expect(followUp.technicalReadings.isEmpty)
+        #expect(followUp.serviceActionStatuses.isEmpty)
+    }
+
+    @MainActor
+    @Test func correctiveLineagePersistsAcrossTheSharedModelSchema() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(name: "Persistent Corrective Customer")
+        let source = ServiceCall(
+            type: .install,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer,
+            status: .completed,
+            visitDisposition: .warranty,
+            followUpRequired: true,
+            correctiveWorkReason: .manufacturerWarranty
+        )
+        let followUp = source.makeFollowUpVisit(scheduledDate: Date(timeIntervalSince1970: 1_800_172_800))
+        context.insert(customer)
+        context.insert(source)
+        context.insert(followUp)
+        try context.save()
+
+        let stored = try context.fetch(FetchDescriptor<ServiceCall>())
+        let storedSource = try #require(stored.first { $0.id == source.id })
+        let storedFollowUp = try #require(stored.first { $0.id == followUp.id })
+
+        #expect(storedSource.scheduledFollowUpServiceCallID == storedFollowUp.id)
+        #expect(storedFollowUp.originatingServiceCallID == storedSource.id)
+        #expect(storedFollowUp.visitDisposition == .warranty)
+        #expect(storedFollowUp.correctiveWorkReason == .manufacturerWarranty)
+    }
+
+    @Test func ordinaryFollowUpPreservesLineageWithoutCorrectiveClassification() async throws {
+        let customer = Customer(name: "Routine Follow-Up Customer")
+        let source = ServiceCall(
+            type: .maintenance,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            customer: customer,
+            status: .completed,
+            visitDisposition: .standard,
+            followUpRequired: true,
+            followUpAction: "Return to replace the customer-provided filter"
+        )
+
+        let followUp = source.makeFollowUpVisit()
+
+        #expect(followUp.originatingServiceCallID == source.id)
+        #expect(followUp.visitDisposition == .standard)
+        #expect(followUp.correctiveWorkReason == nil)
+        #expect(followUp.isCorrectiveWorkClassification == false)
+        #expect(followUp.isCorrectiveVisit == true)
+    }
+
     @Test func onlyCompletedAccessibleVisitsCanOfferReviewFollowUp() async throws {
         let customer = Customer(name: "Review Customer")
         let completed = ServiceCall(type: .service, scheduledDate: Date(), customer: customer, status: .completed)

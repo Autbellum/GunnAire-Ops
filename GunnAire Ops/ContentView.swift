@@ -402,6 +402,16 @@ struct ServiceCallDetailView: View {
         serviceCallActivities.filter { $0.serviceCallID == call.id }
     }
 
+    private var originatingCall: ServiceCall? {
+        guard let sourceID = call.originatingServiceCallID else { return nil }
+        return serviceCalls.first { $0.id == sourceID }
+    }
+
+    private var scheduledFollowUpCall: ServiceCall? {
+        guard let followUpID = call.scheduledFollowUpServiceCallID else { return nil }
+        return serviceCalls.first { $0.id == followUpID }
+    }
+
     private var availableFieldFormTemplates: [FieldFormTemplate] {
         fieldFormTemplates.filter { $0.isActive && $0.applies(to: call.type) }
     }
@@ -754,6 +764,17 @@ GunnAire
         return AppAccess.canViewBillingFinancialDetails(email: email, users: users)
     }
 
+    private func canOpenRelatedCall(_ relatedCall: ServiceCall) -> Bool {
+        let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        return AppAccess.canAccessServiceCall(
+            relatedCall,
+            email: email,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+    }
+
     private var tapToPayReady: Bool {
         enableOnsitePayments &&
         selectedProcessor.supportsTapToPay &&
@@ -809,44 +830,23 @@ GunnAire
     }
 
     private func scheduleFollowUpVisit() {
-        let scheduledDate = call.followUpDueDate ?? Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
-        let notesPrefix = call.followUpAction?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let generatedNotes = [notesPrefix, call.notes]
-            .compactMap { value in
-                guard let value, !value.isEmpty else { return nil }
-                return value
-            }
-            .joined(separator: "\n\n")
-
-        let followUpCall = ServiceCall(
-            googleEventManagedByApp: true,
-            siteAddress: call.siteAddress ?? call.customer.address,
-            equipmentName: call.equipmentName,
-            equipmentManufacturer: call.equipmentManufacturer,
-            equipmentModel: call.equipmentModel,
-            equipmentSerialNumber: call.equipmentSerialNumber,
-            equipmentLocation: call.equipmentLocation,
-            equipmentInstallDate: call.equipmentInstallDate,
-            equipmentWarrantyExpiration: call.equipmentWarrantyExpiration,
-            customerEquipmentID: call.customerEquipmentID,
-            type: call.type,
-            scheduledDate: scheduledDate,
-            duration: call.duration,
-            assignedTechnician: call.assignedTechnician,
-            additionalTechnicianIDs: call.additionalTechnicianIDs,
-            customer: call.customer,
-            status: .scheduled,
-            notes: generatedNotes.isEmpty ? "Scheduled follow-up visit" : "Scheduled follow-up visit\n\n\(generatedNotes)",
-            findingsSummary: call.findingsSummary,
-            recommendedWorkSummary: call.recommendedWorkSummary,
-            followUpRequired: false
-        )
-        followUpCall.inheritEquipmentProfile(from: call)
-        followUpCall.dispatchUrgency = call.dispatchUrgency
+        let followUpCall = call.makeFollowUpVisit()
         modelContext.insert(followUpCall)
-        call.followUpRequired = false
-        call.followUpAction = nil
-        call.followUpDueDate = nil
+        let sourceID = String(call.id.uuidString.prefix(8)).uppercased()
+        ServiceCallActivity.record(
+            for: call,
+            action: call.isCorrectiveWorkClassification ? "Corrective visit scheduled" : "Follow-up visit scheduled",
+            detail: "Linked follow-up for \(followUpCall.scheduledDate.formatted(date: .abbreviated, time: .shortened)).",
+            actorEmail: currentActivityActor,
+            in: modelContext
+        )
+        ServiceCallActivity.record(
+            for: followUpCall,
+            action: "Created from prior job",
+            detail: "Linked to source job \(sourceID).",
+            actorEmail: currentActivityActor,
+            in: modelContext
+        )
     }
 
     private func scheduleApprovedWorkFromEstimate() {
@@ -1019,6 +1019,59 @@ GunnAire
                         }
                     }
                     .foregroundColor(.primary)
+                    }
+
+                    if selectedWorkspace == .overview,
+                       call.isCorrectiveVisit || call.scheduledFollowUpServiceCallID != nil {
+                        GroupBox(call.isCorrectiveWorkClassification ? "Corrective Work" : "Related Visit") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                if call.isCorrectiveWorkClassification {
+                                    Label(call.visitDisposition.displayName, systemImage: "arrow.trianglehead.clockwise")
+                                        .font(.headline)
+                                    if let reason = call.correctiveWorkReason {
+                                        Text("Reason: \(reason.displayName)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+
+                                if let originatingCall, canOpenRelatedCall(originatingCall) {
+                                    NavigationLink {
+                                        ServiceCallDetailView(call: originatingCall)
+                                    } label: {
+                                        Label(
+                                            "Open original job from \(originatingCall.scheduledDate.formatted(date: .abbreviated, time: .omitted))",
+                                            systemImage: "arrow.up.left.square"
+                                        )
+                                    }
+                                    .accessibilityIdentifier("OpenOriginatingServiceCall")
+                                } else if call.originatingServiceCallID != nil {
+                                    Text(originatingCall == nil
+                                         ? "The original job is still syncing to this device."
+                                         : "The original job is linked but outside this account's job access.")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
+
+                                if let scheduledFollowUpCall, canOpenRelatedCall(scheduledFollowUpCall) {
+                                    NavigationLink {
+                                        ServiceCallDetailView(call: scheduledFollowUpCall)
+                                    } label: {
+                                        Label(
+                                            "Open scheduled follow-up on \(scheduledFollowUpCall.scheduledDate.formatted(date: .abbreviated, time: .omitted))",
+                                            systemImage: "arrow.down.right.square"
+                                        )
+                                    }
+                                    .accessibilityIdentifier("OpenScheduledFollowUpServiceCall")
+                                } else if call.scheduledFollowUpServiceCallID != nil {
+                                    Text(scheduledFollowUpCall == nil
+                                         ? "The scheduled follow-up is still syncing to this device."
+                                         : "The scheduled follow-up is linked but outside this account's job access.")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                        }
                     }
 
                     if selectedWorkspace == .history {
@@ -2027,6 +2080,7 @@ struct AddServiceCallView: View {
     @State private var findingsSummary = ""
     @State private var recommendedWorkSummary = ""
     @State private var visitDisposition: ServiceVisitDisposition = .standard
+    @State private var correctiveWorkReason: CorrectiveWorkReason = .unresolvedConcern
     @State private var followUpRequired = false
     @State private var followUpAction = ""
     @State private var followUpDueDate = Date()
@@ -2394,6 +2448,16 @@ struct AddServiceCallView: View {
                     Text(visitDisposition.guidance)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if visitDisposition == .warranty || visitDisposition == .callback {
+                        Picker("Corrective reason", selection: $correctiveWorkReason) {
+                            ForEach(CorrectiveWorkReason.allCases) { reason in
+                                Text(reason.displayName).tag(reason)
+                            }
+                        }
+                        Text("The reason follows any scheduled corrective visit for history and callback reporting.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Toggle("Open Documentation After Save", isOn: $openDocumentationAfterSave)
             }
@@ -2480,7 +2544,8 @@ struct AddServiceCallView: View {
             visitDisposition: visitDisposition,
             followUpRequired: followUpRequired,
             followUpAction: followUpRequired ? followUpAction.nilIfBlank : nil,
-            followUpDueDate: followUpRequired ? followUpDueDate : nil
+            followUpDueDate: followUpRequired ? followUpDueDate : nil,
+            correctiveWorkReason: (visitDisposition == .warranty || visitDisposition == .callback) ? correctiveWorkReason : nil
         )
         if let selectedCustomerEquipmentID,
            let equipment = selectedCustomerEquipmentProfiles.first(where: { $0.id == selectedCustomerEquipmentID }) {
@@ -2625,6 +2690,7 @@ struct EditServiceCallView: View {
     @State private var recommendedWorkSummary: String
     @State private var visitDisposition: ServiceVisitDisposition
     @State private var visitDispositionNotes: String
+    @State private var correctiveWorkReason: CorrectiveWorkReason
     @State private var followUpRequired: Bool
     @State private var followUpAction: String
     @State private var followUpDueDate: Date
@@ -2675,6 +2741,7 @@ struct EditServiceCallView: View {
         _recommendedWorkSummary = State(initialValue: call.recommendedWorkSummary ?? "")
         _visitDisposition = State(initialValue: call.visitDisposition)
         _visitDispositionNotes = State(initialValue: call.visitDispositionNotes ?? "")
+        _correctiveWorkReason = State(initialValue: call.correctiveWorkReason ?? .unresolvedConcern)
         _followUpRequired = State(initialValue: call.followUpRequired)
         _followUpAction = State(initialValue: call.followUpAction ?? "")
         _followUpDueDate = State(initialValue: call.followUpDueDate ?? Date())
@@ -2924,6 +2991,16 @@ struct EditServiceCallView: View {
                         TextField("Outcome notes", text: $visitDispositionNotes, axis: .vertical)
                             .lineLimit(2...4)
                     }
+                    if visitDisposition == .warranty || visitDisposition == .callback {
+                        Picker("Corrective reason", selection: $correctiveWorkReason) {
+                            ForEach(CorrectiveWorkReason.allCases) { reason in
+                                Text(reason.displayName).tag(reason)
+                            }
+                        }
+                        Text("This reason remains linked to the original job when a corrective visit is scheduled.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                     if visitDisposition == .noAccess && !followUpRequired {
                         Text("Set a follow-up when the customer wants to reschedule.")
                             .font(.caption)
@@ -3051,6 +3128,7 @@ struct EditServiceCallView: View {
         call.recommendedWorkSummary = recommendedWorkSummary.nilIfBlank
         call.visitDisposition = visitDisposition
         call.visitDispositionNotes = visitDisposition == .standard ? nil : visitDispositionNotes.nilIfBlank
+        call.correctiveWorkReason = (visitDisposition == .warranty || visitDisposition == .callback) ? correctiveWorkReason : nil
         call.followUpRequired = followUpRequired
         call.followUpAction = followUpRequired ? followUpAction.nilIfBlank : nil
         call.followUpDueDate = followUpRequired ? followUpDueDate : nil

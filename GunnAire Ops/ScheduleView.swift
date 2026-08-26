@@ -1144,6 +1144,17 @@ struct ScheduleView: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(call.dispatchUrgency == .emergency ? .red : .orange)
             }
+            if call.isCorrectiveWorkClassification {
+                Label {
+                    Text(correctiveDispatchSummary(for: call))
+                        .lineLimit(1)
+                } icon: {
+                    Image(systemName: call.visitDisposition == .warranty ? "shield.checkered" : "arrow.trianglehead.clockwise")
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("CorrectiveStatus-\(call.id.uuidString)")
+            }
             if call.technicianJobPresence == .enRoute || call.technicianJobPresence == .onSite {
                 Label(call.technicianJobPresence.displayName, systemImage: call.technicianJobPresence == .enRoute ? "car.fill" : "mappin.and.ellipse")
                     .font(.caption2.weight(.semibold))
@@ -1249,6 +1260,13 @@ struct ScheduleView: View {
             return call.customer.name
         }
         return "Unassigned calendar event"
+    }
+
+    private func correctiveDispatchSummary(for call: ServiceCall) -> String {
+        guard let reason = call.correctiveWorkReason else {
+            return call.visitDisposition.displayName
+        }
+        return "\(call.visitDisposition.displayName) • \(reason.displayName)"
     }
 
     private func displaySubtitle(for call: ServiceCall) -> String {
@@ -1621,44 +1639,23 @@ GunnAire
     }
 
     private func scheduleFollowUpVisit(for sourceCall: ServiceCall) {
-        let scheduledDate = sourceCall.followUpDueDate ?? Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
-        let notesPrefix = sourceCall.followUpAction?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let generatedNotes = [notesPrefix, sourceCall.notes]
-            .compactMap { value in
-                guard let value, !value.isEmpty else { return nil }
-                return value
-            }
-            .joined(separator: "\n\n")
-
-        let followUpCall = ServiceCall(
-            googleEventManagedByApp: true,
-            siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
-            equipmentName: sourceCall.equipmentName,
-            equipmentManufacturer: sourceCall.equipmentManufacturer,
-            equipmentModel: sourceCall.equipmentModel,
-            equipmentSerialNumber: sourceCall.equipmentSerialNumber,
-            equipmentLocation: sourceCall.equipmentLocation,
-            equipmentInstallDate: sourceCall.equipmentInstallDate,
-            equipmentWarrantyExpiration: sourceCall.equipmentWarrantyExpiration,
-            customerEquipmentID: sourceCall.customerEquipmentID,
-            type: sourceCall.type,
-            scheduledDate: scheduledDate,
-            duration: sourceCall.duration,
-            assignedTechnician: sourceCall.assignedTechnician,
-            additionalTechnicianIDs: sourceCall.additionalTechnicianIDs,
-            customer: sourceCall.customer,
-            status: .scheduled,
-            notes: generatedNotes.isEmpty ? "Scheduled follow-up visit" : "Scheduled follow-up visit\n\n\(generatedNotes)",
-            findingsSummary: sourceCall.findingsSummary,
-            recommendedWorkSummary: sourceCall.recommendedWorkSummary,
-            followUpRequired: false
-        )
-        followUpCall.inheritEquipmentProfile(from: sourceCall)
-        followUpCall.dispatchUrgency = sourceCall.dispatchUrgency
+        let followUpCall = sourceCall.makeFollowUpVisit()
         modelContext.insert(followUpCall)
-        sourceCall.followUpRequired = false
-        sourceCall.followUpAction = nil
-        sourceCall.followUpDueDate = nil
+        let actorEmail = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        ServiceCallActivity.record(
+            for: sourceCall,
+            action: sourceCall.isCorrectiveWorkClassification ? "Corrective visit scheduled" : "Follow-up visit scheduled",
+            detail: "Linked follow-up for \(followUpCall.scheduledDate.formatted(date: .abbreviated, time: .shortened)).",
+            actorEmail: actorEmail,
+            in: modelContext
+        )
+        ServiceCallActivity.record(
+            for: followUpCall,
+            action: "Created from prior job",
+            detail: "Linked to source job \(String(sourceCall.id.uuidString.prefix(8)).uppercased()).",
+            actorEmail: actorEmail,
+            in: modelContext
+        )
         publishToGoogleCalendar(followUpCall)
         selectedDate = Calendar.current.startOfDay(for: followUpCall.scheduledDate)
         navigationPath.append(followUpCall)

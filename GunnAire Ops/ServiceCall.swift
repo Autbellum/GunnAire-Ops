@@ -93,6 +93,28 @@ enum ServiceVisitDisposition: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum CorrectiveWorkReason: String, Codable, CaseIterable, Identifiable {
+    case unresolvedConcern = "unresolved_concern"
+    case workmanship
+    case partFailure = "part_failure"
+    case manufacturerWarranty = "manufacturer_warranty"
+    case customerCourtesy = "customer_courtesy"
+    case other
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .unresolvedConcern: "Original concern unresolved"
+        case .workmanship: "Workmanship"
+        case .partFailure: "Part failure"
+        case .manufacturerWarranty: "Manufacturer warranty"
+        case .customerCourtesy: "Customer courtesy"
+        case .other: "Other"
+        }
+    }
+}
+
 enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable, Hashable {
     case splitSystemAC = "split_system_ac"
     case heatPump = "heat_pump"
@@ -1198,6 +1220,12 @@ final class ServiceCall {
     var followUpRequired: Bool = false
     var followUpAction: String?
     var followUpDueDate: Date?
+    /// Stable UUID links keep corrective work traceable while remaining safe for
+    /// offline creation and CloudKit replication without requiring both records
+    /// to be resolved at the same instant.
+    var originatingServiceCallID: UUID?
+    var scheduledFollowUpServiceCallID: UUID?
+    var correctiveWorkReasonRaw: String?
     var diagnosticsCaptured: Bool = false
     var quoteReviewedWithCustomer: Bool = false
     var equipmentVerifiedChecklist: Bool = false
@@ -1282,7 +1310,10 @@ final class ServiceCall {
         documentationStartedAt: Date? = nil,
         documentationCompletedAt: Date? = nil,
         linkedEstimateID: UUID? = nil,
-        linkedInvoiceID: UUID? = nil
+        linkedInvoiceID: UUID? = nil,
+        originatingServiceCallID: UUID? = nil,
+        scheduledFollowUpServiceCallID: UUID? = nil,
+        correctiveWorkReason: CorrectiveWorkReason? = nil
     ) {
         self.id = id
         self.googleCalendarID = googleCalendarID
@@ -1349,6 +1380,9 @@ final class ServiceCall {
         self.documentationCompletedAt = documentationCompletedAt
         self.linkedEstimateID = linkedEstimateID
         self.linkedInvoiceID = linkedInvoiceID
+        self.originatingServiceCallID = originatingServiceCallID
+        self.scheduledFollowUpServiceCallID = scheduledFollowUpServiceCallID
+        self.correctiveWorkReasonRaw = correctiveWorkReason?.rawValue
     }
 
     var timeEntries: [TimeEntry] {
@@ -1443,6 +1477,71 @@ final class ServiceCall {
         filterSize = source.filterSize
     }
 
+    /// Creates the next visit locally and links both sides before either record
+    /// is uploaded. Warranty/callback classification and its operational reason
+    /// follow the corrective job; prior measurements and completion evidence do not.
+    func makeFollowUpVisit(scheduledDate requestedDate: Date? = nil) -> ServiceCall {
+        let resolvedDate = requestedDate
+            ?? followUpDueDate
+            ?? Calendar.current.date(byAdding: .day, value: 1, to: Date())
+            ?? Date()
+        let followUpActionText = followUpAction?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceNotes = notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let outcomeContext: String?
+        if let outcome = visitDispositionNotes?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !outcome.isEmpty {
+            outcomeContext = "Original visit outcome: \(outcome)"
+        } else {
+            outcomeContext = nil
+        }
+        let generatedNotes = [followUpActionText, outcomeContext, sourceNotes]
+            .compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            .joined(separator: "\n\n")
+        let retainedDisposition: ServiceVisitDisposition = switch visitDisposition {
+        case .warranty: .warranty
+        case .callback: .callback
+        default: .standard
+        }
+
+        let followUpCall = ServiceCall(
+            googleEventManagedByApp: true,
+            siteAddress: siteAddress ?? customer.address,
+            equipmentName: equipmentName,
+            equipmentManufacturer: equipmentManufacturer,
+            equipmentModel: equipmentModel,
+            equipmentSerialNumber: equipmentSerialNumber,
+            equipmentLocation: equipmentLocation,
+            equipmentInstallDate: equipmentInstallDate,
+            equipmentWarrantyExpiration: equipmentWarrantyExpiration,
+            customerEquipmentID: customerEquipmentID,
+            type: type,
+            scheduledDate: resolvedDate,
+            duration: duration,
+            assignedTechnician: assignedTechnician,
+            additionalTechnicianIDs: additionalTechnicianIDs,
+            customer: customer,
+            status: .scheduled,
+            notes: generatedNotes.isEmpty ? "Scheduled follow-up visit" : "Scheduled follow-up visit\n\n\(generatedNotes)",
+            findingsSummary: findingsSummary,
+            recommendedWorkSummary: recommendedWorkSummary,
+            visitDisposition: retainedDisposition,
+            followUpRequired: false,
+            originatingServiceCallID: id,
+            correctiveWorkReason: retainedDisposition == .standard ? nil : correctiveWorkReason
+        )
+        followUpCall.inheritEquipmentProfile(from: self)
+        followUpCall.dispatchUrgency = dispatchUrgency
+
+        scheduledFollowUpServiceCallID = followUpCall.id
+        followUpRequired = false
+        followUpAction = nil
+        followUpDueDate = nil
+        return followUpCall
+    }
+
     private static func encodedTechnicianIDs(_ ids: Set<UUID>) -> String? {
         guard !ids.isEmpty,
               let data = try? JSONEncoder().encode(ids.map(\.uuidString).sorted()) else { return nil }
@@ -1464,6 +1563,19 @@ final class ServiceCall {
     var visitDisposition: ServiceVisitDisposition {
         get { ServiceVisitDisposition(rawValue: visitDispositionRaw) ?? .standard }
         set { visitDispositionRaw = newValue.rawValue }
+    }
+
+    var correctiveWorkReason: CorrectiveWorkReason? {
+        get { correctiveWorkReasonRaw.flatMap(CorrectiveWorkReason.init(rawValue:)) }
+        set { correctiveWorkReasonRaw = newValue?.rawValue }
+    }
+
+    var isCorrectiveWorkClassification: Bool {
+        visitDisposition == .warranty || visitDisposition == .callback
+    }
+
+    var isCorrectiveVisit: Bool {
+        originatingServiceCallID != nil || isCorrectiveWorkClassification
     }
 
     var checklistCompletedCount: Int {
@@ -1535,6 +1647,8 @@ final class ServiceCall {
             siteAddress,
             type.displayName,
             status.rawValue,
+            visitDisposition.displayName,
+            correctiveWorkReason?.displayName,
             assignedTechnician?.name,
             assignedTechnician?.contactInfo,
             equipmentSummary,
