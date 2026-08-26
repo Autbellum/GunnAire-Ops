@@ -34,11 +34,16 @@ struct PaymentsAndReceiptsView: View {
     @State private var paymentNotes = ""
     @State private var refundNotes = ""
     @State private var tapToPayMessage = ""
+    @State private var fieldHandoffMessage = ""
     @State private var actionMessage = ""
     @State private var backendUploadMessage = ""
     @State private var sharedPaymentCollections: [BackendPaymentCollectionRecord] = []
     @State private var sharedPaymentCollectionMessage = ""
     @State private var isLoadingSharedPaymentCollections = false
+    @State private var fieldPaymentAssignments: [BackendFieldPaymentAssignmentRecord] = []
+    @State private var fieldPaymentAssignmentMessage = ""
+    @State private var isLoadingFieldPaymentAssignments = false
+    @State private var fieldCollectionPrompt: BackendFieldPaymentAssignmentRecord?
     @State private var syncingPaymentID: UUID?
     @State private var isProcessingQuickBooksPayment = false
     @State private var isProcessingQuickBooksRefund = false
@@ -61,7 +66,7 @@ struct PaymentsAndReceiptsView: View {
 
     private var selectedInvoice: Invoice? {
         guard let selectedInvoiceID else { return nil }
-        return invoices.first { $0.id == selectedInvoiceID }
+        return visibleInvoices.first { $0.id == selectedInvoiceID }
     }
 
     private var selectedRefundPayment: Payment? {
@@ -146,6 +151,12 @@ struct PaymentsAndReceiptsView: View {
         outstandingInvoices.reduce(0) { $0 + $1.balanceDue }
     }
 
+    private var activeFieldCollectionTechnicians: [AppUser] {
+        users
+            .filter { $0.isActive && $0.role == .fieldTechnician }
+            .sorted { $0.email.localizedCaseInsensitiveCompare($1.email) == .orderedAscending }
+    }
+
     private var overdueInvoiceCount: Int {
         outstandingInvoices.filter { isOverdue($0.invoice) }.count
     }
@@ -188,10 +199,14 @@ struct PaymentsAndReceiptsView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         } else {
-                            Text("Card, check, and cash payments can still be recorded from this screen.")
+                            Text("Card, check, and cash payments can be recorded here. For contactless payment, use QuickBooks Mobile or GoPayment on the field iPhone after handoff.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                    }
+
+                    if GunnAireBackendService.isConfigured {
+                        fieldPaymentAssignmentSection
                     }
 
                     Section("Outstanding Invoices") {
@@ -246,6 +261,39 @@ struct PaymentsAndReceiptsView: View {
                                         }
                                         .buttonStyle(.bordered)
 
+                                        if isAdminUser, !activeFieldCollectionTechnicians.isEmpty {
+                                            Menu {
+                                                ForEach(activeFieldCollectionTechnicians, id: \.id) { technician in
+                                                    Button(technician.email) {
+                                                        Task {
+                                                            await assignFieldCollection(
+                                                                invoice: entry.invoice,
+                                                                amount: entry.balanceDue,
+                                                                technicianEmail: technician.email
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            } label: {
+                                                Label("Assign Field Collection", systemImage: "person.badge.plus")
+                                            }
+                                            .accessibilityHint("Creates a server-authorized collection task for the selected field technician.")
+                                        }
+
+                                        if FieldPaymentHandoff.shared.canStartFromCurrentDevice {
+                                            Button("Send to Field iPhone") {
+                                                let didStart = FieldPaymentHandoff.shared.begin(
+                                                    invoiceID: entry.invoice.id,
+                                                    amount: entry.balanceDue
+                                                )
+                                                fieldHandoffMessage = didStart
+                                                    ? "Payment handoff is ready. Open GunnAire Ops from Handoff on the nearby company iPhone to collect this invoice. \(FieldPaymentHandoff.quickBooksTapToPayDetail) \(FieldPaymentHandoff.requirementsDetail)"
+                                                    : "Payment handoff could not start on this device."
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .accessibilityHint(FieldPaymentHandoff.requirementsDetail)
+                                        }
+
                                         if processorIsReady {
                                             Button("Tap to Pay") {
                                                 preparePaymentForm(for: entry.invoice, preferredMethod: .card)
@@ -272,6 +320,12 @@ struct PaymentsAndReceiptsView: View {
                                             }
                                             .buttonStyle(.bordered)
                                         }
+                                    }
+
+                                    if !fieldHandoffMessage.isEmpty {
+                                        Text(fieldHandoffMessage)
+                                            .font(.caption)
+                                            .foregroundColor(fieldHandoffMessage.localizedCaseInsensitiveContains("could not") ? .red : .secondary)
                                     }
                                 }
                                 .padding(.vertical, 4)
@@ -566,9 +620,125 @@ struct PaymentsAndReceiptsView: View {
                     await refreshSharedPaymentCollections()
                 }
             }
+            if GunnAireBackendService.isConfigured, fieldPaymentAssignments.isEmpty {
+                Task {
+                    await refreshFieldPaymentAssignments()
+                }
+            }
+        }
+        .task(id: fieldCollectionPollingKey) {
+            guard fieldCollectionPollingKey != nil else { return }
+            while !Task.isCancelled {
+                await refreshFieldPaymentAssignments()
+                do {
+                    try await Task.sleep(for: .seconds(45))
+                } catch {
+                    return
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
             applyPendingIntentInvoiceIfNeeded()
+        }
+        .alert("Field collection assigned", isPresented: Binding(
+            get: { fieldCollectionPrompt != nil },
+            set: { if !$0 { fieldCollectionPrompt = nil } }
+        ), actions: {
+            Button("View Task") {
+                guard let invoiceID = fieldCollectionPrompt?.invoiceUUID else {
+                    fieldCollectionPrompt = nil
+                    return
+                }
+                fieldCollectionPrompt = nil
+                if visibleInvoices.contains(where: { $0.id == invoiceID }) {
+                    GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
+                } else {
+                    actionMessage = "The collection task is ready. Its job and invoice details will appear after company sync finishes on this device."
+                }
+            }
+            Button("Later", role: .cancel) {
+                fieldCollectionPrompt = nil
+            }
+        }, message: {
+            if let assignment = fieldCollectionPrompt {
+                Text("Collect \(assignment.amount.formatted(.currency(code: "USD"))) from \(assignment.customerName). Accept the task, then open collection when the invoice appears on this device.")
+            }
+        })
+    }
+
+    @ViewBuilder
+    private var fieldPaymentAssignmentSection: some View {
+        Section(isAdminUser ? "Field Collection Assignments" : "Your Field Collection Tasks") {
+            HStack {
+                Button(isLoadingFieldPaymentAssignments ? "Refreshing..." : "Refresh Tasks") {
+                    Task {
+                        await refreshFieldPaymentAssignments()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isLoadingFieldPaymentAssignments)
+
+                Spacer()
+
+                Text("\(fieldPaymentAssignments.count)")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+            }
+
+            if fieldPaymentAssignments.isEmpty {
+                Text(fieldPaymentAssignmentMessage.isEmpty ? "No active field collection tasks." : fieldPaymentAssignmentMessage)
+                    .font(.caption)
+                    .foregroundColor(fieldPaymentAssignmentMessage.localizedCaseInsensitiveContains("failed") ? .orange : .secondary)
+            } else {
+                ForEach(fieldPaymentAssignments) { assignment in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text(assignment.customerName)
+                                .font(.headline)
+                            Spacer()
+                            Text(assignment.amount, format: .currency(code: "USD"))
+                                .font(.headline)
+                        }
+                        Text("\(assignment.status.capitalized) • Assigned to \(assignment.assignedTo)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        HStack {
+                            if !isAdminUser, assignment.status == "pending" {
+                                Button("Accept") {
+                                    Task {
+                                        await acceptFieldCollection(assignment)
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+
+                            if let invoiceID = assignment.invoiceUUID,
+                               visibleInvoices.contains(where: { $0.id == invoiceID }),
+                               assignment.isActionable {
+                                Button("Open Collection") {
+                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
+                                }
+                                .buttonStyle(.bordered)
+                            } else if !isAdminUser, assignment.isActionable {
+                                Text("Job details will appear after company sync finishes on this device.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            if isAdminUser, assignment.isActionable {
+                                Button("Cancel", role: .destructive) {
+                                    Task {
+                                        await cancelFieldCollection(assignment)
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 3)
+                }
+            }
         }
     }
 
@@ -757,7 +927,11 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private var paymentFormIsValid: Bool {
-        guard Double(amountText) != nil else { return false }
+        guard let invoice = selectedInvoice,
+              let amount = Double(amountText),
+              PaymentCollectionGuard.validationMessage(invoice: invoice, amount: amount, payments: payments) == nil else {
+            return false
+        }
         if selectedMethod == .card, quickBooksPaymentsEnabled {
             return !cardholderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                 cardNumber.filter(\.isNumber).count >= 12 &&
@@ -786,8 +960,15 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private func applyPendingIntentInvoiceIfNeeded() {
-        guard let pendingInvoiceID = GunnAireAppIntentRouter.consumePendingInvoiceCollectionID(),
-              let invoice = invoices.first(where: { $0.id == pendingInvoiceID }) else {
+        guard let pendingInvoiceID = GunnAireAppIntentRouter.consumePendingInvoiceCollectionID() else {
+            return
+        }
+        guard let invoice = visibleInvoices.first(where: { $0.id == pendingInvoiceID }) else {
+            actionMessage = "This payment request is not assigned to your business account. Ask dispatch to assign the job before collecting payment."
+            return
+        }
+        guard outstandingBalance(for: invoice) > 0.005 else {
+            actionMessage = "This invoice has no open balance. Refresh payment history before collecting again."
             return
         }
         withAnimation(.easeInOut(duration: 0.2)) {
@@ -926,6 +1107,90 @@ struct PaymentsAndReceiptsView: View {
         }
     }
 
+    private func refreshFieldPaymentAssignments() async {
+        guard GunnAireBackendService.isConfigured else { return }
+        isLoadingFieldPaymentAssignments = true
+        defer { isLoadingFieldPaymentAssignments = false }
+        do {
+            let assignments = try await GunnAireBackendService.fetchFieldPaymentAssignments()
+            fieldPaymentAssignments = assignments
+            announceNewFieldCollectionIfNeeded(from: assignments)
+            fieldPaymentAssignmentMessage = fieldPaymentAssignments.isEmpty
+                ? "No active field collection tasks."
+                : "Loaded \(fieldPaymentAssignments.count) active field collection task\(fieldPaymentAssignments.count == 1 ? "" : "s")."
+        } catch {
+            fieldPaymentAssignmentMessage = "Field collection task refresh failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func announceNewFieldCollectionIfNeeded(from assignments: [BackendFieldPaymentAssignmentRecord]) {
+        guard !isAdminUser else { return }
+        let announcedKey = "GunnAireAnnouncedFieldPaymentAssignmentIDs"
+        let announcedIDs = Set(UserDefaults.standard.stringArray(forKey: announcedKey) ?? [])
+        guard let assignment = FieldPaymentAssignmentPromptQueue.nextUnannouncedPendingAssignment(
+            from: assignments,
+            announcedIDs: announcedIDs
+        ) else {
+            return
+        }
+        UserDefaults.standard.set(
+            FieldPaymentAssignmentPromptQueue.recordingAnnouncement(
+                for: assignment.id,
+                previouslyAnnouncedIDs: announcedIDs
+            ),
+            forKey: announcedKey
+        )
+        fieldCollectionPrompt = assignment
+    }
+
+    private var fieldCollectionPollingKey: String? {
+        guard !isAdminUser,
+              GunnAireBackendService.isConfigured,
+              let signedInEmail,
+              !signedInEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return signedInEmail
+    }
+
+    private func assignFieldCollection(invoice: Invoice, amount: Double, technicianEmail: String) async {
+        guard GunnAireBackendService.isConfigured else {
+            actionMessage = "Configure shared company storage before assigning a field collection."
+            return
+        }
+        do {
+            let assignment = try await GunnAireBackendService.createFieldPaymentAssignment(
+                invoice: invoice,
+                amount: amount,
+                assignedTo: technicianEmail
+            )
+            await refreshFieldPaymentAssignments()
+            actionMessage = "Assigned \(assignment.customerName)'s \(assignment.amount.formatted(.currency(code: "USD"))) collection to \(assignment.assignedTo)."
+        } catch {
+            actionMessage = "Could not assign field collection: \(error.localizedDescription)"
+        }
+    }
+
+    private func acceptFieldCollection(_ assignment: BackendFieldPaymentAssignmentRecord) async {
+        do {
+            _ = try await GunnAireBackendService.acceptFieldPaymentAssignment(id: assignment.id)
+            await refreshFieldPaymentAssignments()
+            actionMessage = "Field collection accepted."
+        } catch {
+            actionMessage = "Could not accept field collection: \(error.localizedDescription)"
+        }
+    }
+
+    private func cancelFieldCollection(_ assignment: BackendFieldPaymentAssignmentRecord) async {
+        do {
+            _ = try await GunnAireBackendService.cancelFieldPaymentAssignment(id: assignment.id)
+            await refreshFieldPaymentAssignments()
+            actionMessage = "Field collection cancelled."
+        } catch {
+            actionMessage = "Could not cancel field collection: \(error.localizedDescription)"
+        }
+    }
+
     private func sharedCollectionDetail(for collection: BackendPaymentCollectionRecord) -> String {
         let method = collection.method.capitalized
         let collector = collection.collectedBy?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
@@ -969,6 +1234,10 @@ struct PaymentsAndReceiptsView: View {
     private func savePaymentRecord() async {
         guard let invoice = selectedInvoice, let amount = Double(amountText), amount > 0 else {
             actionMessage = "Select an invoice and enter a valid payment amount."
+            return
+        }
+        if let issue = PaymentCollectionGuard.validationMessage(invoice: invoice, amount: amount, payments: payments) {
+            actionMessage = issue
             return
         }
 
@@ -1080,6 +1349,10 @@ struct PaymentsAndReceiptsView: View {
         }
         guard let amount = Double(amountText), amount > 0 else {
             tapToPayMessage = "Enter a valid amount before starting Tap to Pay."
+            return
+        }
+        if let issue = PaymentCollectionGuard.validationMessage(invoice: invoice, amount: amount, payments: payments) {
+            tapToPayMessage = issue
             return
         }
 

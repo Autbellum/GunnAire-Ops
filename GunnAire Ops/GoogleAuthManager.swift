@@ -621,7 +621,9 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     func deleteCalendarEvent(calendarID: String = "primary", eventID: String, completion: @escaping (Result<Void, Error>) -> Void) {
         let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
         let encodedEventID = eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID
-        guard let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events/\(encodedEventID)") else {
+        var components = URLComponents(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events/\(encodedEventID)")
+        components?.queryItems = [URLQueryItem(name: "sendUpdates", value: "none")]
+        guard let url = components?.url else {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return
         }
@@ -676,7 +678,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         body: String,
         threadID: String? = nil,
         attachments: [GmailAttachment] = [],
-        completion: @escaping (Result<Void, Error>) -> Void
+        completion: @escaping (Result<GmailMessageReference, Error>) -> Void
     ) {
         let message = Self.makeGmailRawMessage(
             to: to,
@@ -693,8 +695,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         let payload = GmailSendRequest(raw: Data(message.utf8).base64URLEncodedString(), threadId: threadID)
         authorizedJSONRequest(url: url, method: "POST", body: payload) { (result: Result<GmailMessageReference, Error>) in
             switch result {
-            case .success:
-                completion(.success(()))
+            case .success(let sentMessage):
+                completion(.success(sentMessage))
             case .failure(let error):
                 completion(.failure(error))
             }

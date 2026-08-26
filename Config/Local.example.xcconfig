@@ -2,7 +2,8 @@
 // This file is safe to commit because it contains placeholders only.
 
 QB_CLIENT_ID = ABCHxXFCYpnkZSYq3BemmzGhVQ4tm63jDIvo6UxjQMeHgO8jmF
-QB_CLIENT_SECRET = DRjOmhNmIMyxV0zNZW4Xf7wEKVmc0xC9djh0vozM
+// Never place a production QuickBooks client secret in an iOS build setting.
+// Set it only in the backend process environment; the OAuth callback bridge performs token exchange server-side.
 QB_REDIRECT_URI = https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback
 QB_CALLBACK_SCHEME = gunnaireops
 QB_ENVIRONMENT = production
@@ -27,3 +28,4 @@ GOOGLE_iOS_URL_SCHEME = com.googleusercontent.apps.539751190237-oumf7hncfrbhegun
 
 GUNNAIRE_BACKEND_BASE_URL = http://macstudio.local:8787
 GUNNAIRE_BACKEND_API_TOKEN = replace-with-a-long-random-token
+GUNNAIRE_BACKEND_AUTH_MODE = api-token

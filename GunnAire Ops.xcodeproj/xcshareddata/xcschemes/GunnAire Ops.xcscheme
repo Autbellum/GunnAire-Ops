@@ -102,58 +102,6 @@
             ReferencedContainer = "container:GunnAire Ops.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <EnvironmentVariables>
-         <EnvironmentVariable
-            key = "GOOGLE_CALLBACK_SCHEME"
-            value = "com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "GOOGLE_CLIENT_ID"
-            value = "539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e.apps.googleusercontent.com"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "GOOGLE_REVERSED_CLIENT_ID"
-            value = "com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "GOOGLE_REDIRECT_URI"
-            value = "com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e:/oauth2redirect"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "QB_CALLBACK_SCHEME"
-            value = "gunnaireops"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "QB_CLIENT_ID"
-            value = "ABUeWKrqnanv8jakA8Hgui7zF8mMpsHkxdtSlHEtkyclaDFMLH"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "QB_CLIENT_SECRET"
-            value = "garGog2E3NF3fWN6GcFW9eEsoGRfhB2p2yvYrV8p"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "QB_DEFAULT_ITEM_REF"
-            value = "$(QB_DEFAULT_ITEM_REF)"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "QB_ENVIRONMENT"
-            value = "production"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-         <EnvironmentVariable
-            key = "QB_REDIRECT_URI"
-            value = "https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-      </EnvironmentVariables>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"

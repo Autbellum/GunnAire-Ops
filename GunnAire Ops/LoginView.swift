@@ -21,15 +21,20 @@ struct LoginView: View {
 
     var body: some View {
         ZStack {
-            WatermarkBackground()
+            LinearGradient(
+                colors: [Color(.systemBackground), Color.brandGold.opacity(0.10)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
 
             VStack(spacing: 20) {
-                Image("LoadingEmblem")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 140, height: 140)
-                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-                    .shadow(color: .black.opacity(0.18), radius: 18, y: 10)
+                Image(systemName: "thermometer.medium")
+                    .font(.system(size: 42, weight: .semibold))
+                    .foregroundStyle(Color.brandGold)
+                    .frame(width: 84, height: 84)
+                    .background(Color.brandGold.opacity(0.12), in: Circle())
+                    .accessibilityHidden(true)
 
                 Text("GunnAire Ops")
                     .font(.largeTitle)
@@ -74,8 +79,10 @@ struct LoginView: View {
                         .padding(.horizontal)
                 }
             }
-            .padding()
+            .padding(28)
             .frame(maxWidth: 520)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .padding(24)
         }
     }
 
@@ -115,11 +122,19 @@ struct LoginView: View {
 
         if GunnAireBackendService.isConfigured {
             do {
-                authorizationUsers = try await GunnAireBackendService.refreshUsers(
-                    into: modelContext,
-                    currentUsers: users,
-                    technicians: technicians
-                )
+                if Config.Backend.usesGoogleIDToken {
+                    authorizationUsers = try await GunnAireBackendService.refreshCurrentUser(
+                        into: modelContext,
+                        currentUsers: users,
+                        technicians: technicians
+                    )
+                } else {
+                    authorizationUsers = try await GunnAireBackendService.refreshUsers(
+                        into: modelContext,
+                        currentUsers: users,
+                        technicians: technicians
+                    )
+                }
             } catch {
                 sharedUserError = error
             }

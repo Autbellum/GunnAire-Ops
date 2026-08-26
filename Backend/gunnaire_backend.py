@@ -49,6 +49,11 @@ STORAGE_ROOT = Path(
 QBO_CLIENT_ID = os.environ.get("GUNNAIRE_QBO_CLIENT_ID", "").strip()
 QBO_CLIENT_SECRET = os.environ.get("GUNNAIRE_QBO_CLIENT_SECRET", "").strip()
 QBO_REDIRECT_URI = os.environ.get("GUNNAIRE_QBO_REDIRECT_URI", "").strip()
+QBO_ENVIRONMENT = os.environ.get("GUNNAIRE_QBO_ENVIRONMENT", "sandbox").strip().lower()
+# A valid Fernet key is required before the confidential bridge persists a
+# rotating QBO refresh token. This deliberately fails closed instead of
+# downgrading production credentials to plaintext SQLite storage.
+QBO_TOKEN_ENCRYPTION_KEY = os.environ.get("GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY", "").strip()
 QBO_TOKEN_ENDPOINT = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 QBO_REVOCATION_ENDPOINT = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
 PUBLIC_BOOKING_ENABLED = os.environ.get("GUNNAIRE_PUBLIC_BOOKING_ENABLED", "false").strip().lower() == "true"
@@ -68,6 +73,9 @@ ALLOWED_CORS_ORIGINS = {
 
 if AUTH_MODE not in {"api-token", "google-id-token"}:
     raise RuntimeError("GUNNAIRE_BACKEND_AUTH_MODE must be api-token or google-id-token")
+
+if QBO_ENVIRONMENT not in {"sandbox", "production"}:
+    raise RuntimeError("GUNNAIRE_QBO_ENVIRONMENT must be sandbox or production")
 
 if AUTH_MODE == "google-id-token":
     try:
@@ -108,6 +116,38 @@ def qbo_is_configured() -> bool:
     return bool(QBO_CLIENT_ID and QBO_CLIENT_SECRET and QBO_REDIRECT_URI)
 
 
+def qbo_token_store() -> object | None:
+    """Return the configured encryptor without ever logging its key or plaintext."""
+    if not QBO_TOKEN_ENCRYPTION_KEY:
+        return None
+    try:
+        from cryptography.fernet import Fernet
+        return Fernet(QBO_TOKEN_ENCRYPTION_KEY.encode("utf-8"))
+    except (ImportError, ValueError):
+        return None
+
+
+def qbo_token_storage_is_configured() -> bool:
+    return qbo_token_store() is not None
+
+
+def encrypt_qbo_refresh_token(token: str) -> str:
+    encryptor = qbo_token_store()
+    if encryptor is None:
+        raise RuntimeError("QuickBooks token encryption is not configured")
+    return encryptor.encrypt(token.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_qbo_refresh_token(ciphertext: str) -> str | None:
+    encryptor = qbo_token_store()
+    if encryptor is None:
+        return None
+    try:
+        return encryptor.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
+    except Exception:
+        return None
+
+
 def qbo_request(form: dict[str, str], endpoint: str) -> tuple[int, dict[str, object]]:
     """Confidential QBO call. Never log the body because it can contain OAuth tokens."""
     if not qbo_is_configured():
@@ -144,6 +184,22 @@ def qbo_token_response(payload: dict[str, object]) -> dict[str, object] | None:
     if not isinstance(expires_in, (int, float)):
         return None
     return {"accessToken": access_token, "refreshToken": refresh_token, "expiresIn": expires_in}
+
+
+def qbo_client_token_response(payload: dict[str, object]) -> dict[str, object] | None:
+    """Return only the short-lived access credential to an authenticated app."""
+    token_response = qbo_token_response(payload)
+    if token_response is None:
+        return None
+    return {
+        "accessToken": token_response["accessToken"],
+        "expiresIn": token_response["expiresIn"],
+    }
+
+
+def qbo_connection_matches(row: sqlite3.Row, realm_id: str, environment: str) -> bool:
+    """Bind every access-token refresh to the same company and Intuit environment."""
+    return row["realm_id"] == realm_id and row["environment"] == environment
 
 
 def db() -> sqlite3.Connection:
@@ -236,6 +292,23 @@ def initialize_database() -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS field_payment_assignments (
+                id TEXT PRIMARY KEY,
+                invoice_id TEXT NOT NULL,
+                customer_name TEXT NOT NULL,
+                amount REAL NOT NULL,
+                assigned_to TEXT NOT NULL,
+                assigned_by TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                accepted_at TEXT,
+                cancelled_at TEXT,
+                cancelled_by TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS customer_communications (
                 id TEXT PRIMARY KEY,
                 customer_name TEXT NOT NULL,
@@ -288,6 +361,19 @@ def initialize_database() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS qbo_connections (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                realm_id TEXT NOT NULL,
+                refresh_token_ciphertext TEXT NOT NULL,
+                environment TEXT NOT NULL,
+                client_id_fingerprint TEXT NOT NULL,
+                authorized_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         now = utc_now()
         connection.execute(
             """
@@ -328,6 +414,21 @@ def payment_collection_record(row: sqlite3.Row) -> dict[str, object]:
     }
 
 
+def field_payment_assignment_record(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "id": row["id"],
+        "invoiceID": row["invoice_id"],
+        "customerName": row["customer_name"],
+        "amount": row["amount"],
+        "assignedTo": row["assigned_to"],
+        "assignedBy": row["assigned_by"],
+        "status": row["status"],
+        "createdAt": row["created_at"],
+        "acceptedAt": row["accepted_at"],
+        "cancelledAt": row["cancelled_at"],
+    }
+
+
 def document_record(row: sqlite3.Row) -> dict[str, object]:
     return {
         "id": row["id"],
@@ -342,6 +443,23 @@ def document_record(row: sqlite3.Row) -> dict[str, object]:
         "customerName": row["customer_name"],
         "createdAt": row["created_at"],
     }
+
+
+def document_contains_financial_data(row: sqlite3.Row) -> bool:
+    """Classify records that can expose billing or payment data.
+
+    Files created in the field remain available to active staff, while invoice,
+    estimate, payment, receipt, and bill artifacts are restricted to the roles
+    that are allowed to handle billing documents. Checking both the stored kind
+    and the billing references protects older uploads whose kind predates the
+    current document taxonomy.
+    """
+    financial_kinds = {
+        "invoice", "estimate", "payment", "receipt", "bill", "financial",
+        "credit", "statement", "transaction",
+    }
+    kind = str(row["kind"] or "").strip().lower()
+    return bool(row["invoice_id"] or row["estimate_id"] or kind in financial_kinds)
 
 
 def communication_record(row: sqlite3.Row) -> dict[str, object]:
@@ -475,11 +593,34 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 ).fetchall()
             self.write_json({"payments": [payment_collection_record(row) for row in rows]})
             return
+        if parsed.path == "/api/field-payment-assignments":
+            if not self.require_field_payment_assignment_access():
+                return
+            principal = self.principal() or {}
+            role = principal.get("role")
+            with db() as connection:
+                if role == "Field Technician":
+                    rows = connection.execute(
+                        """
+                        SELECT * FROM field_payment_assignments
+                        WHERE assigned_to = ? AND status IN ('pending', 'accepted')
+                        ORDER BY created_at DESC LIMIT 200
+                        """,
+                        (principal.get("email"),),
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        "SELECT * FROM field_payment_assignments ORDER BY created_at DESC LIMIT 500"
+                    ).fetchall()
+            self.write_json({"assignments": [field_payment_assignment_record(row) for row in rows]})
+            return
         if parsed.path == "/api/documents":
             with db() as connection:
                 rows = connection.execute(
                     "SELECT * FROM documents ORDER BY created_at DESC LIMIT 500"
                 ).fetchall()
+            if not self.has_billing_document_access():
+                rows = [row for row in rows if not document_contains_financial_data(row)]
             self.write_json({"documents": [document_record(row) for row in rows]})
             return
         if parsed.path == "/api/communications":
@@ -526,6 +667,17 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if not self.require_payment_collector():
                 return
             self.store_payment_collection()
+            return
+        if parsed.path == "/api/field-payment-assignments":
+            if not self.require_field_payment_assignment_management():
+                return
+            self.create_field_payment_assignment()
+            return
+        if parsed.path.startswith("/api/field-payment-assignments/") and parsed.path.endswith("/accept"):
+            if not self.require_field_payment_assignment_access():
+                return
+            assignment_id = unquote(parsed.path.removeprefix("/api/field-payment-assignments/").removesuffix("/accept")).strip()
+            self.accept_field_payment_assignment(assignment_id)
             return
         if parsed.path == "/api/communications":
             if not self.require_admin():
@@ -604,6 +756,12 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "revoke", "customer-portal-link", link_id)
             self.write_json({"id": link_id, "revoked": True})
             return
+        if parsed.path.startswith("/api/field-payment-assignments/"):
+            if not self.require_field_payment_assignment_management():
+                return
+            assignment_id = unquote(parsed.path.removeprefix("/api/field-payment-assignments/")).strip()
+            self.cancel_field_payment_assignment(assignment_id)
+            return
         self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
     def principal(self) -> dict[str, object] | None:
@@ -665,11 +823,33 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.write_json({"error": "Financial access required"}, status=HTTPStatus.FORBIDDEN, require_auth=False)
         return False
 
+    def has_billing_document_access(self) -> bool:
+        principal = self.principal()
+        return principal is not None and principal.get("role") in {
+            "Admin", "Accounting", "Field Technician",
+        }
+
     def require_dispatch_access(self) -> bool:
         principal = self.principal()
         if principal is not None and principal.get("role") in {"Admin", "Dispatcher"}:
             return True
         self.write_json({"error": "Dispatcher access required"}, status=HTTPStatus.FORBIDDEN, require_auth=False)
+        return False
+
+    def require_field_payment_assignment_access(self) -> bool:
+        principal = self.principal()
+        if principal is not None and principal.get("role") in {
+            "Admin", "Accounting", "Dispatcher", "Field Technician",
+        }:
+            return True
+        self.write_json({"error": "Field collection assignment access required"}, status=HTTPStatus.FORBIDDEN, require_auth=False)
+        return False
+
+    def require_field_payment_assignment_management(self) -> bool:
+        principal = self.principal()
+        if principal is not None and principal.get("role") in {"Admin", "Accounting", "Dispatcher"}:
+            return True
+        self.write_json({"error": "Field collection assignment management access required"}, status=HTTPStatus.FORBIDDEN, require_auth=False)
         return False
 
     def read_json(self) -> dict[str, object]:
@@ -881,8 +1061,19 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
             return
         code = payload.get("code") if isinstance(payload.get("code"), str) else ""
+        realm_id = payload.get("realmID") if isinstance(payload.get("realmID"), str) else ""
+        environment = payload.get("environment") if isinstance(payload.get("environment"), str) else ""
         if not code.strip() or len(code) > 4096:
             self.write_json({"error": "Invalid authorization code"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", realm_id.strip()):
+            self.write_json({"error": "Invalid QuickBooks company realm"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if environment.strip().lower() != QBO_ENVIRONMENT:
+            self.write_json({"error": "QuickBooks environment does not match this backend"}, status=HTTPStatus.CONFLICT)
+            return
+        if not qbo_token_storage_is_configured():
+            self.write_json({"error": "QuickBooks encrypted token storage is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
             return
         status, result = qbo_request(
             {"grant_type": "authorization_code", "code": code, "redirect_uri": QBO_REDIRECT_URI},
@@ -892,9 +1083,39 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if status < 200 or status >= 300 or token_response is None:
             self.write_json({"error": "QuickBooks authorization exchange failed"}, status=HTTPStatus.BAD_GATEWAY)
             return
+        now = utc_now()
+        try:
+            encrypted_refresh_token = encrypt_qbo_refresh_token(str(token_response["refreshToken"]))
+        except RuntimeError:
+            self.write_json({"error": "QuickBooks encrypted token storage is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        with db() as connection:
+            connection.execute(
+                """
+                INSERT INTO qbo_connections(
+                    id, realm_id, refresh_token_ciphertext, environment,
+                    client_id_fingerprint, authorized_at, updated_at
+                ) VALUES (1, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    realm_id = excluded.realm_id,
+                    refresh_token_ciphertext = excluded.refresh_token_ciphertext,
+                    environment = excluded.environment,
+                    client_id_fingerprint = excluded.client_id_fingerprint,
+                    authorized_at = excluded.authorized_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    realm_id.strip(),
+                    encrypted_refresh_token,
+                    QBO_ENVIRONMENT,
+                    hashlib.sha256(QBO_CLIENT_ID.encode("utf-8")).hexdigest(),
+                    now,
+                    now,
+                ),
+            )
         principal = self.principal() or {}
         record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "authorize", "quickbooks")
-        self.write_json(token_response)
+        self.write_json(qbo_client_token_response(result))
 
     def refresh_qbo_access_token(self) -> None:
         try:
@@ -902,33 +1123,68 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
             return
-        refresh_token = payload.get("refreshToken") if isinstance(payload.get("refreshToken"), str) else ""
-        if not refresh_token.strip() or len(refresh_token) > 4096:
-            self.write_json({"error": "Invalid refresh token"}, status=HTTPStatus.BAD_REQUEST)
+        realm_id = payload.get("realmID") if isinstance(payload.get("realmID"), str) else ""
+        environment = payload.get("environment") if isinstance(payload.get("environment"), str) else ""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", realm_id.strip()) or environment.strip().lower() not in {"sandbox", "production"}:
+            self.write_json({"error": "Invalid QuickBooks connection context"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not qbo_token_storage_is_configured():
+            self.write_json({"error": "QuickBooks encrypted token storage is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        with db() as connection:
+            connection_row = connection.execute(
+                "SELECT realm_id, environment, refresh_token_ciphertext FROM qbo_connections WHERE id = 1"
+            ).fetchone()
+        if connection_row is None:
+            self.write_json({"error": "QuickBooks is not connected"}, status=HTTPStatus.CONFLICT)
+            return
+        if not qbo_connection_matches(connection_row, realm_id.strip(), environment.strip().lower()):
+            self.write_json({"error": "QuickBooks company or environment differs; reconnect QuickBooks"}, status=HTTPStatus.CONFLICT)
+            return
+        refresh_token = decrypt_qbo_refresh_token(connection_row["refresh_token_ciphertext"])
+        if not refresh_token:
+            self.write_json({"error": "QuickBooks stored authorization is unreadable; reconnect QuickBooks"}, status=HTTPStatus.CONFLICT)
             return
         status, result = qbo_request({"grant_type": "refresh_token", "refresh_token": refresh_token}, QBO_TOKEN_ENDPOINT)
         token_response = qbo_token_response(result)
         if status < 200 or status >= 300 or token_response is None:
             self.write_json({"error": "QuickBooks token refresh failed"}, status=HTTPStatus.BAD_GATEWAY)
             return
+        try:
+            encrypted_refresh_token = encrypt_qbo_refresh_token(str(token_response["refreshToken"]))
+        except RuntimeError:
+            self.write_json({"error": "QuickBooks encrypted token storage is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        with db() as connection:
+            connection.execute(
+                "UPDATE qbo_connections SET refresh_token_ciphertext = ?, updated_at = ? WHERE id = 1",
+                (encrypted_refresh_token, utc_now()),
+            )
         principal = self.principal() or {}
         record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "refresh", "quickbooks")
-        self.write_json(token_response)
+        self.write_json(qbo_client_token_response(result))
 
     def revoke_qbo_token(self) -> None:
-        try:
-            payload = self.read_json()
-        except json.JSONDecodeError:
-            self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
+        if not qbo_token_storage_is_configured():
+            self.write_json({"error": "QuickBooks encrypted token storage is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
             return
-        token = payload.get("token") if isinstance(payload.get("token"), str) else ""
-        if not token.strip() or len(token) > 4096:
-            self.write_json({"error": "Invalid token"}, status=HTTPStatus.BAD_REQUEST)
+        with db() as connection:
+            connection_row = connection.execute(
+                "SELECT refresh_token_ciphertext FROM qbo_connections WHERE id = 1"
+            ).fetchone()
+        if connection_row is None:
+            self.write_json({"revoked": True})
+            return
+        token = decrypt_qbo_refresh_token(connection_row["refresh_token_ciphertext"])
+        if not token:
+            self.write_json({"error": "QuickBooks stored authorization is unreadable; reconnect QuickBooks"}, status=HTTPStatus.CONFLICT)
             return
         status, _ = qbo_request({"token": token}, QBO_REVOCATION_ENDPOINT)
         if status < 200 or status >= 300:
             self.write_json({"error": "QuickBooks token revocation failed"}, status=HTTPStatus.BAD_GATEWAY)
             return
+        with db() as connection:
+            connection.execute("DELETE FROM qbo_connections WHERE id = 1")
         principal = self.principal() or {}
         record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "revoke", "quickbooks")
         self.write_json({"revoked": True})
@@ -983,6 +1239,15 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         invoice_id = references["invoice_id"]
         estimate_id = references["estimate_id"]
         customer_equipment_id = references["customer_equipment_id"]
+        if (invoice_id or estimate_id or kind in {
+            "invoice", "estimate", "payment", "receipt", "bill", "financial",
+            "credit", "statement", "transaction",
+        }) and not self.has_billing_document_access():
+            self.write_json(
+                {"error": "Financial access is required to store billing documents"},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
         equipment_name = str(payload.get("equipmentName") or "").strip() or None
         customer_name = payload.get("customerName") if isinstance(payload.get("customerName"), str) else None
         if (equipment_name and len(equipment_name) > 300) or (customer_name and len(customer_name) > 300):
@@ -1035,6 +1300,128 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             },
             status=HTTPStatus.CREATED,
         )
+
+    def create_field_payment_assignment(self) -> None:
+        try:
+            payload = self.read_json()
+        except json.JSONDecodeError:
+            self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        invoice_id = str(payload.get("invoiceID") or "").strip()
+        customer_name = str(payload.get("customerName") or "").strip()
+        assigned_to = normalize_email(payload.get("assignedTo") if isinstance(payload.get("assignedTo"), str) else None)
+        try:
+            amount = float(payload.get("amount"))
+        except (TypeError, ValueError):
+            self.write_json({"error": "Assignment amount must be numeric"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not invoice_id or not customer_name or not assigned_to:
+            self.write_json({"error": "Invoice, customer, and assigned technician are required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if amount <= 0 or amount > 1_000_000:
+            self.write_json({"error": "Assignment amount must be greater than zero and within the approved limit"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        principal = self.principal() or {}
+        assigned_by = normalize_email(principal.get("email") if isinstance(principal.get("email"), str) else None)
+        with db() as connection:
+            technician = connection.execute(
+                "SELECT role, is_active FROM users WHERE email = ?",
+                (assigned_to,),
+            ).fetchone()
+            if technician is None or not bool(technician["is_active"]) or technician["role"] != "Field Technician":
+                self.write_json({"error": "Assignments must target an active field technician"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            existing = connection.execute(
+                """
+                SELECT * FROM field_payment_assignments
+                WHERE invoice_id = ? AND assigned_to = ? AND status IN ('pending', 'accepted')
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (invoice_id, assigned_to),
+            ).fetchone()
+            if existing is not None:
+                self.write_json(
+                    {"assignment": field_payment_assignment_record(existing), "idempotentReplay": True},
+                    status=HTTPStatus.OK,
+                )
+                return
+            assignment_id = str(uuid.uuid4())
+            created_at = utc_now()
+            connection.execute(
+                """
+                INSERT INTO field_payment_assignments(
+                    id, invoice_id, customer_name, amount, assigned_to, assigned_by, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+                """,
+                (assignment_id, invoice_id, customer_name, amount, assigned_to, assigned_by, created_at),
+            )
+            row = connection.execute(
+                "SELECT * FROM field_payment_assignments WHERE id = ?", (assignment_id,)
+            ).fetchone()
+        record_audit_event(assigned_by, "assign", "field-payment", assignment_id)
+        self.write_json({"assignment": field_payment_assignment_record(row)}, status=HTTPStatus.CREATED)
+
+    def accept_field_payment_assignment(self, assignment_id: str) -> None:
+        if not re.fullmatch(r"[0-9a-fA-F-]{36}", assignment_id):
+            self.write_json({"error": "Invalid field collection assignment"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        principal = self.principal() or {}
+        email = normalize_email(principal.get("email") if isinstance(principal.get("email"), str) else None)
+        role = principal.get("role")
+        with db() as connection:
+            row = connection.execute(
+                "SELECT * FROM field_payment_assignments WHERE id = ?", (assignment_id,)
+            ).fetchone()
+            if row is None:
+                self.write_json({"error": "Field collection assignment not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            can_accept = role in {"Admin", "Accounting", "Dispatcher"} or row["assigned_to"] == email
+            if not can_accept:
+                self.write_json({"error": "This collection assignment belongs to another technician"}, status=HTTPStatus.FORBIDDEN)
+                return
+            if row["status"] == "cancelled":
+                self.write_json({"error": "This collection assignment was cancelled"}, status=HTTPStatus.CONFLICT)
+                return
+            if row["status"] == "pending":
+                connection.execute(
+                    "UPDATE field_payment_assignments SET status = 'accepted', accepted_at = ? WHERE id = ?",
+                    (utc_now(), assignment_id),
+                )
+                row = connection.execute(
+                    "SELECT * FROM field_payment_assignments WHERE id = ?", (assignment_id,)
+                ).fetchone()
+        record_audit_event(email, "accept", "field-payment", assignment_id)
+        self.write_json({"assignment": field_payment_assignment_record(row)})
+
+    def cancel_field_payment_assignment(self, assignment_id: str) -> None:
+        if not re.fullmatch(r"[0-9a-fA-F-]{36}", assignment_id):
+            self.write_json({"error": "Invalid field collection assignment"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        principal = self.principal() or {}
+        actor = normalize_email(principal.get("email") if isinstance(principal.get("email"), str) else None)
+        with db() as connection:
+            row = connection.execute(
+                "SELECT * FROM field_payment_assignments WHERE id = ?", (assignment_id,)
+            ).fetchone()
+            if row is None:
+                self.write_json({"error": "Field collection assignment not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            if row["status"] != "cancelled":
+                connection.execute(
+                    """
+                    UPDATE field_payment_assignments
+                    SET status = 'cancelled', cancelled_at = ?, cancelled_by = ?
+                    WHERE id = ?
+                    """,
+                    (utc_now(), actor, assignment_id),
+                )
+                row = connection.execute(
+                    "SELECT * FROM field_payment_assignments WHERE id = ?", (assignment_id,)
+                ).fetchone()
+        record_audit_event(actor, "cancel", "field-payment", assignment_id)
+        self.write_json({"assignment": field_payment_assignment_record(row)})
 
     def store_payment_collection(self) -> None:
         try:
@@ -1216,6 +1603,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             ).fetchone()
         if row is None:
             self.write_json({"error": "Document not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        if document_contains_financial_data(row) and not self.has_billing_document_access():
+            self.write_json({"error": "Financial access required"}, status=HTTPStatus.FORBIDDEN)
             return
 
         stored_path = Path(row["stored_path"]).expanduser()

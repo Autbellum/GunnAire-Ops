@@ -23,19 +23,98 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
+    func testUnauthenticatedLaunchShowsTheSecureSignInGate() throws {
         let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-hasAuthenticatedUser", "NO",
+            "-disableCloudKitForTesting"
+        ]
         app.launch()
 
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
+        XCTAssertTrue(app.staticTexts["GunnAire Ops"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Sign in with your GunnAire Google account."].exists)
+        XCTAssertTrue(app.buttons["Sign In With Google"].exists)
+    }
+
+    @MainActor
+    func testAuthenticatedAdminLaunchShowsTheIPadOperationsWorkspace() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Operations"].exists)
+        XCTAssertTrue(app.staticTexts["Command Center"].exists)
+        XCTAssertTrue(app.staticTexts["Schedule & Jobs"].exists)
+        XCTAssertTrue(app.staticTexts["Customers"].exists)
+        XCTAssertTrue(app.staticTexts["Back Office"].exists)
+        XCTAssertTrue(app.staticTexts["Payments"].exists)
+        XCTAssertTrue(app.staticTexts["Administrator"].exists)
+        XCTAssertTrue(app.staticTexts["QuickBooks Management"].exists)
+
+        app.staticTexts["Schedule & Jobs"].tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        app.staticTexts["Payments"].tap()
+        XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 3))
+    }
+
+    /// The iPad workspace intentionally has a small, role-aware sidebar rather
+    /// than putting every workflow in the Command Center. This smoke test
+    /// verifies that the primary administrative destinations remain reachable
+    /// from that single navigation surface as the app evolves.
+    @MainActor
+    func testAuthenticatedAdminCanNavigatePrimaryIPadWorkspaces() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin"
+        ]
+        app.launch()
+
+        let destinations: [(sidebar: String, title: String)] = [
+            ("Clock In/Out", "Time Clock"),
+            ("Customers", "Customers"),
+            ("Mail", "Mail"),
+            ("Estimates", "Estimates"),
+            ("Invoices", "Invoices"),
+            ("Receipts & Bills", "Receipts & Bills"),
+            ("Sync & Integrations", "Sync & Integrations"),
+            ("Onsite Documentation", "Onsite Documentation"),
+            ("QuickBooks Management", "QuickBooks Management")
+        ]
+
+        for destination in destinations {
+            let sidebarItem = app.staticTexts[destination.sidebar]
+            XCTAssertTrue(sidebarItem.waitForExistence(timeout: 3), "Missing sidebar item: \(destination.sidebar)")
+            sidebarItem.tap()
+            XCTAssertTrue(
+                app.navigationBars[destination.title].waitForExistence(timeout: 3),
+                "Failed to open \(destination.title) from the iPad sidebar"
+            )
+        }
     }
 
     @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
+        let app = XCUIApplication()
+        // Keep the performance launch on the same isolated SwiftData path as
+        // the other UI tests. The simulator has no production CloudKit
+        // entitlement, and allowing this one test to initialize the private
+        // store can interfere with later model-container tests.
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting"
+        ]
         measure(metrics: [XCTApplicationLaunchMetric()]) {
-            XCUIApplication().launch()
+            app.launch()
         }
     }
 }

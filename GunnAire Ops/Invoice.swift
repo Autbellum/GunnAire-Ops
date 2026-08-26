@@ -3,23 +3,47 @@
 import Foundation
 import SwiftData
 
+enum InvoiceWorkType: String, Codable, CaseIterable, Identifiable {
+    case service
+    case repair
+    case replacement
+
+    var id: String { rawValue }
+
+    var displayName: String { rawValue.capitalized }
+    var documentTitle: String { "\(displayName) Invoice" }
+
+    static func inferred(from serviceCall: ServiceCall?) -> InvoiceWorkType {
+        switch serviceCall?.type {
+        case .install: .replacement
+        case .service: .repair
+        case .maintenance, .estimate, .meeting, .reminder, .siteVisit, .other, .none: .service
+        }
+    }
+}
+
 @Model
 final class Invoice {
-    @Attribute(.unique) var id: UUID
+    var id: UUID = UUID()
     var serviceCallID: UUID?
-    var customer: Customer
+    /// Stored as an optional CloudKit relationship; all normal invoice creation
+    /// paths still provide a customer.
+    var customer: Customer!
+    @Relationship(originalName: "payments", inverse: \Payment.invoice) private var storedPayments: [Payment]?
     var quickBooksID: String?
     var quickBooksBalanceDue: Double?
-    var lineItemSummary: String
-    var amount: Double
-    var status: String // unpaid, paid, overdue
+    var workTypeRaw: String = InvoiceWorkType.service.rawValue
+    var lineItemSummary: String = ""
+    var catalogSnapshotJSON: String?
+    var amount: Double = 0
+    var status: String = "unpaid" // unpaid, paid, overdue
     var notes: String?
     var customerSignatureName: String?
     var customerSignatureImageBase64: String?
     var customerSignedAt: Date?
     var completionNotes: String?
     var finalizedAt: Date?
-    var createdAt: Date
+    var createdAt: Date = Date()
     
     init(
         id: UUID = UUID(),
@@ -27,7 +51,9 @@ final class Invoice {
         customer: Customer,
         quickBooksID: String? = nil,
         quickBooksBalanceDue: Double? = nil,
+        workType: InvoiceWorkType = .service,
         lineItemSummary: String = "",
+        catalogSnapshotJSON: String? = nil,
         amount: Double = 0,
         status: String = "unpaid",
         notes: String? = nil,
@@ -43,7 +69,9 @@ final class Invoice {
         self.customer = customer
         self.quickBooksID = quickBooksID
         self.quickBooksBalanceDue = quickBooksBalanceDue
+        self.workTypeRaw = workType.rawValue
         self.lineItemSummary = lineItemSummary
+        self.catalogSnapshotJSON = catalogSnapshotJSON
         self.amount = amount
         self.status = status
         self.notes = notes
@@ -63,6 +91,20 @@ final class Invoice {
         default:
             return value.isEmpty ? "unpaid" : value
         }
+    }
+
+    var workType: InvoiceWorkType {
+        get { InvoiceWorkType(rawValue: workTypeRaw) ?? .service }
+        set { workTypeRaw = newValue.rawValue }
+    }
+
+    var payments: [Payment] {
+        get { storedPayments ?? [] }
+        set { storedPayments = newValue }
+    }
+
+    var catalogLineSnapshots: [CatalogLineItemSnapshot] {
+        CatalogLineItemSnapshot.decoded(from: catalogSnapshotJSON)
     }
 
     var hasQuickBooksBalance: Bool {

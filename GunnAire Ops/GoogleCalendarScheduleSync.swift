@@ -160,6 +160,51 @@ enum GoogleCalendarScheduleSync {
         }
     }
 
+    /// Removes only an event the app can prove it created. Imported or manually-created
+    /// Google events are never deleted when a local HVAC job is cancelled.
+    static func cancelManagedEventImmediately(
+        for call: ServiceCall,
+        auth: GoogleAuthManager,
+        modelContext: ModelContext,
+        completion: ((Result<String, Error>) -> Void)? = nil
+    ) {
+        guard shouldAttemptManagedCalendarDeletion(for: call),
+              let eventID = call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !eventID.isEmpty else {
+            completion?(.success("No app-managed Google Calendar event to cancel."))
+            return
+        }
+        let requestedCalendarID = call.googleCalendarID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let calendarID = requestedCalendarID.isEmpty ? "primary" : requestedCalendarID
+        auth.fetchCalendarEvent(calendarID: calendarID, eventID: eventID) { fetchResult in
+            switch fetchResult {
+            case .failure(let error):
+                completion?(.failure(error))
+            case .success(let remoteEvent):
+                guard shouldDeleteExistingGoogleCalendarEvent(
+                    hasGoogleEventID: true,
+                    isLocallyMarkedManagedByApp: call.googleEventManagedByApp,
+                    remoteEvent: remoteEvent
+                ) else {
+                    completion?(.success("The linked Google Calendar event is not app-managed, so it was left unchanged."))
+                    return
+                }
+                auth.deleteCalendarEvent(calendarID: calendarID, eventID: eventID) { result in
+                    Task { @MainActor in
+                        switch result {
+                        case .success:
+                            markCalendarEventDeleted(calendarID: calendarID, eventID: eventID)
+                            try? modelContext.save()
+                            completion?(.success("Cancelled the app-managed Google Calendar event."))
+                        case .failure(let error):
+                            completion?(.failure(error))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private static func importEvents(
         _ calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)],
         into modelContext: ModelContext,
@@ -378,7 +423,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldExportDuringCalendarSync(_ call: ServiceCall) -> Bool {
-        false
+        call.status != .cancelled && shouldAllowGoogleCalendarWrite(for: call)
     }
 
     private static func shouldExportSystemCalendarCall(_ call: ServiceCall) -> Bool {
@@ -618,8 +663,7 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldAllowGoogleCalendarWrite(for call: ServiceCall) -> Bool {
-        call.googleEventManagedByApp &&
-            call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+        call.googleEventManagedByApp
     }
 
     static func isExternalGoogleCalendarEvent(_ call: ServiceCall) -> Bool {
@@ -641,7 +685,11 @@ enum GoogleCalendarScheduleSync {
     }
 
     static func shouldPatchExistingGoogleCalendarEvent(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> Bool {
-        false
+        shouldDeleteExistingGoogleCalendarEvent(
+            hasGoogleEventID: call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+            isLocallyMarkedManagedByApp: call.googleEventManagedByApp,
+            remoteEvent: remoteEvent
+        )
     }
 
     static func shouldDeleteExistingGoogleCalendarEvent(for call: ServiceCall, remoteEvent: GoogleCalendarEvent?) -> Bool {
@@ -657,7 +705,12 @@ enum GoogleCalendarScheduleSync {
         isLocallyMarkedManagedByApp: Bool,
         remoteEvent: GoogleCalendarEvent?
     ) -> Bool {
-        false
+        hasGoogleEventID && isLocallyMarkedManagedByApp && remoteEvent?.isManagedByGunnAire == true
+    }
+
+    static func shouldAttemptManagedCalendarDeletion(for call: ServiceCall) -> Bool {
+        call.googleEventManagedByApp &&
+            call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     static func isImportedEventManagedByApp(_ event: GoogleCalendarEvent) -> Bool {
@@ -754,7 +807,11 @@ enum GoogleCalendarScheduleSync {
     }
 
     private static func calendarEventUserDescription(for call: ServiceCall) -> String? {
-        normalizedOptional(call.notes)
+        let arrivalWindow = call.promisedArrivalWindowSummary.map { "Customer arrival window: \($0)" }
+        let parts = [normalizedOptional(call.notes), arrivalWindow]
+            .compactMap { $0 }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: "\n\n")
     }
 
     static func isGeneratedCalendarTitle(_ title: String) -> Bool {

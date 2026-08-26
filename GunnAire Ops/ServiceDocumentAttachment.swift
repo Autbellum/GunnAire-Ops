@@ -91,7 +91,7 @@ struct EquipmentAttachmentGroup: Identifiable {
     }
 
     var otherDocumentCount: Int {
-        attachments.count - serviceReportCount - photoCount - billingDocumentCount
+        attachments.count - serviceReportCount - dataPlatePhotoCount - photoCount - billingDocumentCount
     }
 
     var latestAttachmentDate: Date? {
@@ -117,23 +117,25 @@ struct EquipmentAttachmentGroup: Identifiable {
 
 @Model
 final class ServiceDocumentAttachment {
-    @Attribute(.unique) var id: UUID
+    var id: UUID = UUID()
     var customer: Customer?
     var serviceCallID: UUID?
     var customerEquipmentID: UUID?
     var invoiceID: UUID?
     var estimateID: UUID?
-    var kindRaw: String
-    var displayName: String
+    var kindRaw: String = ServiceDocumentAttachmentKind.other.rawValue
+    var displayName: String = ""
     var caption: String?
-    var localFilePath: String
-    var contentType: String
-    var fileSizeBytes: Int
+    var localFilePath: String = ""
+    var contentType: String = "application/octet-stream"
+    var fileSizeBytes: Int = 0
     var backendDocumentID: String?
+    var sharedCompanySyncStatus: String?
+    var sharedCompanySyncDetail: String?
     var quickBooksAttachableID: String?
     var quickBooksSyncError: String?
     var quickBooksAttachedEntityKeysRaw: String?
-    var createdAt: Date
+    var createdAt: Date = Date()
 
     init(
         id: UUID = UUID(),
@@ -149,6 +151,8 @@ final class ServiceDocumentAttachment {
         contentType: String,
         fileSizeBytes: Int,
         backendDocumentID: String? = nil,
+        sharedCompanySyncStatus: String? = nil,
+        sharedCompanySyncDetail: String? = nil,
         quickBooksAttachableID: String? = nil,
         quickBooksSyncError: String? = nil,
         quickBooksAttachedEntityKeysRaw: String? = nil,
@@ -167,6 +171,8 @@ final class ServiceDocumentAttachment {
         self.contentType = contentType
         self.fileSizeBytes = fileSizeBytes
         self.backendDocumentID = backendDocumentID
+        self.sharedCompanySyncStatus = sharedCompanySyncStatus
+        self.sharedCompanySyncDetail = sharedCompanySyncDetail
         self.quickBooksAttachableID = quickBooksAttachableID
         self.quickBooksSyncError = quickBooksSyncError
         self.quickBooksAttachedEntityKeysRaw = quickBooksAttachedEntityKeysRaw
@@ -196,6 +202,16 @@ final class ServiceDocumentAttachment {
         }
     }
 
+    var canUseAsEquipmentProfilePhoto: Bool {
+        guard isImage else { return false }
+        switch kind {
+        case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .equipmentDataPlatePhoto, .customerDocument, .other:
+            return true
+        case .serviceReport, .invoiceSupport, .estimateSupport, .receipt:
+            return false
+        }
+    }
+
     var canShowInActiveEquipmentHistory: Bool {
         switch kind {
         case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .equipmentDataPlatePhoto, .customerDocument, .other:
@@ -211,6 +227,21 @@ final class ServiceDocumentAttachment {
 
     var canLinkToInvoiceReport: Bool {
         kind == .serviceReport
+    }
+
+    var needsSharedCompanyStorageUpload: Bool {
+        backendDocumentID == nil && sharedCompanySyncStatus == "needs_attention"
+    }
+
+    func markSharedCompanyStored(id: String) {
+        backendDocumentID = id
+        sharedCompanySyncStatus = "stored"
+        sharedCompanySyncDetail = "Stored in shared company storage."
+    }
+
+    func markSharedCompanyUploadFailed(_ errorDescription: String) {
+        sharedCompanySyncStatus = "needs_attention"
+        sharedCompanySyncDetail = "Shared company storage upload failed: \(errorDescription)"
     }
 
     var canLinkToQuickBooksInvoiceAttachment: Bool {
@@ -820,6 +851,41 @@ final class ServiceDocumentAttachment {
             .sorted { $0.createdAt > $1.createdAt }
     }
 
+    static func primaryEquipmentPhoto(
+        for equipment: CustomerEquipment,
+        in attachments: [ServiceDocumentAttachment],
+        serviceCalls: [ServiceCall] = []
+    ) -> ServiceDocumentAttachment? {
+        equipmentAttachments(for: equipment, in: attachments, serviceCalls: serviceCalls)
+            .filter(\.canUseAsEquipmentProfilePhoto)
+            .sorted { lhs, rhs in
+                let lhsScore = equipmentProfilePhotoScore(lhs)
+                let rhsScore = equipmentProfilePhotoScore(rhs)
+                if lhsScore == rhsScore {
+                    return lhs.createdAt > rhs.createdAt
+                }
+                return lhsScore > rhsScore
+            }
+            .first
+    }
+
+    private static func equipmentProfilePhotoScore(_ attachment: ServiceDocumentAttachment) -> Int {
+        switch attachment.kind {
+        case .equipmentDataPlatePhoto:
+            return 500
+        case .diagnosticPhoto:
+            return 350
+        case .beforePhoto, .afterPhoto:
+            return 300
+        case .customerDocument, .other:
+            return 250
+        case .customerProfilePhoto:
+            return 150
+        case .serviceReport, .invoiceSupport, .estimateSupport, .receipt:
+            return 0
+        }
+    }
+
     @discardableResult
     static func detachEquipmentProfileLinks(
         for equipment: CustomerEquipment,
@@ -893,10 +959,10 @@ final class ServiceDocumentAttachment {
             return isCustomerLevel ? 500 : 350
         }
         if searchableText.contains("profile") || searchableText.contains("customer photo") {
-            return isCustomerLevel ? 400 : 300
+            return isCustomerLevel ? 425 : 300
         }
         if isCustomerLevel {
-            return 250
+            return 350
         }
         if attachment.kind == .diagnosticPhoto {
             return 200

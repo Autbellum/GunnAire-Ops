@@ -14,9 +14,11 @@ struct BillingDocumentsView: View {
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
 
     private let initialServiceCall: ServiceCall?
     private let showsDismissButton: Bool
@@ -33,6 +35,11 @@ struct BillingDocumentsView: View {
     @State private var selectedCustomerID: UUID?
     @State private var selectedItems: Set<UUID> = []
     @State private var notes = ""
+    @State private var changeOrderParentEstimateID: UUID?
+    @State private var changeOrderReason = ""
+    @State private var proposalGroupID: UUID?
+    @State private var proposalOption: EstimateProposalOption = .standalone
+    @State private var proposalIsRecommended = false
     @State private var customerSearchText = ""
     @State private var customerName = ""
     @State private var customerPhone = ""
@@ -41,6 +48,7 @@ struct BillingDocumentsView: View {
     @State private var itemSearchText = ""
     @State private var catalogFilter: DocumentationCatalogFilter = .recommended
     @State private var newlyCreatedLineItems: [UUID: Item] = [:]
+    @State private var selectedItemQuantities: [UUID: Double] = [:]
     @State private var newItemName = ""
     @State private var newItemType: CatalogItemType = .service
     @State private var newItemSKU = ""
@@ -55,6 +63,7 @@ struct BillingDocumentsView: View {
     @State private var actionMessage = ""
     @State private var isCreatingDocument = false
     @State private var isImportingQuickBooksItems = false
+    @State private var isPublishingQuickBooksItems = false
     @State private var didLoadInitialContext = false
     @State private var didAttemptInitialCatalogImport = false
     @State private var openInvoiceAfterEstimateCreation = false
@@ -106,14 +115,27 @@ struct BillingDocumentsView: View {
 
     private var activeServiceCall: ServiceCall? {
         if let initialServiceCall {
-            return initialServiceCall
+            return AppAccess.canAccessServiceCall(
+                initialServiceCall,
+                email: currentUserEmail,
+                users: users,
+                serviceCalls: serviceCalls,
+                technicians: technicians
+            ) ? initialServiceCall : nil
         }
         guard let pendingIntentServiceCallID else { return nil }
-        return serviceCalls.first { $0.id == pendingIntentServiceCallID }
+        guard let call = serviceCalls.first(where: { $0.id == pendingIntentServiceCallID }) else { return nil }
+        return AppAccess.canAccessServiceCall(
+            call,
+            email: currentUserEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        ) ? call : nil
     }
 
     private var selectedTotal: Double {
-        selectedLineItems.reduce(0) { $0 + $1.unitPrice }
+        selectedLineItems.reduce(0) { $0 + $1.unitPrice * lineItemQuantity(for: $1) }
     }
 
     private var selectedCustomer: Customer? {
@@ -204,17 +226,35 @@ struct BillingDocumentsView: View {
 
     private var selectedCostTotal: Double {
         selectedLineItems.reduce(0) { partial, item in
-            partial + (item.purchaseCost ?? 0)
+            partial + (item.purchaseCost ?? 0) * lineItemQuantity(for: item)
         }
     }
 
+    private var selectedLaborCosting: JobLaborCosting.Summary? {
+        guard let serviceCall = activeServiceCall else { return nil }
+        let entries = timeEntries.filter { $0.serviceCall?.id == serviceCall.id }
+        return JobLaborCosting.summary(entries: entries, technicians: technicians)
+    }
+
+    private var selectedLaborCost: Double? {
+        selectedLaborCosting?.totalCost
+    }
+
+    private var selectedJobCostTotal: Double {
+        selectedCostTotal + (selectedLaborCost ?? 0)
+    }
+
     private var selectedGrossProfit: Double {
-        selectedTotal - selectedCostTotal
+        selectedTotal - selectedJobCostTotal
     }
 
     private var selectedGrossMarginPercent: Double? {
         guard selectedTotal > 0 else { return nil }
         return (selectedGrossProfit / selectedTotal) * 100
+    }
+
+    private var selectedCatalogSnapshotJSON: String? {
+        CatalogLineItemSnapshot.encoded(from: selectedLineItems, quantities: selectedItemQuantities)
     }
 
     private var filteredItems: [Item] {
@@ -245,6 +285,10 @@ struct BillingDocumentsView: View {
         CatalogItemAmountParser.isValidOptionalAmount(newItemCost)
     }
 
+    private var unsyncedCatalogItems: [Item] {
+        items.filter(itemNeedsQuickBooksSync)
+    }
+
     private var currentJobEstimate: Estimate? {
         guard let estimateID = activeServiceCall?.linkedEstimateID else { return nil }
         return estimates.first { $0.id == estimateID }
@@ -258,6 +302,16 @@ struct BillingDocumentsView: View {
     private var currentJobPayments: [Payment] {
         guard let invoice = currentJobInvoice else { return [] }
         return payments.filter { $0.invoice.id == invoice.id }
+    }
+
+    private var currentJobProposalOptions: [Estimate] {
+        guard let serviceCallID = activeServiceCall?.id,
+              let groupID = currentJobEstimate?.proposalGroupID else { return [] }
+        return estimates
+            .filter { $0.serviceCallID == serviceCallID && $0.proposalGroupID == groupID }
+            .sorted {
+                ($0.proposalOptionKind?.comparisonRank ?? .max) < ($1.proposalOptionKind?.comparisonRank ?? .max)
+            }
     }
 
     private var currentJobBalanceDue: Double? {
@@ -285,12 +339,12 @@ struct BillingDocumentsView: View {
 
     private var estimatesNeedingFollowUp: [Estimate] {
         displayedEstimates.filter { estimate in
-            estimate.status == "pending" || estimate.status == "follow-up"
+            isCurrentProposal(estimate) && (estimate.status == "pending" || estimate.status == "follow-up")
         }
     }
 
     private var acceptedEstimatesReadyToSchedule: [Estimate] {
-        displayedEstimates.filter { $0.status == "accepted" }
+        displayedEstimates.filter { isCurrentProposal($0) && $0.status == "accepted" }
     }
 
     private var collectibleInvoices: [Invoice] {
@@ -345,7 +399,8 @@ struct BillingDocumentsView: View {
             email: currentUserEmail,
             users: users,
             serviceCalls: serviceCalls,
-            activeServiceCall: activeServiceCall
+            activeServiceCall: activeServiceCall,
+            technicians: technicians
         )
     }
 
@@ -405,10 +460,14 @@ struct BillingDocumentsView: View {
     private var selectedSummary: String {
         selectedLineItems
             .map { item in
+                let quantity = lineItemQuantity(for: item)
+                let quantityDescription = quantity == 1
+                    ? ""
+                    : " • Qty \(quantity.formatted(.number.precision(.fractionLength(0...2))))"
                 if let description = item.itemDescription, !description.isEmpty {
-                    return "\(item.name) - \(item.unitPrice.formatted(.currency(code: "USD"))) - \(description)"
+                    return "\(item.name) - \((item.unitPrice * quantity).formatted(.currency(code: "USD")))\(quantityDescription) - \(description)"
                 }
-                return "\(item.name) - \(item.unitPrice.formatted(.currency(code: "USD")))"
+                return "\(item.name) - \((item.unitPrice * quantity).formatted(.currency(code: "USD")))\(quantityDescription)"
             }
             .joined(separator: "\n")
     }
@@ -745,7 +804,32 @@ GunnAire
             DispatchQueue.main.async {
                 isEmailingGeneratedDocument = false
                 switch result {
-                case .success:
+                case .success(let sentMessage):
+                    let communication = CustomerCommunication(
+                        customer: recipient,
+                        serviceCallID: generatedCustomerDocumentServiceCallID,
+                        invoiceID: generatedCustomerDocumentInvoiceID,
+                        estimateID: generatedCustomerDocumentEstimateID,
+                        recipient: email,
+                        subject: subject,
+                        deliveryStatus: "sent",
+                        attachmentFileNames: gmailAttachments.map(\.fileName),
+                        providerMessageID: sentMessage.id
+                    )
+                    modelContext.insert(communication)
+                    try? modelContext.save()
+                    if GunnAireBackendService.isConfigured {
+                        Task {
+                            do {
+                                let remote = try await GunnAireBackendService.uploadCustomerCommunication(communication)
+                                communication.backendCommunicationID = remote.id
+                                communication.backendSyncError = nil
+                            } catch {
+                                communication.backendSyncError = error.localizedDescription
+                            }
+                            try? modelContext.save()
+                        }
+                    }
                     let attachmentSummary = gmailAttachments.count == 1 ? "" : " with onsite report"
                     actionMessage = "\(generatedCustomerDocumentKind.capitalized) emailed to \(email)\(attachmentSummary)."
                 case .failure(let error):
@@ -1001,6 +1085,9 @@ GunnAire
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(item.name)
                                             .font(.caption)
+                                        Text("Qty \(lineItemQuantity(for: item).formatted(.number.precision(.fractionLength(0...2))))")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
                                         if item.isTaxable {
                                             Text("Taxable")
                                                 .font(.caption2)
@@ -1008,7 +1095,7 @@ GunnAire
                                         }
                                     }
                                     Spacer()
-                                    Text(item.unitPrice, format: .currency(code: "USD"))
+                                    Text(item.unitPrice * lineItemQuantity(for: item), format: .currency(code: "USD"))
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }
@@ -1016,6 +1103,7 @@ GunnAire
 
                             Button("Clear Selected Items") {
                                 selectedItems.removeAll()
+                                selectedItemQuantities.removeAll()
                             }
                             .buttonStyle(.bordered)
                         }
@@ -1057,6 +1145,11 @@ GunnAire
                                     .font(.caption)
                                     .foregroundColor(.orange)
                             }
+                        }
+                        if let selectedLaborCosting, selectedLaborCosting.uncostedMinutes > 0 {
+                            Text("\(selectedLaborCosting.uncostedMinutes) completed labor minute\(selectedLaborCosting.uncostedMinutes == 1 ? "" : "s") excluded until that technician has an internal labor rate.")
+                                .font(.caption)
+                                .foregroundColor(.orange)
                         }
 
                         if !actionMessage.isEmpty {
@@ -1133,9 +1226,12 @@ GunnAire
                                 if call.status == .scheduled {
                                     call.status = .inProgress
                                     call.documentationStartedAt = call.documentationStartedAt ?? Date()
+                                    ServiceCallActivity.record(for: call, action: "Job started", detail: "Status changed from scheduled to in progress.", actorEmail: currentUserEmail, in: modelContext)
                                 } else {
                                     if call.markDocumentationCompleteIfReady() {
                                         call.status = call.linkedInvoiceID == nil ? .completed : .invoiced
+                                        let nextStatus = call.linkedInvoiceID == nil ? "completed" : "invoiced"
+                                        ServiceCallActivity.record(for: call, action: "Job status updated", detail: "Status changed from in progress to \(nextStatus).", actorEmail: currentUserEmail, in: modelContext)
                                     } else {
                                         call.status = .inProgress
                                         actionMessage = call.documentationCompletionBlockedMessage ?? "Complete required report fields before closing this job."
@@ -1212,6 +1308,21 @@ GunnAire
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Estimate")
                                     .font(.headline)
+                                if estimate.isChangeOrder {
+                                    Text("Change order • replaces the prior proposal only after this revision is approved")
+                                        .font(.caption2)
+                                        .foregroundColor(.orange)
+                                    if let reason = estimate.changeOrderReason, !reason.isEmpty {
+                                        Text("Reason: \(reason)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                if estimate.isProposalOption {
+                                    Text("Proposal option: \(estimate.proposalOptionDisplayDetail)")
+                                        .font(.caption2)
+                                        .foregroundColor(estimate.proposalIsRecommended ? .green : .secondary)
+                                }
                                 if canViewFinancials {
                                     Text("\(estimate.amount, format: .currency(code: "USD")) • \(estimate.status.capitalized)")
                                         .font(.caption)
@@ -1224,10 +1335,53 @@ GunnAire
                                 Text(estimate.lineItemSummary)
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
+                                if let approvedAt = estimate.customerApprovedAt {
+                                    Text("Customer approval: \(estimate.customerApprovedByName ?? estimate.customer.name) • \(approvedAt.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                if currentJobProposalOptions.count > 1 {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text("Proposal Options")
+                                            .font(.caption.weight(.semibold))
+                                        ForEach(currentJobProposalOptions) { option in
+                                            HStack(spacing: 8) {
+                                                VStack(alignment: .leading, spacing: 1) {
+                                                    Text(option.proposalOptionDisplayDetail)
+                                                        .font(.caption)
+                                                    Text(option.amount, format: .currency(code: "USD"))
+                                                    Text(option.status.capitalized)
+                                                        .font(.caption2)
+                                                        .foregroundColor(.secondary)
+                                                }
+                                                Spacer()
+                                                if option.id == estimate.id {
+                                                    Text("Selected")
+                                                        .font(.caption2)
+                                                        .foregroundColor(.green)
+                                                } else {
+                                                    Button("Select") {
+                                                        selectProposalOption(option)
+                                                    }
+                                                    .font(.caption)
+                                                    .buttonStyle(.bordered)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .padding(.top, 2)
+                                }
                                 Button("Resume Estimate") {
                                     loadEstimateIntoBuilder(estimate)
                                 }
                                 .buttonStyle(.bordered)
+
+                                if estimate.status == "accepted", currentJobInvoice == nil {
+                                    Button("Create Change Order") {
+                                        beginChangeOrder(from: estimate)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
 
                                 Button("Generate Estimate PDF") {
                                     generateEstimateDocument(estimate)
@@ -1242,12 +1396,8 @@ GunnAire
                                 .disabled(!QuickBooksDataAPI.shared.isAuthenticated || estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
 
                                 HStack {
-                                    Button("Mark Accepted") {
-                                        estimate.status = "accepted"
-                                        activeServiceCall?.followUpRequired = false
-                                        activeServiceCall?.followUpAction = nil
-                                        activeServiceCall?.followUpDueDate = nil
-                                        actionMessage = "Estimate marked accepted."
+                                    Button("Mark Customer Approved") {
+                                        recordCustomerApproval(for: estimate)
                                     }
                                     .buttonStyle(.bordered)
 
@@ -1694,6 +1844,32 @@ GunnAire
                     TextField("Notes", text: $notes, axis: .vertical)
                         .lineLimit(2...5)
 
+                    if changeOrderParentEstimateID != nil {
+                        TextField("Change order reason", text: $changeOrderReason, axis: .vertical)
+                            .lineLimit(1...3)
+                        Text("The original proposal is retained. This revision must be approved before it can be scheduled or invoiced.")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
+
+                    if selectedDocumentKind == .estimate {
+                        Picker("Present as", selection: $proposalOption) {
+                            ForEach(EstimateProposalOption.allCases) { option in
+                                Text(option.displayName).tag(option)
+                            }
+                        }
+                        if proposalOption != .standalone {
+                            Toggle("Recommended option", isOn: $proposalIsRecommended)
+                            Text("Create each Good, Better, and Best option with its own line items. The customer chooses one before approval.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Button("End Proposal Set") {
+                                endProposalSet()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+
                     if activeServiceCall != nil {
                         Button("Save Notes Back To Job") {
                             syncNotesToJob()
@@ -1715,6 +1891,15 @@ GunnAire
                                 }
                                 .font(.caption)
                                 .disabled(isImportingQuickBooksItems)
+
+                                if !unsyncedCatalogItems.isEmpty {
+                                    Button(isPublishingQuickBooksItems ? "Publishing..." : "Publish \(unsyncedCatalogItems.count) Pending") {
+                                        publishUnsyncedCatalogItems()
+                                    }
+                                    .font(.caption)
+                                    .disabled(isPublishingQuickBooksItems)
+                                    .accessibilityHint("Publishes locally created catalog items to QuickBooks before they are used on invoices.")
+                                }
                             }
                         }
 
@@ -1765,6 +1950,14 @@ GunnAire
                                                     .lineLimit(1)
                                             }
                                             itemMetaText(for: item)
+                                            if isQuickBooksConnected, item.quickBooksCatalogSyncState != "synced" {
+                                                Label(
+                                                    item.needsQuickBooksAttention ? "QBO needs attention" : "QBO pending",
+                                                    systemImage: item.needsQuickBooksAttention ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath"
+                                                )
+                                                .font(.caption2)
+                                                .foregroundStyle(item.needsQuickBooksAttention ? Color.orange : Color.secondary)
+                                            }
                                         }
                                         Spacer()
                                         Text(item.unitPrice, format: .currency(code: "USD"))
@@ -1790,10 +1983,18 @@ GunnAire
                                         itemMetaText(for: item)
                                     }
                                     Spacer()
-                                    Text(item.unitPrice, format: .currency(code: "USD"))
+                                    Text(item.unitPrice * lineItemQuantity(for: item), format: .currency(code: "USD"))
                                         .foregroundColor(.secondary)
+                                    Stepper(
+                                        "Qty \(lineItemQuantity(for: item).formatted(.number.precision(.fractionLength(0...2))))",
+                                        value: lineItemQuantityBinding(for: item),
+                                        in: 0.25...100,
+                                        step: 0.25
+                                    )
+                                    .accessibilityLabel("Quantity for \(item.name)")
                                     Button {
                                         selectedItems.remove(item.id)
+                                        selectedItemQuantities.removeValue(forKey: item.id)
                                     } label: {
                                         Image(systemName: "minus.circle")
                                     }
@@ -1860,13 +2061,31 @@ GunnAire
                                 .foregroundColor(.secondary)
                         }
                         HStack {
-                            Text("Estimated Cost")
+                            Text("Materials cost")
                             Spacer()
                             Text(selectedCostTotal, format: .currency(code: "USD"))
                                 .foregroundColor(.secondary)
                         }
                         HStack {
-                            Text("Gross Profit")
+                            Text("Completed labor cost")
+                            Spacer()
+                            if let selectedLaborCost {
+                                Text(selectedLaborCost, format: .currency(code: "USD"))
+                                    .foregroundColor(.secondary)
+                            } else {
+                                Text(activeServiceCall == nil ? "No job linked" : "Set a technician rate and complete time")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        HStack {
+                            Text("Job cost")
+                            Spacer()
+                            Text(selectedJobCostTotal, format: .currency(code: "USD"))
+                                .foregroundColor(.secondary)
+                        }
+                        HStack {
+                            Text(selectedLaborCost == nil ? "Gross Profit (materials only)" : "Gross Profit")
                             Spacer()
                             Text(selectedGrossProfit, format: .currency(code: "USD"))
                                 .foregroundColor(selectedGrossProfit >= 0 ? .secondary : .red)
@@ -1951,7 +2170,7 @@ GunnAire
                     .disabled(customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                     if isQuickBooksConnected {
-                        Text("New customers saved here create a QuickBooks customer immediately. Items and documents sync when the estimate or invoice is created.")
+                        Text("New customers and catalog items publish to QuickBooks immediately. Estimates and invoices sync when they are created.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -3572,9 +3791,11 @@ GunnAire
                         equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
                         customerName: attachment.customer?.name
                     )
-                    attachment.backendDocumentID = response.id
+                    attachment.markSharedCompanyStored(id: response.id)
                     try? modelContext.save()
                 } catch {
+                    attachment.markSharedCompanyUploadFailed(error.localizedDescription)
+                    try? modelContext.save()
                     attachmentMessage = "Attachment saved locally. Company storage upload failed: \(error.localizedDescription)"
                 }
             }
@@ -3995,7 +4216,10 @@ GunnAire
         do {
             try modelContext.save()
             selectCreatedItem(item)
-            actionMessage = "Added \(item.name) to this \(selectedDocumentKind.rawValue.lowercased())."
+            actionMessage = isQuickBooksConnected
+                ? "Added \(item.name). Publishing it to QuickBooks..."
+                : "Added \(item.name) to this \(selectedDocumentKind.rawValue.lowercased()). It will publish to QuickBooks when a company connection is available."
+            publishCatalogItemIfPossible(item)
         } catch {
             actionMessage = "Could not save \(item.name): \(error.localizedDescription)"
         }
@@ -4016,6 +4240,7 @@ GunnAire
     private func selectCreatedItem(_ item: Item) {
         newlyCreatedLineItems[item.id] = item
         selectedItems.insert(item.id)
+        selectedItemQuantities[item.id] = selectedItemQuantities[item.id] ?? 1
         catalogFilter = .selected
     }
 
@@ -4027,7 +4252,10 @@ GunnAire
         selectCreatedItem(item)
         itemSearchText = ""
         newItemName = ""
-        actionMessage = "Added \(item.name) to this \(selectedDocumentKind.rawValue.lowercased())."
+        actionMessage = isQuickBooksConnected
+            ? "Added \(item.name). Publishing it to QuickBooks..."
+            : "Added \(item.name) to this \(selectedDocumentKind.rawValue.lowercased()). It will publish to QuickBooks when a company connection is available."
+        publishCatalogItemIfPossible(item)
     }
 
     private func nonBlank(_ value: String) -> String? {
@@ -4049,7 +4277,12 @@ GunnAire
                     var imported = 0
                     for quickBooksItem in quickBooksItems {
                         let normalizedID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if let existing = items.first(where: { $0.quickBooksID == normalizedID }) {
+                        if let existing = Item.matchingLocalCatalogItem(
+                            in: items,
+                            quickBooksID: normalizedID,
+                            name: quickBooksItem.Name,
+                            sku: quickBooksItem.Sku
+                        ) {
                             applyQuickBooksItem(quickBooksItem, to: existing)
                             continue
                         }
@@ -4086,8 +4319,39 @@ GunnAire
         importQuickBooksItems()
     }
 
+    private func publishCatalogItemIfPossible(_ item: Item) {
+        guard isQuickBooksConnected, itemNeedsQuickBooksSync(item) else { return }
+        prepareQuickBooksItemsForDocument([item]) { result in
+            switch result {
+            case .success:
+                actionMessage = "Added \(item.name) and synced it to QuickBooks."
+            case .failure(let error):
+                actionMessage = "Added \(item.name) locally. QuickBooks publish is pending: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func publishUnsyncedCatalogItems() {
+        let pendingItems = unsyncedCatalogItems
+        guard isQuickBooksConnected, !pendingItems.isEmpty else { return }
+        isPublishingQuickBooksItems = true
+        actionMessage = "Publishing \(pendingItems.count) catalog item\(pendingItems.count == 1 ? "" : "s") to QuickBooks..."
+        prepareQuickBooksItemsForDocument(pendingItems) { result in
+            isPublishingQuickBooksItems = false
+            switch result {
+            case .success(let syncedItems):
+                actionMessage = "Published \(syncedItems.count) catalog item\(syncedItems.count == 1 ? "" : "s") to QuickBooks."
+            case .failure(let error):
+                actionMessage = "QuickBooks catalog publish failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
     private func applyQuickBooksItem(_ quickBooksItem: QuickBooksItem, to item: Item) {
         item.quickBooksID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
+        item.quickBooksSyncStatus = "synced"
+        item.quickBooksSyncDetail = nil
+        item.quickBooksLastSyncedAt = Date()
         item.name = quickBooksItem.Name
         if let itemType = quickBooksItem.ItemType {
             item.itemTypeRawValue = itemType
@@ -4110,14 +4374,76 @@ GunnAire
         }
     }
 
+    private func markQuickBooksCatalogSyncFailure(for items: [Item], error: Error) {
+        let detail = error.localizedDescription
+        for item in items where itemNeedsQuickBooksSync(item) {
+            item.quickBooksSyncStatus = "needs_attention"
+            item.quickBooksSyncDetail = detail
+        }
+        saveQuickBooksSyncState()
+    }
+
     private func loadEstimateIntoBuilder(_ estimate: Estimate, announce: Bool = true) {
+        changeOrderParentEstimateID = nil
+        changeOrderReason = ""
+        proposalGroupID = estimate.proposalGroupID
+        proposalOption = estimate.proposalOptionKind ?? .standalone
+        proposalIsRecommended = estimate.proposalIsRecommended
         applyDocumentContext(
             customer: estimate.customer,
             notes: estimate.notes,
             lineItemSummary: estimate.lineItemSummary,
+            catalogSnapshotJSON: estimate.catalogSnapshotJSON,
             preferredKind: .estimate,
             announce: announce
         )
+    }
+
+    private func beginChangeOrder(from estimate: Estimate) {
+        changeOrderParentEstimateID = estimate.id
+        changeOrderReason = "Scope revised after field diagnosis."
+        proposalGroupID = nil
+        proposalOption = .standalone
+        proposalIsRecommended = false
+        applyDocumentContext(
+            customer: estimate.customer,
+            notes: estimate.notes,
+            lineItemSummary: estimate.lineItemSummary,
+            catalogSnapshotJSON: estimate.catalogSnapshotJSON,
+            preferredKind: .estimate,
+            announce: false
+        )
+        actionMessage = "Change order started. Update the line items, explain the scope change, then send this revised proposal for a new approval."
+    }
+
+    private func endProposalSet() {
+        proposalGroupID = nil
+        proposalOption = .standalone
+        proposalIsRecommended = false
+        actionMessage = "Proposal set ended. New estimates will be standalone."
+    }
+
+    private func selectProposalOption(_ estimate: Estimate) {
+        guard let call = activeServiceCall else { return }
+        call.linkedEstimateID = estimate.id
+        call.followUpRequired = false
+        call.followUpAction = nil
+        call.followUpDueDate = nil
+        actionMessage = "\(estimate.proposalOptionDisplayName) selected. Record customer approval when they choose this option."
+    }
+
+    private func recordCustomerApproval(for estimate: Estimate) {
+        estimate.recordCustomerApproval(by: estimate.customer.name)
+        if let groupID = estimate.proposalGroupID {
+            for option in estimates where option.proposalGroupID == groupID && option.id != estimate.id && option.status != "invoiced" {
+                option.status = "not-selected"
+            }
+        }
+        activeServiceCall?.linkedEstimateID = estimate.id
+        activeServiceCall?.followUpRequired = false
+        activeServiceCall?.followUpAction = nil
+        activeServiceCall?.followUpDueDate = nil
+        actionMessage = "Customer approval recorded."
     }
 
     private func prepareInvoiceFromEstimate(_ estimate: Estimate) {
@@ -4125,6 +4451,7 @@ GunnAire
             customer: estimate.customer,
             notes: estimate.notes,
             lineItemSummary: estimate.lineItemSummary,
+            catalogSnapshotJSON: estimate.catalogSnapshotJSON,
             preferredKind: .invoice,
             announce: false
         )
@@ -4132,6 +4459,14 @@ GunnAire
     }
 
     private func createInvoiceFromEstimate(_ estimate: Estimate) {
+        guard isCurrentProposal(estimate) else {
+            actionMessage = "A newer change order is the active proposal. Invoice the approved current proposal instead."
+            return
+        }
+        guard !estimate.isProposalOption || estimate.hasRecordedCustomerApproval else {
+            actionMessage = "Record the customer's approval for the selected proposal option before creating an invoice."
+            return
+        }
         if let existingInvoice = invoice(for: estimate) {
             selectedInvoiceForCloseout = existingInvoice
             actionMessage = "Opened the existing invoice for this estimate."
@@ -4146,7 +4481,7 @@ GunnAire
         let conversion = convertEstimate(estimate)
         let invoice = conversion.invoice
         selectedInvoiceForCloseout = invoice
-        let restoredItems = items.filter { matchingItemIDs(from: estimate.lineItemSummary).contains($0.id) }
+        let restoredItems = restoredCatalogItems(snapshotJSON: estimate.catalogSnapshotJSON, lineItemSummary: estimate.lineItemSummary)
         if let reportErrorMessage = conversion.reportErrorMessage {
             actionMessage = reportErrorMessage
             if isQuickBooksConnected, !restoredItems.isEmpty {
@@ -4167,6 +4502,7 @@ GunnAire
             customer: invoice.customer,
             notes: invoice.notes,
             lineItemSummary: invoice.lineItemSummary,
+            catalogSnapshotJSON: invoice.catalogSnapshotJSON,
             preferredKind: .invoice,
             announce: announce
         )
@@ -4176,6 +4512,7 @@ GunnAire
         customer: Customer,
         notes: String?,
         lineItemSummary: String,
+        catalogSnapshotJSON: String?,
         preferredKind: BillingDocumentKind,
         announce: Bool
     ) {
@@ -4187,11 +4524,17 @@ GunnAire
         }
         self.notes = notes ?? ""
 
-        let restoredItems = matchingItemIDs(from: lineItemSummary)
+        let restoredItems = restoredCatalogItems(snapshotJSON: catalogSnapshotJSON, lineItemSummary: lineItemSummary)
         if restoredItems.isEmpty, activeServiceCall != nil {
             selectedItems.removeAll()
+            selectedItemQuantities.removeAll()
         } else {
-            selectedItems = restoredItems
+            selectedItems = Set(restoredItems.map(\.id))
+            selectedItemQuantities = Dictionary(
+                uniqueKeysWithValues: CatalogLineItemSnapshot
+                    .decoded(from: catalogSnapshotJSON)
+                    .map { ($0.catalogItemID, $0.quantity) }
+            )
         }
 
         if announce {
@@ -4507,6 +4850,10 @@ GunnAire
     }
 
     private func canCreateOrOpenInvoice(from estimate: Estimate) -> Bool {
+        guard isCurrentProposal(estimate) else { return false }
+        if estimate.isProposalOption && !estimate.hasRecordedCustomerApproval {
+            return false
+        }
         if invoice(for: estimate) != nil {
             return true
         }
@@ -4514,6 +4861,12 @@ GunnAire
     }
 
     private func invoiceCreationBlockedMessage(for estimate: Estimate) -> String? {
+        guard isCurrentProposal(estimate) else {
+            return "A newer change order is the active proposal. Invoice the approved current proposal instead."
+        }
+        if estimate.isProposalOption && !estimate.hasRecordedCustomerApproval {
+            return "Record customer approval for the selected proposal option before invoicing."
+        }
         guard invoice(for: estimate) == nil else { return nil }
         return serviceCall(for: estimate)?.invoiceCreationBlockedMessage
     }
@@ -4530,6 +4883,12 @@ GunnAire
             return estimate
         }
         return estimates.first { $0.serviceCallID == serviceCall.id }
+    }
+
+    private func isCurrentProposal(_ estimate: Estimate) -> Bool {
+        guard let serviceCallID = estimate.serviceCallID else { return true }
+        guard let serviceCall = serviceCalls.first(where: { $0.id == serviceCallID }) else { return true }
+        return serviceCall.linkedEstimateID == estimate.id
     }
 
     private func invoice(for estimate: Estimate) -> Invoice? {
@@ -4588,6 +4947,15 @@ GunnAire
         return Set(containsMatches.map(\.id))
     }
 
+    private func restoredCatalogItems(snapshotJSON: String?, lineItemSummary: String) -> [Item] {
+        let snapshotIDs = Set(CatalogLineItemSnapshot.decoded(from: snapshotJSON).map(\.catalogItemID))
+        if !snapshotIDs.isEmpty {
+            return items.filter { snapshotIDs.contains($0.id) }
+        }
+        let summaryIDs = matchingItemIDs(from: lineItemSummary)
+        return items.filter { summaryIDs.contains($0.id) }
+    }
+
     private func invoiceBalanceDue(for invoice: Invoice) -> Double {
         Invoice.outstandingBalance(for: invoice, payments: payments)
     }
@@ -4643,6 +5011,7 @@ GunnAire
             scheduledDate: scheduledDate,
             duration: sourceCall.duration,
             assignedTechnician: sourceCall.assignedTechnician,
+            additionalTechnicianIDs: sourceCall.additionalTechnicianIDs,
             customer: sourceCall.customer,
             status: .scheduled,
             notes: generatedNotes.isEmpty ? "Scheduled follow-up visit" : "Scheduled follow-up visit\n\n\(generatedNotes)",
@@ -4650,6 +5019,8 @@ GunnAire
             recommendedWorkSummary: sourceCall.recommendedWorkSummary,
             followUpRequired: false
         )
+        followUpCall.inheritEquipmentProfile(from: sourceCall)
+        followUpCall.dispatchUrgency = sourceCall.dispatchUrgency
         modelContext.insert(followUpCall)
         sourceCall.followUpRequired = false
         sourceCall.followUpAction = nil
@@ -4681,6 +5052,7 @@ GunnAire
             scheduledDate: scheduledDate,
             duration: sourceCall.duration,
             assignedTechnician: sourceCall.assignedTechnician,
+            additionalTechnicianIDs: sourceCall.additionalTechnicianIDs,
             customer: sourceCall.customer,
             status: .scheduled,
             notes: generatedNotes.isEmpty ? "Scheduled from approved estimate" : "Scheduled from approved estimate\n\n\(generatedNotes)",
@@ -4688,6 +5060,8 @@ GunnAire
             recommendedWorkSummary: sourceCall.recommendedWorkSummary,
             followUpRequired: false
         )
+        approvedWorkCall.inheritEquipmentProfile(from: sourceCall)
+        approvedWorkCall.dispatchUrgency = sourceCall.dispatchUrgency
         modelContext.insert(approvedWorkCall)
         sourceCall.followUpRequired = false
         sourceCall.followUpAction = nil
@@ -4747,9 +5121,22 @@ GunnAire
     private func toggleItem(_ item: Item) {
         if selectedItems.contains(item.id) {
             selectedItems.remove(item.id)
+            selectedItemQuantities.removeValue(forKey: item.id)
         } else {
             selectedItems.insert(item.id)
+            selectedItemQuantities[item.id] = 1
         }
+    }
+
+    private func lineItemQuantity(for item: Item) -> Double {
+        max(selectedItemQuantities[item.id] ?? 1, 0.25)
+    }
+
+    private func lineItemQuantityBinding(for item: Item) -> Binding<Double> {
+        Binding(
+            get: { lineItemQuantity(for: item) },
+            set: { selectedItemQuantities[item.id] = min(max($0, 0.25), 100) }
+        )
     }
 
     private func resolveCustomerForDocument() -> Customer {
@@ -4792,17 +5179,36 @@ GunnAire
 
         switch selectedDocumentKind {
         case .estimate:
+            let normalizedChangeOrderReason = changeOrderReason.trimmingCharacters(in: .whitespacesAndNewlines)
+            if changeOrderParentEstimateID != nil && normalizedChangeOrderReason.isEmpty {
+                actionMessage = "Enter a reason for the change order before creating the revised estimate."
+                isCreatingDocument = false
+                return
+            }
+            let resolvedProposalGroupID = proposalOption == .standalone ? nil : (proposalGroupID ?? UUID())
+            if proposalOption != .standalone {
+                proposalGroupID = resolvedProposalGroupID
+            }
             let estimate = Estimate(
                 serviceCallID: activeServiceCall?.id,
+                parentEstimateID: changeOrderParentEstimateID,
+                changeOrderReason: changeOrderParentEstimateID == nil ? nil : normalizedChangeOrderReason,
+                proposalGroupID: resolvedProposalGroupID,
+                proposalOption: proposalOption == .standalone ? nil : proposalOption.rawValue,
+                proposalIsRecommended: proposalOption == .standalone ? false : proposalIsRecommended,
                 customer: customer,
                 lineItemSummary: selectedSummary,
+                catalogSnapshotJSON: selectedCatalogSnapshotJSON,
                 amount: selectedTotal,
                 notes: trimmedNotes.isEmpty ? nil : trimmedNotes
             )
             modelContext.insert(estimate)
             activeServiceCall?.linkedEstimateID = estimate.id
             linkExistingEstimateAttachments(to: estimate, serviceCallID: activeServiceCall?.id)
-            actionMessage = isQuickBooksConnected ? "Estimate created locally. Syncing to QuickBooks..." : "Estimate created locally."
+            let documentTitle = estimate.isChangeOrder ? "Change order" : "Estimate"
+            actionMessage = isQuickBooksConnected
+                ? "\(documentTitle) created locally. Syncing to QuickBooks..."
+                : "\(documentTitle) created locally."
             guard saveBillingContext(failureMessage: "Could not save estimate locally") else {
                 isCreatingDocument = false
                 return
@@ -4813,7 +5219,14 @@ GunnAire
                 actionMessage = "Estimate created. Review and create the invoice when ready."
             } else {
                 selectedItems.removeAll()
+                selectedItemQuantities.removeAll()
                 notes = ""
+                changeOrderParentEstimateID = nil
+                changeOrderReason = ""
+                if proposalOption == .standalone {
+                    proposalGroupID = nil
+                    proposalIsRecommended = false
+                }
             }
 
         case .invoice:
@@ -4826,7 +5239,9 @@ GunnAire
             let invoice = Invoice(
                 serviceCallID: activeServiceCall?.id,
                 customer: customer,
+                workType: InvoiceWorkType.inferred(from: activeServiceCall),
                 lineItemSummary: selectedSummary,
+                catalogSnapshotJSON: selectedCatalogSnapshotJSON,
                 amount: selectedTotal,
                 status: "unpaid",
                 notes: trimmedNotes.isEmpty ? nil : trimmedNotes
@@ -4843,6 +5258,7 @@ GunnAire
             }
             syncInvoiceIfNeeded(invoice, customer: customer, items: selectedLineItems)
             selectedItems.removeAll()
+            selectedItemQuantities.removeAll()
             notes = ""
         }
         isCreatingDocument = false
@@ -4879,8 +5295,8 @@ GunnAire
             case .success(let syncedItems):
                 let payload = QuickBooksEstimateCreate(
                     CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
-                    Line: quickBooksLineItems(for: syncedItems),
-                    PrivateNote: estimate.notes
+                    Line: quickBooksLineItems(for: syncedItems, snapshotJSON: estimate.catalogSnapshotJSON),
+                    PrivateNote: quickBooksPrivateNote(for: estimate)
                 )
                 liveAPI.createEstimate(payload) { apiResult in
                     DispatchQueue.main.async {
@@ -4899,6 +5315,16 @@ GunnAire
         }
     }
 
+    private func quickBooksPrivateNote(for estimate: Estimate) -> String? {
+        let entries = [
+            estimate.notes?.trimmingCharacters(in: .whitespacesAndNewlines),
+            estimate.changeOrderReason.map { "Change order reason: \($0)" }
+        ]
+        .compactMap { $0 }
+        .filter { !$0.isEmpty }
+        return entries.isEmpty ? nil : entries.joined(separator: "\n")
+    }
+
     private func syncInvoiceIfNeeded(_ invoice: Invoice, customer: Customer, items: [Item]) {
         guard isQuickBooksConnected else { return }
         ensureQuickBooksDocumentInputs(customer: customer, items: items) { result in
@@ -4908,7 +5334,7 @@ GunnAire
             case .success(let syncedItems):
                 let payload = QuickBooksInvoiceCreate(
                     CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
-                    Line: quickBooksLineItems(for: syncedItems),
+                    Line: quickBooksLineItems(for: syncedItems, snapshotJSON: invoice.catalogSnapshotJSON),
                     PrivateNote: invoice.notes
                 )
                 liveAPI.createInvoice(payload) { apiResult in
@@ -4982,6 +5408,7 @@ GunnAire
             DispatchQueue.main.async {
                 switch result {
                 case .failure(let error):
+                    markQuickBooksCatalogSyncFailure(for: items.filter(itemNeedsQuickBooksSync), error: error)
                     completion(.failure(error))
                 case .success(let quickBooksItems):
                     let quickBooksItemsByName = Dictionary(
@@ -5006,7 +5433,9 @@ GunnAire
                     }
 
                     guard let incomeAccountRef = QuickBooksItemAccountResolver.incomeAccountRef(from: quickBooksItems) else {
-                        completion(.failure(QuickBooksDataAPI.QBError.missingDefaultIncomeAccountRef))
+                        let error = QuickBooksDataAPI.QBError.missingDefaultIncomeAccountRef
+                        markQuickBooksCatalogSyncFailure(for: remainingLocalItems, error: error)
+                        completion(.failure(error))
                         return
                     }
 
@@ -5074,7 +5503,7 @@ GunnAire
             DispatchQueue.main.async {
                 switch result {
                 case .success(let quickBooksItem):
-                    item.quickBooksID = quickBooksItem.Id
+                    applyQuickBooksItem(quickBooksItem, to: item)
                     saveQuickBooksSyncState()
                     ensureQuickBooksItems(
                         items,
@@ -5085,22 +5514,31 @@ GunnAire
                         completion: completion
                     )
                 case .failure(let error):
+                    markQuickBooksCatalogSyncFailure(for: [item], error: error)
                     completion(.failure(error))
                 }
             }
         }
     }
 
-    private func quickBooksLineItems(for items: [Item]) -> [QuickBooksLineItem] {
-        items.compactMap { item in
+    private func quickBooksLineItems(for items: [Item], snapshotJSON: String?) -> [QuickBooksLineItem] {
+        let snapshotsByID = Dictionary(
+            uniqueKeysWithValues: CatalogLineItemSnapshot.decoded(from: snapshotJSON).map { ($0.catalogItemID, $0) }
+        )
+        return items.compactMap { item in
             let explicitQuickBooksID = item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let quickBooksID = explicitQuickBooksID, !quickBooksID.isEmpty else { return nil }
+            let snapshot = snapshotsByID[item.id]
+            let quantity = snapshot?.quantity ?? 1
+            let unitPrice = snapshot?.unitPrice ?? item.unitPrice
             return QuickBooksLineItem(
-                Amount: item.unitPrice,
+                Amount: unitPrice * quantity,
                 DetailType: "SalesItemLineDetail",
-                Description: item.itemDescription ?? item.name,
+                Description: snapshot?.description ?? item.itemDescription ?? snapshot?.name ?? item.name,
                 SalesItemLineDetail: QuickBooksSalesItemLineDetail(
-                    ItemRef: QuickBooksReference(value: quickBooksID, name: item.name)
+                    ItemRef: QuickBooksReference(value: quickBooksID, name: snapshot?.name ?? item.name),
+                    Qty: quantity,
+                    UnitPrice: unitPrice
                 )
             )
         }
@@ -5112,6 +5550,7 @@ GunnAire
             serviceCallID: estimate.serviceCallID,
             customer: estimate.customer,
             lineItemSummary: estimate.lineItemSummary,
+            catalogSnapshotJSON: estimate.catalogSnapshotJSON,
             amount: estimate.amount,
             notes: estimate.notes
         )
@@ -5125,7 +5564,9 @@ GunnAire
             call.linkedInvoiceID = invoice.id
             call.status = .invoiced
             call.markDocumentationCompleteIfReady()
+            ServiceCallActivity.record(for: call, action: "Invoice created", detail: "Estimate converted to invoice and job marked invoiced.", actorEmail: currentUserEmail, in: modelContext)
         }
+        invoice.workType = InvoiceWorkType.inferred(from: linkedServiceCall)
         let reportErrorMessage = prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: linkedServiceCall)
         return (invoice, reportErrorMessage)
     }
@@ -5208,7 +5649,14 @@ GunnAire
             case .meeting, .reminder, .siteVisit, .other:
                 Toggle("Arrival confirmed", isOn: Binding(
                     get: { call.arrivalConfirmed },
-                    set: { call.arrivalConfirmed = $0 }
+                    set: { arrived in
+                        if arrived {
+                            call.markTechnicianArrived()
+                        } else {
+                            call.arrivalConfirmed = false
+                            call.technicianArrivedAt = nil
+                        }
+                    }
                 ))
                 Toggle("Action items documented", isOn: Binding(
                     get: { call.workCompletedChecklist },
@@ -5776,10 +6224,13 @@ private struct RecordInvoicePaymentView: View {
 
         if let serviceCallID = invoice.serviceCallID,
            let call = serviceCalls.first(where: { $0.id == serviceCallID }) {
+            let previousStatus = call.status
             call.markDocumentationCompleteIfReady()
             call.workCompletedChecklist = true
             call.paymentCollectedChecklist = totalPaid > 0
             call.status = Invoice.isPaid(invoice, payments: payments.filter { $0.invoice.id == invoice.id }) ? .completed : .invoiced
+            let paymentOutcome = Invoice.isPaid(invoice, payments: payments.filter { $0.invoice.id == invoice.id }) ? "paid in full" : "recorded with an outstanding balance"
+            ServiceCallActivity.record(for: call, action: "Payment recorded", detail: "Payment \(paymentOutcome); job status changed from \(previousStatus.rawValue) to \(call.status.rawValue).", actorEmail: GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"), in: modelContext)
             if !trimmedCompletionNotes.isEmpty {
                 call.notes = mergedJobNotes(existing: call.notes, completionNotes: trimmedCompletionNotes)
             }

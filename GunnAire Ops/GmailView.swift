@@ -1,7 +1,10 @@
 import SwiftUI
+import SwiftData
 
 struct GmailView: View {
+    @Environment(\.modelContext) private var modelContext
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
+    @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
 
     @State private var messages: [GmailMessageDetail] = []
     @State private var isLoading = false
@@ -100,6 +103,9 @@ struct GmailView: View {
             .onSubmit(of: .search) {
                 loadMessages()
             }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
+                applyPendingDraftIfNeeded(force: true)
+            }
             .sheet(item: $selectedMessage) { message in
                 GmailMessageDetailView(message: message) { draft in
                     composeDraft = draft
@@ -112,12 +118,12 @@ struct GmailView: View {
                     initialMessageBody: draft.body,
                     attachments: draft.attachments
                 ) { to, subject, body in
-                    sendMessage(to: to, subject: subject, body: body, threadID: draft.threadID, attachments: draft.attachments)
+                    sendMessage(to: to, subject: subject, body: body, threadID: draft.threadID, attachments: draft.attachments, auditDraft: draft)
                 }
             }
             .sheet(isPresented: $showingComposeSheet) {
                 GmailComposeView { to, subject, body in
-                    sendMessage(to: to, subject: subject, body: body, threadID: nil, attachments: [])
+                    sendMessage(to: to, subject: subject, body: body, threadID: nil, attachments: [], auditDraft: nil)
                 }
             }
         }
@@ -146,12 +152,29 @@ struct GmailView: View {
         }
     }
 
-    private func sendMessage(to: String, subject: String, body: String, threadID: String?, attachments: [GmailAttachment]) {
+    private func sendMessage(to: String, subject: String, body: String, threadID: String?, attachments: [GmailAttachment], auditDraft: GmailDraft?) {
+        let recipient = AppAccess.normalizedEmail(to)
+        let linkedCustomer = auditDraft?.customerID.flatMap { customerID in
+            customers.first { $0.id == customerID }
+        } ?? customers.first { AppAccess.normalizedEmail($0.email) == recipient }
+        if let linkedCustomer, !linkedCustomer.allowsTransactionalEmail {
+            statusMessage = "Email was not sent because \(linkedCustomer.name)'s service and billing email preference is off. Update Contact Preferences in the customer record before sending."
+            return
+        }
         statusMessage = "Sending message..."
         googleAuth.sendGmailMessage(to: to, subject: subject, body: body, threadID: threadID, attachments: attachments) { result in
             DispatchQueue.main.async {
                 switch result {
-                case .success:
+                case .success(let sentMessage):
+                    if let auditDraft {
+                        recordSentCustomerCommunication(
+                            from: auditDraft,
+                            to: to,
+                            subject: subject,
+                            attachments: attachments,
+                            providerMessageID: sentMessage.id
+                        )
+                    }
                     statusMessage = "Message sent."
                     loadMessages()
                 case .failure(let error):
@@ -161,8 +184,8 @@ struct GmailView: View {
         }
     }
 
-    private func applyPendingDraftIfNeeded() {
-        guard !didConsumePendingDraft else { return }
+    private func applyPendingDraftIfNeeded(force: Bool = false) {
+        guard force || !didConsumePendingDraft else { return }
         didConsumePendingDraft = true
         guard let draft = GunnAireAppIntentRouter.consumePendingMailDraft() else { return }
         composeDraft = GmailDraft(
@@ -171,7 +194,46 @@ struct GmailView: View {
             body: draft.body,
             threadID: nil,
             attachments: attachments(from: draft.attachmentPaths)
+            ,
+            customerID: draft.customerID,
+            serviceCallID: draft.serviceCallID,
+            invoiceID: draft.invoiceID,
+            estimateID: draft.estimateID
         )
+    }
+
+    private func recordSentCustomerCommunication(
+        from draft: GmailDraft,
+        to: String,
+        subject: String,
+        attachments: [GmailAttachment],
+        providerMessageID: String
+    ) {
+        guard let customerID = draft.customerID,
+              let customer = customers.first(where: { $0.id == customerID }) else { return }
+        let communication = CustomerCommunication(
+            customer: customer,
+            serviceCallID: draft.serviceCallID,
+            invoiceID: draft.invoiceID,
+            estimateID: draft.estimateID,
+            recipient: to,
+            subject: subject,
+            deliveryStatus: "sent",
+            attachmentFileNames: attachments.map(\.fileName),
+            providerMessageID: providerMessageID
+        )
+        modelContext.insert(communication)
+        try? modelContext.save()
+        guard GunnAireBackendService.isConfigured else { return }
+        Task {
+            do {
+                let remote = try await GunnAireBackendService.uploadCustomerCommunication(communication)
+                communication.backendCommunicationID = remote.id
+            } catch {
+                communication.backendSyncError = error.localizedDescription
+            }
+            try? modelContext.save()
+        }
     }
 
     private func attachments(from paths: [String]) -> [GmailAttachment] {
@@ -514,6 +576,32 @@ private struct GmailDraft: Identifiable {
     let body: String
     let threadID: String?
     let attachments: [GmailAttachment]
+    let customerID: UUID?
+    let serviceCallID: UUID?
+    let invoiceID: UUID?
+    let estimateID: UUID?
+
+    init(
+        to: String,
+        subject: String,
+        body: String,
+        threadID: String?,
+        attachments: [GmailAttachment],
+        customerID: UUID? = nil,
+        serviceCallID: UUID? = nil,
+        invoiceID: UUID? = nil,
+        estimateID: UUID? = nil
+    ) {
+        self.to = to
+        self.subject = subject
+        self.body = body
+        self.threadID = threadID
+        self.attachments = attachments
+        self.customerID = customerID
+        self.serviceCallID = serviceCallID
+        self.invoiceID = invoiceID
+        self.estimateID = estimateID
+    }
 }
 
 private extension String {

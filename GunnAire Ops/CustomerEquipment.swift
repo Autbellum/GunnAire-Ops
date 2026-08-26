@@ -3,10 +3,10 @@ import SwiftData
 
 @Model
 final class CustomerEquipment {
-    @Attribute(.unique) var id: UUID
+    var id: UUID = UUID()
     var customer: Customer?
     var equipmentTypeRaw: String?
-    var name: String
+    var name: String = ""
     var manufacturer: String?
     var modelNumber: String?
     var serialNumber: String?
@@ -16,8 +16,8 @@ final class CustomerEquipment {
     var filterSize: String?
     var notes: String?
     var technicalBaselineReadingsJSON: String?
-    var isActive: Bool
-    var createdAt: Date
+    var isActive: Bool = true
+    var createdAt: Date = Date()
 
     init(
         id: UUID = UUID(),

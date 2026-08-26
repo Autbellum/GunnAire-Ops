@@ -20,6 +20,15 @@ final class GunnAire_OpsUITestsLaunchTests: XCTestCase {
     @MainActor
     func testLaunch() throws {
         let app = XCUIApplication()
+        // Screenshot variants run without a signed-in iCloud account. Match the
+        // isolated local-store launch used by the other UI tests so this smoke
+        // test verifies the app's first screen instead of simulator account
+        // state.
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-hasAuthenticatedUser", "NO",
+            "-disableCloudKitForTesting"
+        ]
         app.launch()
 
         // Insert steps here to perform after app launch but before taking a screenshot,

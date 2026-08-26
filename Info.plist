@@ -50,8 +50,6 @@
 	<string>$(QB_CALLBACK_SCHEME)</string>
 	<key>QB_CLIENT_ID</key>
 	<string>$(QB_CLIENT_ID)</string>
-	<key>QB_CLIENT_SECRET</key>
-	<string>$(QB_CLIENT_SECRET)</string>
 	<key>QB_DEFAULT_ITEM_REF</key>
 	<string>$(QB_DEFAULT_ITEM_REF)</string>
 	<key>QB_DEFAULT_INCOME_ACCOUNT_REF</key>

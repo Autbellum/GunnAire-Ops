@@ -6,12 +6,16 @@ struct ScheduleView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: [SortDescriptor(\ServiceCall.scheduledDate)]) private var serviceCalls: [ServiceCall]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
+    @Query(sort: \TechnicianAvailabilityBlock.startsAt, order: .forward) private var technicianAvailabilityBlocks: [TechnicianAvailabilityBlock]
     @Query private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
+    @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \ServiceRequest.createdAt, order: .forward) private var serviceRequests: [ServiceRequest]
+    @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
@@ -28,6 +32,10 @@ struct ScheduleView: View {
     @State private var syncMessage: String?
     @State private var deleteConfirmationCall: ServiceCall?
     @State private var jobSearchText = ""
+    @State private var showingNewRequestSheet = false
+    @State private var showingAvailabilityBlocks = false
+    @State private var requestMessage: String?
+    @State private var isImportingOnlineRequests = false
 
     private var selectedDayCalls: [ServiceCall] {
         callsForSignedInUser
@@ -113,7 +121,12 @@ struct ScheduleView: View {
                 call.scheduledDate >= now &&
                 call.scheduledDate <= sevenDaysAhead
             }
-            .sorted { $0.scheduledDate < $1.scheduledDate }
+            .sorted {
+                if $0.dispatchUrgency.dispatchSortRank != $1.dispatchUrgency.dispatchSortRank {
+                    return $0.dispatchUrgency.dispatchSortRank < $1.dispatchUrgency.dispatchSortRank
+                }
+                return $0.scheduledDate < $1.scheduledDate
+            }
     }
 
     private var readyToInvoiceCalls: [ServiceCall] {
@@ -131,6 +144,10 @@ struct ScheduleView: View {
             .sorted { $0.scheduledDate > $1.scheduledDate }
     }
 
+    private var openServiceRequests: [ServiceRequest] {
+        serviceRequests.filter { $0.status == .new || $0.status == .qualified }
+    }
+
     private var quickBooksAttentionPayments: [Payment] {
         payments
             .filter { payment in
@@ -141,15 +158,9 @@ struct ScheduleView: View {
     }
 
     private var callsForSignedInUser: [ServiceCall] {
-        guard let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") else {
-            return serviceCalls
-        }
-        let matched = serviceCalls.filter { call in
-            guard let technician = call.assignedTechnician else { return true }
-            return technician.contactInfo?.localizedCaseInsensitiveContains(email) == true ||
-                email.localizedCaseInsensitiveContains(technician.name)
-        }
-        return matched
+        let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        let visibleIDs = AppAccess.visibleServiceCallIDs(email: email, users: users, serviceCalls: serviceCalls, technicians: technicians)
+        return serviceCalls.filter { visibleIDs.contains($0.id) }
     }
     
     var activeRecurringContracts: [RecurringMaintenanceContract] {
@@ -159,7 +170,7 @@ struct ScheduleView: View {
 
     private var maintenanceAttentionContracts: [RecurringMaintenanceContract] {
         recurringContracts
-            .filter { $0.active && ($0.isOverdue || $0.isUpcoming || $0.needsReminder) }
+            .filter { $0.active && ($0.isOverdue || $0.isUpcoming || $0.needsReminder || $0.needsRenewalAttention || $0.isExpired) }
             .sorted { $0.nextDate < $1.nextDate }
     }
 
@@ -178,6 +189,11 @@ struct ScheduleView: View {
         return AppAccess.isAdmin(email: email, users: users)
     }
 
+    private var canManageDispatch: Bool {
+        let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        return AppAccess.canManageDispatch(email: email, users: users)
+    }
+
     private var canCollectFieldPayments: Bool {
         let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
         return AppAccess.canCollectFieldPayments(email: email, users: users)
@@ -192,6 +208,10 @@ struct ScheduleView: View {
                         snapshotSection
 
                         jobSearchSection
+
+                        if canManageDispatch {
+                            serviceRequestsSection
+                        }
 
                         VStack(alignment: .leading, spacing: 10) {
                             sectionTitle("Calendar")
@@ -282,6 +302,15 @@ struct ScheduleView: View {
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         HStack {
+                            if canManageDispatch {
+                                Button {
+                                    showingAvailabilityBlocks = true
+                                } label: {
+                                    Label("Availability", systemImage: "person.badge.clock")
+                                }
+                                .tint(Color.brandGold)
+                            }
+
                             Button {
                                 syncGoogleCalendar()
                             } label: {
@@ -322,6 +351,18 @@ struct ScheduleView: View {
                         openDocumentationInTapToPay = false
                         documentationCall = createdCall
                     }
+                        .tint(Color.brandGold)
+                }
+                .sheet(isPresented: $showingNewRequestSheet) {
+                    NewServiceRequestView { request in
+                        modelContext.insert(request)
+                        try? modelContext.save()
+                        requestMessage = "Request saved. Qualify it, then schedule without changing a committed appointment."
+                    }
+                    .tint(Color.brandGold)
+                }
+                .sheet(isPresented: $showingAvailabilityBlocks) {
+                    TechnicianAvailabilityView()
                         .tint(Color.brandGold)
                 }
                 .fullScreenCover(item: $editingCall) { call in
@@ -368,7 +409,7 @@ struct ScheduleView: View {
 
     private func applyPendingScheduleIntentIfNeeded() {
         guard let pendingID = GunnAireAppIntentRouter.consumePendingScheduleCallID(),
-              let call = callsForSignedInUser.first(where: { $0.id == pendingID }) ?? serviceCalls.first(where: { $0.id == pendingID }) else {
+              let call = callsForSignedInUser.first(where: { $0.id == pendingID }) else {
             return
         }
         withAnimation(.easeInOut(duration: 0.2)) {
@@ -379,6 +420,185 @@ struct ScheduleView: View {
     }
 
     @ViewBuilder
+    private var serviceRequestsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                sectionTitle("Incoming Requests")
+                Spacer()
+                Button {
+                    showingNewRequestSheet = true
+                } label: {
+                    Label("New Request", systemImage: "phone.badge.plus")
+                }
+                .buttonStyle(.bordered)
+                if GunnAireBackendService.isConfigured {
+                    Button {
+                        importOnlineRequests()
+                    } label: {
+                        Label(isImportingOnlineRequests ? "Importing..." : "Import Online", systemImage: "arrow.down.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isImportingOnlineRequests)
+                }
+            }
+
+            if let requestMessage {
+                Text(requestMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if openServiceRequests.isEmpty {
+                Text("No unqualified service requests. New requests stay here until dispatch confirms the customer and appointment.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(openServiceRequests.prefix(5)) { request in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(request.customerName)
+                                .font(.headline)
+                            Spacer()
+                            Text(request.urgency.displayName)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(request.urgency == .emergency ? .red : request.urgency == .priority ? .orange : .secondary)
+                        }
+                        Text("\(request.requestedServiceType.displayName) • \(request.summary)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        if let preferredDate = request.preferredDate {
+                            Text("Requested: \(preferredDate.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        HStack {
+                            Button(request.status == .new ? "Qualify" : "Qualified") {
+                                request.status = .qualified
+                                request.qualifiedAt = request.qualifiedAt ?? Date()
+                                try? modelContext.save()
+                                requestMessage = "Request qualified. Choose Schedule when the appointment window is confirmed."
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(request.status != .new)
+
+                            Button("Schedule") {
+                                schedule(request)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(!request.canSchedule)
+
+                            Button("Decline", role: .destructive) {
+                                request.status = .declined
+                                try? modelContext.save()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(12)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
+        }
+    }
+
+    private func schedule(_ request: ServiceRequest) {
+        guard request.canSchedule else {
+            requestMessage = "Qualify the request before creating an appointment."
+            return
+        }
+        let customer: Customer
+        if let existingCustomer = matchingCustomer(for: request) {
+            customer = existingCustomer
+        } else {
+            customer = Customer(
+                name: request.customerName,
+                phone: request.phone,
+                email: request.email,
+                address: request.address
+            )
+            modelContext.insert(customer)
+        }
+        let scheduledDate = request.preferredDate ?? defaultRequestScheduleDate()
+        let call = ServiceCall(
+            eventTitle: "\(request.requestedServiceType.displayName) request",
+            siteAddress: request.address,
+            type: request.requestedServiceType,
+            dispatchUrgency: request.urgency,
+            scheduledDate: scheduledDate,
+            customer: customer,
+            notes: "Request intake: \(request.summary)"
+        )
+        modelContext.insert(call)
+        request.markScheduled(customerID: customer.id, serviceCallID: call.id)
+        ServiceCallActivity.record(
+            for: call,
+            action: "Request scheduled",
+            detail: "Created from a \(request.urgency.displayName.lowercased()) service request received \(request.createdAt.formatted(date: .abbreviated, time: .shortened)).",
+            actorEmail: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
+            in: modelContext
+        )
+        do {
+            try modelContext.save()
+            selectedDate = Calendar.current.startOfDay(for: scheduledDate)
+            requestMessage = "Scheduled \(request.customerName). Assign a technician from the job card before dispatching."
+            claimOnlineRequestIfNeeded(request)
+            navigationPath.append(call)
+        } catch {
+            requestMessage = "Could not schedule this request: \(error.localizedDescription)"
+        }
+    }
+
+    private func importOnlineRequests() {
+        guard GunnAireBackendService.isConfigured else { return }
+        isImportingOnlineRequests = true
+        Task {
+            do {
+                let count = try await GunnAireBackendService.importServiceRequests(
+                    into: modelContext,
+                    currentRequests: serviceRequests
+                )
+                requestMessage = count == 0 ? "No new online requests." : "Imported \(count) online request\(count == 1 ? "" : "s") for qualification."
+            } catch {
+                requestMessage = "Could not import online requests: \(error.localizedDescription)"
+            }
+            isImportingOnlineRequests = false
+        }
+    }
+
+    private func claimOnlineRequestIfNeeded(_ request: ServiceRequest) {
+        guard let backendRequestID = request.backendRequestID,
+              GunnAireBackendService.isConfigured else { return }
+        Task {
+            do {
+                try await GunnAireBackendService.claimServiceRequest(id: backendRequestID)
+            } catch {
+                requestMessage = "Appointment saved locally, but the online request still needs server reconciliation: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func matchingCustomer(for request: ServiceRequest) -> Customer? {
+        let email = AppAccess.normalizedEmail(request.email)
+        let phone = normalizedPhone(request.phone)
+        return customers.first { customer in
+            (!email.isEmpty && AppAccess.normalizedEmail(customer.email) == email) ||
+            (!phone.isEmpty && normalizedPhone(customer.phone) == phone) ||
+            (email.isEmpty && phone.isEmpty && customer.name.caseInsensitiveCompare(request.customerName) == .orderedSame)
+        }
+    }
+
+    private func normalizedPhone(_ value: String?) -> String {
+        value?.filter(\.isNumber) ?? ""
+    }
+
+    private func defaultRequestScheduleDate() -> Date {
+        let day = Calendar.current.startOfDay(for: selectedDate)
+        return Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: day) ?? selectedDate
+    }
+
     private var snapshotSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -505,11 +725,22 @@ struct ScheduleView: View {
                                 .foregroundStyle(.secondary)
                         }
 
+                        if contract.isExpired {
+                            Label("Agreement term expired", systemImage: "calendar.badge.exclamationmark")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        } else if contract.needsRenewalAttention, let termEndsOn = contract.termEndsOn {
+                            Label("Renewal due \(termEndsOn.formatted(date: .abbreviated, time: .omitted))", systemImage: "arrow.clockwise.circle")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+
                         Button("Schedule Maintenance Visit") {
                             scheduleMaintenanceVisit(for: contract)
                         }
                         .buttonStyle(.bordered)
                         .tint(Color.brandGold)
+                        .disabled(!contract.canScheduleVisit)
 
                         if let maintenanceReminderEmailURL = maintenanceReminderEmailURL(for: contract) {
                             Button("Send Reminder") {
@@ -877,13 +1108,28 @@ struct ScheduleView: View {
                         .foregroundColor(Color.brandGold)
                 }
                 Spacer()
-                Text(call.scheduledDate.formatted(date: .omitted, time: .shortened))
+                Text(call.promisedArrivalWindowSummary ?? call.scheduledDate.formatted(date: .omitted, time: .shortened))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
             Text(call.status.rawValue.capitalized)
                 .font(.caption)
                 .foregroundColor(.gray)
+            if call.dispatchUrgency != .normal {
+                Label(call.dispatchUrgency.displayName, systemImage: call.dispatchUrgency == .emergency ? "exclamationmark.triangle.fill" : "flag.fill")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(call.dispatchUrgency == .emergency ? .red : .orange)
+            }
+            if call.technicianJobPresence == .enRoute || call.technicianJobPresence == .onSite {
+                Label(call.technicianJobPresence.displayName, systemImage: call.technicianJobPresence == .enRoute ? "car.fill" : "mappin.and.ellipse")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(call.technicianJobPresence == .enRoute ? .orange : .green)
+            }
+            if let promisedArrivalWindowSummary = call.promisedArrivalWindowSummary {
+                Text("Customer window • \(promisedArrivalWindowSummary)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color.brandGold)
+            }
             if let address = call.siteAddress ?? call.customer.address,
                !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(address)
@@ -896,6 +1142,9 @@ struct ScheduleView: View {
                     Label(technician.name, systemImage: "person.fill")
                 } else {
                     Label("Unassigned", systemImage: "person.slash")
+                }
+                if !call.additionalTechnicianIDs.isEmpty {
+                    Label("+\(call.additionalTechnicianIDs.count) crew", systemImage: "person.2.fill")
                 }
                 if call.googleEventID != nil {
                     Label("Google", systemImage: "calendar.badge.checkmark")
@@ -1005,7 +1254,7 @@ struct ScheduleView: View {
     }
 
     private func deleteCall(_ call: ServiceCall) {
-        let shouldTryGoogleDelete = GoogleCalendarScheduleSync.shouldAllowGoogleCalendarWrite(for: call)
+        let shouldTryGoogleDelete = GoogleCalendarScheduleSync.shouldAttemptManagedCalendarDeletion(for: call)
         if call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             GoogleCalendarScheduleSync.markCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: call.googleEventID)
         }
@@ -1269,11 +1518,11 @@ GunnAire
               !email.isEmpty else { return nil }
         return (
             to: email,
-            subject: "Maintenance Reminder From GunnAire",
+            subject: contract.needsRenewalAttention ? "Maintenance Agreement Renewal From GunnAire" : "Maintenance Reminder From GunnAire",
             body: """
 Hello \(contract.customer.name),
 
-This is a reminder that your \(contract.schedulePattern) maintenance visit is due on \(contract.nextDate.formatted(date: .abbreviated, time: .omitted)).
+\(contract.needsRenewalAttention && contract.termEndsOn != nil ? "Your \(contract.displayName) is due for renewal on \(contract.termEndsOn!.formatted(date: .abbreviated, time: .omitted))." : "This is a reminder that your \(contract.schedulePattern) maintenance visit is due on \(contract.nextDate.formatted(date: .abbreviated, time: .omitted)).")
 
 Reply to this email if you would like us to schedule your visit.
 
@@ -1285,7 +1534,13 @@ GunnAire
 
     private func openFollowUpEmail(for call: ServiceCall, fallbackURL: URL) {
         if googleAuth.isAuthenticated, let draft = followUpEmailDraft(for: call) {
-            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: draft.to,
+                subject: draft.subject,
+                body: draft.body,
+                customerID: call.customer.id,
+                serviceCallID: call.id
+            )
         } else {
             openURL(fallbackURL)
         }
@@ -1293,13 +1548,19 @@ GunnAire
 
     private func openMaintenanceReminderEmail(for contract: RecurringMaintenanceContract, fallbackURL: URL) {
         if googleAuth.isAuthenticated, let draft = maintenanceReminderEmailDraft(for: contract) {
-            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: draft.to,
+                subject: draft.subject,
+                body: draft.body,
+                customerID: contract.customer.id
+            )
         } else {
             openURL(fallbackURL)
         }
     }
 
     private func scheduleMaintenanceVisit(for contract: RecurringMaintenanceContract) {
+        guard contract.canScheduleVisit else { return }
         let serviceAddress = contract.customer.address?.trimmingCharacters(in: .whitespacesAndNewlines)
         let call = ServiceCall(
             googleEventManagedByApp: true,
@@ -1309,9 +1570,25 @@ GunnAire
             duration: 90 * 60,
             customer: contract.customer,
             status: .scheduled,
-            notes: "Scheduled from maintenance agreement: \(contract.schedulePattern)",
+            notes: "Scheduled from \(contract.displayName): \(contract.schedulePattern)",
             followUpRequired: false
         )
+        if let coveredEquipment = equipmentProfiles.first(where: {
+            $0.customer?.id == contract.customer.id && contract.coveredEquipmentIDs.contains($0.id)
+        }) {
+            call.customerEquipmentID = coveredEquipment.id
+            call.equipmentName = coveredEquipment.name
+            call.equipmentManufacturer = coveredEquipment.manufacturer
+            call.equipmentModel = coveredEquipment.modelNumber
+            call.equipmentSerialNumber = coveredEquipment.serialNumber
+            call.equipmentLocation = coveredEquipment.location
+            call.equipmentInstallDate = coveredEquipment.installDate
+            call.equipmentWarrantyExpiration = coveredEquipment.warrantyExpiration
+            call.equipmentType = coveredEquipment.equipmentType
+            call.filterSize = coveredEquipment.filterSize
+            call.equipmentNotes = coveredEquipment.notes
+            coveredEquipment.applyTechnicalBaselines(to: call)
+        }
         modelContext.insert(call)
         contract.advanceNextDate()
         publishToGoogleCalendar(call)
@@ -1344,6 +1621,7 @@ GunnAire
             scheduledDate: scheduledDate,
             duration: sourceCall.duration,
             assignedTechnician: sourceCall.assignedTechnician,
+            additionalTechnicianIDs: sourceCall.additionalTechnicianIDs,
             customer: sourceCall.customer,
             status: .scheduled,
             notes: generatedNotes.isEmpty ? "Scheduled follow-up visit" : "Scheduled follow-up visit\n\n\(generatedNotes)",
@@ -1351,6 +1629,8 @@ GunnAire
             recommendedWorkSummary: sourceCall.recommendedWorkSummary,
             followUpRequired: false
         )
+        followUpCall.inheritEquipmentProfile(from: sourceCall)
+        followUpCall.dispatchUrgency = sourceCall.dispatchUrgency
         modelContext.insert(followUpCall)
         sourceCall.followUpRequired = false
         sourceCall.followUpAction = nil
@@ -1384,6 +1664,7 @@ GunnAire
             scheduledDate: scheduledDate,
             duration: sourceCall.duration,
             assignedTechnician: sourceCall.assignedTechnician,
+            additionalTechnicianIDs: sourceCall.additionalTechnicianIDs,
             customer: sourceCall.customer,
             status: .scheduled,
             notes: generatedNotes.isEmpty ? "Scheduled from approved estimate" : "Scheduled from approved estimate\n\n\(generatedNotes)",
@@ -1391,6 +1672,8 @@ GunnAire
             recommendedWorkSummary: sourceCall.recommendedWorkSummary,
             followUpRequired: false
         )
+        approvedWorkCall.inheritEquipmentProfile(from: sourceCall)
+        approvedWorkCall.dispatchUrgency = sourceCall.dispatchUrgency
         modelContext.insert(approvedWorkCall)
         sourceCall.followUpRequired = false
         sourceCall.followUpAction = nil
@@ -1414,7 +1697,19 @@ GunnAire
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician) {
+        let previousTechnician = call.assignedTechnician?.name
         call.assignedTechnician = technician
+        var additionalCrew = call.additionalTechnicianIDs
+        additionalCrew.remove(technician.id)
+        call.additionalTechnicianIDs = additionalCrew
+        let assignmentDetail = previousTechnician.map { "Reassigned from \($0) to \(technician.name)." } ?? "Assigned to \(technician.name)."
+        ServiceCallActivity.record(
+            for: call,
+            action: previousTechnician == nil ? "Technician assigned" : "Technician reassigned",
+            detail: assignmentDetail,
+            actorEmail: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
+            in: modelContext
+        )
         if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
             call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
         }
@@ -1427,11 +1722,24 @@ GunnAire
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician, reschedulingTo newStart: Date) {
+        let originalStart = call.scheduledDate
+        let previousTechnician = call.assignedTechnician?.name
         call.assignedTechnician = technician
+        var additionalCrew = call.additionalTechnicianIDs
+        additionalCrew.remove(technician.id)
+        call.additionalTechnicianIDs = additionalCrew
         if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
             call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
         }
         call.scheduledDate = newStart
+        let technicianDetail = previousTechnician.map { "Reassigned from \($0) to \(technician.name)." } ?? "Assigned to \(technician.name)."
+        ServiceCallActivity.record(
+            for: call,
+            action: "Assignment and schedule updated",
+            detail: "\(technicianDetail) Moved from \(originalStart.formatted(date: .abbreviated, time: .shortened)) to \(newStart.formatted(date: .abbreviated, time: .shortened)).",
+            actorEmail: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
+            in: modelContext
+        )
         guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else {
             try? modelContext.save()
             return
@@ -1441,22 +1749,93 @@ GunnAire
     }
 
     private func nextAvailableStart(for technician: Technician, proposedStart: Date, duration: TimeInterval) -> Date? {
-        let proposedEnd = proposedStart.addingTimeInterval(duration)
-        let conflicts = serviceCalls
-            .filter { call in
-                guard call.assignedTechnician?.id == technician.id, call.status != .cancelled else { return false }
-                let existingStart = call.scheduledDate
-                let existingEnd = call.scheduledDate.addingTimeInterval(call.duration)
-                return proposedStart < existingEnd && proposedEnd > existingStart
-            }
-            .sorted { $0.scheduledDate < $1.scheduledDate }
-
-        guard !conflicts.isEmpty else { return proposedStart }
-        return conflicts
-            .map { $0.scheduledDate.addingTimeInterval($0.duration) }
-            .max()
+        TechnicianDispatchAvailability.nextAvailableStart(
+            technicianID: technician.id,
+            proposedStart: proposedStart,
+            duration: duration,
+            serviceCalls: serviceCalls,
+            availabilityBlocks: technicianAvailabilityBlocks
+        )
     }
 
+}
+
+private struct NewServiceRequestView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let onSave: (ServiceRequest) -> Void
+    @State private var customerName = ""
+    @State private var phone = ""
+    @State private var email = ""
+    @State private var address = ""
+    @State private var serviceType: ServiceCallType = .service
+    @State private var urgency: ServiceRequestUrgency = .normal
+    @State private var summary = ""
+    @State private var includesPreferredDate = false
+    @State private var preferredDate = Date()
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Customer") {
+                    TextField("Customer name", text: $customerName)
+                    TextField("Phone", text: $phone)
+                        .keyboardType(.phonePad)
+                    TextField("Email", text: $email)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                    TextField("Service address", text: $address, axis: .vertical)
+                        .lineLimit(2...3)
+                }
+
+                Section("Request") {
+                    Picker("Requested work", selection: $serviceType) {
+                        ForEach(ServiceCallType.allCases, id: \.rawValue) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
+                    Picker("Urgency", selection: $urgency) {
+                        ForEach(ServiceRequestUrgency.allCases) { urgency in
+                            Text(urgency.displayName).tag(urgency)
+                        }
+                    }
+                    TextField("What does the customer need?", text: $summary, axis: .vertical)
+                        .lineLimit(3...6)
+                    Toggle("Customer gave a preferred time", isOn: $includesPreferredDate)
+                    if includesPreferredDate {
+                        DatePicker("Preferred time", selection: $preferredDate)
+                    }
+                }
+
+                Text("A request is not an appointment. Dispatch must qualify it and choose Schedule before it becomes a job.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .navigationTitle("New Service Request")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(ServiceRequest(
+                            customerName: customerName.trimmingCharacters(in: .whitespacesAndNewlines),
+                            phone: phone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : phone.trimmingCharacters(in: .whitespacesAndNewlines),
+                            email: email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : email.trimmingCharacters(in: .whitespacesAndNewlines),
+                            address: address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : address.trimmingCharacters(in: .whitespacesAndNewlines),
+                            requestedServiceType: serviceType,
+                            urgency: urgency,
+                            summary: summary.trimmingCharacters(in: .whitespacesAndNewlines),
+                            preferredDate: includesPreferredDate ? preferredDate : nil,
+                            createdByEmail: GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+                        ))
+                        dismiss()
+                    }
+                    .disabled(customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
 }
 
 #Preview {

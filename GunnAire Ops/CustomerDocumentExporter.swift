@@ -129,8 +129,9 @@ enum CustomerDocumentExporter {
             equipmentProfiles: equipmentProfiles,
             serviceCalls: serviceCalls
         )
+        let title = estimate.isProposalOption ? "\(estimate.proposalOptionDisplayName) Estimate" : "Estimate"
         return try renderPDF(
-            title: "Estimate",
+            title: title,
             customer: estimate.customer,
             sections: sections,
             imageAttachments: billingPhotoAttachments(
@@ -152,7 +153,8 @@ enum CustomerDocumentExporter {
         serviceCalls: [ServiceCall] = []
     ) throws -> URL {
         let paid = isInvoicePaid(invoice, payments: payments)
-        let fileName = makeFileName(prefix: paid ? "GunnAire-Paid-Invoice" : "GunnAire-Invoice", customerName: invoice.customer.name)
+        let workPrefix = invoice.workType.displayName.replacingOccurrences(of: " ", with: "-")
+        let fileName = makeFileName(prefix: paid ? "GunnAire-Paid-\(workPrefix)-Invoice" : "GunnAire-\(workPrefix)-Invoice", customerName: invoice.customer.name)
         let sections = invoiceSections(
             invoice: invoice,
             serviceCall: serviceCall,
@@ -162,7 +164,7 @@ enum CustomerDocumentExporter {
             serviceCalls: serviceCalls
         )
         return try renderPDF(
-            title: paid ? "Paid Invoice" : "Invoice",
+            title: paid ? "Paid \(invoice.workType.documentTitle)" : invoice.workType.documentTitle,
             customer: invoice.customer,
             sections: sections,
             imageAttachments: billingPhotoAttachments(
@@ -288,13 +290,17 @@ enum CustomerDocumentExporter {
     static func equipmentHistoryRows(
         serviceCall: ServiceCall,
         equipmentProfiles: [CustomerEquipment],
-        serviceCalls: [ServiceCall]
+        serviceCalls: [ServiceCall],
+        includeCurrentJob: Bool = true
     ) -> [(label: String, value: String)] {
         guard let equipment = matchingEquipmentProfile(
             for: serviceCall,
             equipmentProfiles: equipmentProfiles
         ) else { return [] }
-        let relatedCalls = serviceCalls.filter { $0.customer.id == serviceCall.customer.id }
+        let relatedCalls = serviceCalls.filter {
+            $0.customer.id == serviceCall.customer.id &&
+                (includeCurrentJob || $0.id != serviceCall.id)
+        }
         var rows: [(label: String, value: String)] = [
             ("Equipment Profile", equipment.displayName)
         ]
@@ -309,6 +315,12 @@ enum CustomerDocumentExporter {
         }
         if let trends = equipment.recentTechnicalTrendSummary(in: relatedCalls, now: serviceCall.scheduledDate) {
             rows.append(("Reading Trends", trends))
+        } else if !includeCurrentJob,
+                  let latestReadings = equipment.latestTechnicalReadingsSummary(
+                    in: relatedCalls,
+                    now: serviceCall.scheduledDate
+                  ) {
+            rows.append(("Reading Trends", latestReadings))
         }
         return rows.filter { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
@@ -370,6 +382,9 @@ enum CustomerDocumentExporter {
         if let estimate {
             rows.append(("Estimate ID", shortID(estimate.id)))
             rows.append(("Estimate Status", estimate.status.capitalized))
+            if let approvedAt = estimate.customerApprovedAt {
+                rows.append(("Customer Approval", "\(estimate.customerApprovedByName ?? estimate.customer.name) • \(formattedDateTime(approvedAt))"))
+            }
             if includeFinancials {
                 rows.append(("Estimate Amount", currency(estimate.amount)))
             }
@@ -872,6 +887,18 @@ enum CustomerDocumentExporter {
             ("Notes", estimate.notes ?? ""),
             ("Total", currency(estimate.amount))
         ]
+        if estimate.isProposalOption {
+            rows.insert(
+                ("Proposal Option", estimate.proposalOptionDisplayDetail),
+                at: 2
+            )
+        }
+        if let approvedAt = estimate.customerApprovedAt {
+            rows.insert(
+                ("Customer Approval", "\(estimate.customerApprovedByName ?? estimate.customer.name) • \(formattedDateTime(approvedAt))"),
+                at: 2
+            )
+        }
         if let documentationStatus {
             rows.append(("Documentation Status", documentationStatus.statusLabel))
             rows.append(("Documentation Summary", documentationStatus.summary))
@@ -942,6 +969,7 @@ enum CustomerDocumentExporter {
         let status = Invoice.resolvedStatus(for: invoice, payments: payments)
         var rows = [
             ("Created", formattedDateTime(invoice.createdAt)),
+            ("Work Type", invoice.workType.displayName),
             ("Status", status.capitalized),
             ("QuickBooks ID", invoice.quickBooksID ?? ""),
             ("Items", invoice.lineItemSummary),
@@ -1021,7 +1049,8 @@ enum CustomerDocumentExporter {
         let historyRows = equipmentHistoryRows(
             serviceCall: serviceCall,
             equipmentProfiles: equipmentProfiles,
-            serviceCalls: serviceCalls
+            serviceCalls: serviceCalls,
+            includeCurrentJob: false
         )
         rows.append(contentsOf: historyRows.map { row($0.label, $0.value) })
         return rows
@@ -1048,7 +1077,14 @@ enum CustomerDocumentExporter {
             summaries.append(("Technical Snapshot", technicalRows))
         }
 
-        let serviceActionRows = serviceCall.populatedServiceActionRows
+        let serviceActionRows = serviceCall.populatedServiceActionRows.map { row in
+            // Billing documents present a completed task in completion language,
+            // while customer equipment history retains the inspection terminology.
+            if row.label == "Electrical connections inspected" {
+                return (label: "Electrical connections checked", value: row.value)
+            }
+            return row
+        }
         if !serviceActionRows.isEmpty {
             summaries.append(("Service Actions", serviceActionRows))
         }

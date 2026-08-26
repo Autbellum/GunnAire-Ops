@@ -38,59 +38,15 @@ struct GunnAire_OpsApp: App {
 
     private static func buildStartupState() -> StartupState {
         let schema = GunnAireModelSchema.schema
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        let modelConfiguration = GunnAireCloudKit.modelConfiguration(for: schema)
 
         do {
             return .ready(try ModelContainer(for: schema, configurations: [modelConfiguration]))
         } catch {
-            logger.error("Primary SwiftData store load failed: \(error.localizedDescription, privacy: .public)")
-            resetKnownStoreArtifacts()
-            do {
-                return .ready(try ModelContainer(for: schema, configurations: [modelConfiguration]))
-            } catch {
-                logger.error("Persistent SwiftData retry failed: \(error.localizedDescription, privacy: .public)")
-                do {
-                    logger.notice("Falling back to in-memory SwiftData store for this launch.")
-                    let inMemoryConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
-                    return .ready(try ModelContainer(for: schema, configurations: [inMemoryConfiguration]))
-                } catch {
-                    logger.fault("In-memory SwiftData fallback failed: \(error.localizedDescription, privacy: .public)")
-                    return .failed(
-                        "The app could not start its local data store. Restart the app, then free device storage or reinstall if the problem continues."
-                    )
-                }
-            }
-        }
-    }
-
-    private static func resetKnownStoreArtifacts() {
-        let fileManager = FileManager.default
-        let roots = [
-            fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
-            fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first
-        ]
-        .compactMap { $0 }
-
-        let candidateNames = [
-            "default.store",
-            "default.store-shm",
-            "default.store-wal",
-            "GunnAireOps.store",
-            "GunnAireOps.store-shm",
-            "GunnAireOps.store-wal"
-        ]
-
-        for root in roots {
-            for name in candidateNames {
-                let url = root.appendingPathComponent(name)
-                guard fileManager.fileExists(atPath: url.path) else { continue }
-                do {
-                    try fileManager.removeItem(at: url)
-                    logger.notice("Removed SwiftData store artifact at \(url.path, privacy: .public)")
-                } catch {
-                    logger.error("Failed removing SwiftData store artifact at \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                }
-            }
+            logger.error("Persistent SwiftData store load failed: \(error.localizedDescription, privacy: .public)")
+            return .failed(
+                "The app could not access its local data store. Your existing data was not changed. Restart the app, check available device storage, and contact GunnAire support before reinstalling."
+            )
         }
     }
 

@@ -31,6 +31,12 @@ struct SettingsView: View {
     @State private var quickBooksConnectionMessage: String?
     @State private var resettingQuickBooksConnection = false
     @State private var isSyncingSharedUsers = false
+    @State private var backendAuditEvents: [BackendAuditEventRecord] = []
+    @State private var isLoadingBackendAudit = false
+    @State private var backendAuditMessage: String?
+    @State private var showingFieldFormTemplates = false
+    @State private var showingCustomerPortalLinks = false
+    @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness = .couldNotDetermine
 
     @AppStorage("companyName") private var companyName = "GunnAire"
     @AppStorage("dispatchStartHour") private var dispatchStartHour = 8
@@ -58,6 +64,7 @@ struct SettingsView: View {
     @AppStorage("enableOfflineMode") private var enableOfflineMode = false
     @AppStorage("enableReportingDashboard") private var enableReportingDashboard = true
     @AppStorage("enableMarketingCampaigns") private var enableMarketingCampaigns = false
+    @AppStorage("customerReviewURL") private var customerReviewURL = ""
     @AppStorage("enableCustomerPortal") private var enableCustomerPortal = false
 
     private var currentUserEmail: String? {
@@ -116,6 +123,7 @@ struct SettingsView: View {
                             readinessRow(title: "Users and roles", isComplete: !users.isEmpty)
                             readinessRow(title: "QuickBooks connected", isComplete: isQuickBooksAuthenticated)
                             readinessRow(title: "Google admin account connected", isComplete: isGoogleAuthenticated)
+                            readinessRow(title: "CloudKit on this device", isComplete: cloudKitReadiness.isReady)
                             readinessRow(title: "Pricebook enabled", isComplete: enablePricebook)
                             readinessRow(title: "Technician workflow configured", isComplete: requireTechnicianClockIn && requireJobCompletionChecklist)
                             readinessRow(title: "Payments configured", isComplete: !enableOnsitePayments || isQuickBooksAuthenticated)
@@ -227,15 +235,18 @@ struct SettingsView: View {
 
                     case .workflow:
                         Section("Field Service Modules") {
-                            settingsToggle("Dispatch Board", systemImage: "rectangle.3.group", isOn: $enableDispatchBoard)
-                            settingsToggle("Route Planning", systemImage: "map", isOn: $enableRoutePlanning)
-                            settingsToggle("Recurring Maintenance", systemImage: "repeat", isOn: $enableRecurringMaintenance)
-                            settingsToggle("Customer Equipment Tracking", systemImage: "wrench.and.screwdriver", isOn: $enableEquipmentTracking)
-                            settingsToggle("Inventory & Parts Tracking", systemImage: "shippingbox", isOn: $enableInventoryTracking)
-                            settingsToggle("Pricebook", systemImage: "list.bullet.rectangle", isOn: $enablePricebook)
-                            settingsToggle("Good-Better-Best Estimates", systemImage: "square.stack.3d.up", isOn: $enableGoodBetterBestEstimates)
+                            featureStatus("Dispatch Board", systemImage: "rectangle.3.group", detail: "Included in Schedule")
+                            featureStatus("Route Planning", systemImage: "map", detail: "Calendar routing is included")
+                            featureStatus("Recurring Maintenance", systemImage: "repeat", detail: "Included in Schedule")
+                            featureStatus("Customer Equipment Tracking", systemImage: "wrench.and.screwdriver", detail: "Included in Customer records")
+                            featureStatus("Inventory & Parts Tracking", systemImage: "shippingbox", detail: "Included in Receipts & Bills")
+                            featureStatus("Pricebook", systemImage: "list.bullet.rectangle", detail: "Included in estimates and invoices")
+                            featureStatus("Good-Better-Best Estimates", systemImage: "square.stack.3d.up", detail: "Included in estimates")
+                            Button("Manage Field Form Templates") {
+                                showingFieldFormTemplates = true
+                            }
                             settingsToggle("Photo & Document Capture", systemImage: "camera", isOn: $enablePhotoDocumentation)
-                            settingsToggle("Reporting Dashboard", systemImage: "chart.bar", isOn: $enableReportingDashboard)
+                            featureStatus("Reporting Dashboard", systemImage: "chart.bar", detail: "Included in Command Center")
                         }
 
                         Section("Technician Workflow") {
@@ -256,15 +267,25 @@ struct SettingsView: View {
                             }
                             settingsToggle("Require Completion Checklist", systemImage: "checklist", isOn: $requireJobCompletionChecklist)
                             settingsToggle("Require Customer Signature", systemImage: "signature", isOn: $requireCustomerSignature)
-                            settingsToggle("Customer Appointment Notifications", systemImage: "bell", isOn: $enableCustomerNotifications)
-                            settingsToggle("Offline Field Mode", systemImage: "wifi.slash", isOn: $enableOfflineMode)
+                            featureStatus("Customer Appointment Notifications", systemImage: "bell", detail: "Requires a connected messaging provider")
+                            featureStatus("Offline Field Mode", systemImage: "wifi.slash", detail: OperationalDataContinuity.offlineRecoveryDetail)
+                            featureStatus("Cross-Device Operations", systemImage: cloudKitReadiness.isReady ? "externaldrive.badge.checkmark" : "externaldrive.badge.exclamationmark", detail: "CloudKit: \(cloudKitReadiness.statusTitle). \(cloudKitReadiness.userFacingDetail) \(OperationalDataContinuity.currentStatusDetail)")
                         }
 
                         Section("Sales & Payments") {
                             settingsToggle("On-Site Payment Processing", systemImage: "creditcard", isOn: $enableOnsitePayments)
-                            settingsToggle("Customer Financing", systemImage: "dollarsign.circle", isOn: $enableFinancing)
+                            featureStatus("Customer Financing", systemImage: "dollarsign.circle", detail: "Requires an approved financing provider")
                             settingsToggle("Marketing Campaigns", systemImage: "megaphone", isOn: $enableMarketingCampaigns)
-                            settingsToggle("Customer Portal", systemImage: "person.text.rectangle", isOn: $enableCustomerPortal)
+                            if enableMarketingCampaigns {
+                                TextField("Review request URL", text: $customerReviewURL)
+                                    .keyboardType(.URL)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                Text("Use an HTTPS link to the business's approved review destination. Review drafts appear only for completed jobs when this URL and the customer's marketing consent are both present.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            featureStatus("Customer Portal", systemImage: "person.text.rectangle", detail: "Requires a deployed customer portal")
 
                             if enableOnsitePayments {
                                 if OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild {
@@ -281,7 +302,7 @@ struct SettingsView: View {
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 } else {
-                                    Text("Card and check payments can still be recorded from the app. Tap to Pay stays hidden until the Intuit iOS bridge is added to this build.")
+                                    Text("Card and check payments can be recorded in GunnAire Ops. For contactless payment, hand off to a field iPhone and use QuickBooks Mobile or GoPayment; Intuit provides Tap to Pay in those apps rather than an embedded custom-app flow.")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }
@@ -345,7 +366,7 @@ struct SettingsView: View {
                         Section("Active Users") {
                             ForEach(users) { user in
                                 HStack {
-                                    Image(systemName: user.role == .admin ? "person.crop.circle.badge.checkmark" : (user.role == .fieldTechnician ? "wrench.and.screwdriver" : "person.crop.circle"))
+                                    Image(systemName: roleIcon(for: user.role))
                                         .foregroundColor(user.role == .admin ? Color.brandGold : .secondary)
                                     VStack(alignment: .leading) {
                                         Text(user.email)
@@ -405,6 +426,14 @@ struct SettingsView: View {
             .sheet(isPresented: $showingSplashVideoPreview) {
                 SplashVideoPreviewSheet()
             }
+            .sheet(isPresented: $showingFieldFormTemplates) {
+                FieldFormTemplateManagerView()
+                    .tint(Color.brandGold)
+            }
+            .sheet(isPresented: $showingCustomerPortalLinks) {
+                CustomerPortalLinkManagerView()
+                    .tint(Color.brandGold)
+            }
             .fullScreenCover(isPresented: $showingSplashLaunchSimulation) {
                 SplashLaunchSimulationSheet()
             }
@@ -412,7 +441,18 @@ struct SettingsView: View {
                 refreshSplashVideoState(loadDetails: true)
                 syncUserTechnicians()
                 await refreshSharedUsers(showSuccess: false)
+                await refreshCloudKitReadiness()
             }
+        }
+    }
+
+    private func roleIcon(for role: AppUserRole) -> String {
+        switch role {
+        case .admin: "person.crop.circle.badge.checkmark"
+        case .fieldTechnician: "wrench.and.screwdriver"
+        case .dispatcher: "calendar.badge.clock"
+        case .accounting: "chart.line.uptrend.xyaxis"
+        case .standard: "person.crop.circle"
         }
     }
 
@@ -421,6 +461,21 @@ struct SettingsView: View {
         Toggle(isOn: isOn) {
             Label(title, systemImage: systemImage)
         }
+    }
+
+    private func featureStatus(_ title: String, systemImage: String, detail: String) -> some View {
+        LabeledContent {
+            Text(detail)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.trailing)
+        } label: {
+            Label(title, systemImage: systemImage)
+        }
+    }
+
+    private func refreshCloudKitReadiness() async {
+        cloudKitReadiness = await GunnAireCloudKit.accountReadiness()
     }
 
     @ViewBuilder
@@ -515,6 +570,58 @@ struct SettingsView: View {
                 }
             }
         }
+
+        if isAdminUser {
+            Section("Customer Portal") {
+                Button {
+                    showingCustomerPortalLinks = true
+                } label: {
+                    Label("Manage Customer Portal Links", systemImage: "person.badge.key")
+                }
+                .disabled(!GunnAireBackendService.isConfigured)
+
+                Text(GunnAireBackendService.isConfigured
+                     ? "Review active, expired, and revoked link metadata. Capability URLs are never shown again after creation."
+                     : "Configure the shared backend before managing customer portal links.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section("Shared Server Activity") {
+                Button {
+                    refreshBackendAuditEvents()
+                } label: {
+                    Label(isLoadingBackendAudit ? "Loading Activity..." : "Refresh Activity", systemImage: "clock.arrow.circlepath")
+                }
+                .disabled(isLoadingBackendAudit || !GunnAireBackendService.isConfigured)
+
+                if !GunnAireBackendService.isConfigured {
+                    Text("Configure the shared backend to review role, document, payment, communication, and QuickBooks authorization activity.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else if backendAuditEvents.isEmpty {
+                    Text("Refresh to review recent server activity. Sensitive values such as OAuth tokens and card details are never included.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(backendAuditEvents.prefix(8)) { event in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(event.summary)
+                                .font(.subheadline.weight(.medium))
+                            Text("\(event.actorEmail) • \(event.occurredAt)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                if let backendAuditMessage {
+                    Text(backendAuditMessage)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -570,6 +677,27 @@ struct SettingsView: View {
 
     private func syncUserTechnicians() {
         AppAccess.ensureTechnicianRecords(for: users, technicians: technicians, modelContext: modelContext)
+    }
+
+    private func refreshBackendAuditEvents() {
+        guard GunnAireBackendService.isConfigured else { return }
+        isLoadingBackendAudit = true
+        backendAuditMessage = nil
+        Task {
+            do {
+                let events = try await GunnAireBackendService.fetchAuditEvents()
+                await MainActor.run {
+                    backendAuditEvents = events
+                    backendAuditMessage = events.isEmpty ? "No recorded shared-server activity yet." : "Showing the latest \(min(events.count, 8)) of \(events.count) events."
+                    isLoadingBackendAudit = false
+                }
+            } catch {
+                await MainActor.run {
+                    backendAuditMessage = "Unable to load shared-server activity: \(error.localizedDescription)"
+                    isLoadingBackendAudit = false
+                }
+            }
+        }
     }
 
     @MainActor

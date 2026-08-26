@@ -18,7 +18,6 @@ final class QuickBooksAuthAPI: ObservableObject {
     
     // OAuth client credentials and redirect URI referenced from Config.swift
     private let clientID = Config.QuickBooks.clientID
-    private let clientSecret = Config.QuickBooks.clientSecret
     private let redirectURI = Config.QuickBooks.redirectURI
     private let callbackScheme = Config.QuickBooks.callbackScheme
     private let environment = Config.QuickBooks.environment
@@ -27,7 +26,6 @@ final class QuickBooksAuthAPI: ObservableObject {
     
     @Published private(set) var isAuthenticated: Bool = false
     @Published private var accessToken: String?
-    @Published private var refreshToken: String?
     @Published private var realmID: String?
     @Published private var tokenExpiry: Date?
 
@@ -39,13 +37,11 @@ final class QuickBooksAuthAPI: ObservableObject {
         QuickBooksDataAPI.shared.loadTokens()
         if let stored = QuickBooksDataAPI.shared.tokens {
             accessToken = stored.accessToken
-            refreshToken = stored.refreshToken
             tokenExpiry = stored.expiration
             realmID = QuickBooksDataAPI.shared.realmID
             isAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
         } else {
             accessToken = nil
-            refreshToken = nil
             tokenExpiry = nil
             realmID = nil
             isAuthenticated = false
@@ -108,7 +104,6 @@ final class QuickBooksAuthAPI: ObservableObject {
     func signOut() {
         isAuthenticated = false
         accessToken = nil
-        refreshToken = nil
         realmID = nil
         tokenExpiry = nil
         pendingOAuthState = nil
@@ -180,7 +175,6 @@ final class QuickBooksAuthAPI: ObservableObject {
                 switch result {
                 case .success(let tokens):
                     self.accessToken = tokens.accessToken
-                    self.refreshToken = tokens.refreshToken
                     self.tokenExpiry = tokens.expiration
                     self.isAuthenticated = true
                     QuickBooksDataAPI.shared.storeTokens(tokens, realmID: realmID)
@@ -194,68 +188,14 @@ final class QuickBooksAuthAPI: ObservableObject {
     }
 
     private func exchangeAuthorizationCode(code: String, realmID: String, completion: @escaping (Result<QuickBooksOAuthTokens, Error>) -> Void) {
-        guard let url = URL(string: Config.QuickBooks.tokenEndpoint) else {
-            completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.invalidEndpoint))
-            return
+        Task {
+            do {
+                let tokens = try await GunnAireBackendService.exchangeQuickBooksAuthorizationCode(code, realmID: realmID)
+                completion(.success(tokens))
+            } catch {
+                completion(.failure(error))
+            }
         }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = Config.QuickBooks.requestTimeoutSeconds
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        let credentials = "\(clientID):\(clientSecret)"
-        guard let credData = credentials.data(using: .utf8) else {
-            completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.unknown))
-            return
-        }
-        request.setValue("Basic \(credData.base64EncodedString())", forHTTPHeaderField: "Authorization")
-
-        var bodyComponents = URLComponents()
-        bodyComponents.queryItems = [
-            URLQueryItem(name: "grant_type", value: "authorization_code"),
-            URLQueryItem(name: "code", value: code),
-            URLQueryItem(name: "redirect_uri", value: redirectURI)
-        ]
-        request.httpBody = bodyComponents.percentEncodedQuery?.data(using: .utf8)
-
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error {
-                completion(Result<QuickBooksOAuthTokens, Error>.failure(error))
-                return
-            }
-
-            guard let http = response as? HTTPURLResponse, let data else {
-                completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.unknown))
-                return
-            }
-
-            guard (200...299).contains(http.statusCode) else {
-                let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.tokenExchangeFailed(http.statusCode, raw)))
-                return
-            }
-
-            guard
-                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                let access = json["access_token"] as? String,
-                let refresh = json["refresh_token"] as? String,
-                let expiresIn = json["expires_in"] as? Double
-            else {
-                let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                completion(Result<QuickBooksOAuthTokens, Error>.failure(QBOError.tokenExchangeFailed(http.statusCode, raw)))
-                return
-            }
-
-            _ = realmID
-            let tokens = QuickBooksOAuthTokens(
-                accessToken: access,
-                refreshToken: refresh,
-                expiration: Date().addingTimeInterval(expiresIn)
-            )
-            completion(Result<QuickBooksOAuthTokens, Error>.success(tokens))
-        }.resume()
     }
     
     // MARK: - API Requests (scaffold)

@@ -6,6 +6,7 @@ struct OperationsDashboardView: View {
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \ServiceCall.scheduledDate, order: .forward) private var serviceCalls: [ServiceCall]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
+    @Query(sort: \TechnicianAvailabilityBlock.startsAt, order: .forward) private var technicianAvailabilityBlocks: [TechnicianAvailabilityBlock]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -21,6 +22,8 @@ struct OperationsDashboardView: View {
     @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
     @State private var dispatchMessage: String?
     @State private var showingCommandPalette = false
+    @State private var isBusinessOverviewExpanded = false
+    @State private var isOperationalStatusExpanded = false
 
     private let calendar = Calendar.current
 
@@ -67,7 +70,12 @@ struct OperationsDashboardView: View {
     private var unassignedUpcomingCalls: [ServiceCall] {
         upcomingCalls
             .filter { $0.assignedTechnician == nil }
-            .sorted { $0.scheduledDate < $1.scheduledDate }
+            .sorted {
+                if $0.dispatchUrgency.dispatchSortRank != $1.dispatchUrgency.dispatchSortRank {
+                    return $0.dispatchUrgency.dispatchSortRank < $1.dispatchUrgency.dispatchSortRank
+                }
+                return $0.scheduledDate < $1.scheduledDate
+            }
     }
 
     private var readyToBillCalls: [ServiceCall] {
@@ -188,7 +196,7 @@ struct OperationsDashboardView: View {
 
     private var clearTechnicianCountToday: Int {
         technicians.filter { technician in
-            todayCalls.allSatisfy { $0.assignedTechnician?.id != technician.id }
+            todayCalls.allSatisfy { !$0.includesAssignedTechnician(technician.id) }
         }
         .count
     }
@@ -260,17 +268,35 @@ struct OperationsDashboardView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         headerSection
                         metricsGrid
-                        if canViewFinancials {
-                            suiteSynchronizationSection
-                        }
                         priorityQueueSection
-                        if canViewFinancials {
-                            accountIntelligenceSection
-                            workflowSection
-                        }
                         dispatchIntelligenceSection
-                        fieldTeamSection
-                        systemsSection
+                        if canViewFinancials {
+                            DisclosureGroup(isExpanded: $isBusinessOverviewExpanded) {
+                                VStack(alignment: .leading, spacing: 18) {
+                                    suiteSynchronizationSection
+                                    accountIntelligenceSection
+                                    workflowSection
+                                }
+                                .padding(.top, 12)
+                            } label: {
+                                Label("Business overview", systemImage: "chart.bar.xaxis")
+                                    .font(.headline)
+                            }
+                            .padding(14)
+                            .background(Color(.secondarySystemBackground).opacity(0.64), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+                        DisclosureGroup(isExpanded: $isOperationalStatusExpanded) {
+                            VStack(alignment: .leading, spacing: 18) {
+                                fieldTeamSection
+                                systemsSection
+                            }
+                            .padding(.top, 12)
+                        } label: {
+                            Label("Field and system status", systemImage: "checklist.checked")
+                                .font(.headline)
+                        }
+                        .padding(14)
+                        .background(Color(.secondarySystemBackground).opacity(0.64), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
                     .padding(.horizontal)
                     .padding(.vertical, 14)
@@ -421,7 +447,7 @@ struct OperationsDashboardView: View {
             }
 
             if suiteSnapshot.actions.isEmpty {
-                emptyState("All workstreams are synchronized.")
+                emptyState("Connected workstreams show no sync exceptions.")
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Next Best Actions")
@@ -448,7 +474,7 @@ struct OperationsDashboardView: View {
                     priorityRow(
                         title: "Assign upcoming work",
                         subtitle: "\(call.customer.name) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))",
-                        value: call.type.displayName,
+                        value: call.dispatchUrgency == .normal ? call.type.displayName : call.dispatchUrgency.displayName,
                         systemImage: "person.crop.circle.badge.plus",
                         tint: .blue,
                         actionTitle: "Open Schedule"
@@ -1307,8 +1333,8 @@ struct OperationsDashboardView: View {
     private var technicianLoads: [TechnicianLoad] {
         technicians
             .map { technician in
-                let todaysJobs = todayCalls.filter { $0.assignedTechnician?.id == technician.id }
-                let weekJobs = upcomingCalls.filter { $0.assignedTechnician?.id == technician.id }
+                let todaysJobs = todayCalls.filter { $0.includesAssignedTechnician(technician.id) }
+                let weekJobs = upcomingCalls.filter { $0.includesAssignedTechnician(technician.id) }
                 let nextJob = weekJobs.first
                 let isClockedIn = openTimeEntries.contains { entry in
                     AppAccess.normalizedEmail(entry.userEmail) == AppAccess.normalizedEmail(technician.contactInfo)
@@ -1448,15 +1474,22 @@ struct OperationsDashboardView: View {
 
     private func assignmentTitle(for call: ServiceCall, technician: Technician) -> String {
         let technicianLabel = AppAccess.scheduleLabel(for: technician)
+        let qualification = technician.qualification(for: call.equipmentType)
+        let qualificationSuffix = qualification == .qualified || qualification == .notRequired
+            ? ""
+            : " • \(qualification == .reviewRequired ? "review equipment" : "qualification unverified")"
+        let areaMatch = technician.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
+        let areaSuffix = areaMatch == .covered ? "" : " • \(areaMatch.dispatchDetail.lowercased())"
         guard let nextStart = nextAvailableStart(for: technician, proposedStart: call.scheduledDate, duration: call.duration),
               nextStart > call.scheduledDate else {
-            return technicianLabel
+            return technicianLabel + qualificationSuffix + areaSuffix
         }
-        return "\(technicianLabel) • move to \(nextStart.formatted(date: .omitted, time: .shortened))"
+        return "\(technicianLabel) • move to \(nextStart.formatted(date: .omitted, time: .shortened))\(qualificationSuffix)\(areaSuffix)"
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician) {
         let originalStart = call.scheduledDate
+        let previousTechnician = call.assignedTechnician?.name
         let nextStart = nextAvailableStart(for: technician, proposedStart: call.scheduledDate, duration: call.duration)
         call.assignedTechnician = technician
         if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
@@ -1469,6 +1502,17 @@ struct OperationsDashboardView: View {
         } else {
             dispatchMessage = "\(call.customer.name) assigned to \(technician.name)."
         }
+        let assignment = previousTechnician.map { "Reassigned from \($0) to \(technician.name)." } ?? "Assigned to \(technician.name)."
+        let moved = call.scheduledDate != originalStart
+            ? " Moved from \(originalStart.formatted(date: .abbreviated, time: .shortened)) to \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))."
+            : ""
+        ServiceCallActivity.record(
+            for: call,
+            action: moved.isEmpty ? "Technician assigned" : "Assignment and schedule updated",
+            detail: assignment + moved,
+            actorEmail: currentUserEmail,
+            in: modelContext
+        )
 
         guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else {
             try? modelContext.save()
@@ -1503,14 +1547,24 @@ struct OperationsDashboardView: View {
     private func bestTechnician(for call: ServiceCall) -> Technician? {
         assignableTechnicians
             .sorted { lhs, rhs in
+                let lhsQualification = lhs.qualification(for: call.equipmentType)
+                let rhsQualification = rhs.qualification(for: call.equipmentType)
+                if lhsQualification.dispatchRank != rhsQualification.dispatchRank {
+                    return lhsQualification.dispatchRank < rhsQualification.dispatchRank
+                }
+                let lhsArea = lhs.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
+                let rhsArea = rhs.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
+                if lhsArea != rhsArea {
+                    return lhsArea < rhsArea
+                }
                 let lhsStart = nextAvailableStart(for: lhs, proposedStart: call.scheduledDate, duration: call.duration) ?? call.scheduledDate
                 let rhsStart = nextAvailableStart(for: rhs, proposedStart: call.scheduledDate, duration: call.duration) ?? call.scheduledDate
                 if lhsStart != rhsStart {
                     return lhsStart < rhsStart
                 }
 
-                let lhsWeekLoad = upcomingCalls.filter { $0.assignedTechnician?.id == lhs.id }.count
-                let rhsWeekLoad = upcomingCalls.filter { $0.assignedTechnician?.id == rhs.id }.count
+                let lhsWeekLoad = upcomingCalls.filter { $0.includesAssignedTechnician(lhs.id) }.count
+                let rhsWeekLoad = upcomingCalls.filter { $0.includesAssignedTechnician(rhs.id) }.count
                 if lhsWeekLoad != rhsWeekLoad {
                     return lhsWeekLoad < rhsWeekLoad
                 }
@@ -1521,29 +1575,13 @@ struct OperationsDashboardView: View {
     }
 
     private func nextAvailableStart(for technician: Technician, proposedStart: Date, duration: TimeInterval) -> Date? {
-        let scheduledCalls = serviceCalls
-            .filter { call in
-                guard call.assignedTechnician?.id == technician.id, call.status != .cancelled else { return false }
-                return call.status != .completed
-            }
-            .sorted { $0.scheduledDate < $1.scheduledDate }
-
-        var candidateStart = proposedStart
-        var moved = true
-        while moved {
-            moved = false
-            let candidateEnd = candidateStart.addingTimeInterval(duration)
-            if let conflict = scheduledCalls.first(where: { existingCall in
-                let existingStart = existingCall.scheduledDate
-                let existingEnd = existingCall.scheduledDate.addingTimeInterval(existingCall.duration)
-                return candidateStart < existingEnd && candidateEnd > existingStart
-            }) {
-                candidateStart = conflict.scheduledDate.addingTimeInterval(conflict.duration)
-                moved = true
-            }
-        }
-
-        return candidateStart
+        TechnicianDispatchAvailability.nextAvailableStart(
+            technicianID: technician.id,
+            proposedStart: proposedStart,
+            duration: duration,
+            serviceCalls: serviceCalls,
+            availabilityBlocks: technicianAvailabilityBlocks
+        )
     }
 
     private func followUpSubtitle(for call: ServiceCall) -> String {

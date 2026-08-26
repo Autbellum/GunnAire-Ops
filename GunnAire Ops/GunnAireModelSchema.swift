@@ -7,6 +7,7 @@ enum GunnAireModelSchema {
             ServiceCall.self,
             Customer.self,
             Technician.self,
+            TechnicianAvailabilityBlock.self,
             RecurringMaintenanceContract.self,
             Invoice.self,
             Estimate.self,
@@ -16,6 +17,13 @@ enum GunnAireModelSchema {
             AppUser.self,
             ServiceDocumentAttachment.self,
             CustomerEquipment.self,
+            CustomerCommunication.self,
+            PurchaseOrder.self,
+            InventoryMovement.self,
+            ServiceRequest.self,
+            ServiceCallActivity.self,
+            FieldFormTemplate.self,
+            FieldFormResponse.self,
         ])
     }
 }

@@ -290,8 +290,8 @@ struct QuickBooksManagementView: View {
                         if !quickBooksConfigReady {
                             Text(
                                 isAuthenticated
-                                ? "QuickBooks is connected with a saved session. Reconnecting or refreshing this connection on this Mac still requires `QB_CLIENT_ID` and `QB_CLIENT_SECRET` in `Config/Local.xcconfig`."
-                                : "QuickBooks credentials are not configured on this Mac. Update `QB_CLIENT_ID` and `QB_CLIENT_SECRET` in `Config/Local.xcconfig` before connecting."
+                                ? "QuickBooks is connected with a saved session. Reconnecting or refreshing requires the configured backend OAuth bridge and `QB_CLIENT_ID` in this app."
+                                : "QuickBooks is not ready. Configure `QB_CLIENT_ID`, the HTTPS redirect URI, and the backend OAuth bridge before connecting."
                             )
                             .font(.caption)
                             .foregroundColor(.secondary)

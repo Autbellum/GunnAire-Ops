@@ -6,9 +6,10 @@ struct WatermarkBackground: View {
         Image("AppLogo")
             .resizable()
             .scaledToFit()
-            .opacity(0.08)
-            .blur(radius: 1)
+            .frame(maxWidth: 520)
+            .opacity(0.025)
             .allowsHitTesting(false)
+            .accessibilityHidden(true)
             .ignoresSafeArea()
     }
 }

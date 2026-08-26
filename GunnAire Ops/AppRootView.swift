@@ -23,10 +23,24 @@ struct AppRootView: View {
             }
         }
         .onAppear {
+            applyUITestAuthenticationIfRequested()
             if !enableSplashVideo || SplashVideoLocator.resolveURL() == nil {
                 showingSplash = false
             }
         }
+    }
+
+    /// UI tests need to reach the authenticated iPad workspace without
+    /// obtaining a real Google credential. This path exists only in Debug
+    /// builds and is deliberately keyed to an explicit process argument.
+    private func applyUITestAuthenticationIfRequested() {
+        #if DEBUG
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestAuthenticatedAdmin") else {
+            return
+        }
+        UserDefaults.standard.set(AppAccess.primaryAdminEmail, forKey: "SignedInGoogleEmail")
+        hasAuthenticatedUser = true
+        #endif
     }
 }
 

@@ -126,6 +126,58 @@ enum GunnAireAppIntentRouter {
         return route
     }
 
+    /// Removes context queued for a route that the current account cannot open.
+    /// This is intentionally separate from route consumption: a shared iPad must
+    /// never retain a customer, job, invoice, or email draft for a later user.
+    nonisolated static func discardPendingPayload(for route: GunnAireAppRoute) {
+        switch route {
+        case .customers:
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingCustomerID")
+        case .schedule:
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingScheduleServiceCallID")
+        case .documentation, .invoices:
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingServiceCallID")
+        case .payments:
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingInvoiceID")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingOpenPaymentCollection")
+        case .mail:
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailTo")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailSubject")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailBody")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailAttachmentPaths")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailCustomerID")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailServiceCallID")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailInvoiceID")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailEstimateID")
+        case .commandCenter, .timeClock, .estimates, .invoicesEstimates, .receiptsBills, .sync, .quickBooks:
+            break
+        }
+    }
+
+    /// A sign-out on a shared iPad or Mac must not leave customer, billing, or
+    /// message context for the next person who authenticates.
+    nonisolated static func discardAllPendingPayloads() {
+        let keys = [
+            "GunnAirePendingAppRoute",
+            "GunnAirePendingCustomerID",
+            "GunnAirePendingScheduleServiceCallID",
+            "GunnAirePendingServiceCallID",
+            "GunnAirePendingInvoiceID",
+            "GunnAirePendingOpenPaymentCollection",
+            "GunnAirePendingMailTo",
+            "GunnAirePendingMailSubject",
+            "GunnAirePendingMailBody",
+            "GunnAirePendingMailAttachmentPaths",
+            "GunnAirePendingMailCustomerID",
+            "GunnAirePendingMailServiceCallID",
+            "GunnAirePendingMailInvoiceID",
+            "GunnAirePendingMailEstimateID"
+        ]
+        for key in keys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
     nonisolated static func storeCustomerRoute(_ id: UUID) {
         UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingCustomerID")
         store(.customers)
@@ -190,26 +242,47 @@ enum GunnAireAppIntentRouter {
         return id
     }
 
-    nonisolated static func storeMailDraftRoute(to: String, subject: String, body: String, attachmentPaths: [String] = []) {
+    nonisolated static func storeMailDraftRoute(
+        to: String,
+        subject: String,
+        body: String,
+        attachmentPaths: [String] = [],
+        customerID: UUID? = nil,
+        serviceCallID: UUID? = nil,
+        invoiceID: UUID? = nil,
+        estimateID: UUID? = nil
+    ) {
         UserDefaults.standard.set(to, forKey: "GunnAirePendingMailTo")
         UserDefaults.standard.set(subject, forKey: "GunnAirePendingMailSubject")
         UserDefaults.standard.set(body, forKey: "GunnAirePendingMailBody")
         UserDefaults.standard.set(attachmentPaths, forKey: "GunnAirePendingMailAttachmentPaths")
+        UserDefaults.standard.set(customerID?.uuidString, forKey: "GunnAirePendingMailCustomerID")
+        UserDefaults.standard.set(serviceCallID?.uuidString, forKey: "GunnAirePendingMailServiceCallID")
+        UserDefaults.standard.set(invoiceID?.uuidString, forKey: "GunnAirePendingMailInvoiceID")
+        UserDefaults.standard.set(estimateID?.uuidString, forKey: "GunnAirePendingMailEstimateID")
         store(.mail)
     }
 
-    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String, attachmentPaths: [String])? {
+    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String, attachmentPaths: [String], customerID: UUID?, serviceCallID: UUID?, invoiceID: UUID?, estimateID: UUID?)? {
         guard let to = UserDefaults.standard.string(forKey: "GunnAirePendingMailTo"),
               let subject = UserDefaults.standard.string(forKey: "GunnAirePendingMailSubject"),
               let body = UserDefaults.standard.string(forKey: "GunnAirePendingMailBody") else {
             return nil
         }
         let attachmentPaths = UserDefaults.standard.stringArray(forKey: "GunnAirePendingMailAttachmentPaths") ?? []
+        let customerID = UserDefaults.standard.string(forKey: "GunnAirePendingMailCustomerID").flatMap(UUID.init(uuidString:))
+        let serviceCallID = UserDefaults.standard.string(forKey: "GunnAirePendingMailServiceCallID").flatMap(UUID.init(uuidString:))
+        let invoiceID = UserDefaults.standard.string(forKey: "GunnAirePendingMailInvoiceID").flatMap(UUID.init(uuidString:))
+        let estimateID = UserDefaults.standard.string(forKey: "GunnAirePendingMailEstimateID").flatMap(UUID.init(uuidString:))
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailTo")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailSubject")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailBody")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailAttachmentPaths")
-        return (to, subject, body, attachmentPaths)
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailCustomerID")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailServiceCallID")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailInvoiceID")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailEstimateID")
+        return (to, subject, body, attachmentPaths, customerID, serviceCallID, invoiceID, estimateID)
     }
 }
 
@@ -218,7 +291,7 @@ private enum GunnAireIntentStore {
 
     static let container: ModelContainer? = try? ModelContainer(
         for: schema,
-        configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)]
+        configurations: [GunnAireCloudKit.modelConfiguration(for: schema)]
     )
 
     @MainActor

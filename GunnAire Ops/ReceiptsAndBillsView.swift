@@ -6,6 +6,7 @@ import os
 
 struct ReceiptsAndBillsView: View {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "GunnAireOps", category: "ReceiptsAndBills")
+    @Environment(\.modelContext) private var modelContext
 
     private struct LegacyPendingUploadRecord: Codable {
         let id: UUID
@@ -38,6 +39,10 @@ struct ReceiptsAndBillsView: View {
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
+    @Query(sort: \Item.name, order: .forward) private var catalogItems: [Item]
+    @Query(sort: \PurchaseOrder.updatedAt, order: .reverse) private var purchaseOrders: [PurchaseOrder]
+    @Query(sort: \InventoryMovement.createdAt, order: .reverse) private var inventoryMovements: [InventoryMovement]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     @State private var showingReceiptPicker = false
@@ -68,6 +73,22 @@ struct ReceiptsAndBillsView: View {
     @State private var queueSort: QueueSort = .nextRetry
     @State private var isUploadingReceiptToBackend = false
     @State private var backendUploadMessage: String?
+    @State private var newPurchaseOrderVendorID: UUID?
+    @State private var newPurchaseOrderServiceCallID: UUID?
+    @State private var newPurchaseOrderItemID: UUID?
+    @State private var newPurchaseOrderQuantity = "1"
+    @State private var newPurchaseOrderUnitCost = ""
+    @State private var newPurchaseOrderShippingCost = ""
+    @State private var newPurchaseOrderNotes = ""
+    @State private var purchaseOrderMessage: String?
+    @State private var selectedInventoryItemID: UUID?
+    @State private var inventoryMovementType: InventoryMovementType = .receive
+    @State private var inventoryQuantity = "1"
+    @State private var inventorySourceLocation = "Warehouse"
+    @State private var inventoryDestinationLocation = "Warehouse"
+    @State private var inventoryServiceCallID: UUID?
+    @State private var inventoryNotes = ""
+    @State private var inventoryMessage: String?
 
     private enum QueueFilter: String, CaseIterable, Identifiable {
         case all = "All"
@@ -152,6 +173,29 @@ struct ReceiptsAndBillsView: View {
         )
     }
 
+    private var activePurchaseOrders: [PurchaseOrder] {
+        purchaseOrders.filter { $0.status != .received && $0.status != .cancelled }
+    }
+
+    private var selectedPurchaseOrderVendor: Vendor? {
+        newPurchaseOrderVendorID.flatMap { id in vendors.first { $0.id == id } }
+    }
+
+    private var selectedPurchaseOrderItem: Item? {
+        newPurchaseOrderItemID.flatMap { id in catalogItems.first { $0.id == id } }
+    }
+
+    private var selectedInventoryItem: Item? {
+        selectedInventoryItemID.flatMap { id in catalogItems.first { $0.id == id } }
+    }
+
+    private var lowStockItems: [Item] {
+        catalogItems.filter { item in
+            guard item.tracksInventory, let reorderPoint = item.reorderPoint, reorderPoint > 0 else { return false }
+            return InventoryLedger.availableQuantity(for: item.id, movements: inventoryMovements) <= reorderPoint
+        }
+    }
+
     var body: some View {
         ZStack {
             WatermarkBackground()
@@ -231,6 +275,11 @@ struct ReceiptsAndBillsView: View {
                                     .foregroundColor(.secondary)
                             }
                         }
+                    }
+
+                    if isAdminUser {
+                        purchaseOrdersSection
+                        inventorySection
                     }
 
                     Section(header: Text("Sync and Transactions")
@@ -539,6 +588,283 @@ struct ReceiptsAndBillsView: View {
                 }
             )
         }
+    }
+
+    @ViewBuilder
+    private var purchaseOrdersSection: some View {
+        Section(header: Text("Purchase Orders")
+            .font(.headline)
+            .foregroundColor(Color.brandGold)) {
+            Text("Create a job-linked purchase order before ordering. Mark receipt only after parts are verified; attach the vendor bill below for accounting.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Picker("Vendor", selection: $newPurchaseOrderVendorID) {
+                Text("Choose vendor").tag(UUID?.none)
+                ForEach(vendors) { vendor in
+                    Text(vendor.name).tag(UUID?.some(vendor.id))
+                }
+            }
+
+            Picker("Job", selection: $newPurchaseOrderServiceCallID) {
+                Text("Stock / no job").tag(UUID?.none)
+                ForEach(serviceCalls) { call in
+                    Text("\(call.customer.name) • \(call.type.displayName)").tag(UUID?.some(call.id))
+                }
+            }
+
+            Picker("Pricebook item", selection: $newPurchaseOrderItemID) {
+                Text("Manual part").tag(UUID?.none)
+                ForEach(catalogItems) { item in
+                    Text(item.name).tag(UUID?.some(item.id))
+                }
+            }
+            .onChange(of: newPurchaseOrderItemID) { _, _ in
+                applyPurchaseOrderItemDefaults()
+            }
+
+            if let selectedPurchaseOrderItem {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selectedPurchaseOrderItem.vendorPartNumber ?? selectedPurchaseOrderItem.sku ?? "No supplier part number")
+                    if let source = selectedPurchaseOrderItem.preferredVendorName, !source.isEmpty {
+                        Text("Preferred supplier: \(source)")
+                    }
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+
+            TextField("Quantity", text: $newPurchaseOrderQuantity)
+                .keyboardType(.decimalPad)
+            TextField("Unit cost", text: $newPurchaseOrderUnitCost)
+                .keyboardType(.decimalPad)
+            TextField("Shipping / freight", text: $newPurchaseOrderShippingCost)
+                .keyboardType(.decimalPad)
+            TextField("Order notes", text: $newPurchaseOrderNotes, axis: .vertical)
+                .lineLimit(2...4)
+
+            Button {
+                createPurchaseOrder()
+            } label: {
+                Label("Create Purchase Order", systemImage: "cart.badge.plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.brandGold)
+            .foregroundStyle(Color.primaryBlack)
+            .disabled(selectedPurchaseOrderVendor == nil || !validPurchaseOrderDraft)
+
+            if let purchaseOrderMessage {
+                Text(purchaseOrderMessage)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            if activePurchaseOrders.isEmpty {
+                Text("No open purchase orders.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(activePurchaseOrders.prefix(10)) { order in
+                    purchaseOrderRow(order)
+                }
+            }
+        }
+    }
+
+    private var validPurchaseOrderDraft: Bool {
+        guard let quantity = Double(newPurchaseOrderQuantity), quantity > 0,
+              let unitCost = Double(newPurchaseOrderUnitCost), unitCost >= 0 else { return false }
+        return true
+    }
+
+    @ViewBuilder
+    private var inventorySection: some View {
+        Section(header: Text("Stock & Replenishment")
+            .font(.headline)
+            .foregroundColor(Color.brandGold)) {
+            Text("Record each physical stock change here. The ledger keeps the part, location, job, date, and user traceable; it never changes counts silently.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Picker("Pricebook item", selection: $selectedInventoryItemID) {
+                Text("Choose item").tag(UUID?.none)
+                ForEach(catalogItems) { item in
+                    Text(item.name).tag(UUID?.some(item.id))
+                }
+            }
+            .onChange(of: selectedInventoryItemID) { _, _ in
+                applyInventoryItemDefaults()
+            }
+
+            if let item = selectedInventoryItem {
+                Toggle("Track inventory for this item", isOn: Binding(
+                    get: { item.tracksInventory },
+                    set: { item.tracksInventory = $0 }
+                ))
+
+                if item.tracksInventory {
+                    let onHand = InventoryLedger.onHandQuantity(for: item.id, movements: inventoryMovements)
+                    let reserved = InventoryLedger.reservedQuantity(for: item.id, movements: inventoryMovements)
+                    let available = InventoryLedger.availableQuantity(for: item.id, movements: inventoryMovements)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("On hand: \(onHand.formatted()) • Reserved: \(reserved.formatted()) • Available: \(available.formatted())")
+                        if let reorderPoint = item.reorderPoint, reorderPoint > 0 {
+                            Text("Reorder point: \(reorderPoint.formatted())")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundColor(available < 0 ? .red : .secondary)
+
+                    TextField("Reorder point (optional)", value: Binding(
+                        get: { item.reorderPoint },
+                        set: { item.reorderPoint = $0 }
+                    ), format: .number)
+                    .keyboardType(.decimalPad)
+
+                    Picker("Movement", selection: $inventoryMovementType) {
+                        ForEach(InventoryMovementType.allCases) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
+
+                    if inventoryMovementType.requiresSourceLocation {
+                        TextField("From location", text: $inventorySourceLocation)
+                    }
+                    if inventoryMovementType.requiresDestinationLocation {
+                        TextField(inventoryMovementType == .adjust ? "Location" : "To location", text: $inventoryDestinationLocation)
+                    }
+                    if inventoryMovementType.requiresJobLink {
+                        Picker("Job", selection: $inventoryServiceCallID) {
+                            Text("Choose job").tag(UUID?.none)
+                            ForEach(serviceCalls) { call in
+                                Text("\(call.customer.name) • \(call.type.displayName)").tag(UUID?.some(call.id))
+                            }
+                        }
+                    }
+                    TextField(inventoryMovementType == .adjust ? "Adjustment (+/- quantity)" : "Quantity", text: $inventoryQuantity)
+                        .keyboardType(.decimalPad)
+                    TextField("Reason / notes", text: $inventoryNotes, axis: .vertical)
+                        .lineLimit(2...3)
+
+                    Button {
+                        recordInventoryMovement()
+                    } label: {
+                        Label("Record Stock Movement", systemImage: "shippingbox.and.arrow.backward")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.brandGold)
+                    .foregroundStyle(Color.primaryBlack)
+
+                    if let inventoryMessage {
+                        Text(inventoryMessage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    Text("Enable tracking before recording stock changes. Service-only pricebook items can stay untracked.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if !lowStockItems.isEmpty {
+                Divider()
+                Text("Replenishment attention")
+                    .font(.subheadline.weight(.semibold))
+                ForEach(lowStockItems.prefix(5)) { item in
+                    let available = InventoryLedger.availableQuantity(for: item.id, movements: inventoryMovements)
+                    Text("\(item.name): \(available.formatted()) available • reorder at \((item.reorderPoint ?? 0).formatted())")
+                        .font(.caption)
+                        .foregroundColor(available <= 0 ? .red : .orange)
+                }
+            }
+
+            let recentMovements = Array(inventoryMovements.prefix(6))
+            if !recentMovements.isEmpty {
+                Divider()
+                Text("Recent stock activity")
+                    .font(.subheadline.weight(.semibold))
+                ForEach(recentMovements) { movement in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(movement.type.displayName): \(movement.quantity.formatted()) × \(movement.itemName)")
+                        Text(inventoryMovementDetail(movement))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    .font(.caption)
+                }
+            }
+        }
+    }
+
+    private func purchaseOrderRow(_ order: PurchaseOrder) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(order.number)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(order.status.displayName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(purchaseOrderStatusTint(order.status))
+            }
+            Text("\(order.quantity.formatted()) × \(order.itemName) • \(order.total.formatted(.currency(code: "USD")))")
+                .font(.caption)
+            Text(order.vendorName)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            if let job = order.serviceCallID.flatMap({ id in serviceCalls.first { $0.id == id } }) {
+                Text("Job: \(job.customer.name) • \(job.type.displayName)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            if let receivedToLocation = order.receivedToLocation, !receivedToLocation.isEmpty {
+                Text("Received to: \(receivedToLocation)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            HStack {
+                if order.status == .draft {
+                    Button("Mark Ordered") { updatePurchaseOrder(order, to: .ordered) }
+                        .buttonStyle(.bordered)
+                    Button("Cancel", role: .destructive) { updatePurchaseOrder(order, to: .cancelled) }
+                        .buttonStyle(.bordered)
+                }
+                if order.status == .ordered {
+                    Button("Receive") { receivePurchaseOrder(order) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                }
+                Button("Copy Order") {
+                    UIPasteboard.general.string = order.supplierOrderSummary
+                    purchaseOrderMessage = "Copied \(order.number). Paste it into the approved supplier portal or an email, then mark it ordered only after the supplier accepts it."
+                }
+                .buttonStyle(.bordered)
+                Button("Accounting") {
+                    GunnAireAppIntentRouter.store(.quickBooks)
+                }
+                .buttonStyle(.bordered)
+                if let urlText = selectedPurchaseURL(for: order), let url = URL(string: urlText) {
+                    Link("Open Supplier", destination: url)
+                        .buttonStyle(.bordered)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func purchaseOrderStatusTint(_ status: PurchaseOrderStatus) -> Color {
+        switch status {
+        case .draft: .secondary
+        case .ordered: .orange
+        case .received: .green
+        case .cancelled: .red
+        }
+    }
+
+    private func selectedPurchaseURL(for order: PurchaseOrder) -> String? {
+        catalogItems.first {
+            $0.name == order.itemName && $0.vendorPartNumber == order.vendorPartNumber
+        }?.purchaseURL
     }
 }
 
@@ -1243,6 +1569,181 @@ private extension ReceiptsAndBillsView {
         }
     }
 
+    func applyPurchaseOrderItemDefaults() {
+        guard let item = selectedPurchaseOrderItem else { return }
+        if let preferredVendorID = item.preferredVendorQuickBooksID,
+           let vendor = vendors.first(where: { $0.quickBooksID == preferredVendorID }) {
+            newPurchaseOrderVendorID = vendor.id
+        } else if let preferredVendorName = item.preferredVendorName,
+                  let vendor = vendors.first(where: { $0.name.caseInsensitiveCompare(preferredVendorName) == .orderedSame }) {
+            newPurchaseOrderVendorID = vendor.id
+        }
+        if newPurchaseOrderUnitCost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let purchaseCost = item.purchaseCost {
+            newPurchaseOrderUnitCost = String(format: "%.2f", purchaseCost)
+        }
+    }
+
+    func applyInventoryItemDefaults() {
+        guard let item = selectedInventoryItem else { return }
+        let location = item.defaultInventoryLocation?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let location, !location.isEmpty {
+            inventorySourceLocation = location
+            inventoryDestinationLocation = location
+        }
+        inventoryMessage = nil
+    }
+
+    func recordInventoryMovement() {
+        guard let item = selectedInventoryItem, item.tracksInventory else {
+            inventoryMessage = "Choose a tracked pricebook item before recording stock."
+            return
+        }
+        guard let quantity = Double(inventoryQuantity),
+              inventoryMovementType == .adjust ? quantity != 0 : quantity > 0 else {
+            inventoryMessage = inventoryMovementType == .adjust
+                ? "Enter a non-zero signed adjustment quantity."
+                : "Enter a quantity greater than zero."
+            return
+        }
+
+        let source = inventorySourceLocation.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+        let destination = inventoryDestinationLocation.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+        if inventoryMovementType.requiresSourceLocation && source == nil {
+            inventoryMessage = "Enter the source stock location."
+            return
+        }
+        if inventoryMovementType.requiresDestinationLocation && destination == nil {
+            inventoryMessage = "Enter the destination stock location."
+            return
+        }
+        if inventoryMovementType == .transfer,
+           source?.caseInsensitiveCompare(destination ?? "") == .orderedSame {
+            inventoryMessage = "Choose different source and destination locations for a transfer."
+            return
+        }
+        if inventoryMovementType.requiresJobLink && inventoryServiceCallID == nil {
+            inventoryMessage = "Link reservations, releases, and consumption to the job they support."
+            return
+        }
+
+        let movement = InventoryMovement(
+            item: item,
+            type: inventoryMovementType,
+            quantity: quantity,
+            sourceLocation: source,
+            destinationLocation: destination,
+            serviceCallID: inventoryServiceCallID,
+            notes: inventoryNotes.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank,
+            createdByEmail: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        )
+        modelContext.insert(movement)
+        item.defaultInventoryLocation = (destination ?? source) ?? item.defaultInventoryLocation
+        do {
+            try modelContext.save()
+            inventoryMessage = "Recorded \(movement.type.displayName.lowercased()) for \(item.name)."
+            inventoryQuantity = "1"
+            inventoryNotes = ""
+        } catch {
+            inventoryMessage = "Could not save the stock movement: \(error.localizedDescription)"
+        }
+    }
+
+    func inventoryMovementDetail(_ movement: InventoryMovement) -> String {
+        let locationDetail: String
+        switch movement.type {
+        case .transfer:
+            locationDetail = "\(movement.sourceLocation ?? "Unknown") → \(movement.destinationLocation ?? "Unknown")"
+        case .receive, .returnToStock, .adjust:
+            locationDetail = movement.destinationLocation ?? "No location"
+        case .reserve, .release, .consume:
+            locationDetail = movement.sourceLocation ?? "No location"
+        }
+        let jobDetail = movement.serviceCallID.flatMap { id in
+            serviceCalls.first(where: { $0.id == id })?.customer.name
+        }
+        return [locationDetail, jobDetail, movement.createdAt.formatted(date: .abbreviated, time: .shortened)]
+            .compactMap { $0 }
+            .joined(separator: " • ")
+    }
+
+    func createPurchaseOrder() {
+        guard let vendor = selectedPurchaseOrderVendor,
+              let quantity = Double(newPurchaseOrderQuantity), quantity > 0,
+              let unitCost = Double(newPurchaseOrderUnitCost), unitCost >= 0 else {
+            purchaseOrderMessage = "Choose a vendor and enter a valid quantity and unit cost."
+            return
+        }
+        let shipping = max(Double(newPurchaseOrderShippingCost) ?? 0, 0)
+        let item = selectedPurchaseOrderItem
+        let name = item?.name ?? "Manual part"
+        let order = PurchaseOrder(
+            vendorName: vendor.name,
+            vendorQuickBooksID: vendor.quickBooksID,
+            serviceCallID: newPurchaseOrderServiceCallID,
+            itemName: name,
+            itemSKU: item?.sku,
+            vendorPartNumber: item?.vendorPartNumber,
+            quantity: quantity,
+            unitCost: unitCost,
+            shippingCost: shipping,
+            notes: nonBlankPurchaseOrderNotes,
+            createdByEmail: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        )
+        modelContext.insert(order)
+        do {
+            try modelContext.save()
+            purchaseOrderMessage = "Created \(order.number) as a draft. Review it, then mark it ordered when it is placed with \(vendor.name)."
+            newPurchaseOrderItemID = nil
+            newPurchaseOrderQuantity = "1"
+            newPurchaseOrderUnitCost = ""
+            newPurchaseOrderShippingCost = ""
+            newPurchaseOrderNotes = ""
+        } catch {
+            purchaseOrderMessage = "Could not save the purchase order: \(error.localizedDescription)"
+        }
+    }
+
+    var nonBlankPurchaseOrderNotes: String? {
+        let notes = newPurchaseOrderNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return notes.isEmpty ? nil : notes
+    }
+
+    func updatePurchaseOrder(_ order: PurchaseOrder, to status: PurchaseOrderStatus) {
+        order.status = status
+        do {
+            try modelContext.save()
+            switch status {
+            case .ordered:
+                purchaseOrderMessage = "\(order.number) is marked ordered. Attach the supplier confirmation or bill to preserve the accounting trail."
+            case .received:
+                purchaseOrderMessage = "Use Receive to record this order's stock destination."
+            case .draft, .cancelled:
+                purchaseOrderMessage = "Updated \(order.number)."
+            }
+        } catch {
+            purchaseOrderMessage = "Could not update \(order.number): \(error.localizedDescription)"
+        }
+    }
+
+    func receivePurchaseOrder(_ order: PurchaseOrder) {
+        let actorEmail = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        let receipt = PurchaseOrderReceiving.receive(order, catalogItems: catalogItems, actorEmail: actorEmail)
+        if let receipt {
+            modelContext.insert(receipt)
+        }
+        do {
+            try modelContext.save()
+            if let receipt {
+                purchaseOrderMessage = "\(order.number) received into \(receipt.destinationLocation ?? "stock") and recorded in the inventory ledger. Review quantity and condition before closing the vendor bill."
+            } else {
+                purchaseOrderMessage = "\(order.number) received. No tracked pricebook item matched, so stock was not changed (appropriate for direct-ship or untracked purchases)."
+            }
+        } catch {
+            purchaseOrderMessage = "Could not receive \(order.number): \(error.localizedDescription)"
+        }
+    }
+
     func applyDocumentationProgress(forUploadedFileCount uploadedCount: Int) {
         guard uploadedCount > 0, let selectedServiceCall else { return }
         switch selectedJobDocumentStage {
@@ -1295,6 +1796,13 @@ private struct CameraImagePicker: UIViewControllerRepresentable {
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
             parent.dismiss()
         }
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

@@ -2,9 +2,11 @@
 // Put real OAuth secrets and production account references in ignored Config/Local.xcconfig.
 // NOTE: URLs in .xcconfig files escape // as /$()/ because // starts a comment in xcconfig syntax.
 
-QB_CLIENT_ID = YOUR_QUICKBOOKS_CLIENT_ID
-QB_CLIENT_SECRET = YOUR_QUICKBOOKS_CLIENT_SECRET
-QB_REDIRECT_URI = https:/$()/example.com/qbo/oauth/callback
+// OAuth client IDs and redirect URIs are public identifiers, not secrets.
+// Keep the QBO client secret exclusively in the deployed backend environment.
+QB_CLIENT_ID = ABCHxXFCYpnkZSYq3BemmzGhVQ4tm63jDIvo6UxjQMeHgO8jmF
+// QBO client secret is stored only in the backend environment.
+QB_REDIRECT_URI = https:/$()/gunnaire.com/wp-json/ga/v1/qbo/oauth/callback
 QB_CALLBACK_SCHEME = gunnaireops
 QB_ENVIRONMENT = production
 QB_DEFAULT_ITEM_REF = your_default_item_ref
@@ -19,13 +21,19 @@ QB_TIME_ACTIVITY_ITEM_REF =
 QB_TIME_ACTIVITY_PAYROLL_ITEM_REF =
 QB_TIME_ACTIVITY_PROJECT_REF =
 
-GOOGLE_CLIENT_ID = YOUR_GOOGLE_CLIENT_ID
-GOOGLE_REDIRECT_URI = YOUR_GOOGLE_REVERSED_CLIENT_ID:/oauth2redirect
-GOOGLE_CALLBACK_SCHEME = YOUR_GOOGLE_REVERSED_CLIENT_ID
-GOOGLE_REVERSED_CLIENT_ID = YOUR_GOOGLE_REVERSED_CLIENT_ID
-GOOGLE_ALLOWED_HOSTED_DOMAIN = example.com
+GOOGLE_CLIENT_ID = y539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e.apps.googleusercontent.com
+GOOGLE_REDIRECT_URI = com.googleusercontent.apps.y539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e:/oauth2redirect
+// Google Auth uses the reversed client ID as the callback scheme; this value
+// remains for diagnostics and legacy configuration only.
+GOOGLE_CALLBACK_SCHEME = com.googleusercontent.apps.y539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.y539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e
+GOOGLE_ALLOWED_HOSTED_DOMAIN = gunnaire.com
 
-GUNNAIRE_BACKEND_BASE_URL =
+GUNNAIRE_BACKEND_BASE_URL = https://gunnaire-api.onrender.com
 GUNNAIRE_BACKEND_API_TOKEN =
+// Use google-id-token behind HTTPS in production. api-token is legacy LAN/development only.
+GUNNAIRE_BACKEND_AUTH_MODE = api-token
+// The app target's Release configuration explicitly clears Local.xcconfig's backend
+// overrides, so a production HTTPS endpoint must be supplied by the release build environment.
 
 #include? "Local.xcconfig"

@@ -5,8 +5,10 @@ import SwiftData
 
 @Model
 final class Payment {
-    @Attribute(.unique) var id: UUID
-    var invoice: Invoice
+    var id: UUID = UUID()
+    /// CloudKit can deliver relationship records in either order. The invoice
+    /// remains required by every payment initializer and creation workflow.
+    var invoice: Invoice!
     var quickBooksID: String?
     var quickBooksChargeID: String?
     var quickBooksClientTransID: String?
@@ -19,14 +21,14 @@ final class Payment {
     var processorSyncDetail: String?
     var settlementBatchID: String?
     var storedCardID: String?
-    var amount: Double
-    var date: Date
-    var method: String // cash, check, card
+    var amount: Double = 0
+    var date: Date = Date()
+    var method: String = "cash" // cash, check, card
     var cardLast4: String?
     var authorizationReference: String?
     var notes: String?
     var processor: String?
-    var isRefund: Bool
+    var isRefund: Bool = false
     var refundedPaymentID: UUID?
     
     init(
@@ -137,5 +139,19 @@ extension Payment {
     func markSharedCompanyQueueFailed(_ errorDescription: String) {
         processorSyncStatus = "needs_attention"
         processorSyncDetail = "Shared company payment queue upload failed: \(errorDescription)"
+    }
+}
+
+enum PaymentCollectionGuard {
+    static func validationMessage(invoice: Invoice, amount: Double, payments: [Payment]) -> String? {
+        guard amount > 0 else { return "Enter a payment amount greater than zero." }
+        let balanceDue = Invoice.outstandingBalance(for: invoice, payments: payments)
+        guard balanceDue > 0.005 else {
+            return "This invoice has no open balance. Refresh the payment history before collecting again."
+        }
+        guard amount <= balanceDue + 0.005 else {
+            return "The payment amount exceeds this invoice's open balance of \(balanceDue.formatted(.currency(code: "USD")))."
+        }
+        return nil
     }
 }

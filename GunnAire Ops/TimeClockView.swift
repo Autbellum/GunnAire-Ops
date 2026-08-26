@@ -5,7 +5,10 @@ struct TimeClockView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var entries: [TimeEntry]
+    @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
+    @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @State private var syncMessage: String?
+    @State private var selectedServiceCallID: UUID?
 
     private var signedInEmail: String {
         googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") ?? "testing@gunnaire.com"
@@ -21,6 +24,36 @@ struct TimeClockView: View {
 
     private var openEntry: TimeEntry? {
         userEntries.first { $0.isOpen }
+    }
+
+    private var trackableServiceCalls: [ServiceCall] {
+        serviceCalls
+            .filter { call in
+                guard call.status != .cancelled && call.status != .completed && call.status != .invoiced else {
+                    return false
+                }
+                let signedInTechnicianIDs = Set(technicians.compactMap { technician in
+                    AppAccess.normalizedEmail(technician.contactInfo) == AppAccess.normalizedEmail(signedInEmail) ? technician.id : nil
+                })
+                let isLead = AppAccess.normalizedEmail(call.assignedTechnician?.contactInfo) == AppAccess.normalizedEmail(signedInEmail)
+                return isLead || !signedInTechnicianIDs.isDisjoint(with: call.assignedCrewTechnicianIDs)
+            }
+            .sorted { lhs, rhs in
+                if lhs.status != rhs.status {
+                    return lhs.status == .inProgress
+                }
+                return lhs.scheduledDate < rhs.scheduledDate
+            }
+    }
+
+    private var selectedServiceCall: ServiceCall? {
+        guard let selectedServiceCallID else { return nil }
+        return trackableServiceCalls.first { $0.id == selectedServiceCallID }
+    }
+
+    private func serviceCall(for id: UUID?) -> ServiceCall? {
+        guard let id else { return nil }
+        return serviceCalls.first { $0.id == id }
     }
 
     var body: some View {
@@ -42,6 +75,20 @@ struct TimeClockView: View {
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
+                            if !trackableServiceCalls.isEmpty {
+                                Picker("Current job", selection: Binding(
+                                    get: { openEntry.serviceCall?.id },
+                                    set: { openEntry.serviceCall = serviceCall(for: $0) }
+                                )) {
+                                    Text("No job selected").tag(UUID?.none)
+                                    ForEach(trackableServiceCalls) { call in
+                                        Text(jobLabel(for: call)).tag(UUID?.some(call.id))
+                                    }
+                                }
+                                Text("Optional. Link time to the job currently being worked so labor and QBO time activity retain the customer context.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                             Button("Clock Out") {
                                 clockOut(openEntry)
                             }
@@ -56,13 +103,22 @@ struct TimeClockView: View {
                         } else {
                             Text("You are clocked out.")
                                 .foregroundColor(.secondary)
+                            if !trackableServiceCalls.isEmpty {
+                                Picker("Job for this shift", selection: $selectedServiceCallID) {
+                                    Text("General time / no job").tag(UUID?.none)
+                                    ForEach(trackableServiceCalls) { call in
+                                        Text(jobLabel(for: call)).tag(UUID?.some(call.id))
+                                    }
+                                }
+                            }
                             Button("Clock In") {
-                                modelContext.insert(TimeEntry(userEmail: signedInEmail))
+                                modelContext.insert(TimeEntry(userEmail: signedInEmail, serviceCall: selectedServiceCall))
+                                selectedServiceCallID = nil
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            Text("Job selection is optional for now and will be available for future job-level time tracking.")
+                            Text("Job link is optional. Use general time for non-job work.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                             if Config.QuickBooksTime.enabled {
@@ -157,6 +213,10 @@ struct TimeClockView: View {
                 }
             }
         }
+    }
+
+    private func jobLabel(for call: ServiceCall) -> String {
+        "\(call.customer.name) • \(call.type.displayName) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))"
     }
 
     private static func makeTimeActivityPayload(for entry: TimeEntry) -> QuickBooksTimeActivityCreate? {

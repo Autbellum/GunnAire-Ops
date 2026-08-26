@@ -19,12 +19,14 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     @State private var selectedSidebarItem: SidebarItem? = .commandCenter
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     
     @State private var showingSettings = false
+    @State private var restrictedRouteTitle: String?
     
     // Authentication states
     @State private var isQuickBooksAuthenticated = false
@@ -77,16 +79,28 @@ struct ContentView: View {
     private var pendingAppRoute: GunnAireAppRoute? {
         GunnAireAppIntentRouter.consumePendingRoute()
     }
+
+    private var prefersPersistentSidebar: Bool {
+        #if targetEnvironment(macCatalyst)
+        true
+        #else
+        UIDevice.current.userInterfaceIdiom == .pad
+        #endif
+    }
     
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             List(selection: $selectedSidebarItem) {
-                Section("Operations") {
-                    sidebarRows(for: operationsItems)
+                if !operationsItems.isEmpty {
+                    Section("Operations") {
+                        sidebarRows(for: operationsItems)
+                    }
                 }
 
-                Section("Back Office") {
-                    sidebarRows(for: backOfficeItems)
+                if !backOfficeItems.isEmpty {
+                    Section("Back Office") {
+                        sidebarRows(for: backOfficeItems)
+                    }
                 }
 
                 if !integrationItems.isEmpty {
@@ -106,6 +120,11 @@ struct ContentView: View {
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
+                    if visibleSidebarItems.isEmpty {
+                        Label("Account setup required", systemImage: "person.badge.key")
+                            .font(.footnote)
+                            .foregroundColor(.orange)
+                    }
                     if isAdminUser {
                         Label("Administrator", systemImage: "key.fill")
                             .font(.footnote)
@@ -131,7 +150,13 @@ struct ContentView: View {
             ZStack {
                 WatermarkBackground()
                 Group {
-                    if let selectedSidebarItem, visibleSidebarItems.contains(selectedSidebarItem) {
+                    if visibleSidebarItems.isEmpty {
+                        ContentUnavailableView(
+                            "Account setup required",
+                            systemImage: "person.badge.key",
+                            description: Text("Your signed-in business account has not been assigned an active role. Ask an administrator to activate your access, then reopen GunnAire Ops.")
+                        )
+                    } else if let selectedSidebarItem, visibleSidebarItems.contains(selectedSidebarItem) {
                         switch selectedSidebarItem {
                         case .commandCenter:
                             OperationsDashboardView()
@@ -168,15 +193,17 @@ struct ContentView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .onAppear {
-            if UIDevice.current.userInterfaceIdiom == .pad {
+            if prefersPersistentSidebar {
                 columnVisibility = .doubleColumn
             }
             QuickBooksDataAPI.shared.loadTokens()
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
             ensurePrimaryAdminExists()
+            collapseCloudKitUserDuplicatesIfNeeded()
             cleanupCalendarCreatedCustomersIfNeeded()
             refreshGoogleAccountIdentityIfNeeded()
+            retryPendingSharedCompanyDocumentUploadsIfNeeded()
             if let selectedSidebarItem, !visibleSidebarItems.contains(selectedSidebarItem) {
                 self.selectedSidebarItem = .commandCenter
             }
@@ -195,6 +222,7 @@ struct ContentView: View {
                     GoogleAuthManager.shared.signOut()
                 },
                 signOutOfApp: {
+                    GunnAireAppIntentRouter.discardAllPendingPayloads()
                     QuickBooksAuthAPI.shared.signOut()
                     GoogleAuthManager.shared.signOut()
                     isGoogleAuthenticated = false
@@ -211,9 +239,20 @@ struct ContentView: View {
         }, message: {
             Text(authAlertMessage)
         })
+        .alert("Access Restricted", isPresented: Binding(
+            get: { restrictedRouteTitle != nil },
+            set: { if !$0 { restrictedRouteTitle = nil } }
+        ), actions: {
+            Button("OK", role: .cancel) {
+                restrictedRouteTitle = nil
+            }
+        }, message: {
+            Text("Your business account does not have access to \(restrictedRouteTitle ?? "this workspace"). Contact an administrator if you need access.")
+        })
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             QuickBooksAuthAPI.shared.reloadStoredSession()
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
+            retryPendingSharedCompanyDocumentUploadsIfNeeded()
             applyPendingAppRouteIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .quickBooksAuthenticationDidChange)) { _ in
@@ -221,6 +260,11 @@ struct ContentView: View {
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
+            applyPendingAppRouteIfNeeded()
+        }
+        .onContinueUserActivity(FieldPaymentHandoff.activityType) { activity in
+            guard let invoiceID = FieldPaymentHandoff.invoiceID(from: activity) else { return }
+            GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
             applyPendingAppRouteIfNeeded()
         }
         .tint(Color.brandGold)
@@ -260,8 +304,34 @@ struct ContentView: View {
         modelContext.insert(AppUser(email: AppAccess.primaryAdminEmail, role: .admin))
     }
 
+    private func collapseCloudKitUserDuplicatesIfNeeded() {
+        _ = AppUserDataMaintenance.collapseCloudKitDuplicates(users, modelContext: modelContext)
+    }
+
     private func cleanupCalendarCreatedCustomersIfNeeded() {
         _ = CustomerDataMaintenance.cleanupCalendarNamedCustomers(modelContext: modelContext)
+    }
+
+    private func retryPendingSharedCompanyDocumentUploadsIfNeeded() {
+        guard GunnAireBackendService.isConfigured else { return }
+        let pending = Array(attachments.filter(\.needsSharedCompanyStorageUpload).prefix(10))
+        guard !pending.isEmpty else { return }
+        Task {
+            for attachment in pending {
+                do {
+                    let response = try await GunnAireBackendService.retrySharedCompanyDocumentUpload(attachment)
+                    await MainActor.run {
+                        attachment.markSharedCompanyStored(id: response.id)
+                        try? modelContext.save()
+                    }
+                } catch {
+                    await MainActor.run {
+                        attachment.markSharedCompanyUploadFailed(error.localizedDescription)
+                        try? modelContext.save()
+                    }
+                }
+            }
+        }
     }
 
     private func applyPendingAppRouteIfNeeded() {
@@ -271,9 +341,11 @@ struct ContentView: View {
             if visibleSidebarItems.contains(targetItem) {
                 selectedSidebarItem = targetItem
             } else {
+                GunnAireAppIntentRouter.discardPendingPayload(for: route)
                 selectedSidebarItem = .commandCenter
+                restrictedRouteTitle = targetItem.rawValue
             }
-            columnVisibility = UIDevice.current.userInterfaceIdiom == .pad ? .doubleColumn : .detailOnly
+            columnVisibility = prefersPersistentSidebar ? .doubleColumn : .detailOnly
         }
     }
 }
@@ -299,6 +371,10 @@ struct ServiceCallDetailView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @Query(sort: \ServiceCallActivity.occurredAt, order: .reverse) private var serviceCallActivities: [ServiceCallActivity]
+    @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
+    @Query(sort: \FieldFormTemplate.createdAt, order: .forward) private var fieldFormTemplates: [FieldFormTemplate]
+    @Query(sort: \FieldFormResponse.completedAt, order: .reverse) private var fieldFormResponses: [FieldFormResponse]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
@@ -306,14 +382,33 @@ struct ServiceCallDetailView: View {
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
     @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
+    @AppStorage("enableMarketingCampaigns") private var enableMarketingCampaigns = false
+    @AppStorage("customerReviewURL") private var customerReviewURL = ""
     let call: ServiceCall
     @State private var showingEditSheet = false
+    @State private var showingCustomerPortalComposer = false
     private var resolvedAddress: String? {
         let address = call.siteAddress ?? call.customer.address
         guard let address, !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return nil
         }
         return address
+    }
+
+    private var callActivity: [ServiceCallActivity] {
+        serviceCallActivities.filter { $0.serviceCallID == call.id }
+    }
+
+    private var availableFieldFormTemplates: [FieldFormTemplate] {
+        fieldFormTemplates.filter { $0.isActive && $0.applies(to: call.type) }
+    }
+
+    private var completedFieldFormResponses: [FieldFormResponse] {
+        fieldFormResponses.filter { $0.serviceCallID == call.id }
+    }
+
+    private var currentActivityActor: String? {
+        googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
     }
 
     private var mapsURL: URL? {
@@ -337,6 +432,66 @@ struct ServiceCallDetailView: View {
         return URL(string: "mailto:\(email)")
     }
 
+    private var reviewRequestDraft: (to: String, subject: String, body: String)? {
+        guard call.isEligibleForReviewRequest,
+              enableMarketingCampaigns,
+              call.customer.allowsMarketing,
+              let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty,
+              let reviewURL = validReviewRequestURL else { return nil }
+        let work = call.recommendedWorkSummary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let visitDescription = work?.isEmpty == false ? work! : call.type.displayName.lowercased()
+        return (
+            to: email,
+            subject: "Thank you from GunnAire",
+            body: """
+Hello \(call.customer.name),
+
+Thank you for choosing GunnAire for your \(visitDescription). If you have a moment, we would appreciate your feedback about your experience:
+
+\(reviewURL.absoluteString)
+
+Thank you,
+GunnAire
+"""
+        )
+    }
+
+    private var validReviewRequestURL: URL? {
+        let value = customerReviewURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value),
+              url.scheme?.lowercased() == "https",
+              url.host?.isEmpty == false else { return nil }
+        return url
+    }
+
+    private var reviewRequestEmailURL: URL? {
+        guard let draft = reviewRequestDraft else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = draft.to
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: draft.subject),
+            URLQueryItem(name: "body", value: draft.body)
+        ]
+        return components.url
+    }
+
+    private func openReviewRequest() {
+        guard let draft = reviewRequestDraft else { return }
+        if googleAuth.isAuthenticated {
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: draft.to,
+                subject: draft.subject,
+                body: draft.body,
+                customerID: call.customer.id,
+                serviceCallID: call.id
+            )
+        } else if let reviewRequestEmailURL {
+            openURL(reviewRequestEmailURL)
+        }
+    }
+
     private var linkedPayments: [Payment] {
         guard let invoiceID = call.linkedInvoiceID else { return [] }
         return payments.filter { $0.invoice.id == invoiceID }
@@ -350,6 +505,13 @@ struct ServiceCallDetailView: View {
     private var linkedEstimate: Estimate? {
         guard let estimateID = call.linkedEstimateID else { return nil }
         return estimates.first { $0.id == estimateID }
+    }
+
+    private var linkedProposalOptions: [Estimate] {
+        guard let groupID = linkedEstimate?.proposalGroupID else { return [] }
+        return estimates
+            .filter { $0.serviceCallID == call.id && $0.proposalGroupID == groupID }
+            .sorted { ($0.proposalOptionKind?.comparisonRank ?? Int.max) < ($1.proposalOptionKind?.comparisonRank ?? Int.max) }
     }
 
     private var totalPaid: Double {
@@ -412,6 +574,67 @@ GunnAire
         )
     }
 
+    private var appointmentUpdateDraft: (to: String, subject: String, body: String)? {
+        guard (call.status == .scheduled || call.status == .inProgress),
+              call.customer.allowsTransactionalEmail,
+              let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty else { return nil }
+        let appointment = call.customerAppointmentSummary
+        let location = resolvedAddress.map { " at \($0)" } ?? ""
+        let update: String
+        switch call.technicianJobPresence {
+        case .scheduled:
+            update = "This is a confirmation of your scheduled service appointment."
+        case .enRoute:
+            update = "Your GunnAire technician is on the way for the scheduled service visit."
+        case .onSite:
+            update = "Your GunnAire technician has arrived for the scheduled service visit."
+        case .working:
+            update = "Your GunnAire technician is working on the scheduled service visit."
+        case .completed, .cancelled:
+            return nil
+        }
+        return (
+            to: email,
+            subject: "GunnAire appointment update — \(appointment)",
+            body: """
+Hello \(call.customer.name),
+
+\(update)
+
+Appointment: \(appointment)\(location)
+Service: \(call.type.displayName)
+
+If you need to make a change, please contact GunnAire.
+
+Thank you,
+GunnAire
+"""
+        )
+    }
+
+    private var appointmentUpdateEmailURL: URL? {
+        guard let draft = appointmentUpdateDraft else { return nil }
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = draft.to
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: draft.subject),
+            URLQueryItem(name: "body", value: draft.body)
+        ]
+        return components.url
+    }
+
+    private var appointmentUpdateActionTitle: String {
+        switch call.technicianJobPresence {
+        case .scheduled: "Draft Appointment Confirmation"
+        case .enRoute: "Draft On-My-Way Update"
+        case .onSite: "Draft Arrival Update"
+        case .working: "Draft Work-in-Progress Update"
+        case .completed, .cancelled: "Draft Appointment Update"
+        }
+    }
+
     private var documentationActionLabel: String {
         let hasDocumentation = call.linkedEstimateID != nil || call.linkedInvoiceID != nil || call.documentationStartedAt != nil
         switch call.type {
@@ -463,6 +686,21 @@ GunnAire
             GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
         } else {
             openURL(fallbackURL)
+        }
+    }
+
+    private func openAppointmentUpdate() {
+        guard let draft = appointmentUpdateDraft else { return }
+        if googleAuth.isAuthenticated {
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: draft.to,
+                subject: draft.subject,
+                body: draft.body,
+                customerID: call.customer.id,
+                serviceCallID: call.id
+            )
+        } else if let appointmentUpdateEmailURL {
+            openURL(appointmentUpdateEmailURL)
         }
     }
 
@@ -585,6 +823,7 @@ GunnAire
             scheduledDate: scheduledDate,
             duration: call.duration,
             assignedTechnician: call.assignedTechnician,
+            additionalTechnicianIDs: call.additionalTechnicianIDs,
             customer: call.customer,
             status: .scheduled,
             notes: generatedNotes.isEmpty ? "Scheduled follow-up visit" : "Scheduled follow-up visit\n\n\(generatedNotes)",
@@ -592,6 +831,8 @@ GunnAire
             recommendedWorkSummary: call.recommendedWorkSummary,
             followUpRequired: false
         )
+        followUpCall.inheritEquipmentProfile(from: call)
+        followUpCall.dispatchUrgency = call.dispatchUrgency
         modelContext.insert(followUpCall)
         call.followUpRequired = false
         call.followUpAction = nil
@@ -622,6 +863,7 @@ GunnAire
             scheduledDate: scheduledDate,
             duration: call.duration,
             assignedTechnician: call.assignedTechnician,
+            additionalTechnicianIDs: call.additionalTechnicianIDs,
             customer: call.customer,
             status: .scheduled,
             notes: generatedNotes.isEmpty ? "Scheduled from approved estimate" : "Scheduled from approved estimate\n\n\(generatedNotes)",
@@ -629,6 +871,8 @@ GunnAire
             recommendedWorkSummary: call.recommendedWorkSummary,
             followUpRequired: false
         )
+        approvedWorkCall.inheritEquipmentProfile(from: call)
+        approvedWorkCall.dispatchUrgency = call.dispatchUrgency
         modelContext.insert(approvedWorkCall)
         call.followUpRequired = false
         call.followUpAction = nil
@@ -655,9 +899,35 @@ GunnAire
                         if let tech = call.assignedTechnician {
                             Text("Technician: \(tech.name)")
                         }
-                        Text("Scheduled: \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
+                        if !crewTechnicianNames.isEmpty {
+                            Text("Crew: \(crewTechnicianNames.joined(separator: ", "))")
+                        }
+                        Text("Scheduled work: \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
+                        if let promisedArrivalWindowSummary = call.promisedArrivalWindowSummary {
+                            Text("Customer arrival window: \(promisedArrivalWindowSummary)")
+                                .foregroundColor(.secondary)
+                        }
                         Text("Duration: \(Int(call.duration / 60)) minutes")
                         Text("Status: \(call.status.rawValue.capitalized)")
+                        Label(call.technicianJobPresence.displayName, systemImage: presenceSystemImage)
+                            .foregroundColor(call.technicianJobPresence == .enRoute ? .orange : .secondary)
+                        if call.status == .cancelled {
+                            if let cancelledAt = call.cancelledAt {
+                                Text("Cancelled: \(cancelledAt.formatted(date: .abbreviated, time: .shortened))")
+                                    .foregroundColor(.secondary)
+                            }
+                            if let cancellationReason = call.cancellationReason, !cancellationReason.isEmpty {
+                                Text("Cancellation reason: \(cancellationReason)")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        if call.visitDisposition != .standard {
+                            Text("Visit result: \(call.visitDisposition.displayName)")
+                                .foregroundColor(call.visitDisposition == .noAccess ? .orange : .secondary)
+                            if let visitDispositionNotes = call.visitDispositionNotes, !visitDispositionNotes.isEmpty {
+                                Text("Outcome: \(visitDispositionNotes)")
+                            }
+                        }
                         if let calendarID = call.googleCalendarID, !calendarID.isEmpty {
                             Text("Calendar: \(calendarID == "primary" ? "Primary Calendar" : calendarID)")
                         }
@@ -694,8 +964,89 @@ GunnAire
                             }
                             .buttonStyle(.bordered)
                         }
+                        if appointmentUpdateDraft != nil {
+                            Button(appointmentUpdateActionTitle) {
+                                openAppointmentUpdate()
+                            }
+                            .buttonStyle(.bordered)
+                            Text("Transactional email only. It opens as a draft and is recorded after staff sends it.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        if reviewRequestDraft != nil {
+                            Button("Draft Review Request") {
+                                openReviewRequest()
+                            }
+                            .buttonStyle(.bordered)
+                            Text("Optional marketing follow-up. It opens as a draft and is recorded only after staff sends it.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                     .foregroundColor(.primary)
+
+                    GroupBox("Job Activity") {
+                        if callActivity.isEmpty {
+                            Text("New operational changes will appear here for the office and field team.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(callActivity.prefix(12)) { activity in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack {
+                                            Text(activity.action)
+                                                .font(.subheadline.weight(.semibold))
+                                            Spacer()
+                                            Text(activity.occurredAt.formatted(date: .abbreviated, time: .shortened))
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Text(activity.detail)
+                                            .font(.caption)
+                                        if let actorEmail = activity.actorEmail, !actorEmail.isEmpty {
+                                            Text(actorEmail)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                    .accessibilityElement(children: .combine)
+                                }
+                            }
+                        }
+                    }
+
+                    GroupBox("Field Forms") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Use a short reusable form when this visit needs evidence beyond the standard HVAC report.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(availableFieldFormTemplates) { template in
+                                NavigationLink {
+                                    FieldFormResponseEditor(template: template, serviceCall: call, actorEmail: currentActivityActor)
+                                } label: {
+                                    Label(template.title, systemImage: "checklist")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            if completedFieldFormResponses.isEmpty {
+                                Text("No reusable field forms completed for this job yet.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(completedFieldFormResponses.prefix(4)) { response in
+                                    HStack {
+                                        Text(response.templateTitle)
+                                            .font(.caption.weight(.semibold))
+                                        Spacer()
+                                        Text(response.completedAt.formatted(date: .abbreviated, time: .shortened))
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     GroupBox("Equipment") {
                         VStack(alignment: .leading, spacing: 8) {
@@ -868,7 +1219,14 @@ GunnAire
                             case .meeting, .reminder, .siteVisit, .other:
                                 Toggle("Arrival confirmed", isOn: Binding(
                                     get: { call.arrivalConfirmed },
-                                    set: { call.arrivalConfirmed = $0 }
+                                    set: { arrived in
+                                        if arrived {
+                                            call.markTechnicianArrived()
+                                        } else {
+                                            call.arrivalConfirmed = false
+                                            call.technicianArrivedAt = nil
+                                        }
+                                    }
                                 ))
                                 Toggle("Action items documented", isOn: Binding(
                                     get: { call.workCompletedChecklist },
@@ -913,12 +1271,49 @@ GunnAire
                                 Text("Estimate: \(linkedEstimate.amount, format: .currency(code: "USD")) • \(linkedEstimate.status.capitalized)")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                if linkedEstimate.isProposalOption {
+                                    Text("Selected proposal: \(linkedEstimate.proposalOptionDisplayDetail)")
+                                        .font(.caption2)
+                                        .foregroundColor(linkedEstimate.proposalIsRecommended ? .green : .secondary)
+                                }
+                                if linkedProposalOptions.count > 1 {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text("Proposal Options")
+                                            .font(.caption.weight(.semibold))
+                                        ForEach(linkedProposalOptions) { option in
+                                            HStack {
+                                                VStack(alignment: .leading, spacing: 1) {
+                                                    Text(option.proposalOptionDisplayDetail)
+                                                        .font(.caption)
+                                                    Text(option.amount, format: .currency(code: "USD"))
+                                                        .font(.caption2)
+                                                        .foregroundColor(.secondary)
+                                                }
+                                                Spacer()
+                                                if option.id == linkedEstimate.id {
+                                                    Text("Selected")
+                                                        .font(.caption2)
+                                                        .foregroundColor(.green)
+                                                } else {
+                                                    Button("Select") {
+                                                        selectProposalOption(option)
+                                                    }
+                                                    .font(.caption)
+                                                    .buttonStyle(.bordered)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .padding(.top, 2)
+                                }
+                                if let approvedAt = linkedEstimate.customerApprovedAt {
+                                    Text("Customer approval: \(linkedEstimate.customerApprovedByName ?? call.customer.name) • \(approvedAt.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
                                 HStack {
-                                    Button("Accepted") {
-                                        linkedEstimate.status = "accepted"
-                                        call.followUpRequired = false
-                                        call.followUpAction = nil
-                                        call.followUpDueDate = nil
+                                    Button("Mark Customer Approved") {
+                                        recordCustomerApproval(for: linkedEstimate)
                                     }
                                     .buttonStyle(.bordered)
 
@@ -1036,7 +1431,14 @@ GunnAire
                             ))
                             Toggle("Technician arrived on site", isOn: Binding(
                                 get: { call.arrivalConfirmed },
-                                set: { call.arrivalConfirmed = $0 }
+                                set: { arrived in
+                                    if arrived {
+                                        call.markTechnicianArrived()
+                                    } else {
+                                        call.arrivalConfirmed = false
+                                        call.technicianArrivedAt = nil
+                                    }
+                                }
                             ))
                             Toggle("Work completed", isOn: Binding(
                                 get: { call.workCompletedChecklist },
@@ -1075,10 +1477,31 @@ GunnAire
                     GroupBox("Job Actions") {
                         VStack(spacing: 12) {
                             HStack {
+                                if call.status == .scheduled && call.technicianEnRouteAt == nil {
+                                    Button {
+                                        call.markTechnicianEnRoute()
+                                        ServiceCallActivity.record(for: call, action: "Technician en route", detail: "Technician marked en route; job moved to in progress.", actorEmail: currentActivityActor, in: modelContext)
+                                    } label: {
+                                        Label("En Route", systemImage: "car.fill")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
+                                if call.technicianEnRouteAt != nil && call.technicianArrivedAt == nil && !call.arrivalConfirmed {
+                                    Button {
+                                        call.markTechnicianArrived()
+                                        ServiceCallActivity.record(for: call, action: "Technician arrived", detail: "Arrival confirmed on site.", actorEmail: currentActivityActor, in: modelContext)
+                                    } label: {
+                                        Label("Arrived", systemImage: "mappin.and.ellipse")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
                                 if call.status == .scheduled {
                                     Button {
                                         call.status = .inProgress
                                         call.documentationStartedAt = call.documentationStartedAt ?? Date()
+                                        ServiceCallActivity.record(for: call, action: "Job started", detail: "Status changed from scheduled to in progress.", actorEmail: currentActivityActor, in: modelContext)
                                     } label: {
                                         Label("Start Job", systemImage: "play.fill")
                                             .frame(maxWidth: .infinity)
@@ -1088,6 +1511,7 @@ GunnAire
                                     Button {
                                         if call.markDocumentationCompleteIfReady() {
                                             call.status = .completed
+                                            ServiceCallActivity.record(for: call, action: "Job completed", detail: "Status changed from in progress to completed.", actorEmail: currentActivityActor, in: modelContext)
                                         }
                                     } label: {
                                         Label("Mark Complete", systemImage: "checkmark.circle.fill")
@@ -1098,6 +1522,7 @@ GunnAire
                                 } else if call.status == .completed {
                                     Button {
                                         call.status = .inProgress
+                                        ServiceCallActivity.record(for: call, action: "Job reopened", detail: "Status changed from completed to in progress.", actorEmail: currentActivityActor, in: modelContext)
                                     } label: {
                                         Label("Reopen Job", systemImage: "arrow.uturn.backward.circle")
                                             .frame(maxWidth: .infinity)
@@ -1132,6 +1557,18 @@ GunnAire
                         .buttonStyle(.borderedProminent)
                         .tint(Color.brandGold)
                         .foregroundStyle(Color.primaryBlack)
+                    }
+
+                    if canViewFinancials,
+                       GunnAireBackendService.isConfigured,
+                       call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                        Button {
+                            showingCustomerPortalComposer = true
+                        } label: {
+                            Label("Share Customer Portal", systemImage: "person.badge.key")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
                     }
 
                     if canViewFinancials && hasOpenInvoiceBalance {
@@ -1181,6 +1618,150 @@ GunnAire
         .fullScreenCover(isPresented: $showingEditSheet) {
             EditServiceCallView(call: call)
                 .tint(Color.brandGold)
+        }
+        .sheet(isPresented: $showingCustomerPortalComposer) {
+            CustomerPortalLinkComposer(
+                call: call,
+                invoice: linkedInvoice,
+                balanceDue: linkedInvoice == nil ? nil : invoiceBalanceDue
+            )
+            .tint(Color.brandGold)
+        }
+        .onAppear {
+            FieldFormTemplate.ensureStarterTemplates(in: modelContext)
+        }
+    }
+
+    private func selectProposalOption(_ estimate: Estimate) {
+        call.linkedEstimateID = estimate.id
+    }
+
+    private var presenceSystemImage: String {
+        switch call.technicianJobPresence {
+        case .scheduled: "calendar"
+        case .enRoute: "car.fill"
+        case .onSite: "mappin.and.ellipse"
+        case .working: "wrench.and.screwdriver.fill"
+        case .completed: "checkmark.circle.fill"
+        case .cancelled: "xmark.circle.fill"
+        }
+    }
+
+    private var crewTechnicianNames: [String] {
+        technicians
+            .filter { call.additionalTechnicianIDs.contains($0.id) }
+            .map(\.name)
+    }
+
+    private func recordCustomerApproval(for estimate: Estimate) {
+        estimate.recordCustomerApproval(by: call.customer.name)
+        if let groupID = estimate.proposalGroupID {
+            for option in estimates where option.proposalGroupID == groupID && option.id != estimate.id && option.status != "invoiced" {
+                option.status = "not-selected"
+            }
+        }
+        call.linkedEstimateID = estimate.id
+        call.followUpRequired = false
+        call.followUpAction = nil
+        call.followUpDueDate = nil
+    }
+}
+
+private struct CustomerPortalLinkComposer: View {
+    @Environment(\.dismiss) private var dismiss
+    let call: ServiceCall
+    let invoice: Invoice?
+    let balanceDue: Double?
+
+    @State private var expiryDays = 14
+    @State private var isCreating = false
+    @State private var link: BackendCustomerPortalLink?
+    @State private var errorMessage: String?
+
+    private var expiryDescription: String {
+        "Expires in \(expiryDays) day\(expiryDays == 1 ? "" : "s") and can be revoked by an administrator from the shared server."
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Customer Access") {
+                    Text(call.customer.name)
+                    Text(call.customer.email ?? "No email")
+                        .foregroundStyle(.secondary)
+                    Text("This link only shows this appointment and its linked invoice summary. It cannot be used to browse customer records, edit a job, or take a payment.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Link Expiry") {
+                    Stepper("\(expiryDays) days", value: $expiryDays, in: 1...30)
+                    Text(expiryDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let link, let url = URL(string: link.url) {
+                    Section("Secure Link") {
+                        ShareLink(item: url, subject: Text("Your GunnAire service update"), message: Text("Here is your secure GunnAire service link.")) {
+                            Label("Share Secure Link", systemImage: "square.and.arrow.up")
+                        }
+                        Text(url.absoluteString)
+                            .font(.caption2)
+                            .textSelection(.enabled)
+                        Text("Expires \(link.expiresAt)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Customer Portal")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(link == nil ? "Cancel" : "Done") { dismiss() }
+                }
+                if link == nil {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(isCreating ? "Creating…" : "Create Link") {
+                            createLink()
+                        }
+                        .disabled(isCreating)
+                    }
+                }
+            }
+        }
+    }
+
+    private func createLink() {
+        isCreating = true
+        errorMessage = nil
+        Task {
+            do {
+                let created = try await GunnAireBackendService.createCustomerPortalLink(
+                    customer: call.customer,
+                    serviceCall: call,
+                    invoice: invoice,
+                    balanceDue: balanceDue,
+                    expiresInDays: expiryDays
+                )
+                await MainActor.run {
+                    link = created
+                    isCreating = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isCreating = false
+                }
+            }
         }
     }
 }
@@ -1293,11 +1874,16 @@ struct AddServiceCallView: View {
     @AppStorage("defaultJobDurationMinutes") private var defaultJobDurationMinutes = 90
     
     @State private var callType: ServiceCallType = .service
+    @State private var dispatchUrgency: ServiceRequestUrgency = .normal
     @State private var eventTitle = ""
     @State private var customer: Customer?
     @State private var technician: Technician?
+    @State private var crewMemberIDs: Set<UUID> = []
     @State private var scheduledTime: Date
     @State private var duration: TimeInterval = 3600
+    @State private var usesArrivalWindow = false
+    @State private var arrivalWindowStart: Date
+    @State private var arrivalWindowEnd: Date
     @State private var customerSearchText = ""
     @State private var creatingNewCustomer = false
     @State private var newCustomerName = ""
@@ -1321,6 +1907,7 @@ struct AddServiceCallView: View {
     @State private var notes: String = ""
     @State private var findingsSummary = ""
     @State private var recommendedWorkSummary = ""
+    @State private var visitDisposition: ServiceVisitDisposition = .standard
     @State private var followUpRequired = false
     @State private var followUpAction = ""
     @State private var followUpDueDate = Date()
@@ -1336,6 +1923,9 @@ struct AddServiceCallView: View {
         let components = DateComponents(hour: 8)
         _scheduledTime = State(initialValue: calendar.date(byAdding: components, to: baseDate) ?? Date())
         _duration = State(initialValue: 90 * 60)
+        let defaultWindowStart = calendar.date(byAdding: components, to: baseDate) ?? Date()
+        _arrivalWindowStart = State(initialValue: defaultWindowStart)
+        _arrivalWindowEnd = State(initialValue: defaultWindowStart.addingTimeInterval(2 * 3600))
         self.onCreated = onCreated
     }
 
@@ -1365,7 +1955,8 @@ struct AddServiceCallView: View {
     }
 
     private var canSaveCall: Bool {
-        customer != nil || (!requiresCustomer && eventTitle.nilIfBlank != nil)
+        (customer != nil || (!requiresCustomer && eventTitle.nilIfBlank != nil)) &&
+            (!usesArrivalWindow || arrivalWindowEnd > arrivalWindowStart)
     }
 
     private var assignableTechnicians: [Technician] {
@@ -1378,10 +1969,12 @@ struct AddServiceCallView: View {
     }
 
     private var conflictingCalls: [ServiceCall] {
-        guard let technician else { return [] }
+        var proposedTechnicianIDs = crewMemberIDs
+        if let technician { proposedTechnicianIDs.insert(technician.id) }
+        guard !proposedTechnicianIDs.isEmpty else { return [] }
         let proposedEnd = scheduledTime.addingTimeInterval(duration)
         return existingServiceCalls.filter { call in
-            guard call.assignedTechnician?.id == technician.id, call.status != .cancelled else { return false }
+            guard !call.assignedCrewTechnicianIDs.isDisjoint(with: proposedTechnicianIDs), call.status != .cancelled else { return false }
             let existingStart = call.scheduledDate
             let existingEnd = call.scheduledDate.addingTimeInterval(call.duration)
             return scheduledTime < existingEnd && proposedEnd > existingStart
@@ -1420,6 +2013,11 @@ struct AddServiceCallView: View {
                 Picker("Type", selection: $callType) {
                     ForEach(ServiceCallType.allCases, id: \.self) { type in
                         Text(type.displayName).tag(type)
+                    }
+                }
+                Picker("Dispatch Priority", selection: $dispatchUrgency) {
+                    ForEach(ServiceRequestUrgency.allCases) { urgency in
+                        Text(urgency.displayName).tag(urgency)
                     }
                 }
 
@@ -1579,6 +2177,30 @@ struct AddServiceCallView: View {
                         Text(AppAccess.scheduleLabel(for: t)).tag(Technician?.some(t))
                     }
                 }
+                if let technician {
+                    let qualification = technician.qualification(for: equipmentType)
+                    Text("Dispatch qualification: \(qualification.displayName)")
+                        .font(.caption)
+                        .foregroundStyle(qualification == .reviewRequired ? .orange : .secondary)
+                    let serviceAreaMatch = technician.serviceAreaMatch(for: siteAddress)
+                    Text("Dispatch territory: \(serviceAreaMatch.dispatchDetail)")
+                        .font(.caption)
+                        .foregroundStyle(serviceAreaMatch == .outsideConfiguredAreas ? .orange : .secondary)
+                }
+                DisclosureGroup("Additional Crew (\(crewMemberIDs.count))") {
+                    ForEach(assignableTechnicians.filter { $0.id != technician?.id }) { crewTechnician in
+                        Toggle(crewTechnician.name, isOn: Binding(
+                            get: { crewMemberIDs.contains(crewTechnician.id) },
+                            set: { selected in
+                                if selected { crewMemberIDs.insert(crewTechnician.id) }
+                                else { crewMemberIDs.remove(crewTechnician.id) }
+                            }
+                        ))
+                    }
+                    Text("Crew members are included in conflict checks. The selected technician remains the lead and calendar owner.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Picker("Calendar", selection: $selectedCalendarID) {
                     ForEach(availableCalendars, id: \.id) { calendar in
                         Text(calendar.label).tag(calendar.id)
@@ -1591,9 +2213,25 @@ struct AddServiceCallView: View {
                 Stepper(value: $duration, in: 1800...8*3600, step: 900) {
                     Text("Duration: \(Int(duration/60)) min")
                 }
+                Section("Customer Arrival Window") {
+                    Toggle("Promise an arrival range", isOn: $usesArrivalWindow)
+                    if usesArrivalWindow {
+                        DatePicker("Arrival begins", selection: $arrivalWindowStart, displayedComponents: [.date, .hourAndMinute])
+                        DatePicker("Arrival ends", selection: $arrivalWindowEnd, displayedComponents: [.date, .hourAndMinute])
+                        if arrivalWindowEnd <= arrivalWindowStart {
+                            Text("Arrival end must be later than arrival start.")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        } else {
+                            Text("This customer promise does not change technician capacity or the calendar work block.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 if !conflictingCalls.isEmpty {
                     Section("Schedule Conflict") {
-                        Text("This technician already has overlapping work scheduled.")
+                        Text("A selected lead or crew member already has overlapping work scheduled.")
                             .foregroundColor(.orange)
                         ForEach(conflictingCalls.prefix(3)) { conflict in
                             VStack(alignment: .leading, spacing: 2) {
@@ -1628,6 +2266,16 @@ struct AddServiceCallView: View {
                         DatePicker("Follow-Up Due", selection: $followUpDueDate, displayedComponents: .date)
                     }
                 }
+                Section("Visit Classification") {
+                    Picker("Visit class", selection: $visitDisposition) {
+                        ForEach(ServiceVisitDisposition.allCases.filter { $0 != .noAccess }) { disposition in
+                            Text(disposition.displayName).tag(disposition)
+                        }
+                    }
+                    Text(visitDisposition.guidance)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Toggle("Open Documentation After Save", isOn: $openDocumentationAfterSave)
             }
             .scrollContentBackground(.hidden)
@@ -1654,12 +2302,21 @@ struct AddServiceCallView: View {
             loadAccessibleCalendarsIfNeeded()
         }
         .onChange(of: technician) { _, newTechnician in
+            if let newTechnician {
+                crewMemberIDs.remove(newTechnician.id)
+            }
             selectedCalendarID = ServiceCalendarRouting.preferredCalendarID(for: newTechnician, calendars: accessibleCalendars)
         }
         .onChange(of: customer) { _, newCustomer in
             selectedCustomerEquipmentID = nil
             guard siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             siteAddress = newCustomer?.address ?? ""
+        }
+        .onChange(of: scheduledTime) { oldValue, newValue in
+            guard usesArrivalWindow else { return }
+            let shift = newValue.timeIntervalSince(oldValue)
+            arrivalWindowStart = arrivalWindowStart.addingTimeInterval(shift)
+            arrivalWindowEnd = arrivalWindowEnd.addingTimeInterval(shift)
         }
     }
     
@@ -1689,14 +2346,19 @@ struct AddServiceCallView: View {
             equipmentNotes: equipmentNotes.nilIfBlank,
             filterSize: filterSize.nilIfBlank,
             type: callType,
+            dispatchUrgency: dispatchUrgency,
             scheduledDate: scheduledTime,
             duration: duration,
+            promisedArrivalWindowStart: usesArrivalWindow ? arrivalWindowStart : nil,
+            promisedArrivalWindowEnd: usesArrivalWindow ? arrivalWindowEnd : nil,
             assignedTechnician: technician,
+            additionalTechnicianIDs: crewMemberIDs,
             customer: resolvedCustomer,
             status: .scheduled,
             notes: notes.nilIfBlank,
             findingsSummary: findingsSummary.nilIfBlank,
             recommendedWorkSummary: recommendedWorkSummary.nilIfBlank,
+            visitDisposition: visitDisposition,
             followUpRequired: followUpRequired,
             followUpAction: followUpRequired ? followUpAction.nilIfBlank : nil,
             followUpDueDate: followUpRequired ? followUpDueDate : nil
@@ -1813,12 +2475,18 @@ struct EditServiceCallView: View {
     let call: ServiceCall
 
     @State private var callType: ServiceCallType
+    @State private var dispatchUrgency: ServiceRequestUrgency
     @State private var eventTitle: String
     @State private var customer: Customer?
     @State private var technician: Technician?
+    @State private var crewMemberIDs: Set<UUID>
     @State private var scheduledTime: Date
     @State private var duration: TimeInterval
+    @State private var usesArrivalWindow: Bool
+    @State private var arrivalWindowStart: Date
+    @State private var arrivalWindowEnd: Date
     @State private var status: JobStatus
+    @State private var cancellationReason: String
     @State private var siteAddress: String
     @State private var equipmentType: HVACEquipmentType
     @State private var equipmentName: String
@@ -1836,6 +2504,8 @@ struct EditServiceCallView: View {
     @State private var notes: String
     @State private var findingsSummary: String
     @State private var recommendedWorkSummary: String
+    @State private var visitDisposition: ServiceVisitDisposition
+    @State private var visitDispositionNotes: String
     @State private var followUpRequired: Bool
     @State private var followUpAction: String
     @State private var followUpDueDate: Date
@@ -1855,12 +2525,18 @@ struct EditServiceCallView: View {
             initialEventTitle = recoveredEventTitle ?? ""
         }
         _callType = State(initialValue: call.type)
+        _dispatchUrgency = State(initialValue: call.dispatchUrgency)
         _eventTitle = State(initialValue: initialEventTitle)
         _customer = State(initialValue: call.customer)
         _technician = State(initialValue: call.assignedTechnician)
+        _crewMemberIDs = State(initialValue: call.additionalTechnicianIDs)
         _scheduledTime = State(initialValue: call.scheduledDate)
         _duration = State(initialValue: call.duration)
+        _usesArrivalWindow = State(initialValue: call.hasPromisedArrivalWindow)
+        _arrivalWindowStart = State(initialValue: call.promisedArrivalWindowStart ?? call.scheduledDate)
+        _arrivalWindowEnd = State(initialValue: call.promisedArrivalWindowEnd ?? call.scheduledDate.addingTimeInterval(2 * 3600))
         _status = State(initialValue: call.status)
+        _cancellationReason = State(initialValue: call.cancellationReason ?? "")
         _siteAddress = State(initialValue: call.siteAddress ?? call.customer.address ?? "")
         _equipmentType = State(initialValue: call.equipmentType ?? .splitSystemAC)
         _equipmentName = State(initialValue: call.equipmentName ?? "")
@@ -1878,6 +2554,8 @@ struct EditServiceCallView: View {
         _notes = State(initialValue: call.notes ?? "")
         _findingsSummary = State(initialValue: call.findingsSummary ?? "")
         _recommendedWorkSummary = State(initialValue: call.recommendedWorkSummary ?? "")
+        _visitDisposition = State(initialValue: call.visitDisposition)
+        _visitDispositionNotes = State(initialValue: call.visitDispositionNotes ?? "")
         _followUpRequired = State(initialValue: call.followUpRequired)
         _followUpAction = State(initialValue: call.followUpAction ?? "")
         _followUpDueDate = State(initialValue: call.followUpDueDate ?? Date())
@@ -1885,11 +2563,13 @@ struct EditServiceCallView: View {
     }
 
     private var conflictingCalls: [ServiceCall] {
-        guard let technician else { return [] }
+        var proposedTechnicianIDs = crewMemberIDs
+        if let technician { proposedTechnicianIDs.insert(technician.id) }
+        guard !proposedTechnicianIDs.isEmpty else { return [] }
         let proposedEnd = scheduledTime.addingTimeInterval(duration)
         return existingServiceCalls.filter { existingCall in
             guard existingCall.id != call.id,
-                  existingCall.assignedTechnician?.id == technician.id,
+                  !existingCall.assignedCrewTechnicianIDs.isDisjoint(with: proposedTechnicianIDs),
                   existingCall.status != .cancelled else { return false }
             let existingStart = existingCall.scheduledDate
             let existingEnd = existingCall.scheduledDate.addingTimeInterval(existingCall.duration)
@@ -1940,6 +2620,11 @@ struct EditServiceCallView: View {
                         Text(type.displayName).tag(type)
                     }
                 }
+                Picker("Dispatch Priority", selection: $dispatchUrgency) {
+                    ForEach(ServiceRequestUrgency.allCases) { urgency in
+                        Text(urgency.displayName).tag(urgency)
+                    }
+                }
                 Section("Calendar Event") {
                     TextField("Event Title", text: $eventTitle)
                         .textInputAutocapitalization(.words)
@@ -1964,9 +2649,38 @@ struct EditServiceCallView: View {
                         Text(AppAccess.scheduleLabel(for: technician)).tag(Technician?.some(technician))
                     }
                 }
+                if let technician {
+                    let qualification = technician.qualification(for: equipmentType)
+                    Text("Dispatch qualification: \(qualification.displayName)")
+                        .font(.caption)
+                        .foregroundStyle(qualification == .reviewRequired ? .orange : .secondary)
+                }
+                DisclosureGroup("Additional Crew (\(crewMemberIDs.count))") {
+                    ForEach(assignableTechnicians.filter { $0.id != technician?.id }) { crewTechnician in
+                        Toggle(crewTechnician.name, isOn: Binding(
+                            get: { crewMemberIDs.contains(crewTechnician.id) },
+                            set: { selected in
+                                if selected { crewMemberIDs.insert(crewTechnician.id) }
+                                else { crewMemberIDs.remove(crewTechnician.id) }
+                            }
+                        ))
+                    }
+                    Text("Crew members are included in conflict checks. The selected technician remains the lead and calendar owner.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Picker("Status", selection: $status) {
                     ForEach(JobStatus.allCases, id: \.self) { status in
                         Text(status.rawValue.capitalized).tag(status)
+                    }
+                }
+                if status == .cancelled {
+                    Section("Cancellation") {
+                        TextField("Reason for cancellation", text: $cancellationReason, axis: .vertical)
+                            .lineLimit(2...4)
+                        Text("Cancellation is retained in the job history and blocks invoice creation.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 Picker("Calendar", selection: $selectedCalendarID) {
@@ -2020,9 +2734,28 @@ struct EditServiceCallView: View {
                 Stepper(value: $duration, in: 1800...8*3600, step: 900) {
                     Text("Duration: \(Int(duration / 60)) min")
                 }
+                Section("Customer Arrival Window") {
+                    Toggle("Promise an arrival range", isOn: $usesArrivalWindow)
+                        .disabled(isExternalGoogleCalendarEvent)
+                    if usesArrivalWindow {
+                        DatePicker("Arrival begins", selection: $arrivalWindowStart, displayedComponents: [.date, .hourAndMinute])
+                            .disabled(isExternalGoogleCalendarEvent)
+                        DatePicker("Arrival ends", selection: $arrivalWindowEnd, displayedComponents: [.date, .hourAndMinute])
+                            .disabled(isExternalGoogleCalendarEvent)
+                        if arrivalWindowEnd <= arrivalWindowStart {
+                            Text("Arrival end must be later than arrival start.")
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        } else {
+                            Text("This is a customer promise, separate from the technician work block.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 if !conflictingCalls.isEmpty {
                     Section("Schedule Conflict") {
-                        Text("This technician already has overlapping work scheduled.")
+                        Text("A selected lead or crew member already has overlapping work scheduled.")
                             .foregroundColor(.orange)
                         ForEach(conflictingCalls.prefix(3)) { conflict in
                             VStack(alignment: .leading, spacing: 2) {
@@ -2059,6 +2792,25 @@ struct EditServiceCallView: View {
                         DatePicker("Follow-Up Due", selection: $followUpDueDate, displayedComponents: .date)
                     }
                 }
+                Section("Visit Result") {
+                    Picker("Result", selection: $visitDisposition) {
+                        ForEach(ServiceVisitDisposition.allCases) { disposition in
+                            Text(disposition.displayName).tag(disposition)
+                        }
+                    }
+                    Text(visitDisposition.guidance)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if visitDisposition != .standard {
+                        TextField("Outcome notes", text: $visitDispositionNotes, axis: .vertical)
+                            .lineLimit(2...4)
+                    }
+                    if visitDisposition == .noAccess && !followUpRequired {
+                        Text("Set a follow-up when the customer wants to reschedule.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
             }
             .navigationTitle("Edit Service Call")
             .toolbar {
@@ -2069,7 +2821,7 @@ struct EditServiceCallView: View {
                     Button("Save") {
                         saveChanges()
                     }
-                    .disabled(customer == nil)
+                    .disabled(customer == nil || (status == .cancelled && cancellationReason.nilIfBlank == nil) || (usesArrivalWindow && arrivalWindowEnd <= arrivalWindowStart))
                 }
             }
         }
@@ -2079,6 +2831,9 @@ struct EditServiceCallView: View {
             loadAccessibleCalendarsIfNeeded()
         }
         .onChange(of: technician) { _, newTechnician in
+            if let newTechnician {
+                crewMemberIDs.remove(newTechnician.id)
+            }
             selectedCalendarID = ServiceCalendarRouting.preferredCalendarID(for: newTechnician, calendars: accessibleCalendars)
         }
         .onChange(of: customer) { _, _ in
@@ -2086,6 +2841,12 @@ struct EditServiceCallView: View {
                !selectedCustomerEquipmentProfiles.contains(where: { $0.id == selectedCustomerEquipmentID }) {
                 self.selectedCustomerEquipmentID = nil
             }
+        }
+        .onChange(of: scheduledTime) { oldValue, newValue in
+            guard usesArrivalWindow else { return }
+            let shift = newValue.timeIntervalSince(oldValue)
+            arrivalWindowStart = arrivalWindowStart.addingTimeInterval(shift)
+            arrivalWindowEnd = arrivalWindowEnd.addingTimeInterval(shift)
         }
     }
 
@@ -2115,14 +2876,26 @@ struct EditServiceCallView: View {
 
     private func saveChanges() {
         guard let customer else { return }
+        let originalStart = call.scheduledDate
+        let originalArrivalWindow = call.promisedArrivalWindowSummary
+        let originalStatus = call.status
+        let originalDispatchUrgency = call.dispatchUrgency
+        let originalTechnician = call.assignedTechnician?.name
+        let originalCrewIDs = call.additionalTechnicianIDs
         let preserveExternalCalendarDetails = GoogleCalendarScheduleSync.shouldPreserveExternalGoogleCalendarDetails(for: call)
         call.type = callType
+        call.dispatchUrgency = dispatchUrgency
         if !preserveExternalCalendarDetails {
             call.eventTitle = eventTitle.nilIfBlank
         }
         call.customer = customer
         call.assignedTechnician = technician
+        call.additionalTechnicianIDs = crewMemberIDs
         call.status = status
+        if status == .cancelled {
+            call.cancelledAt = call.cancelledAt ?? Date()
+            call.cancellationReason = cancellationReason.nilIfBlank
+        }
         if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
             call.googleCalendarID = ServiceCalendarRouting.validSelection(
                 selectedCalendarID,
@@ -2150,11 +2923,15 @@ struct EditServiceCallView: View {
         }
         call.scheduledDate = scheduledTime
         call.duration = duration
+        call.promisedArrivalWindowStart = usesArrivalWindow ? arrivalWindowStart : nil
+        call.promisedArrivalWindowEnd = usesArrivalWindow ? arrivalWindowEnd : nil
         if !preserveExternalCalendarDetails {
             call.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         call.findingsSummary = findingsSummary.nilIfBlank
         call.recommendedWorkSummary = recommendedWorkSummary.nilIfBlank
+        call.visitDisposition = visitDisposition
+        call.visitDispositionNotes = visitDisposition == .standard ? nil : visitDispositionNotes.nilIfBlank
         call.followUpRequired = followUpRequired
         call.followUpAction = followUpRequired ? followUpAction.nilIfBlank : nil
         call.followUpDueDate = followUpRequired ? followUpDueDate : nil
@@ -2165,12 +2942,42 @@ struct EditServiceCallView: View {
         if status == .completed || status == .invoiced {
             call.markDocumentationCompleteIfReady()
         }
+        let actorEmail = GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        if originalStart != scheduledTime {
+            ServiceCallActivity.record(for: call, action: "Appointment rescheduled", detail: "Moved from \(originalStart.formatted(date: .abbreviated, time: .shortened)) to \(scheduledTime.formatted(date: .abbreviated, time: .shortened)).", actorEmail: actorEmail, in: modelContext)
+        }
+        if originalArrivalWindow != call.promisedArrivalWindowSummary {
+            let detail = call.promisedArrivalWindowSummary.map { "Customer arrival window set to \($0)." } ?? "Customer arrival window cleared."
+            ServiceCallActivity.record(for: call, action: "Customer arrival window updated", detail: detail, actorEmail: actorEmail, in: modelContext)
+        }
+        if originalTechnician != technician?.name {
+            let detail = technician.map { "Assigned to \($0.name)." } ?? "Technician assignment cleared."
+            ServiceCallActivity.record(for: call, action: "Technician assignment updated", detail: detail, actorEmail: actorEmail, in: modelContext)
+        }
+        if originalCrewIDs != call.additionalTechnicianIDs {
+            let crewNames = assignableTechnicians
+                .filter { call.additionalTechnicianIDs.contains($0.id) }
+                .map(\.name)
+            let detail = crewNames.isEmpty ? "Additional crew cleared." : "Additional crew: \(crewNames.joined(separator: ", "))."
+            ServiceCallActivity.record(for: call, action: "Job crew updated", detail: detail, actorEmail: actorEmail, in: modelContext)
+        }
+        if originalStatus != status {
+            let detail = status == .cancelled && !cancellationReason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Status changed from \(originalStatus.rawValue) to cancelled. Reason: \(cancellationReason.trimmingCharacters(in: .whitespacesAndNewlines))."
+                : "Status changed from \(originalStatus.rawValue) to \(status.rawValue)."
+            ServiceCallActivity.record(for: call, action: status == .cancelled ? "Job cancelled" : "Job status updated", detail: detail, actorEmail: actorEmail, in: modelContext)
+        }
+        if originalDispatchUrgency != dispatchUrgency {
+            ServiceCallActivity.record(for: call, action: "Dispatch priority updated", detail: "Priority changed from \(originalDispatchUrgency.displayName) to \(dispatchUrgency.displayName).", actorEmail: actorEmail, in: modelContext)
+        }
         let shouldPublishCalendarChanges = GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call)
         if shouldPublishCalendarChanges {
             GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
         }
         try? modelContext.save()
-        if shouldPublishCalendarChanges {
+        if status == .cancelled {
+            cancelManagedGoogleCalendarEvent(for: call)
+        } else if shouldPublishCalendarChanges {
             publishToGoogleCalendar(call)
         }
         dismiss()
@@ -2185,6 +2992,15 @@ struct EditServiceCallView: View {
             modelContext: modelContext,
             signedInEmail: signedInEmail,
             isAdminUser: isAdminUser
+        )
+    }
+
+    private func cancelManagedGoogleCalendarEvent(for call: ServiceCall) {
+        guard googleAuth.isAuthenticated else { return }
+        GoogleCalendarScheduleSync.cancelManagedEventImmediately(
+            for: call,
+            auth: googleAuth,
+            modelContext: modelContext
         )
     }
 

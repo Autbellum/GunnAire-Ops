@@ -52,7 +52,7 @@ enum OnsitePaymentError: LocalizedError {
         case .quickBooksPaymentsScopeRequired:
             return "QuickBooks Payments scope is disabled. Enable the payments scope and reconnect QuickBooks before starting Tap to Pay."
         case .quickBooksSDKNotIntegrated:
-            return "QuickBooks Payments is selected, but the Tap to Pay support package is not installed in this build."
+            return "QuickBooks Tap to Pay is available in QuickBooks Mobile or GoPayment. This custom app does not embed a Tap to Pay capture flow."
         }
     }
 }
@@ -100,10 +100,10 @@ final class OnsitePaymentManager: ObservableObject {
         case .none:
             return tapToPayAvailableInCurrentBuild
                 ? "No on-device payment processor is selected."
-                : "Tap to Pay is hidden in this build until the QuickBooks Tap to Pay support package is installed."
+                : "Use QuickBooks Mobile or GoPayment on the field iPhone for contactless Tap to Pay."
         case .quickBooksPayments:
             guard tapToPayAvailableInCurrentBuild else {
-                return "Tap to Pay is hidden in this build until the QuickBooks Tap to Pay support package is installed."
+                return "Use QuickBooks Mobile or GoPayment on the field iPhone for contactless Tap to Pay."
             }
             if !Config.QuickBooks.enablePaymentsScope {
                 return "Enable the QuickBooks Payments scope and reconnect QuickBooks before using live Tap to Pay capture."
@@ -115,7 +115,7 @@ final class OnsitePaymentManager: ObservableObject {
                 return diagnostic
             }
             if !UserDefaults.standard.bool(forKey: "onsitePaymentProcessorReady") {
-                return "QuickBooks Payments is connected. Mark this device ready after the Tap to Pay support package is installed."
+                return "QuickBooks Payments is connected. Use the QuickBooks field app for its supported Tap to Pay checkout."
             }
             return "QuickBooks Payments is selected and ready for live Tap to Pay capture."
         }

@@ -4,6 +4,8 @@ import SwiftData
 enum AppUserRole: String, Codable, CaseIterable, Identifiable {
     case standard = "Standard"
     case fieldTechnician = "Field Technician"
+    case dispatcher = "Dispatcher"
+    case accounting = "Accounting"
     case admin = "Admin"
 
     var id: String { rawValue }
@@ -11,11 +13,11 @@ enum AppUserRole: String, Codable, CaseIterable, Identifiable {
 
 @Model
 final class AppUser {
-    @Attribute(.unique) var id: UUID
-    var email: String
-    var roleRawValue: String
-    var isActive: Bool
-    var createdAt: Date
+    var id: UUID = UUID()
+    var email: String = ""
+    var roleRawValue: String = AppUserRole.standard.rawValue
+    var isActive: Bool = true
+    var createdAt: Date = Date()
 
     init(id: UUID = UUID(), email: String, role: AppUserRole = .standard, isActive: Bool = true, createdAt: Date = Date()) {
         self.id = id
@@ -63,7 +65,16 @@ enum AppAccess {
         if email == primaryAdminEmail {
             return .admin
         }
-        return users.first { $0.isActive && $0.email == email }?.role
+        let matchingUsers = users.filter { $0.email == email }
+        guard !matchingUsers.isEmpty,
+              matchingUsers.allSatisfy(\.isActive) else {
+            return nil
+        }
+        let roles = Set(matchingUsers.map(\.role))
+        // CloudKit does not enforce uniqueness constraints. Until the approved
+        // backend refreshes a conflict, fail closed instead of selecting an
+        // arbitrary record that could grant dispatch or financial access.
+        return roles.count == 1 ? roles.first : .standard
     }
 
     static func isAuthorized(email: String?, users: [AppUser]) -> Bool {
@@ -77,17 +88,24 @@ enum AppAccess {
     static func canAccessSidebarItem(_ item: SidebarItem, email: String?, users: [AppUser]) -> Bool {
         guard let role = activeRole(email: email, users: users) else { return false }
         switch item {
-        case .commandCenter, .timeClock, .scheduleAndJobs, .customers, .onsiteDocumentation:
+        case .commandCenter, .customers:
             return true
+        case .timeClock:
+            return role != .accounting
+        case .scheduleAndJobs, .onsiteDocumentation:
+            return role != .accounting
+        case .mail, .estimates:
+            return role == .dispatcher || role == .admin
         case .invoices, .payments, .receiptsBills:
-            return role == .fieldTechnician || role == .admin
-        case .mail, .estimates, .syncIntegrations, .quickBooksManagement:
+            return role == .fieldTechnician || role == .accounting || role == .admin
+        case .syncIntegrations, .quickBooksManagement:
             return role == .admin
         }
     }
 
     static func canViewFinancialManagement(email: String?, users: [AppUser]) -> Bool {
-        isAdmin(email: email, users: users)
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .admin || role == .accounting
     }
 
     static func canViewBillingFinancialDetails(email: String?, users: [AppUser]) -> Bool {
@@ -99,11 +117,55 @@ enum AppAccess {
         return role == .fieldTechnician || role == .admin
     }
 
+    /// Creating a job from an incoming customer request changes the committed
+    /// dispatch board, so it is limited to dispatch and administrative staff.
+    static func canManageDispatch(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .dispatcher || role == .admin
+    }
+
+    /// Job-level scope is enforced independently of whether a workspace is visible.
+    /// Field technicians may only open jobs assigned to their signed-in account;
+    /// office roles retain the workflow scope needed for dispatch and billing.
+    static func visibleServiceCallIDs(
+        email: String?,
+        users: [AppUser],
+        serviceCalls: [ServiceCall],
+        technicians: [Technician] = []
+    ) -> Set<UUID> {
+        guard let role = activeRole(email: email, users: users) else { return [] }
+        switch role {
+        case .admin, .dispatcher, .accounting, .standard:
+            return Set(serviceCalls.map(\.id))
+        case .fieldTechnician:
+            let normalized = normalizedEmail(email)
+            let technicianIDs = Set(technicians.compactMap { technician in
+                normalizedEmail(technician.contactInfo) == normalized ? technician.id : nil
+            })
+            return Set(serviceCalls.compactMap { call in
+                let isLead = normalizedEmail(call.assignedTechnician?.contactInfo) == normalized
+                let isCrew = !technicianIDs.isDisjoint(with: call.assignedCrewTechnicianIDs)
+                return isLead || isCrew ? call.id : nil
+            })
+        }
+    }
+
+    static func canAccessServiceCall(
+        _ serviceCall: ServiceCall,
+        email: String?,
+        users: [AppUser],
+        serviceCalls: [ServiceCall],
+        technicians: [Technician] = []
+    ) -> Bool {
+        visibleServiceCallIDs(email: email, users: users, serviceCalls: serviceCalls, technicians: technicians).contains(serviceCall.id)
+    }
+
     static func visibleBillingServiceCallIDs(
         email: String?,
         users: [AppUser],
         serviceCalls: [ServiceCall],
-        activeServiceCall: ServiceCall?
+        activeServiceCall: ServiceCall?,
+        technicians: [Technician] = []
     ) -> Set<UUID> {
         guard !canViewBillingFinancialDetails(email: email, users: users) else {
             return Set(serviceCalls.map(\.id))
@@ -113,17 +175,11 @@ enum AppAccess {
             return []
         }
 
-        var ids = Set<UUID>()
-        if let activeServiceCall {
-            ids.insert(activeServiceCall.id)
+        let authorizedIDs = visibleServiceCallIDs(email: email, users: users, serviceCalls: serviceCalls, technicians: technicians)
+        guard let activeServiceCall, authorizedIDs.contains(activeServiceCall.id) else {
+            return authorizedIDs
         }
-
-        let email = normalizedEmail(email)
-        guard !email.isEmpty else { return ids }
-        for call in serviceCalls where normalizedEmail(call.assignedTechnician?.contactInfo) == email {
-            ids.insert(call.id)
-        }
-        return ids
+        return authorizedIDs.union([activeServiceCall.id])
     }
 
     @discardableResult
@@ -180,5 +236,41 @@ enum AppAccess {
             return technician.name
         }
         return "\(technician.name) (\(email))"
+    }
+}
+
+enum AppUserDataMaintenance {
+    /// Collapses duplicate email records that can be created independently on
+    /// two devices before CloudKit converges. Conflicting roles or activation
+    /// state are reduced to a safe, standard inactive/limited state until the
+    /// approved server role sync supplies one authoritative record.
+    @discardableResult
+    static func collapseCloudKitDuplicates(
+        _ users: [AppUser],
+        modelContext: ModelContext
+    ) -> Int {
+        let grouped = Dictionary(grouping: users) { AppAccess.normalizedEmail($0.email) }
+        var removedCount = 0
+
+        for (email, matches) in grouped where !email.isEmpty && matches.count > 1 {
+            let ordered = matches.sorted {
+                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+            guard let canonical = ordered.first else { continue }
+            let roles = Set(ordered.map(\.role))
+            canonical.email = email
+            canonical.isActive = ordered.allSatisfy(\.isActive)
+            canonical.role = roles.count == 1 ? (roles.first ?? .standard) : .standard
+
+            for duplicate in ordered.dropFirst() {
+                modelContext.delete(duplicate)
+                removedCount += 1
+            }
+        }
+
+        guard removedCount > 0 else { return 0 }
+        try? modelContext.save()
+        return removedCount
     }
 }

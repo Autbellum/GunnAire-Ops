@@ -23,6 +23,12 @@ struct Config {
     struct Backend {
         static let baseURL = Config.value("GUNNAIRE_BACKEND_BASE_URL", fallback: "")
         static let apiToken = Config.value("GUNNAIRE_BACKEND_API_TOKEN", fallback: "")
+        static let authMode = Config.value("GUNNAIRE_BACKEND_AUTH_MODE", fallback: "api-token")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        static var usesGoogleIDToken: Bool { authMode == "google-id-token" }
+        static var hasSupportedAuthMode: Bool { authMode == "api-token" || usesGoogleIDToken }
 
         static var normalizedBaseURL: String {
             baseURL
@@ -30,11 +36,22 @@ struct Config {
                 .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         }
 
+        static var usesHTTPS: Bool {
+            URL(string: normalizedBaseURL)?.scheme?.lowercased() == "https"
+        }
+
         static var isConfigured: Bool {
             !normalizedBaseURL.isEmpty &&
             URL(string: normalizedBaseURL) != nil &&
-            !apiToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            !apiToken.contains("$(")
+            hasSupportedAuthMode &&
+            (usesGoogleIDToken ||
+                (!apiToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !apiToken.contains("$(")))
+        }
+
+        /// Production accounting access must not rely on the legacy shared-token
+        /// backend mode, which is only appropriate for a controlled development LAN.
+        static var isProductionReady: Bool {
+            isConfigured && usesGoogleIDToken && usesHTTPS
         }
 
         static var displayHost: String {
@@ -52,7 +69,8 @@ struct Config {
         // Prefer env / Info.plist overrides for local and CI workflows. Production is the app default;
         // use QB_ENVIRONMENT=sandbox only for an intentional Intuit sandbox test build.
         static let clientID = Config.value("QB_CLIENT_ID", fallback: "YOUR_CLIENT_ID")
-        static let clientSecret = Config.value("QB_CLIENT_SECRET", fallback: "YOUR_CLIENT_SECRET")
+        // The iOS app is a public OAuth client. The QBO client secret is held only by
+        // the backend callback bridge, which performs code exchange and token refresh.
         static let redirectURI = Config.value("QB_REDIRECT_URI", fallback: "YOUR_REDIRECT_URI")
         // ASWebAuthenticationSession callback scheme. For production, use an HTTPS Intuit redirect URI
         // that forwards back into this custom scheme after your backend exchanges / validates the callback.
@@ -121,19 +139,20 @@ struct Config {
         static var redirectURIIsHTTPS: Bool { URL(string: redirectURI)?.scheme?.lowercased() == "https" }
         static var redirectURIIsPlaceholder: Bool { redirectURI.hasPrefix("YOUR_") || redirectURI.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         static var clientIDIsPlaceholder: Bool { clientID.hasPrefix("YOUR_") || clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        static var clientSecretIsPlaceholder: Bool { clientSecret.hasPrefix("YOUR_") || clientSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-
         static var isConfigured: Bool {
             !clientIDIsPlaceholder &&
-            !clientSecretIsPlaceholder &&
             !redirectURIIsPlaceholder &&
-            (isSandbox || redirectURIIsHTTPS)
+            Backend.isConfigured &&
+            (isSandbox || (redirectURIIsHTTPS && Backend.isProductionReady))
         }
 
         static var configurationWarnings: [String] {
             var warnings: [String] = []
             if isProduction && !redirectURIIsHTTPS {
                 warnings.append("Production QuickBooks redirect URIs must be HTTPS and must exactly match the Intuit Developer Portal entry.")
+            }
+            if isProduction && !Backend.isProductionReady {
+                warnings.append("Production QuickBooks requires an HTTPS backend using Google ID-token authorization. The shared API-token backend mode is development-only.")
             }
             if configuredEnvironment != "production" && configuredEnvironment != "sandbox" {
                 warnings.append("QB_ENVIRONMENT was '\(configuredEnvironment)'. The app is using production; set it to production or sandbox explicitly.")

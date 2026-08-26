@@ -18,6 +18,7 @@ enum CustomerDataMaintenance {
         var timeEntries = 0
         var documentAttachments = 0
         var equipmentProfiles = 0
+        var customerCommunications = 0
     }
 
     private static let genericCalendarCustomerNames: Set<String> = [
@@ -68,6 +69,7 @@ enum CustomerDataMaintenance {
         let timeEntries = (try? modelContext.fetch(FetchDescriptor<TimeEntry>())) ?? []
         let documentAttachments = (try? modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())) ?? []
         let equipmentProfiles = (try? modelContext.fetch(FetchDescriptor<CustomerEquipment>())) ?? []
+        let customerCommunications = (try? modelContext.fetch(FetchDescriptor<CustomerCommunication>())) ?? []
 
         var summary = DeletionSummary()
         for customer in genericCustomers {
@@ -81,7 +83,8 @@ enum CustomerDataMaintenance {
                 contracts: contracts,
                 timeEntries: timeEntries,
                 documentAttachments: documentAttachments,
-                equipmentProfiles: equipmentProfiles
+                equipmentProfiles: equipmentProfiles,
+                customerCommunications: customerCommunications
             ))
         }
         try? modelContext.save()
@@ -98,7 +101,8 @@ enum CustomerDataMaintenance {
         contracts: [RecurringMaintenanceContract],
         timeEntries: [TimeEntry],
         documentAttachments: [ServiceDocumentAttachment],
-        equipmentProfiles: [CustomerEquipment]
+        equipmentProfiles: [CustomerEquipment],
+        customerCommunications: [CustomerCommunication]
     ) -> DeletionSummary {
         var summary = DeletionSummary()
         let customerID = customer.id
@@ -141,6 +145,10 @@ enum CustomerDataMaintenance {
             modelContext.delete(equipment)
             summary.equipmentProfiles += 1
         }
+        for communication in customerCommunications where communication.customer.id == customerID {
+            modelContext.delete(communication)
+            summary.customerCommunications += 1
+        }
         modelContext.delete(customer)
         summary.customers += 1
         return summary
@@ -158,10 +166,11 @@ private extension CustomerDataMaintenance.DeletionSummary {
         timeEntries += other.timeEntries
         documentAttachments += other.documentAttachments
         equipmentProfiles += other.equipmentProfiles
+        customerCommunications += other.customerCommunications
     }
 
     var deletedAnything: Bool {
-        customers + serviceCalls + estimates + invoices + payments + contracts + timeEntries + documentAttachments + equipmentProfiles > 0
+        customers + serviceCalls + estimates + invoices + payments + contracts + timeEntries + documentAttachments + equipmentProfiles + customerCommunications > 0
     }
 
     var customerScreenMessage: String {
@@ -805,7 +814,7 @@ struct SyncIntegrationsView: View {
                     }
 
                     if attentionWorkstreams.isEmpty {
-                        Text("All workstreams are synchronized.")
+                        Text("Connected workstreams show no sync exceptions.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {
@@ -1164,6 +1173,7 @@ struct OnsiteDocumentationView: View {
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @State private var selectedServiceCallID: UUID?
     @State private var didLoadPendingRoute = false
     @State private var generatedCustomerDocumentURL: URL?
@@ -1190,7 +1200,17 @@ struct OnsiteDocumentationView: View {
     }
 
     private var openJobs: [ServiceCall] {
-        serviceCalls.filter { $0.status != .completed && $0.status != .cancelled }
+        visibleServiceCalls.filter { $0.status != .completed && $0.status != .cancelled }
+    }
+
+    private var visibleServiceCalls: [ServiceCall] {
+        let visibleIDs = AppAccess.visibleServiceCallIDs(
+            email: currentUserEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+        return serviceCalls.filter { visibleIDs.contains($0.id) }
     }
 
     private var jobsNeedingDocumentation: [ServiceCall] {
@@ -1219,18 +1239,18 @@ struct OnsiteDocumentationView: View {
             if let call = serviceCall(for: invoice) {
                 return !closeoutReadiness(for: call, invoice: invoice).isReady
             }
-            return invoiceBalanceDue(for: invoice) > 0 || invoice.finalizedAt == nil
+            return canViewFinancials && (invoiceBalanceDue(for: invoice) > 0 || invoice.finalizedAt == nil)
         }
     }
 
     private var selectedServiceCall: ServiceCall? {
         guard let selectedServiceCallID else { return nil }
-        return serviceCalls.first { $0.id == selectedServiceCallID }
+        return visibleServiceCalls.first { $0.id == selectedServiceCallID }
     }
 
     private func serviceCall(for invoice: Invoice) -> ServiceCall? {
         guard let serviceCallID = invoice.serviceCallID else { return nil }
-        return serviceCalls.first(where: { $0.id == serviceCallID })
+        return visibleServiceCalls.first(where: { $0.id == serviceCallID })
     }
 
     private func estimate(for call: ServiceCall) -> Estimate? {
@@ -1532,6 +1552,7 @@ struct OnsiteDocumentationView: View {
             didLoadPendingRoute = true
         }
         guard let pendingID = GunnAireAppIntentRouter.consumePendingServiceCallID() else { return }
+        guard visibleServiceCalls.contains(where: { $0.id == pendingID }) else { return }
         selectedServiceCallID = pendingID
     }
 
@@ -1641,9 +1662,11 @@ struct OnsiteDocumentationView: View {
                     equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
                     customerName: attachment.customer?.name
                 )
-                attachment.backendDocumentID = response.id
+                attachment.markSharedCompanyStored(id: response.id)
                 try? modelContext.save()
             } catch {
+                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
+                try? modelContext.save()
                 documentExportMessage = "Onsite report saved locally, but company storage upload failed: \(error.localizedDescription)"
             }
         }
@@ -1793,9 +1816,11 @@ struct OnsiteDocumentationView: View {
                     equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
                     customerName: attachment.customer?.name
                 )
-                attachment.backendDocumentID = response.id
+                attachment.markSharedCompanyStored(id: response.id)
                 try? modelContext.save()
             } catch {
+                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
+                try? modelContext.save()
                 documentExportMessage = "Billing PDF saved locally, but company storage upload failed: \(error.localizedDescription)"
             }
         }
@@ -1821,6 +1846,7 @@ private struct CustomerEditorView: View {
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
+    @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
 
     let customer: Customer
 
@@ -1828,8 +1854,18 @@ private struct CustomerEditorView: View {
     @State private var address: String
     @State private var email: String
     @State private var phone: String
+    @State private var allowsTransactionalEmail: Bool
+    @State private var allowsServiceText: Bool
+    @State private var allowsMarketing: Bool
+    @State private var preferredContactMethod: CustomerContactMethod
+    @State private var newContractName: String = ""
     @State private var newContractPattern: String = ""
     @State private var newContractDate: Date = Date()
+    @State private var includesContractTerm = false
+    @State private var newContractTermEnd = Calendar.current.date(byAdding: .year, value: 1, to: Date()) ?? Date()
+    @State private var newContractPricePerVisit = ""
+    @State private var newContractIncludedVisits = 2
+    @State private var newContractCoveredEquipmentIDs: Set<UUID> = []
     @State private var customerActionMessage: String?
     @State private var isSyncingCustomer = false
     @State private var showingDeleteConfirmation = false
@@ -1940,6 +1976,10 @@ private struct CustomerEditorView: View {
         equipmentProfiles.filter { $0.customer?.id == customer.id }
     }
 
+    private var customerCommunicationsForCustomer: [CustomerCommunication] {
+        customerCommunications.filter { $0.customer.id == customer.id }
+    }
+
     private func equipmentFileSummary(for equipment: CustomerEquipment) -> String? {
         let attachments = ServiceDocumentAttachment.equipmentAttachments(
             for: equipment,
@@ -2031,6 +2071,10 @@ private struct CustomerEditorView: View {
         _address = State(initialValue: customer.address ?? "")
         _email = State(initialValue: customer.email ?? "")
         _phone = State(initialValue: customer.phone ?? "")
+        _allowsTransactionalEmail = State(initialValue: customer.allowsTransactionalEmail)
+        _allowsServiceText = State(initialValue: customer.allowsServiceText)
+        _allowsMarketing = State(initialValue: customer.allowsMarketing)
+        _preferredContactMethod = State(initialValue: customer.preferredContactMethod)
     }
 
     private var customerHealthTint: Color {
@@ -2105,6 +2149,20 @@ private struct CustomerEditorView: View {
                     .textInputAutocapitalization(.never)
                 TextField("Phone", text: $phone)
                     .keyboardType(.phonePad)
+                Section("Contact Preferences") {
+                    Picker("Preferred Contact", selection: $preferredContactMethod) {
+                        ForEach(CustomerContactMethod.allCases) { method in
+                            Text(method.displayName).tag(method)
+                        }
+                    }
+                    Toggle("Allow service and billing email", isOn: $allowsTransactionalEmail)
+                    Toggle("Allow service text messages", isOn: $allowsServiceText)
+                    Toggle("Allow marketing email", isOn: $allowsMarketing)
+
+                    Text("Service and billing email covers appointment, estimate, invoice, and report delivery. Marketing is optional and never implied by service consent. Text preference is stored for a future consent-aware provider; this app does not send texts yet.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
                 if canViewFinancials, let quickBooksID = customer.quickBooksID, !quickBooksID.isEmpty {
                     Text("QuickBooks ID: \(quickBooksID)")
                         .font(.caption)
@@ -2178,6 +2236,13 @@ private struct CustomerEditorView: View {
                     } else {
                         ForEach(customerEquipmentProfiles) { equipment in
                             VStack(alignment: .leading, spacing: 4) {
+                                if let equipmentPhoto = ServiceDocumentAttachment.primaryEquipmentPhoto(
+                                    for: equipment,
+                                    in: visibleCustomerAttachments,
+                                    serviceCalls: customerServiceCalls
+                                ) {
+                                    customerAttachmentThumbnail(for: equipmentPhoto)
+                                }
                                 HStack {
                                     Text(equipment.name)
                                         .font(.headline)
@@ -2405,6 +2470,18 @@ private struct CustomerEditorView: View {
                     }
                 }
 
+                if !customerCommunicationsForCustomer.isEmpty {
+                    Section("Sent Documents & Emails") {
+                        Text("A delivery record is kept for customer-facing email. Full message content remains in the connected Gmail mailbox.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        ForEach(customerCommunicationsForCustomer.prefix(12)) { communication in
+                            customerCommunicationRow(communication)
+                        }
+                    }
+                }
+
                 if !recentCustomerServiceCalls.isEmpty {
                     Section("Recent Jobs") {
                         ForEach(recentCustomerServiceCalls) { call in
@@ -2429,16 +2506,41 @@ private struct CustomerEditorView: View {
                         ForEach(customer.recurringContracts.sorted(by: { $0.nextDate < $1.nextDate })) { contract in
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
-                                    Text(contract.schedulePattern)
+                                    Text(contract.displayName)
                                         .font(.headline)
                                     Spacer()
-                                    Text(contract.active ? "Active" : "Inactive")
+                                    Text(contract.isExpired ? "Expired" : (contract.active ? "Active" : "Inactive"))
                                         .font(.caption)
-                                        .foregroundColor(contract.active ? .green : .secondary)
+                                        .foregroundColor(contract.isExpired ? .orange : (contract.active ? .green : .secondary))
                                 }
+                                Text(contract.schedulePattern)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
                                 Text("Next visit: \(contract.nextDate.formatted(date: .abbreviated, time: .omitted))")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                if let termEndsOn = contract.termEndsOn {
+                                    Text("Term ends: \(termEndsOn.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.caption2)
+                                        .foregroundColor(contract.needsRenewalAttention || contract.isExpired ? .orange : .secondary)
+                                }
+                                if let pricePerVisit = contract.pricePerVisit {
+                                    Text("Member visit price: \(pricePerVisit, format: .currency(code: "USD"))")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                if let includedVisits = contract.includedVisitsPerTerm {
+                                    Text("Included visits per term: \(includedVisits)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                let coveredEquipment = customerEquipmentProfiles.filter { contract.coveredEquipmentIDs.contains($0.id) }
+                                if !coveredEquipment.isEmpty {
+                                    Text("Covered: \(coveredEquipment.map(\.displayName).joined(separator: ", "))")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(2)
+                                }
                                 Text("Reminder: \(contract.reminderDate.formatted(date: .abbreviated, time: .omitted))")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
@@ -2451,20 +2553,56 @@ private struct CustomerEditorView: View {
                         }
                     }
 
-                    TextField("Schedule Pattern", text: $newContractPattern)
-                    DatePicker("Next Visit", selection: $newContractDate, displayedComponents: .date)
-                    Button("Add Service Agreement") {
-                        let contract = RecurringMaintenanceContract(
-                            customer: customer,
-                            schedulePattern: newContractPattern.trimmingCharacters(in: .whitespacesAndNewlines),
-                            nextDate: newContractDate,
-                            active: true
-                        )
-                        modelContext.insert(contract)
-                        newContractPattern = ""
-                        newContractDate = Date()
+                    DisclosureGroup("Add Service Agreement") {
+                        TextField("Plan Name (optional)", text: $newContractName)
+                        TextField("Schedule Pattern", text: $newContractPattern)
+                        DatePicker("Next Visit", selection: $newContractDate, displayedComponents: .date)
+                        Toggle("Set Agreement Term", isOn: $includesContractTerm)
+                        if includesContractTerm {
+                            DatePicker("Term Ends", selection: $newContractTermEnd, displayedComponents: .date)
+                        }
+                        TextField("Member Visit Price (optional)", text: $newContractPricePerVisit)
+                            .keyboardType(.decimalPad)
+                        Stepper("Included Visits Per Term: \(newContractIncludedVisits)", value: $newContractIncludedVisits, in: 1...12)
+                        if !customerEquipmentProfiles.isEmpty {
+                            Text("Covered Equipment")
+                                .font(.subheadline.weight(.semibold))
+                            ForEach(customerEquipmentProfiles) { equipment in
+                                Toggle(equipment.displayName, isOn: Binding(
+                                    get: { newContractCoveredEquipmentIDs.contains(equipment.id) },
+                                    set: { isCovered in
+                                        if isCovered {
+                                            newContractCoveredEquipmentIDs.insert(equipment.id)
+                                        } else {
+                                            newContractCoveredEquipmentIDs.remove(equipment.id)
+                                        }
+                                    }
+                                ))
+                            }
+                        }
+                        Button("Add Service Agreement") {
+                            let contract = RecurringMaintenanceContract(
+                                customer: customer,
+                                planName: newContractName.nilIfBlank,
+                                schedulePattern: newContractPattern.trimmingCharacters(in: .whitespacesAndNewlines),
+                                nextDate: newContractDate,
+                                active: true,
+                                termEndsOn: includesContractTerm ? newContractTermEnd : nil,
+                                pricePerVisit: Double(newContractPricePerVisit),
+                                includedVisitsPerTerm: newContractIncludedVisits,
+                                coveredEquipmentIDs: newContractCoveredEquipmentIDs
+                            )
+                            modelContext.insert(contract)
+                            newContractName = ""
+                            newContractPattern = ""
+                            newContractDate = Date()
+                            includesContractTerm = false
+                            newContractPricePerVisit = ""
+                            newContractIncludedVisits = 2
+                            newContractCoveredEquipmentIDs = []
+                        }
+                        .disabled(newContractPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-                    .disabled(newContractPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
 
                 Section("Customer Actions") {
@@ -2506,6 +2644,11 @@ private struct CustomerEditorView: View {
                         customer.address = address.nilIfBlank
                         customer.email = email.nilIfBlank
                         customer.phone = phone.nilIfBlank
+                        customer.allowsTransactionalEmail = allowsTransactionalEmail
+                        customer.allowsServiceText = allowsServiceText
+                        customer.allowsMarketing = allowsMarketing
+                        customer.preferredContactMethod = preferredContactMethod
+                        customer.communicationConsentUpdatedAt = Date()
                         dismiss()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -2517,7 +2660,7 @@ private struct CustomerEditorView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This removes this customer, local jobs, estimates, invoices, payments, and service agreements tied to the customer. QuickBooks records are not deleted.")
+                Text("This removes this customer, local jobs, estimates, invoices, payments, service agreements, files, and delivery records tied to the customer. QuickBooks and retained company-server audit records are not deleted.")
             }
             .sheet(isPresented: $showingCustomerCamera) {
                 CustomerAttachmentCameraPicker(sourceType: .camera) { image in
@@ -2622,6 +2765,66 @@ private struct CustomerEditorView: View {
                 if let serviceCall {
                     Button("Open Job") {
                         GunnAireAppIntentRouter.storeDocumentationRoute(serviceCall.id)
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func customerCommunicationRow(_ communication: CustomerCommunication) -> some View {
+        let linkedInvoice = communication.invoiceID.flatMap { id in invoices.first { $0.id == id } }
+        let linkedEstimate = communication.estimateID.flatMap { id in estimates.first { $0.id == id } }
+        let linkedCall = communication.serviceCallID.flatMap { id in customerServiceCalls.first { $0.id == id } }
+
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Label(communication.deliveryStatus.capitalized, systemImage: communication.deliveryStatus == "sent" ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(communication.deliveryStatus == "sent" ? .green : .orange)
+                Spacer()
+                Text(communication.createdAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            Text(communication.subject)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(2)
+            Text("To: \(communication.recipient)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if let providerMessageID = communication.providerMessageID, !providerMessageID.isEmpty {
+                Text("Gmail ID: \(providerMessageID)")
+                    .font(.caption2.monospaced())
+                    .foregroundColor(.secondary)
+                    .textSelection(.enabled)
+            }
+            if !communication.attachmentFileNames.isEmpty {
+                Label(communication.attachmentFileNames.joined(separator: ", "), systemImage: "paperclip")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+            }
+            HStack {
+                if linkedInvoice != nil {
+                    Button("Invoice") {
+                        GunnAireAppIntentRouter.store(.invoices)
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                if linkedEstimate != nil {
+                    Button("Estimate") {
+                        GunnAireAppIntentRouter.store(.estimates)
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                if let linkedCall {
+                    Button("Job") {
+                        GunnAireAppIntentRouter.storeDocumentationRoute(linkedCall.id)
                         dismiss()
                     }
                     .buttonStyle(.bordered)
@@ -2765,9 +2968,11 @@ private struct CustomerEditorView: View {
                     equipmentName: attachment.linkedEquipment(in: equipmentProfiles, serviceCalls: serviceCalls)?.displayName,
                     customerName: customer.name
                 )
-                attachment.backendDocumentID = response.id
+                attachment.markSharedCompanyStored(id: response.id)
                 try? modelContext.save()
             } catch {
+                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
+                try? modelContext.save()
                 customerAttachmentMessage = "Attachment saved locally. Company storage upload failed: \(error.localizedDescription)"
             }
         }
@@ -3175,7 +3380,8 @@ private struct CustomerEditorView: View {
             contracts: recurringContracts,
             timeEntries: timeEntries,
             documentAttachments: documentAttachments,
-            equipmentProfiles: equipmentProfiles
+            equipmentProfiles: equipmentProfiles,
+            customerCommunications: customerCommunications
         )
         try? modelContext.save()
         dismiss()
@@ -3285,11 +3491,19 @@ private struct TechnicianEditorView: View {
 
     @State private var name: String
     @State private var calendarEmail: String
+    @State private var supportedEquipmentTypes: Set<HVACEquipmentType>
+    @State private var qualificationNotes: String
+    @State private var serviceAreas: String
+    @State private var laborCostPerHour: String
 
     init(technician: Technician) {
         self.technician = technician
         _name = State(initialValue: technician.name)
         _calendarEmail = State(initialValue: technician.contactInfo ?? "")
+        _supportedEquipmentTypes = State(initialValue: technician.supportedEquipmentTypes)
+        _qualificationNotes = State(initialValue: technician.qualificationNotes ?? "")
+        _serviceAreas = State(initialValue: technician.serviceAreas.joined(separator: ", "))
+        _laborCostPerHour = State(initialValue: technician.laborCostPerHour.map { String(format: "%.2f", $0) } ?? "")
     }
 
     var body: some View {
@@ -3299,6 +3513,39 @@ private struct TechnicianEditorView: View {
                 TextField("Calendar ID or email", text: $calendarEmail)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.emailAddress)
+                Section("Internal Job Costing") {
+                    TextField("Loaded labor cost per hour", text: $laborCostPerHour)
+                        .keyboardType(.decimalPad)
+                    Text("Used only in internal job-cost reporting after completed time is recorded. It is never shown on customer estimates or invoices.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Section("Equipment Qualifications") {
+                    Text("Leave all unchecked when qualifications have not yet been verified. Dispatch will show a review cue rather than block assignment.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(HVACEquipmentType.allCases) { type in
+                        Toggle(type.displayName, isOn: Binding(
+                            get: { supportedEquipmentTypes.contains(type) },
+                            set: { isSupported in
+                                if isSupported {
+                                    supportedEquipmentTypes.insert(type)
+                                } else {
+                                    supportedEquipmentTypes.remove(type)
+                                }
+                            }
+                        ))
+                    }
+                    TextField("Qualification notes", text: $qualificationNotes, axis: .vertical)
+                        .lineLimit(2...4)
+                }
+                Section("Dispatch Service Areas") {
+                    TextField("Cities, ZIP codes, or territories", text: $serviceAreas, axis: .vertical)
+                        .lineLimit(2...3)
+                    Text("Separate entries with commas. Dispatch uses these as a visible recommendation only; office staff can always assign outside an area.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .navigationTitle("Edit Technician")
             .toolbar {
@@ -3309,6 +3556,10 @@ private struct TechnicianEditorView: View {
                     Button("Save") {
                         technician.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
                         technician.contactInfo = AppAccess.normalizedEmail(calendarEmail).nilIfBlank
+                        technician.supportedEquipmentTypes = supportedEquipmentTypes
+                        technician.qualificationNotes = qualificationNotes.nilIfBlank
+                        technician.serviceAreas = Technician.serviceAreas(from: serviceAreas)
+                        technician.laborCostPerHour = Double(laborCostPerHour.trimmingCharacters(in: .whitespacesAndNewlines))
                         dismiss()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

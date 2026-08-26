@@ -12,6 +12,10 @@ export GUNNAIRE_BACKEND_PORT=8787
 export GUNNAIRE_QBO_CLIENT_ID="your-intuit-client-id"
 export GUNNAIRE_QBO_CLIENT_SECRET="your-intuit-client-secret"
 export GUNNAIRE_QBO_REDIRECT_URI="https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback"
+export GUNNAIRE_QBO_ENVIRONMENT="production" # or sandbox; must match the app build
+# Generate once with: python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+# Save this only in the host secret manager; do not rotate it while a QBO connection is active.
+export GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY="your-fernet-encryption-key"
 # Optional browser clients only; native iPad/Mac requests do not need CORS.
 export GUNNAIRE_ALLOWED_CORS_ORIGINS="https://ops.gunnaire.com"
 # Default is 12 MiB; set within the supported 1–25 MiB range if needed.
@@ -61,6 +65,8 @@ GUNNAIRE_GOOGLE_ALLOWED_DOMAIN=gunnaire.com
 GUNNAIRE_QBO_CLIENT_ID=your-intuit-client-id
 GUNNAIRE_QBO_CLIENT_SECRET=your-intuit-client-secret
 GUNNAIRE_QBO_REDIRECT_URI=https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback
+GUNNAIRE_QBO_ENVIRONMENT=production
+GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY=your-fernet-encryption-key
 GUNNAIRE_BACKEND_DATA_DIR=/var/data
 ```
 
@@ -101,13 +107,15 @@ An administrator can then create an expiring, revocable link from a job in GunnA
 
 ## QuickBooks OAuth bridge
 
-`POST /api/qbo/exchange`, `/api/qbo/refresh`, and `/api/qbo/revoke` are administrator-only backend operations used by the app after the registered HTTPS callback hands the authorization code back to `gunnaireops://`. The bridge sends the client secret to Intuit and returns only the necessary token result to the authenticated app. Run this backend behind HTTPS and in Google ID-token mode before connecting a production QBO company.
+`POST /api/qbo/exchange`, `/api/qbo/refresh`, and `/api/qbo/revoke` are administrator-only backend operations used by the app after the registered HTTPS callback hands the authorization code back to `gunnaireops://`. The bridge encrypts and retains the rotating Intuit refresh token in its persistent database; the app receives only a short-lived access token. The client realm and sandbox/production environment must match the saved backend connection before it can refresh. Set a valid `GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY` and `GUNNAIRE_QBO_ENVIRONMENT` before authorizing QuickBooks. Store that Fernet key only in the deployment secret manager, keep it stable while the QBO connection exists, and rotate it only through a planned decrypt/re-encrypt migration. Run this backend behind HTTPS and in Google ID-token mode before connecting a production QBO company.
 
 ## Quick Checks
 
 ```sh
 curl http://macstudio.local:8787/health
 curl -H "Authorization: Bearer replace-with-a-long-random-token" http://macstudio.local:8787/api/users
+# Requires Backend/requirements.txt, including cryptography.
+python3 -m unittest Backend.test_qbo_token_storage -v
 ```
 
 Field payment records are accepted at `POST /api/payments`. The app sends metadata only: amount, method, customer/invoice references, last four digits, authorization reference, notes, and collector email. Full card numbers, CVC values, and bank account numbers are not stored by this backend.

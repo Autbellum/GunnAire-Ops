@@ -39,7 +39,61 @@ enum JobStatus: String, Codable, CaseIterable {
     case scheduled, inProgress, completed, invoiced, cancelled
 }
 
-enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable {
+enum TechnicianJobPresence: String, Codable {
+    case scheduled
+    case enRoute = "en_route"
+    case onSite = "on_site"
+    case working
+    case completed
+    case cancelled
+
+    var displayName: String {
+        switch self {
+        case .scheduled: "Scheduled"
+        case .enRoute: "En route"
+        case .onSite: "On site"
+        case .working: "Work in progress"
+        case .completed: "Completed"
+        case .cancelled: "Cancelled"
+        }
+    }
+}
+
+enum ServiceVisitDisposition: String, Codable, CaseIterable, Identifiable {
+    case standard
+    case diagnosticOnly = "diagnostic_only"
+    case warranty
+    case callback
+    case noAccess = "no_access"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .standard: "Standard service"
+        case .diagnosticOnly: "Diagnosis only"
+        case .warranty: "Warranty work"
+        case .callback: "Callback"
+        case .noAccess: "No access / reschedule"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .standard: "Use for a normal service, repair, maintenance, or installation visit."
+        case .diagnosticOnly: "Document findings and the recommended repair before creating a customer-facing repair invoice."
+        case .warranty: "Keep the equipment and warranty information linked for manufacturer and labor traceability."
+        case .callback: "Record the original concern and schedule the corrective visit if the issue remains open."
+        case .noAccess: "This visit cannot create a billing document. Record the reason and schedule a follow-up when appropriate."
+        }
+    }
+
+    var preventsBilling: Bool {
+        self == .noAccess
+    }
+}
+
+enum HVACEquipmentType: String, Codable, CaseIterable, Identifiable, Hashable {
     case splitSystemAC = "split_system_ac"
     case heatPump = "heat_pump"
     case gasFurnace = "gas_furnace"
@@ -892,22 +946,28 @@ struct InvoiceDocumentationStatus: Equatable {
     }
 
     var statusLabel: String {
+        if failedQuickBooksAttachmentCount > 0 {
+            return "QuickBooks attachment sync failed"
+        }
+        if linkedBillingDocumentCount == 0 && linkedPhotoEvidenceCount > 0 {
+            return "Invoice PDF missing"
+        }
+        if pendingQuickBooksAttachmentCount > 0 {
+            return "QuickBooks attachments pending"
+        }
         if linkedReportCount == 0 {
             return "Onsite report missing"
         }
         if linkedBillingDocumentCount == 0 {
             return "Invoice PDF missing"
         }
-        if failedQuickBooksAttachmentCount > 0 {
-            return "QuickBooks attachment sync failed"
-        }
-        if pendingQuickBooksAttachmentCount > 0 {
-            return "QuickBooks attachments pending"
-        }
         return "Invoice documentation ready"
     }
 
     var sendReadinessLabel: String {
+        if linkedBillingDocumentCount == 0 && linkedPhotoEvidenceCount > 0 {
+            return "Generate invoice PDF before sending"
+        }
         if linkedReportCount == 0 {
             return "Generate onsite report before sending"
         }
@@ -924,17 +984,20 @@ struct InvoiceDocumentationStatus: Equatable {
     }
 
     var actionSummary: String {
+        if failedQuickBooksAttachmentCount > 0 {
+            return "Retry \(failedQuickBooksAttachmentCount) failed QuickBooks attachment upload\(failedQuickBooksAttachmentCount == 1 ? "" : "s") before emailing."
+        }
+        if linkedBillingDocumentCount == 0 && linkedPhotoEvidenceCount > 0 {
+            return "Generate and save the customer-facing invoice PDF before emailing."
+        }
+        if pendingQuickBooksAttachmentCount > 0 {
+            return "Upload \(pendingQuickBooksAttachmentCount) invoice attachment\(pendingQuickBooksAttachmentCount == 1 ? "" : "s") to QuickBooks before emailing."
+        }
         if linkedReportCount == 0 {
             return "Create or attach the onsite service report for this invoice."
         }
         if linkedBillingDocumentCount == 0 {
             return "Generate and save the customer-facing invoice PDF before emailing."
-        }
-        if failedQuickBooksAttachmentCount > 0 {
-            return "Retry \(failedQuickBooksAttachmentCount) failed QuickBooks attachment upload\(failedQuickBooksAttachmentCount == 1 ? "" : "s") before emailing."
-        }
-        if pendingQuickBooksAttachmentCount > 0 {
-            return "Upload \(pendingQuickBooksAttachmentCount) invoice attachment\(pendingQuickBooksAttachmentCount == 1 ? "" : "s") to QuickBooks before emailing."
         }
         if linkedPhotoEvidenceCount == 0 {
             return "Ready to email; no job photo evidence is linked."
@@ -1079,7 +1142,7 @@ struct PhotoEvidenceStatus: Equatable {
 
 @Model
 final class ServiceCall {
-    @Attribute(.unique) var id: UUID
+    var id: UUID = UUID()
     var googleCalendarID: String?
     var googleEventID: String?
     var googleEventManagedByApp: Bool = false
@@ -1104,31 +1167,52 @@ final class ServiceCall {
     var drainLineCondition: String?
     var thermostatOperation: String?
     var serviceReportSummary: String?
-    var type: ServiceCallType
-    var scheduledDate: Date
-    var duration: TimeInterval
+    var type: ServiceCallType = ServiceCallType.service
+    /// Captures the dispatcher triage level independently from job type and
+    /// schedule. Existing records safely default to normal priority.
+    var dispatchUrgencyRaw: String = ServiceRequestUrgency.normal.rawValue
+    var scheduledDate: Date = Date()
+    var duration: TimeInterval = 0
+    /// The customer-facing range is intentionally separate from the technician's
+    /// scheduled work block. Dispatch can promise a range without corrupting
+    /// capacity, conflict, or Google Calendar calculations.
+    var promisedArrivalWindowStart: Date?
+    var promisedArrivalWindowEnd: Date?
     var assignedTechnician: Technician?
-    var customer: Customer
-    var status: JobStatus
+    /// Additional technicians assigned to the same work order. The lead remains
+    /// the relationship used for calendar ownership; crew IDs make install teams
+    /// and their capacity explicit without duplicating the work order.
+    var additionalTechnicianIDsJSON: String?
+    /// IUO keeps the persisted CloudKit relationship optional while preserving
+    /// the required customer contract for every locally created work order.
+    var customer: Customer!
+    @Relationship(originalName: "timeEntries", inverse: \TimeEntry.serviceCall) private var storedTimeEntries: [TimeEntry]?
+    var status: JobStatus = JobStatus.scheduled
+    var cancelledAt: Date?
+    var cancellationReason: String?
     var notes: String?
     var findingsSummary: String?
     var recommendedWorkSummary: String?
-    var followUpRequired: Bool
+    var visitDispositionRaw: String = ServiceVisitDisposition.standard.rawValue
+    var visitDispositionNotes: String?
+    var followUpRequired: Bool = false
     var followUpAction: String?
     var followUpDueDate: Date?
-    var diagnosticsCaptured: Bool
-    var quoteReviewedWithCustomer: Bool
-    var equipmentVerifiedChecklist: Bool
-    var startupChecklistComplete: Bool
-    var maintenanceChecklistComplete: Bool
-    var safetyChecklistComplete: Bool
-    var customerNotified: Bool
-    var arrivalConfirmed: Bool
-    var workCompletedChecklist: Bool
-    var documentationChecklist: Bool
-    var paymentCollectedChecklist: Bool
-    var beforePhotoCount: Int
-    var afterPhotoCount: Int
+    var diagnosticsCaptured: Bool = false
+    var quoteReviewedWithCustomer: Bool = false
+    var equipmentVerifiedChecklist: Bool = false
+    var startupChecklistComplete: Bool = false
+    var maintenanceChecklistComplete: Bool = false
+    var safetyChecklistComplete: Bool = false
+    var customerNotified: Bool = false
+    var arrivalConfirmed: Bool = false
+    var technicianEnRouteAt: Date?
+    var technicianArrivedAt: Date?
+    var workCompletedChecklist: Bool = false
+    var documentationChecklist: Bool = false
+    var paymentCollectedChecklist: Bool = false
+    var beforePhotoCount: Int = 0
+    var afterPhotoCount: Int = 0
     var documentationStartedAt: Date?
     var documentationCompletedAt: Date?
     var linkedEstimateID: UUID?
@@ -1161,14 +1245,22 @@ final class ServiceCall {
         thermostatOperation: String? = nil,
         serviceReportSummary: String? = nil,
         type: ServiceCallType,
+        dispatchUrgency: ServiceRequestUrgency = .normal,
         scheduledDate: Date,
         duration: TimeInterval = 3600,
+        promisedArrivalWindowStart: Date? = nil,
+        promisedArrivalWindowEnd: Date? = nil,
         assignedTechnician: Technician? = nil,
+        additionalTechnicianIDs: Set<UUID> = [],
         customer: Customer,
         status: JobStatus = .scheduled,
+        cancelledAt: Date? = nil,
+        cancellationReason: String? = nil,
         notes: String? = nil,
         findingsSummary: String? = nil,
         recommendedWorkSummary: String? = nil,
+        visitDisposition: ServiceVisitDisposition = .standard,
+        visitDispositionNotes: String? = nil,
         followUpRequired: Bool = false,
         followUpAction: String? = nil,
         followUpDueDate: Date? = nil,
@@ -1180,6 +1272,8 @@ final class ServiceCall {
         safetyChecklistComplete: Bool = false,
         customerNotified: Bool = false,
         arrivalConfirmed: Bool = false,
+        technicianEnRouteAt: Date? = nil,
+        technicianArrivedAt: Date? = nil,
         workCompletedChecklist: Bool = false,
         documentationChecklist: Bool = false,
         paymentCollectedChecklist: Bool = false,
@@ -1216,14 +1310,23 @@ final class ServiceCall {
         self.thermostatOperation = thermostatOperation
         self.serviceReportSummary = serviceReportSummary
         self.type = type
+        self.dispatchUrgencyRaw = dispatchUrgency.rawValue
         self.scheduledDate = scheduledDate
         self.duration = duration
+        self.promisedArrivalWindowStart = promisedArrivalWindowStart
+        self.promisedArrivalWindowEnd = promisedArrivalWindowEnd
         self.assignedTechnician = assignedTechnician
+        let crewWithoutLead = assignedTechnician.map { additionalTechnicianIDs.subtracting([$0.id]) } ?? additionalTechnicianIDs
+        self.additionalTechnicianIDsJSON = Self.encodedTechnicianIDs(crewWithoutLead)
         self.customer = customer
         self.status = status
+        self.cancelledAt = cancelledAt
+        self.cancellationReason = cancellationReason
         self.notes = notes
         self.findingsSummary = findingsSummary
         self.recommendedWorkSummary = recommendedWorkSummary
+        self.visitDispositionRaw = visitDisposition.rawValue
+        self.visitDispositionNotes = visitDispositionNotes
         self.followUpRequired = followUpRequired
         self.followUpAction = followUpAction
         self.followUpDueDate = followUpDueDate
@@ -1235,6 +1338,8 @@ final class ServiceCall {
         self.safetyChecklistComplete = safetyChecklistComplete
         self.customerNotified = customerNotified
         self.arrivalConfirmed = arrivalConfirmed
+        self.technicianEnRouteAt = technicianEnRouteAt
+        self.technicianArrivedAt = technicianArrivedAt
         self.workCompletedChecklist = workCompletedChecklist
         self.documentationChecklist = documentationChecklist
         self.paymentCollectedChecklist = paymentCollectedChecklist
@@ -1245,11 +1350,120 @@ final class ServiceCall {
         self.linkedEstimateID = linkedEstimateID
         self.linkedInvoiceID = linkedInvoiceID
     }
+
+    var timeEntries: [TimeEntry] {
+        get { storedTimeEntries ?? [] }
+        set { storedTimeEntries = newValue }
+    }
     
     var isUpcomingThisWeek: Bool {
         let now = Date()
         let oneWeekLater = Calendar.current.date(byAdding: .day, value: 7, to: now)!
         return scheduledDate >= now && scheduledDate <= oneWeekLater
+    }
+
+    var dispatchUrgency: ServiceRequestUrgency {
+        get { ServiceRequestUrgency(rawValue: dispatchUrgencyRaw) ?? .normal }
+        set { dispatchUrgencyRaw = newValue.rawValue }
+    }
+
+    var promisedArrivalWindow: ClosedRange<Date>? {
+        guard let promisedArrivalWindowStart,
+              let promisedArrivalWindowEnd,
+              promisedArrivalWindowEnd > promisedArrivalWindowStart else {
+            return nil
+        }
+        return promisedArrivalWindowStart...promisedArrivalWindowEnd
+    }
+
+    var hasPromisedArrivalWindow: Bool { promisedArrivalWindow != nil }
+
+    var promisedArrivalWindowSummary: String? {
+        guard let window = promisedArrivalWindow else { return nil }
+        let calendar = Calendar.current
+        if calendar.isDate(window.lowerBound, inSameDayAs: window.upperBound) {
+            return "\(window.lowerBound.formatted(date: .omitted, time: .shortened)) – \(window.upperBound.formatted(date: .omitted, time: .shortened))"
+        }
+        return "\(window.lowerBound.formatted(date: .abbreviated, time: .shortened)) – \(window.upperBound.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    var customerAppointmentSummary: String {
+        if let promisedArrivalWindowSummary {
+            return "\(scheduledDate.formatted(date: .abbreviated, time: .omitted)) • arrival \(promisedArrivalWindowSummary)"
+        }
+        return scheduledDate.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    var technicianJobPresence: TechnicianJobPresence {
+        if status == .cancelled { return .cancelled }
+        if status == .completed || status == .invoiced { return .completed }
+        if technicianArrivedAt != nil || arrivalConfirmed { return .onSite }
+        if technicianEnRouteAt != nil { return .enRoute }
+        if status == .inProgress { return .working }
+        return .scheduled
+    }
+
+    var additionalTechnicianIDs: Set<UUID> {
+        get {
+            guard let additionalTechnicianIDsJSON,
+                  let data = additionalTechnicianIDsJSON.data(using: .utf8),
+                  let values = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+            return Set(values.compactMap(UUID.init(uuidString:)))
+        }
+        set {
+            let withoutLead = assignedTechnician.map { newValue.subtracting([$0.id]) } ?? newValue
+            additionalTechnicianIDsJSON = Self.encodedTechnicianIDs(withoutLead)
+        }
+    }
+
+    var assignedCrewTechnicianIDs: Set<UUID> {
+        var ids = additionalTechnicianIDs
+        if let assignedTechnician { ids.insert(assignedTechnician.id) }
+        return ids
+    }
+
+    func includesAssignedTechnician(_ technicianID: UUID) -> Bool {
+        assignedCrewTechnicianIDs.contains(technicianID)
+    }
+
+    /// Transfers durable equipment identity to a newly generated work order.
+    /// Live diagnostic readings, service checklist results, and arrival state are
+    /// intentionally excluded: each visit must capture its own field evidence.
+    func inheritEquipmentProfile(from source: ServiceCall) {
+        customerEquipmentID = source.customerEquipmentID
+        equipmentName = source.equipmentName
+        equipmentManufacturer = source.equipmentManufacturer
+        equipmentModel = source.equipmentModel
+        equipmentSerialNumber = source.equipmentSerialNumber
+        equipmentLocation = source.equipmentLocation
+        equipmentInstallDate = source.equipmentInstallDate
+        equipmentWarrantyExpiration = source.equipmentWarrantyExpiration
+        equipmentTypeRaw = source.equipmentTypeRaw
+        equipmentNotes = source.equipmentNotes
+        filterSize = source.filterSize
+    }
+
+    private static func encodedTechnicianIDs(_ ids: Set<UUID>) -> String? {
+        guard !ids.isEmpty,
+              let data = try? JSONEncoder().encode(ids.map(\.uuidString).sorted()) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    func markTechnicianEnRoute(at date: Date = Date()) {
+        technicianEnRouteAt = technicianEnRouteAt ?? date
+        if status == .scheduled { status = .inProgress }
+        documentationStartedAt = documentationStartedAt ?? date
+    }
+
+    func markTechnicianArrived(at date: Date = Date()) {
+        markTechnicianEnRoute(at: date)
+        technicianArrivedAt = technicianArrivedAt ?? date
+        arrivalConfirmed = true
+    }
+
+    var visitDisposition: ServiceVisitDisposition {
+        get { ServiceVisitDisposition(rawValue: visitDispositionRaw) ?? .standard }
+        set { visitDispositionRaw = newValue.rawValue }
     }
 
     var checklistCompletedCount: Int {
@@ -1471,6 +1685,20 @@ final class ServiceCall {
         equipmentType?.readingDefinitions ?? []
     }
 
+    /// These diagnostic inputs may be captured from a meter even when they are not
+    /// promoted into the selected equipment profile's primary UI. Persisting them
+    /// keeps imported/mobile evidence intact without expanding every equipment form.
+    private static let calculationSupportTechnicalReadingKeys: Set<String> = [
+        "return_air_temp", "supply_air_temp", "temperature_split", "temperature_rise",
+        "suction_line_temp", "suction_saturation_temp", "superheat",
+        "liquid_line_temp", "liquid_saturation_temp", "subcooling",
+        "static_pressure_return", "static_pressure_supply", "total_external_static"
+    ]
+
+    private static let allServiceActionKeys: Set<String> = Set(
+        HVACEquipmentType.allCases.flatMap { $0.serviceActionDefinitions.map(\.key) }
+    )
+
     var groupedTechnicalReadingDefinitions: [HVACTechnicalReadingGroup] {
         Self.groupedTechnicalReadingDefinitions(for: technicalReadingDefinitions)
     }
@@ -1543,6 +1771,8 @@ final class ServiceCall {
         }
         if key.contains("voltage") ||
             key.contains("amps") ||
+            key.contains("rla") ||
+            key.contains("fla") ||
             key.contains("capacitor") ||
             key.contains("contactor") ||
             key.contains("communication") ||
@@ -1621,6 +1851,9 @@ final class ServiceCall {
     }
 
     func pruneTechnicalReadingsToCurrentEquipmentType() {
+        // Derived values remain useful evidence when a system is reclassified (for example,
+        // a temperature split captured before the equipment profile is finalized). Keep those
+        // values with the compatible technical record, while pruning direct incompatible fields.
         let allowedKeys = Set(technicalReadingDefinitions.map(\.key))
         let prunedReadings = technicalReadings.filter { allowedKeys.contains($0.key) }
         guard prunedReadings.count != technicalReadings.count else { return }
@@ -1633,23 +1866,18 @@ final class ServiceCall {
     }
 
     func pruneServiceActionsToCurrentEquipmentType() {
-        let allowedKeys = Set(serviceActionDefinitions.map(\.key))
-        let prunedStatuses = serviceActionStatuses.filter { allowedKeys.contains($0.key) }
-        guard prunedStatuses.count != serviceActionStatuses.count else { return }
-        if prunedStatuses.isEmpty {
-            serviceActionChecklistJSON = nil
-        } else {
-            let rawStatuses = prunedStatuses.mapValues(\.rawValue)
-            if let data = try? JSONEncoder().encode(rawStatuses),
-               let encoded = String(data: data, encoding: .utf8) {
-                serviceActionChecklistJSON = encoded
-            }
-        }
+        // Preserve recognized action evidence across a correction to the equipment type.
+        // `serviceActionStatus(for:)` and the UI expose only actions supported by the current
+        // profile, so stale/inapplicable actions are never presented as current work.
+        let knownKeys = Self.allServiceActionKeys
+        let retainedStatuses = serviceActionStatuses.filter { knownKeys.contains($0.key) }
+        guard retainedStatuses.count != serviceActionStatuses.count else { return }
+        writeServiceActionStatuses(retainedStatuses)
     }
 
     func setTechnicalReading(_ value: String, for key: String) {
         var readings = technicalReadings
-        let allowedKeys = Set(technicalReadingDefinitions.map(\.key))
+        let allowedKeys = Set(technicalReadingDefinitions.map(\.key)).union(Self.calculationSupportTechnicalReadingKeys)
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard allowedKeys.contains(key) else {
             readings.removeValue(forKey: key)
@@ -1947,13 +2175,13 @@ final class ServiceCall {
     }
 
     func serviceActionStatus(for key: String) -> HVACServiceActionStatus {
-        serviceActionStatuses[key] ?? .notChecked
+        guard Set(serviceActionDefinitions.map(\.key)).contains(key) else { return .notChecked }
+        return serviceActionStatuses[key] ?? .notChecked
     }
 
     func setServiceActionStatus(_ status: HVACServiceActionStatus, for key: String) {
         var statuses = serviceActionStatuses
-        let allowedKeys = Set(serviceActionDefinitions.map(\.key))
-        guard allowedKeys.contains(key) else {
+        guard equipmentType != nil, Self.allServiceActionKeys.contains(key) else {
             statuses.removeValue(forKey: key)
             writeServiceActionStatuses(statuses)
             return
@@ -1963,7 +2191,7 @@ final class ServiceCall {
         } else {
             statuses[key] = status
         }
-        writeServiceActionStatuses(statuses.filter { allowedKeys.contains($0.key) })
+        writeServiceActionStatuses(statuses.filter { Self.allServiceActionKeys.contains($0.key) })
         diagnosticsCaptured = true
     }
 
@@ -2213,7 +2441,8 @@ final class ServiceCall {
 
     var serviceReportRequiredItemCount: Int {
         let baseRequiredFields = requiresTechnicalServiceReportCompletion ? 5 : 4
-        return baseRequiredFields + requiredTechnicalReadingDefinitions.count + (type == .maintenance ? requiredServiceActionDefinitions.count : 0)
+        return baseRequiredFields + requiredTechnicalReadingDefinitions.count +
+            (type == .maintenance ? requiredServiceActionDefinitions.count : 0)
     }
 
     var serviceReportCompletedRequiredItemCount: Int {
@@ -2265,6 +2494,7 @@ final class ServiceCall {
     var isReadyToCreateBillingDocument: Bool {
         linkedInvoiceID == nil &&
             status != .cancelled &&
+            !visitDisposition.preventsBilling &&
             (workCompletedChecklist || documentationChecklist || status == .completed) &&
             canCompleteDocumentation
     }
@@ -2272,7 +2502,14 @@ final class ServiceCall {
     var canCreateInvoiceDocument: Bool {
         linkedInvoiceID == nil &&
             status != .cancelled &&
+            !visitDisposition.preventsBilling &&
             canCompleteDocumentation
+    }
+
+    /// Review requests are marketing follow-up, never a transactional job message.
+    /// The UI additionally checks the customer's recorded marketing consent and email.
+    var isEligibleForReviewRequest: Bool {
+        (status == .completed || status == .invoiced) && !visitDisposition.preventsBilling
     }
 
     var invoiceCreationBlockedMessage: String? {
@@ -2282,6 +2519,9 @@ final class ServiceCall {
         }
         if status == .cancelled {
             return "Cancelled jobs cannot create invoices."
+        }
+        if visitDisposition.preventsBilling {
+            return "No-access visits cannot create invoices. Record the reason and schedule a follow-up if needed."
         }
         return documentationCompletionBlockedMessage
     }
