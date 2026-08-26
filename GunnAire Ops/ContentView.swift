@@ -811,8 +811,13 @@ GunnAire
         return composite == "|" || composite.isEmpty ? nil : composite
     }
 
+    private var linkedMaintenanceAgreement: RecurringMaintenanceContract? {
+        guard let maintenanceAgreementID = call.maintenanceAgreementID else { return nil }
+        return call.customer.recurringContracts.first { $0.id == maintenanceAgreementID }
+    }
+
     private var activeServiceAgreement: RecurringMaintenanceContract? {
-        call.customer.recurringContracts
+        linkedMaintenanceAgreement ?? call.customer.recurringContracts
             .filter(\.active)
             .sorted(by: { $0.nextDate < $1.nextDate })
             .first
@@ -1022,6 +1027,25 @@ GunnAire
                         }
                     }
                     .foregroundColor(.primary)
+                    }
+
+                    if selectedWorkspace == .overview,
+                       let linkedMaintenanceAgreement {
+                        GroupBox("Agreement Visit") {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(linkedMaintenanceAgreement.displayName)
+                                    .font(.headline)
+                                if let dueDate = call.maintenanceAgreementDueDate {
+                                    Text("Agreement obligation: \(dueDate.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text("The agreement advances after this visit is completed, not when it is merely scheduled.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .accessibilityIdentifier("LinkedMaintenanceAgreementVisit")
                     }
 
                     if selectedWorkspace == .overview,
@@ -1724,6 +1748,7 @@ GunnAire
                     Button {
                         if call.markDocumentationCompleteIfReady() {
                             call.status = .completed
+                            call.completeLinkedMaintenanceAgreementIfNeeded()
                             ServiceCallActivity.record(for: call, action: "Job completed", detail: "Status changed from in progress to completed.", actorEmail: currentActivityActor, in: modelContext)
                         }
                     } label: {
@@ -3141,6 +3166,7 @@ struct EditServiceCallView: View {
         }
         if status == .completed || status == .invoiced {
             call.markDocumentationCompleteIfReady()
+            call.completeLinkedMaintenanceAgreementIfNeeded()
         }
         let actorEmail = GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
         if originalStart != scheduledTime {

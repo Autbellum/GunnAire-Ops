@@ -2642,6 +2642,9 @@ private struct CustomerEditorView: View {
                             .foregroundColor(.secondary)
                     } else {
                         ForEach(customer.recurringContracts.sorted(by: { $0.nextDate < $1.nextDate })) { contract in
+                            let agreementVisits = customer.serviceCalls.filter { $0.maintenanceAgreementID == contract.id }
+                            let completedVisitCount = agreementVisits.filter { $0.status == .completed || $0.status == .invoiced }.count
+                            let openVisitCount = agreementVisits.filter { $0.status == .scheduled || $0.status == .inProgress }.count
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack {
                                     Text(contract.displayName)
@@ -2654,6 +2657,11 @@ private struct CustomerEditorView: View {
                                 Text(contract.schedulePattern)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                if !agreementVisits.isEmpty {
+                                    Text("Visit history: \(completedVisitCount) completed • \(openVisitCount) scheduled")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
                                 Text("Next visit: \(contract.nextDate.formatted(date: .abbreviated, time: .omitted))")
                                     .font(.caption)
                                     .foregroundColor(.secondary)

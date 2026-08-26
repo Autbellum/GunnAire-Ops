@@ -1220,6 +1220,11 @@ final class ServiceCall {
     var followUpRequired: Bool = false
     var followUpAction: String?
     var followUpDueDate: Date?
+    /// Stable agreement lineage keeps planned maintenance obligations traceable
+    /// without requiring the agreement and job to resolve as a CloudKit
+    /// relationship at the same instant.
+    var maintenanceAgreementID: UUID?
+    var maintenanceAgreementDueDate: Date?
     /// Stable UUID links keep corrective work traceable while remaining safe for
     /// offline creation and CloudKit replication without requiring both records
     /// to be resolved at the same instant.
@@ -1292,6 +1297,8 @@ final class ServiceCall {
         followUpRequired: Bool = false,
         followUpAction: String? = nil,
         followUpDueDate: Date? = nil,
+        maintenanceAgreementID: UUID? = nil,
+        maintenanceAgreementDueDate: Date? = nil,
         diagnosticsCaptured: Bool = false,
         quoteReviewedWithCustomer: Bool = false,
         equipmentVerifiedChecklist: Bool = false,
@@ -1361,6 +1368,8 @@ final class ServiceCall {
         self.followUpRequired = followUpRequired
         self.followUpAction = followUpAction
         self.followUpDueDate = followUpDueDate
+        self.maintenanceAgreementID = maintenanceAgreementID
+        self.maintenanceAgreementDueDate = maintenanceAgreementDueDate
         self.diagnosticsCaptured = diagnosticsCaptured
         self.quoteReviewedWithCustomer = quoteReviewedWithCustomer
         self.equipmentVerifiedChecklist = equipmentVerifiedChecklist
@@ -1383,6 +1392,16 @@ final class ServiceCall {
         self.originatingServiceCallID = originatingServiceCallID
         self.scheduledFollowUpServiceCallID = scheduledFollowUpServiceCallID
         self.correctiveWorkReasonRaw = correctiveWorkReason?.rawValue
+    }
+
+    @discardableResult
+    func completeLinkedMaintenanceAgreementIfNeeded() -> Bool {
+        guard type == .maintenance,
+              let maintenanceAgreementID,
+              let agreement = customer.recurringContracts.first(where: { $0.id == maintenanceAgreementID }) else {
+            return false
+        }
+        return agreement.recordCompletedVisit(self)
     }
 
     var timeEntries: [TimeEntry] {

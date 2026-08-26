@@ -36,6 +36,7 @@ struct ScheduleView: View {
     @State private var showingAvailabilityBlocks = false
     @State private var showingDispatchWeekBoard = false
     @State private var requestMessage: String?
+    @State private var maintenanceMessage: String?
     @State private var isImportingOnlineRequests = false
 
     private var selectedDayCalls: [ServiceCall] {
@@ -170,7 +171,8 @@ struct ScheduleView: View {
     }
 
     private var maintenanceAttentionContracts: [RecurringMaintenanceContract] {
-        recurringContracts
+        guard canManageDispatch else { return [] }
+        return recurringContracts
             .filter { $0.active && ($0.isOverdue || $0.isUpcoming || $0.needsReminder || $0.needsRenewalAttention || $0.isExpired) }
             .sorted { $0.nextDate < $1.nextDate }
     }
@@ -724,14 +726,24 @@ struct ScheduleView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color.brandGold)
 
+                if let maintenanceMessage {
+                    Label(maintenanceMessage, systemImage: "info.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 ForEach(maintenanceAttentionContracts.prefix(3)) { contract in
+                    let scheduledVisit = contract.scheduledVisit(
+                        forDueDate: contract.nextDate,
+                        in: serviceCalls
+                    )
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(contract.customer.name)
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.primary)
-                                Text(maintenanceReason(for: contract))
+                                Text(maintenanceReason(for: contract, scheduledVisit: scheduledVisit))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -751,12 +763,18 @@ struct ScheduleView: View {
                                 .foregroundStyle(.orange)
                         }
 
-                        Button("Schedule Maintenance Visit") {
-                            scheduleMaintenanceVisit(for: contract)
+                        Button(scheduledVisit == nil ? "Schedule Maintenance Visit" : "Open Scheduled Visit") {
+                            if let scheduledVisit {
+                                selectedDate = Calendar.current.startOfDay(for: scheduledVisit.scheduledDate)
+                                navigationPath.append(scheduledVisit)
+                            } else {
+                                scheduleMaintenanceVisit(for: contract)
+                            }
                         }
                         .buttonStyle(.bordered)
                         .tint(Color.brandGold)
-                        .disabled(!contract.canScheduleVisit)
+                        .disabled(scheduledVisit == nil && !contract.canScheduleVisit)
+                        .accessibilityIdentifier("MaintenanceVisitAction-\(contract.id.uuidString)")
 
                         if let maintenanceReminderEmailURL = maintenanceReminderEmailURL(for: contract) {
                             Button("Send Reminder") {
@@ -1497,7 +1515,10 @@ struct ScheduleView: View {
         )
     }
 
-    private func maintenanceReason(for contract: RecurringMaintenanceContract) -> String {
+    private func maintenanceReason(for contract: RecurringMaintenanceContract, scheduledVisit: ServiceCall?) -> String {
+        if let scheduledVisit {
+            return "Visit scheduled \(scheduledVisit.scheduledDate.formatted(date: .abbreviated, time: .shortened))"
+        }
         if contract.isOverdue {
             return "Maintenance visit overdue"
         }
@@ -1603,6 +1624,12 @@ GunnAire
 
     private func scheduleMaintenanceVisit(for contract: RecurringMaintenanceContract) {
         guard contract.canScheduleVisit else { return }
+        if let existingVisit = contract.scheduledVisit(forDueDate: contract.nextDate, in: serviceCalls) {
+            selectedDate = Calendar.current.startOfDay(for: existingVisit.scheduledDate)
+            navigationPath.append(existingVisit)
+            return
+        }
+        let agreementDueDate = contract.nextDate
         let serviceAddress = contract.customer.address?.trimmingCharacters(in: .whitespacesAndNewlines)
         let call = ServiceCall(
             googleEventManagedByApp: true,
@@ -1613,7 +1640,9 @@ GunnAire
             customer: contract.customer,
             status: .scheduled,
             notes: "Scheduled from \(contract.displayName): \(contract.schedulePattern)",
-            followUpRequired: false
+            followUpRequired: false,
+            maintenanceAgreementID: contract.id,
+            maintenanceAgreementDueDate: agreementDueDate
         )
         if let coveredEquipment = equipmentProfiles.first(where: {
             $0.customer?.id == contract.customer.id && contract.coveredEquipmentIDs.contains($0.id)
@@ -1632,7 +1661,14 @@ GunnAire
             coveredEquipment.applyTechnicalBaselines(to: call)
         }
         modelContext.insert(call)
-        contract.advanceNextDate()
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.delete(call)
+            maintenanceMessage = "Could not save the maintenance visit. The agreement due date was not advanced."
+            return
+        }
+        maintenanceMessage = "Scheduled \(contract.displayName) for \(agreementDueDate.formatted(date: .abbreviated, time: .omitted)). The next obligation advances only after completion."
         publishToGoogleCalendar(call)
         selectedDate = Calendar.current.startOfDay(for: call.scheduledDate)
         navigationPath.append(call)

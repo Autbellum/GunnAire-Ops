@@ -96,8 +96,43 @@ final class RecurringMaintenanceContract {
         Calendar.current.date(byAdding: .day, value: -7, to: nextDate) ?? nextDate
     }
 
-    func advanceNextDate() {
-        let calendar = Calendar.current
+    func scheduledVisit(forDueDate dueDate: Date, in serviceCalls: [ServiceCall], calendar: Calendar = .current) -> ServiceCall? {
+        serviceCalls
+            .filter { call in
+                call.maintenanceAgreementID == id &&
+                call.status != .cancelled &&
+                call.maintenanceAgreementDueDate.map { calendar.isDate($0, inSameDayAs: dueDate) } == true
+            }
+            .sorted { lhs, rhs in
+                if lhs.status == .completed || lhs.status == .invoiced {
+                    return false
+                }
+                if rhs.status == .completed || rhs.status == .invoiced {
+                    return true
+                }
+                return lhs.scheduledDate < rhs.scheduledDate
+            }
+            .first
+    }
+
+    @discardableResult
+    func recordCompletedVisit(_ serviceCall: ServiceCall, calendar: Calendar = .current) -> Bool {
+        guard serviceCall.maintenanceAgreementID == id,
+              serviceCall.type == .maintenance,
+              (serviceCall.status == .completed || serviceCall.status == .invoiced),
+              let fulfilledDueDate = serviceCall.maintenanceAgreementDueDate else {
+            return false
+        }
+
+        let originalNextDate = nextDate
+        while nextDate <= fulfilledDueDate || calendar.isDate(nextDate, inSameDayAs: fulfilledDueDate) {
+            advanceNextDate(calendar: calendar)
+            if nextDate <= originalNextDate { break }
+        }
+        return nextDate > originalNextDate
+    }
+
+    func advanceNextDate(calendar: Calendar = .current) {
         let lowercasedPattern = schedulePattern.lowercased()
 
         if lowercasedPattern.contains("quarter") || lowercasedPattern.contains("3 month") {

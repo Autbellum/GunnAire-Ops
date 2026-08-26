@@ -11574,6 +11574,55 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
+    @Test func maintenanceAgreementVisitRemainsDueUntilCompletionAndAdvancesOnlyOnce() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let dueDate = try #require(calendar.date(from: DateComponents(year: 2026, month: 9, day: 15, hour: 9)))
+        let customer = Customer(name: "Traceable Agreement Customer")
+        let contract = RecurringMaintenanceContract(
+            customer: customer,
+            planName: "Comfort Care",
+            schedulePattern: "Every 6 months",
+            nextDate: dueDate,
+            includedVisitsPerTerm: 2
+        )
+        customer.recurringContracts = [contract]
+        let call = ServiceCall(
+            type: .maintenance,
+            scheduledDate: dueDate,
+            customer: customer,
+            status: .scheduled,
+            maintenanceAgreementID: contract.id,
+            maintenanceAgreementDueDate: dueDate
+        )
+
+        #expect(contract.scheduledVisit(forDueDate: dueDate, in: [call], calendar: calendar)?.id == call.id)
+        #expect(contract.nextDate == dueDate)
+        #expect(!call.completeLinkedMaintenanceAgreementIfNeeded())
+
+        call.status = .completed
+        #expect(call.completeLinkedMaintenanceAgreementIfNeeded())
+        let expectedNextDate = try #require(calendar.date(byAdding: .month, value: 6, to: dueDate))
+        #expect(contract.nextDate == expectedNextDate)
+        #expect(!call.completeLinkedMaintenanceAgreementIfNeeded())
+
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        context.insert(customer)
+        context.insert(contract)
+        context.insert(call)
+        try context.save()
+
+        let persistedCall = try #require(try context.fetch(FetchDescriptor<ServiceCall>()).first { $0.id == call.id })
+        #expect(persistedCall.maintenanceAgreementID == contract.id)
+        #expect(persistedCall.maintenanceAgreementDueDate == dueDate)
+    }
+
+    @MainActor
     @Test func storedQuickBooksPaymentMethodKeepsOnlySafeCustomerScopedMetadata() throws {
         let cardJSON = Data("""
         {

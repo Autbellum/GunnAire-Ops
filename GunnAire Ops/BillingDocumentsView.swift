@@ -470,7 +470,12 @@ struct BillingDocumentsView: View {
     }
 
     private var activeServiceAgreement: RecurringMaintenanceContract? {
-        contextCustomer?.recurringContracts
+        if let activeServiceCall,
+           let maintenanceAgreementID = activeServiceCall.maintenanceAgreementID,
+           let linkedAgreement = activeServiceCall.customer.recurringContracts.first(where: { $0.id == maintenanceAgreementID }) {
+            return linkedAgreement
+        }
+        return contextCustomer?.recurringContracts
             .filter(\.active)
             .sorted(by: { $0.nextDate < $1.nextDate })
             .first
@@ -1361,6 +1366,7 @@ GunnAire
                                 } else {
                                     if call.markDocumentationCompleteIfReady() {
                                         call.status = call.linkedInvoiceID == nil ? .completed : .invoiced
+                                        call.completeLinkedMaintenanceAgreementIfNeeded()
                                         let nextStatus = call.linkedInvoiceID == nil ? "completed" : "invoiced"
                                         ServiceCallActivity.record(for: call, action: "Job status updated", detail: "Status changed from in progress to \(nextStatus).", actorEmail: currentUserEmail, in: modelContext)
                                     } else {
@@ -6580,6 +6586,9 @@ private struct RecordInvoicePaymentView: View {
             call.workCompletedChecklist = true
             call.paymentCollectedChecklist = totalPaid > 0
             call.status = Invoice.isPaid(invoice, payments: payments.filter { $0.invoice.id == invoice.id }) ? .completed : .invoiced
+            if call.status == .completed {
+                call.completeLinkedMaintenanceAgreementIfNeeded()
+            }
             let paymentOutcome = Invoice.isPaid(invoice, payments: payments.filter { $0.invoice.id == invoice.id }) ? "paid in full" : "recorded with an outstanding balance"
             ServiceCallActivity.record(for: call, action: "Payment recorded", detail: "Payment \(paymentOutcome); job status changed from \(previousStatus.rawValue) to \(call.status.rawValue).", actorEmail: GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"), in: modelContext)
             if !trimmedCompletionNotes.isEmpty {

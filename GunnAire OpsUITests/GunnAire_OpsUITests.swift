@@ -355,8 +355,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
         let seededJob = app.buttons["OpenServiceCall-A1000000-0000-4000-8000-000000000002"]
-        XCTAssertTrue(seededJob.waitForExistence(timeout: 3))
         for _ in 0..<6 {
+            if seededJob.exists { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(seededJob.waitForExistence(timeout: 3))
+        for _ in 0..<3 {
             if seededJob.isHittable { break }
             app.swipeUp()
         }
@@ -472,6 +476,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(workspacePicker.buttons["Systems"].isSelected)
         XCTAssertTrue(app.staticTexts["Equipment Profiles"].exists)
         XCTAssertTrue(app.staticTexts["Maintain installed equipment, warranty context, service trends, and maintenance agreements."].exists)
+        let agreementVisitHistory = app.staticTexts["Visit history: 0 completed • 1 scheduled"]
+        for _ in 0..<6 {
+            if agreementVisitHistory.exists { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(agreementVisitHistory.waitForExistence(timeout: 3))
         let storedPaymentMethods = app.descendants(matching: .any)["CustomerStoredPaymentMethods"]
         for _ in 0..<6 {
             if storedPaymentMethods.exists { break }
@@ -495,6 +505,64 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(restoredWorkspacePicker.buttons["History"].isSelected)
         XCTAssertTrue(app.staticTexts["Recent Jobs"].exists)
         XCTAssertFalse(app.staticTexts["Documents & Photos"].exists)
+    }
+
+    @MainActor
+    func testScheduledMaintenanceAgreementOpensItsExistingVisitWithoutDuplicatingIt() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let agreementAction = app.buttons["MaintenanceVisitAction-A1000000-0000-4000-8000-000000000011"]
+        for _ in 0..<8 {
+            if agreementAction.exists { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(agreementAction.waitForExistence(timeout: 3))
+        XCTAssertEqual(agreementAction.label, "Open Scheduled Visit")
+        agreementAction.tap()
+
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+        let workspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Overview"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["LinkedMaintenanceAgreementVisit"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Comfort Care"].exists)
+    }
+
+    @MainActor
+    func testFieldTechnicianScheduleHidesAgreementManagementAttention() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        for _ in 0..<8 {
+            XCTAssertFalse(app.staticTexts["Maintenance Attention"].exists)
+            XCTAssertFalse(app.buttons["MaintenanceVisitAction-A1000000-0000-4000-8000-000000000011"].exists)
+            app.swipeUp()
+        }
     }
 
     @MainActor

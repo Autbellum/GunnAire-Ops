@@ -73,6 +73,8 @@ private enum GunnAireUITestFixtures {
     private static let correctiveSourceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000008")!
     private static let correctiveFollowUpCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000009")!
     private static let equipmentID = UUID(uuidString: "A1000000-0000-4000-8000-000000000010")!
+    private static let maintenanceAgreementID = UUID(uuidString: "A1000000-0000-4000-8000-000000000011")!
+    private static let maintenanceServiceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000012")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -103,8 +105,12 @@ private enum GunnAireUITestFixtures {
             context.delete(invoice)
         }
         let calls = try context.fetch(FetchDescriptor<ServiceCall>())
-        for call in calls where call.id == serviceCallID || call.id == correctiveSourceCallID || call.id == correctiveFollowUpCallID {
+        for call in calls where call.id == serviceCallID || call.id == correctiveSourceCallID || call.id == correctiveFollowUpCallID || call.id == maintenanceServiceCallID {
             context.delete(call)
+        }
+        let maintenanceAgreements = try context.fetch(FetchDescriptor<RecurringMaintenanceContract>())
+        for agreement in maintenanceAgreements where agreement.id == maintenanceAgreementID {
+            context.delete(agreement)
         }
         let equipmentProfiles = try context.fetch(FetchDescriptor<CustomerEquipment>())
         for equipment in equipmentProfiles where equipment.id == equipmentID {
@@ -207,12 +213,47 @@ private enum GunnAireUITestFixtures {
             amount: 189,
             status: "unpaid"
         )
+        let maintenanceDueDate = Calendar.current.date(byAdding: .day, value: 1, to: scheduledDate) ?? scheduledDate
+        let maintenanceAgreement = RecurringMaintenanceContract(
+            id: maintenanceAgreementID,
+            customer: customer,
+            planName: "Comfort Care",
+            schedulePattern: "every 6 months",
+            nextDate: maintenanceDueDate,
+            active: true,
+            termEndsOn: Calendar.current.date(byAdding: .year, value: 1, to: maintenanceDueDate),
+            pricePerVisit: 89,
+            includedVisitsPerTerm: 2,
+            coveredEquipmentIDs: [equipmentID]
+        )
+        let maintenanceCall = ServiceCall(
+            id: maintenanceServiceCallID,
+            googleEventManagedByApp: true,
+            eventTitle: "Comfort Care maintenance",
+            siteAddress: customer.address,
+            equipmentName: equipment.name,
+            equipmentManufacturer: equipment.manufacturer,
+            equipmentModel: equipment.modelNumber,
+            equipmentSerialNumber: equipment.serialNumber,
+            customerEquipmentID: equipment.id,
+            type: .maintenance,
+            scheduledDate: maintenanceDueDate,
+            duration: 90 * 60,
+            assignedTechnician: technician,
+            customer: customer,
+            status: .scheduled,
+            notes: "Scheduled from Comfort Care: every 6 months",
+            maintenanceAgreementID: maintenanceAgreementID,
+            maintenanceAgreementDueDate: maintenanceDueDate
+        )
         context.insert(customer)
         context.insert(technician)
         context.insert(catalogItem)
         context.insert(equipment)
         context.insert(call)
         context.insert(invoice)
+        context.insert(maintenanceAgreement)
+        context.insert(maintenanceCall)
 
         if arguments.contains("-uiTestSeedCorrectiveLineage") {
             let sourceDate = Calendar.current.date(
