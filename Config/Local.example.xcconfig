@@ -19,12 +19,12 @@ QB_TIME_ACTIVITY_ITEM_REF =
 QB_TIME_ACTIVITY_PAYROLL_ITEM_REF =
 QB_TIME_ACTIVITY_PROJECT_REF =
 
-GOOGLE_CLIENT_ID = y539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e.apps.googleusercontent.com
-GOOGLE_REDIRECT_URI = com.googleusercontent.apps.y539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e:/oauth2redirect
+GOOGLE_CLIENT_ID = 539751190237-fcff9hocl8rodfea25ilvld23j6vnhvm.apps.googleusercontent.com
+GOOGLE_REDIRECT_URI = com.googleusercontent.apps.539751190237-fcff9hocl8rodfea25ilvld23j6vnhvm:/oauth2redirect
 GOOGLE_CALLBACK_SCHEME = gunnaireops
-GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.539751190237-fcff9hocl8rodfea25ilvld23j6vnhvm
 GOOGLE_ALLOWED_HOSTED_DOMAIN = gunnaire.com
-GOOGLE_iOS_URL_SCHEME = com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e
+GOOGLE_iOS_URL_SCHEME = com.googleusercontent.apps.539751190237-fcff9hocl8rodfea25ilvld23j6vnhvm
 
 GUNNAIRE_BACKEND_BASE_URL = http:/$()/macstudio.local:8787
 GUNNAIRE_BACKEND_API_TOKEN = replace-with-a-long-random-token
