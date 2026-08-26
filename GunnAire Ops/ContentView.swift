@@ -387,6 +387,8 @@ struct ServiceCallDetailView: View {
     let call: ServiceCall
     @State private var showingEditSheet = false
     @State private var showingCustomerPortalComposer = false
+    @State private var selectedWorkspace: ServiceCallDetailWorkspace = .overview
+    @State private var hasSelectedInitialWorkspace = false
     private var resolvedAddress: String? {
         let address = call.siteAddress ?? call.customer.address
         guard let address, !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -748,7 +750,7 @@ GunnAire
 
     private var canViewFinancials: Bool {
         let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
-        return AppAccess.isAdmin(email: email, users: users)
+        return AppAccess.canViewBillingFinancialDetails(email: email, users: users)
     }
 
     private var tapToPayReady: Bool {
@@ -763,6 +765,13 @@ GunnAire
         call.workCompletedChecklist &&
         call.documentationChecklist &&
         call.paymentCollectedChecklist
+    }
+
+    private var hasJobStatusAction: Bool {
+        call.status == .scheduled ||
+        call.status == .inProgress ||
+        call.status == .completed ||
+        (call.technicianEnRouteAt != nil && call.technicianArrivedAt == nil && !call.arrivalConfirmed)
     }
 
     private func normalizedEquipmentKey(for call: ServiceCall) -> String? {
@@ -911,6 +920,31 @@ GunnAire
                         Text("Status: \(call.status.rawValue.capitalized)")
                         Label(call.technicianJobPresence.displayName, systemImage: presenceSystemImage)
                             .foregroundColor(call.technicianJobPresence == .enRoute ? .orange : .secondary)
+                    }
+                    .foregroundColor(.primary)
+
+                    GroupBox("Job Workspace") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Picker("Workspace", selection: $selectedWorkspace) {
+                                ForEach(ServiceCallDetailWorkspace.available(canViewFinancials: canViewFinancials)) { workspace in
+                                    Text(workspace.label).tag(workspace)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .accessibilityIdentifier("ServiceCallWorkspacePicker")
+
+                            Label(selectedWorkspace.guidance, systemImage: selectedWorkspace.systemImage)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if hasJobStatusAction {
+                        jobActionsSection
+                    }
+
+                    if selectedWorkspace == .overview {
+                    Group {
                         if call.status == .cancelled {
                             if let cancelledAt = call.cancelledAt {
                                 Text("Cancelled: \(cancelledAt.formatted(date: .abbreviated, time: .shortened))")
@@ -984,7 +1018,9 @@ GunnAire
                         }
                     }
                     .foregroundColor(.primary)
+                    }
 
+                    if selectedWorkspace == .history {
                     GroupBox("Job Activity") {
                         if callActivity.isEmpty {
                             Text("New operational changes will appear here for the office and field team.")
@@ -1015,7 +1051,9 @@ GunnAire
                             }
                         }
                     }
+                    }
 
+                    if selectedWorkspace == .work {
                     GroupBox("Field Forms") {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Use a short reusable form when this visit needs evidence beyond the standard HVAC report.")
@@ -1065,8 +1103,10 @@ GunnAire
                             }
                         }
                     }
+                    }
 
-                    if phoneURL != nil || emailURL != nil || mapsURL != nil {
+                    if selectedWorkspace == .overview,
+                       phoneURL != nil || emailURL != nil || mapsURL != nil {
                         GroupBox("Customer Contact") {
                             HStack(spacing: 12) {
                                 if let phoneURL {
@@ -1103,6 +1143,7 @@ GunnAire
                         }
                     }
 
+                    if selectedWorkspace == .history {
                     GroupBox("Membership & History") {
                         VStack(alignment: .leading, spacing: 8) {
                             if let agreement = activeServiceAgreement {
@@ -1156,7 +1197,9 @@ GunnAire
                             }
                         }
                     }
+                    }
 
+                    if selectedWorkspace == .work {
                     GroupBox(jobWorkflowTitle) {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Workflow progress: \(call.workflowChecklistCompletedCount)/\(call.workflowChecklistTotalCount)")
@@ -1239,8 +1282,9 @@ GunnAire
                             }
                         }
                     }
+                    }
 
-                    if !relatedEquipmentCalls.isEmpty {
+                    if selectedWorkspace == .history, !relatedEquipmentCalls.isEmpty {
                         GroupBox("Equipment History") {
                             VStack(alignment: .leading, spacing: 8) {
                                 ForEach(relatedEquipmentCalls.prefix(5)) { historyCall in
@@ -1262,7 +1306,7 @@ GunnAire
                         }
                     }
 
-                    if canViewFinancials {
+                    if selectedWorkspace == .billing, canViewFinancials {
                         GroupBox("Documentation") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(call.linkedEstimateID == nil && call.linkedInvoiceID == nil ? "No estimate or invoice linked yet." : "This job already has linked billing documentation.")
@@ -1398,7 +1442,7 @@ GunnAire
                             }
                         }
                         }
-                    } else {
+                    } else if selectedWorkspace == .work, !canViewFinancials {
                         GroupBox("Documentation") {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Checklist: \(call.checklistCompletedCount)/\(call.checklistTotalCount)")
@@ -1423,6 +1467,7 @@ GunnAire
                         }
                     }
 
+                    if selectedWorkspace == .work {
                     GroupBox("Completion Checklist") {
                         VStack(alignment: .leading, spacing: 10) {
                             Toggle("Customer notified", isOn: Binding(
@@ -1473,69 +1518,9 @@ GunnAire
                             }
                         }
                     }
-
-                    GroupBox("Job Actions") {
-                        VStack(spacing: 12) {
-                            HStack {
-                                if call.status == .scheduled && call.technicianEnRouteAt == nil {
-                                    Button {
-                                        call.markTechnicianEnRoute()
-                                        ServiceCallActivity.record(for: call, action: "Technician en route", detail: "Technician marked en route; job moved to in progress.", actorEmail: currentActivityActor, in: modelContext)
-                                    } label: {
-                                        Label("En Route", systemImage: "car.fill")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                }
-                                if call.technicianEnRouteAt != nil && call.technicianArrivedAt == nil && !call.arrivalConfirmed {
-                                    Button {
-                                        call.markTechnicianArrived()
-                                        ServiceCallActivity.record(for: call, action: "Technician arrived", detail: "Arrival confirmed on site.", actorEmail: currentActivityActor, in: modelContext)
-                                    } label: {
-                                        Label("Arrived", systemImage: "mappin.and.ellipse")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                }
-                                if call.status == .scheduled {
-                                    Button {
-                                        call.status = .inProgress
-                                        call.documentationStartedAt = call.documentationStartedAt ?? Date()
-                                        ServiceCallActivity.record(for: call, action: "Job started", detail: "Status changed from scheduled to in progress.", actorEmail: currentActivityActor, in: modelContext)
-                                    } label: {
-                                        Label("Start Job", systemImage: "play.fill")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                } else if call.status == .inProgress {
-                                    Button {
-                                        if call.markDocumentationCompleteIfReady() {
-                                            call.status = .completed
-                                            ServiceCallActivity.record(for: call, action: "Job completed", detail: "Status changed from in progress to completed.", actorEmail: currentActivityActor, in: modelContext)
-                                        }
-                                    } label: {
-                                        Label("Mark Complete", systemImage: "checkmark.circle.fill")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(requireJobCompletionChecklist && !checklistIsComplete)
-                                } else if call.status == .completed {
-                                    Button {
-                                        call.status = .inProgress
-                                        ServiceCallActivity.record(for: call, action: "Job reopened", detail: "Status changed from completed to in progress.", actorEmail: currentActivityActor, in: modelContext)
-                                    } label: {
-                                        Label("Reopen Job", systemImage: "arrow.uturn.backward.circle")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(.bordered)
-                                }
-                            }
-                            .tint(Color.brandGold)
-                            .foregroundStyle(Color.primaryBlack)
-                        }
                     }
 
-                    if let mapsURL {
+                    if selectedWorkspace == .overview, let mapsURL {
                         Button {
                             openURL(mapsURL)
                         } label: {
@@ -1547,7 +1532,7 @@ GunnAire
                         .foregroundStyle(Color.primaryBlack)
                     }
 
-                    if canViewFinancials {
+                    if selectedWorkspace == .billing, canViewFinancials {
                         Button {
                             GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
                         } label: {
@@ -1559,7 +1544,8 @@ GunnAire
                         .foregroundStyle(Color.primaryBlack)
                     }
 
-                    if canViewFinancials,
+                    if selectedWorkspace == .billing,
+                       canViewFinancials,
                        GunnAireBackendService.isConfigured,
                        call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
                         Button {
@@ -1571,7 +1557,7 @@ GunnAire
                         .buttonStyle(.bordered)
                     }
 
-                    if canViewFinancials && hasOpenInvoiceBalance {
+                    if selectedWorkspace == .billing && canViewFinancials && hasOpenInvoiceBalance {
                         VStack(spacing: 10) {
                             Button {
                                 if let linkedInvoiceID = call.linkedInvoiceID {
@@ -1629,6 +1615,79 @@ GunnAire
         }
         .onAppear {
             FieldFormTemplate.ensureStarterTemplates(in: modelContext)
+            guard !hasSelectedInitialWorkspace else { return }
+            selectedWorkspace = ServiceCallDetailWorkspace.recommended(
+                for: call.status,
+                hasOpenInvoiceBalance: hasOpenInvoiceBalance,
+                canViewFinancials: canViewFinancials
+            )
+            hasSelectedInitialWorkspace = true
+        }
+        .onChange(of: canViewFinancials) { _, newCanViewFinancials in
+            if !ServiceCallDetailWorkspace.available(canViewFinancials: newCanViewFinancials).contains(selectedWorkspace) {
+                selectedWorkspace = .work
+            }
+        }
+    }
+
+    private var jobActionsSection: some View {
+        GroupBox("Job Actions") {
+            HStack {
+                if call.status == .scheduled && call.technicianEnRouteAt == nil {
+                    Button {
+                        call.markTechnicianEnRoute()
+                        ServiceCallActivity.record(for: call, action: "Technician en route", detail: "Technician marked en route; job moved to in progress.", actorEmail: currentActivityActor, in: modelContext)
+                    } label: {
+                        Label("En Route", systemImage: "car.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                if call.technicianEnRouteAt != nil && call.technicianArrivedAt == nil && !call.arrivalConfirmed {
+                    Button {
+                        call.markTechnicianArrived()
+                        ServiceCallActivity.record(for: call, action: "Technician arrived", detail: "Arrival confirmed on site.", actorEmail: currentActivityActor, in: modelContext)
+                    } label: {
+                        Label("Arrived", systemImage: "mappin.and.ellipse")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                if call.status == .scheduled {
+                    Button {
+                        call.status = .inProgress
+                        call.documentationStartedAt = call.documentationStartedAt ?? Date()
+                        ServiceCallActivity.record(for: call, action: "Job started", detail: "Status changed from scheduled to in progress.", actorEmail: currentActivityActor, in: modelContext)
+                    } label: {
+                        Label("Start Job", systemImage: "play.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else if call.status == .inProgress {
+                    Button {
+                        if call.markDocumentationCompleteIfReady() {
+                            call.status = .completed
+                            ServiceCallActivity.record(for: call, action: "Job completed", detail: "Status changed from in progress to completed.", actorEmail: currentActivityActor, in: modelContext)
+                        }
+                    } label: {
+                        Label("Mark Complete", systemImage: "checkmark.circle.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(requireJobCompletionChecklist && !checklistIsComplete)
+                } else if call.status == .completed {
+                    Button {
+                        call.status = .inProgress
+                        ServiceCallActivity.record(for: call, action: "Job reopened", detail: "Status changed from completed to in progress.", actorEmail: currentActivityActor, in: modelContext)
+                    } label: {
+                        Label("Reopen Job", systemImage: "arrow.uturn.backward.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .tint(Color.brandGold)
+            .foregroundStyle(Color.primaryBlack)
         }
     }
 
@@ -1664,6 +1723,65 @@ GunnAire
         call.followUpRequired = false
         call.followUpAction = nil
         call.followUpDueDate = nil
+    }
+}
+
+enum ServiceCallDetailWorkspace: String, CaseIterable, Identifiable {
+    case overview
+    case work
+    case billing
+    case history
+
+    var id: String { rawValue }
+
+    static func available(canViewFinancials: Bool) -> [ServiceCallDetailWorkspace] {
+        canViewFinancials ? allCases : [.overview, .work, .history]
+    }
+
+    static func recommended(
+        for status: JobStatus,
+        hasOpenInvoiceBalance: Bool,
+        canViewFinancials: Bool
+    ) -> ServiceCallDetailWorkspace {
+        switch status {
+        case .scheduled, .inProgress:
+            return .work
+        case .completed, .invoiced:
+            return canViewFinancials && hasOpenInvoiceBalance ? .billing : .history
+        case .cancelled:
+            return .history
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .overview: "Overview"
+        case .work: "Work"
+        case .billing: "Billing"
+        case .history: "History"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview: "rectangle.grid.1x2"
+        case .work: "wrench.and.screwdriver"
+        case .billing: "doc.text"
+        case .history: "clock.arrow.circlepath"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .overview:
+            "Review the appointment, contact the customer, navigate, and handle the next job-status action."
+        case .work:
+            "Capture field forms, equipment context, workflow checks, photos, and completion evidence."
+        case .billing:
+            "Review proposals, invoice status, payment balance, customer documents, and collection follow-up."
+        case .history:
+            "Review the job audit trail, service agreement, recent customer visits, and equipment history."
+        }
     }
 }
 

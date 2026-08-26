@@ -196,6 +196,58 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testServiceCallDetailUsesStateAwareOperationalWorkspaces() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let seededJob = app.buttons["OpenServiceCall-A1000000-0000-4000-8000-000000000002"]
+        XCTAssertTrue(seededJob.waitForExistence(timeout: 3))
+        for _ in 0..<6 {
+            if seededJob.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(seededJob.isHittable)
+        seededJob.tap()
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+
+        let workspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.exists)
+        XCTAssertTrue(workspacePicker.buttons["Billing"].isSelected)
+        XCTAssertTrue(app.staticTexts["Documentation"].exists)
+        XCTAssertFalse(app.staticTexts["Completion Checklist"].exists)
+
+        workspacePicker.buttons["Work"].tap()
+        XCTAssertTrue(workspacePicker.buttons["Work"].isSelected)
+        XCTAssertTrue(app.staticTexts["Field Forms"].exists)
+        XCTAssertTrue(app.staticTexts["Equipment"].exists)
+        XCTAssertTrue(app.staticTexts["Completion Checklist"].exists)
+        XCTAssertFalse(app.staticTexts["Documentation"].exists)
+
+        workspacePicker.buttons["History"].tap()
+        XCTAssertTrue(workspacePicker.buttons["History"].isSelected)
+        XCTAssertTrue(app.staticTexts["Job Activity"].exists)
+        XCTAssertTrue(app.staticTexts["Membership & History"].exists)
+        XCTAssertFalse(app.staticTexts["Completion Checklist"].exists)
+
+        workspacePicker.buttons["Overview"].tap()
+        XCTAssertTrue(workspacePicker.buttons["Overview"].isSelected)
+        XCTAssertTrue(app.staticTexts["Customer Contact"].exists)
+        XCTAssertFalse(app.staticTexts["Membership & History"].exists)
+    }
+
+    @MainActor
     func testQuickBooksManagementUsesFocusedAccountingWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

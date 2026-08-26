@@ -291,6 +291,18 @@ struct GunnAire_OpsTests {
         #expect(ReceiptsBillsWorkspace.recovery.guidance.localizedCaseInsensitiveContains("unsynced"))
     }
 
+    @Test func serviceCallDetailWorkspacesFollowJobStateAndFinancialAccess() {
+        #expect(ServiceCallDetailWorkspace.allCases.map(\.label) == ["Overview", "Work", "Billing", "History"])
+        #expect(ServiceCallDetailWorkspace.available(canViewFinancials: false) == [.overview, .work, .history])
+        #expect(ServiceCallDetailWorkspace.available(canViewFinancials: true) == ServiceCallDetailWorkspace.allCases)
+        #expect(ServiceCallDetailWorkspace.recommended(for: .scheduled, hasOpenInvoiceBalance: false, canViewFinancials: true) == .work)
+        #expect(ServiceCallDetailWorkspace.recommended(for: .inProgress, hasOpenInvoiceBalance: false, canViewFinancials: false) == .work)
+        #expect(ServiceCallDetailWorkspace.recommended(for: .invoiced, hasOpenInvoiceBalance: true, canViewFinancials: true) == .billing)
+        #expect(ServiceCallDetailWorkspace.recommended(for: .completed, hasOpenInvoiceBalance: false, canViewFinancials: true) == .history)
+        #expect(ServiceCallDetailWorkspace.recommended(for: .cancelled, hasOpenInvoiceBalance: false, canViewFinancials: false) == .history)
+        #expect(ServiceCallDetailWorkspace.billing.guidance.localizedCaseInsensitiveContains("payment"))
+    }
+
     @Test func fieldPaymentPromptQueueAnnouncesEveryPendingTaskOnce() {
         let first = BackendFieldPaymentAssignmentRecord(
             id: "assignment-1",
@@ -857,8 +869,9 @@ struct GunnAire_OpsTests {
         let standard = AppUser(email: "standard@gunnaire.com", role: .standard)
         let technician = AppUser(email: "tech@gunnaire.com", role: .fieldTechnician)
         let dispatcher = AppUser(email: "dispatch@gunnaire.com", role: .dispatcher)
+        let accounting = AppUser(email: "accounting@gunnaire.com", role: .accounting)
         let admin = AppUser(email: "admin@gunnaire.com", role: .admin)
-        let users = [standard, technician, dispatcher, admin]
+        let users = [standard, technician, dispatcher, accounting, admin]
 
         #expect(AppAccess.canAccessSidebarItem(.scheduleAndJobs, email: standard.email, users: users) == true)
         #expect(AppAccess.canAccessSidebarItem(.onsiteDocumentation, email: standard.email, users: users) == true)
@@ -886,6 +899,13 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canManageDispatch(email: technician.email, users: users) == false)
 
         #expect(AppAccess.canManageDispatch(email: dispatcher.email, users: users) == true)
+
+        #expect(AppAccess.canAccessSidebarItem(.scheduleAndJobs, email: accounting.email, users: users) == false)
+        #expect(AppAccess.canAccessSidebarItem(.invoices, email: accounting.email, users: users) == true)
+        #expect(AppAccess.canViewFinancialManagement(email: accounting.email, users: users) == true)
+        #expect(AppAccess.canViewBillingFinancialDetails(email: accounting.email, users: users) == true)
+        #expect(AppAccess.canCollectFieldPayments(email: accounting.email, users: users) == false)
+        #expect(AppAccess.canManageDispatch(email: accounting.email, users: users) == false)
 
         #expect(AppAccess.canAccessSidebarItem(.quickBooksManagement, email: admin.email, users: users) == true)
         #expect(AppAccess.canAccessSidebarItem(.syncIntegrations, email: admin.email, users: users) == true)

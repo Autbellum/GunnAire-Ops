@@ -1032,10 +1032,17 @@ struct ScheduleView: View {
     private func serviceCallCard(for call: ServiceCall) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
-                NavigationLink(value: call) {
-                    serviceCallSummary(for: call)
+                serviceCallSummary(for: call)
+
+                Button {
+                    navigationPath.append(call)
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .frame(width: 34, height: 34)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Open job details")
+                .accessibilityIdentifier("OpenServiceCall-\(call.id.uuidString)")
 
                 Button {
                     editingCall = call
