@@ -34,6 +34,7 @@ struct BillingDocumentsView: View {
     }()
 
     @State private var selectedDocumentKind: BillingDocumentKind
+    @State private var selectedJobStage: JobDocumentationStage = .work
     @State private var selectedCustomerID: UUID?
     @State private var selectedItems: Set<UUID> = []
     @State private var notes = ""
@@ -1059,12 +1060,33 @@ GunnAire
                         }
                     }
 
-                    closeoutReadinessSection(for: call)
-                    technicalServiceReportSection(for: call)
-                    equipmentAttachmentHistorySection(for: call)
-                    attachmentSection(for: call)
+                    Section("Job Workspace") {
+                        Picker("Stage", selection: $selectedJobStage) {
+                            ForEach(JobDocumentationStage.allCases) { stage in
+                                Text(stage.label).tag(stage)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityIdentifier("JobDocumentationStagePicker")
 
-                    Section("Documentation Builder") {
+                        Label(selectedJobStage.guidance, systemImage: selectedJobStage.systemImage)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if selectedJobStage == .closeout {
+                        closeoutReadinessSection(for: call)
+                    }
+                    if selectedJobStage == .work {
+                        technicalServiceReportSection(for: call)
+                    }
+                    if selectedJobStage == .files {
+                        equipmentAttachmentHistorySection(for: call)
+                        attachmentSection(for: call)
+                    }
+
+                    if selectedJobStage == .billing {
+                        Section("Documentation Builder") {
                         if allowsDocumentSwitching {
                             Picker("Document", selection: $selectedDocumentKind) {
                                 ForEach(BillingDocumentKind.allCases) { kind in
@@ -1185,9 +1207,11 @@ GunnAire
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                        }
                     }
 
-                    Section("Customer Documents") {
+                    if selectedJobStage == .files {
+                        Section("Customer Documents") {
                         Button {
                             generateOnsiteReport(for: call)
                         } label: {
@@ -1229,9 +1253,11 @@ GunnAire
                             .buttonStyle(.bordered)
                             .disabled(!canEmailGeneratedCustomerDocument)
                         }
+                        }
                     }
 
-                    Section("Job Progress") {
+                    if selectedJobStage == .closeout {
+                        Section("Job Progress") {
                         Toggle("Work Completed", isOn: Binding(
                             get: { call.workCompletedChecklist },
                             set: { call.workCompletedChecklist = $0 }
@@ -1268,9 +1294,12 @@ GunnAire
                             }
                             .buttonStyle(.bordered)
                         }
+                        }
                     }
 
-                    workflowSection(for: call)
+                    if selectedJobStage == .work {
+                        workflowSection(for: call)
+                    }
                 }
 
                 if !isJobDocumentationMode && canViewFinancials {
@@ -1330,7 +1359,9 @@ GunnAire
                     }
                 }
 
-                if (canViewFinancials || canCollectFieldPayments) && (currentJobEstimate != nil || currentJobInvoice != nil) {
+                if (canViewFinancials || canCollectFieldPayments) &&
+                    (currentJobEstimate != nil || currentJobInvoice != nil) &&
+                    (!isJobDocumentationMode || selectedJobStage == .billing) {
                     Section("Current Job Documents") {
                         if let estimate = currentJobEstimate {
                             VStack(alignment: .leading, spacing: 4) {
@@ -1554,7 +1585,8 @@ GunnAire
                     }
                 }
 
-                if let customer = contextCustomer {
+                if let customer = contextCustomer,
+                   !isJobDocumentationMode || selectedJobStage == .work {
                     Section("Customer Context") {
                         if let agreement = activeServiceAgreement {
                             VStack(alignment: .leading, spacing: 4) {
@@ -2470,6 +2502,11 @@ GunnAire
             if !didLoadLinkedDocumentContext {
                 loadLinkedDocumentContextIfNeeded()
             }
+            selectedJobStage = JobDocumentationStage.recommended(
+                for: call.status,
+                hasInvoice: currentJobInvoice != nil,
+                invoiceIsPaid: currentJobInvoice.map(isInvoicePaid) ?? false
+            )
             openInvoiceAfterEstimateCreation = true
             if GunnAireBackendService.isConfigured, sharedJobDocuments.isEmpty {
                 Task {
@@ -5767,6 +5804,60 @@ private func workspaceMetricView(title: String, value: String) -> some View {
             .foregroundColor(.secondary)
         Text(value)
             .font(.headline)
+    }
+}
+
+enum JobDocumentationStage: String, CaseIterable, Identifiable {
+    case work
+    case files
+    case billing
+    case closeout
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .work: "Work"
+        case .files: "Files"
+        case .billing: "Billing"
+        case .closeout: "Closeout"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .work: "wrench.and.screwdriver"
+        case .files: "folder"
+        case .billing: "doc.text"
+        case .closeout: "checkmark.circle"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .work:
+            "Record HVAC readings, findings, equipment details, and workflow checks."
+        case .files:
+            "Capture job photos and files, then create customer-ready documents."
+        case .billing:
+            "Build the estimate or invoice and review documents linked to this job."
+        case .closeout:
+            "Resolve readiness items, complete the checklist, and finish the job."
+        }
+    }
+
+    static func recommended(
+        for status: JobStatus,
+        hasInvoice: Bool,
+        invoiceIsPaid: Bool
+    ) -> JobDocumentationStage {
+        if hasInvoice {
+            return invoiceIsPaid ? .closeout : .billing
+        }
+        if status == .completed || status == .invoiced {
+            return .closeout
+        }
+        return .work
     }
 }
 

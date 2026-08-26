@@ -1081,6 +1081,7 @@ struct ScheduleView: View {
                         documentationCall = call
                     }
                     .buttonStyle(.bordered)
+                    .accessibilityIdentifier("OpenDocumentation-\(call.id.uuidString)")
                 }
 
                 if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {

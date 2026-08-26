@@ -252,6 +252,20 @@ struct GunnAire_OpsTests {
         #expect(paidInvoice == .rejected("This invoice is already paid. No collection is needed."))
     }
 
+    @Test func jobDocumentationStagesKeepTheHVACWorkflowFocused() {
+        #expect(JobDocumentationStage.allCases.map(\.label) == ["Work", "Files", "Billing", "Closeout"])
+        #expect(Set(JobDocumentationStage.allCases.map(\.guidance)).count == 4)
+        #expect(JobDocumentationStage.work.guidance.localizedCaseInsensitiveContains("HVAC"))
+    }
+
+    @Test func jobDocumentationStageRecommendationFollowsJobAndInvoiceState() {
+        #expect(JobDocumentationStage.recommended(for: .scheduled, hasInvoice: false, invoiceIsPaid: false) == .work)
+        #expect(JobDocumentationStage.recommended(for: .inProgress, hasInvoice: false, invoiceIsPaid: false) == .work)
+        #expect(JobDocumentationStage.recommended(for: .invoiced, hasInvoice: true, invoiceIsPaid: false) == .billing)
+        #expect(JobDocumentationStage.recommended(for: .completed, hasInvoice: true, invoiceIsPaid: true) == .closeout)
+        #expect(JobDocumentationStage.recommended(for: .completed, hasInvoice: false, invoiceIsPaid: false) == .closeout)
+    }
+
     @Test func fieldPaymentPromptQueueAnnouncesEveryPendingTaskOnce() {
         let first = BackendFieldPaymentAssignmentRecord(
             id: "assignment-1",
