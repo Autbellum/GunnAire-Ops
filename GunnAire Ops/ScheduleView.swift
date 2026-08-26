@@ -34,6 +34,7 @@ struct ScheduleView: View {
     @State private var jobSearchText = ""
     @State private var showingNewRequestSheet = false
     @State private var showingAvailabilityBlocks = false
+    @State private var showingDispatchWeekBoard = false
     @State private var requestMessage: String?
     @State private var isImportingOnlineRequests = false
 
@@ -304,6 +305,13 @@ struct ScheduleView: View {
                         HStack {
                             if canManageDispatch {
                                 Button {
+                                    showingDispatchWeekBoard = true
+                                } label: {
+                                    Label("Week Board", systemImage: "rectangle.split.3x1")
+                                }
+                                .tint(Color.brandGold)
+
+                                Button {
                                     showingAvailabilityBlocks = true
                                 } label: {
                                     Label("Availability", systemImage: "person.badge.clock")
@@ -364,6 +372,14 @@ struct ScheduleView: View {
                 .sheet(isPresented: $showingAvailabilityBlocks) {
                     TechnicianAvailabilityView()
                         .tint(Color.brandGold)
+                }
+                .fullScreenCover(isPresented: $showingDispatchWeekBoard) {
+                    DispatchWeekBoardView(
+                        initialDate: selectedDate,
+                        calls: callsForSignedInUser,
+                        onMove: moveCallFromDispatchBoard
+                    )
+                    .tint(Color.brandGold)
                 }
                 .fullScreenCover(item: $editingCall) { call in
                     EditServiceCallView(call: call)
@@ -1696,6 +1712,64 @@ GunnAire
         )
     }
 
+    private func moveCallFromDispatchBoard(_ callID: UUID, _ targetDay: Date) -> DispatchBoardMoveResult {
+        guard canManageDispatch else {
+            return .rejected("Your business account cannot change the dispatch schedule.")
+        }
+        guard let call = callsForSignedInUser.first(where: { $0.id == callID }) else {
+            return .rejected("That job is no longer available in your schedule.")
+        }
+        guard DispatchBoardScheduling.canMove(call) else {
+            if GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(call), !call.googleEventManagedByApp {
+                return .rejected("Google-owned events are read-only. Move this event in Google Calendar, then sync again.")
+            }
+            return .rejected("Completed and cancelled jobs cannot be moved from the dispatch board.")
+        }
+
+        let proposedStart = DispatchBoardScheduling.proposedStart(
+            preservingTimeOf: call.scheduledDate,
+            on: targetDay
+        )
+        guard proposedStart != call.scheduledDate else {
+            return .unchanged("This job is already scheduled on that day.")
+        }
+        if let conflict = DispatchBoardScheduling.conflictSummary(
+            for: call,
+            proposedStart: proposedStart,
+            serviceCalls: serviceCalls,
+            availabilityBlocks: technicianAvailabilityBlocks,
+            technicians: technicians
+        ) {
+            return .rejected("Move blocked: \(conflict) Open the job editor to choose another time or deliberately resolve the conflict.")
+        }
+
+        let originalStart = call.scheduledDate
+        call.scheduledDate = proposedStart
+        let activity = ServiceCallActivity(
+            serviceCallID: call.id,
+            action: "Dispatch board rescheduled",
+            detail: "Moved from \(originalStart.formatted(date: .abbreviated, time: .shortened)) to \(proposedStart.formatted(date: .abbreviated, time: .shortened)); appointment time preserved.",
+            actorEmail: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        )
+        modelContext.insert(activity)
+
+        do {
+            try modelContext.save()
+        } catch {
+            call.scheduledDate = originalStart
+            modelContext.delete(activity)
+            try? modelContext.save()
+            return .rejected("The schedule could not be saved: \(error.localizedDescription)")
+        }
+
+        selectedDate = Calendar.current.startOfDay(for: proposedStart)
+        if GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) {
+            GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
+            publishToGoogleCalendar(call)
+        }
+        return .moved("\(displayTitle(for: call)) moved to \(proposedStart.formatted(date: .abbreviated, time: .shortened)).")
+    }
+
     private func assign(_ call: ServiceCall, to technician: Technician) {
         let previousTechnician = call.assignedTechnician?.name
         call.assignedTechnician = technician
@@ -1758,6 +1832,326 @@ GunnAire
         )
     }
 
+}
+
+enum DispatchBoardMoveResult: Equatable {
+    case moved(String)
+    case unchanged(String)
+    case rejected(String)
+
+    var message: String {
+        switch self {
+        case .moved(let message), .unchanged(let message), .rejected(let message):
+            message
+        }
+    }
+
+    var isSuccess: Bool {
+        if case .moved = self { return true }
+        return false
+    }
+}
+
+enum DispatchBoardScheduling {
+    static func startOfWeek(containing date: Date, calendar: Calendar = .current) -> Date {
+        let day = calendar.startOfDay(for: date)
+        let weekday = calendar.component(.weekday, from: day)
+        let offsetFromMonday = (weekday + 5) % 7
+        return calendar.date(byAdding: .day, value: -offsetFromMonday, to: day) ?? day
+    }
+
+    static func daysInWeek(containing date: Date, calendar: Calendar = .current) -> [Date] {
+        let start = startOfWeek(containing: date, calendar: calendar)
+        return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+    }
+
+    static func proposedStart(
+        preservingTimeOf currentStart: Date,
+        on targetDay: Date,
+        calendar: Calendar = .current
+    ) -> Date {
+        let time = calendar.dateComponents([.hour, .minute, .second], from: currentStart)
+        return calendar.date(
+            bySettingHour: time.hour ?? 0,
+            minute: time.minute ?? 0,
+            second: time.second ?? 0,
+            of: targetDay
+        ) ?? calendar.startOfDay(for: targetDay)
+    }
+
+    static func canMove(_ call: ServiceCall) -> Bool {
+        guard call.status != .completed, call.status != .cancelled else { return false }
+        return !GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(call) || call.googleEventManagedByApp
+    }
+
+    static func conflictSummary(
+        for call: ServiceCall,
+        proposedStart: Date,
+        serviceCalls: [ServiceCall],
+        availabilityBlocks: [TechnicianAvailabilityBlock],
+        technicians: [Technician]
+    ) -> String? {
+        let proposedEnd = proposedStart.addingTimeInterval(max(call.duration, 60))
+        var assignedIDs = Set(call.additionalTechnicianIDs)
+        if let leadID = call.assignedTechnician?.id {
+            assignedIDs.insert(leadID)
+        }
+        guard !assignedIDs.isEmpty else { return nil }
+
+        for technicianID in assignedIDs {
+            let technicianName = technicians.first(where: { $0.id == technicianID })?.name ?? "Assigned technician"
+            if let conflictingCall = serviceCalls.first(where: { other in
+                guard other.id != call.id,
+                      other.status != .cancelled,
+                      other.status != .completed,
+                      other.includesAssignedTechnician(technicianID) else { return false }
+                let otherEnd = other.scheduledDate.addingTimeInterval(max(other.duration, 60))
+                return proposedStart < otherEnd && proposedEnd > other.scheduledDate
+            }) {
+                return "\(technicianName) already has \(conflictingCall.customer.name) at \(conflictingCall.scheduledDate.formatted(date: .omitted, time: .shortened))."
+            }
+            if let block = availabilityBlocks.first(where: {
+                $0.technicianID == technicianID && $0.overlaps(start: proposedStart, end: proposedEnd)
+            }) {
+                return "\(technicianName) is marked \(block.dispatchLabel.lowercased()) during that time."
+            }
+        }
+        return nil
+    }
+}
+
+private struct DispatchWeekBoardView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let calls: [ServiceCall]
+    let onMove: (UUID, Date) -> DispatchBoardMoveResult
+
+    @State private var weekAnchor: Date
+    @State private var actionMessage: String?
+    @State private var lastMoveSucceeded = false
+
+    init(
+        initialDate: Date,
+        calls: [ServiceCall],
+        onMove: @escaping (UUID, Date) -> DispatchBoardMoveResult
+    ) {
+        self.calls = calls
+        self.onMove = onMove
+        _weekAnchor = State(initialValue: DispatchBoardScheduling.startOfWeek(containing: initialDate))
+    }
+
+    private var days: [Date] {
+        DispatchBoardScheduling.daysInWeek(containing: weekAnchor)
+    }
+
+    private var weekTitle: String {
+        guard let first = days.first, let last = days.last else { return "Dispatch Week" }
+        return "\(first.formatted(.dateTime.month(.abbreviated).day())) – \(last.formatted(.dateTime.month(.abbreviated).day().year()))"
+    }
+
+    private var visibleCalls: [ServiceCall] {
+        guard let first = days.first,
+              let end = Calendar.current.date(byAdding: .day, value: 7, to: first) else { return [] }
+        return calls
+            .filter { $0.scheduledDate >= first && $0.scheduledDate < end }
+            .sorted { $0.scheduledDate < $1.scheduledDate }
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    Label("Drag a job to another day. Its time stays the same.", systemImage: "hand.draw")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(visibleCalls.count) job\(visibleCalls.count == 1 ? "" : "s")")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let actionMessage {
+                    Label(actionMessage, systemImage: lastMoveSucceeded ? "checkmark.circle.fill" : "info.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(lastMoveSucceeded ? .green : .orange)
+                }
+
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(days, id: \.self) { day in
+                            dayColumn(day)
+                        }
+                    }
+                    .padding(.bottom, 8)
+                }
+                .scrollIndicators(.visible)
+            }
+            .padding()
+            .navigationTitle("Dispatch Week")
+            .navigationSubtitle(weekTitle)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        moveWeek(by: -1)
+                    } label: {
+                        Label("Previous week", systemImage: "chevron.left")
+                    }
+                    Button("Today") {
+                        withAnimation { weekAnchor = DispatchBoardScheduling.startOfWeek(containing: Date()) }
+                    }
+                    Button {
+                        moveWeek(by: 1)
+                    } label: {
+                        Label("Next week", systemImage: "chevron.right")
+                    }
+                }
+            }
+        }
+    }
+
+    private func calls(on day: Date) -> [ServiceCall] {
+        visibleCalls.filter { Calendar.current.isDate($0.scheduledDate, inSameDayAs: day) }
+    }
+
+    private func dayColumn(_ day: Date) -> some View {
+        let dayCalls = calls(on: day)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(day.formatted(.dateTime.weekday(.abbreviated)))
+                        .font(.headline)
+                    Text(day.formatted(.dateTime.month(.abbreviated).day()))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("\(dayCalls.count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            if dayCalls.isEmpty {
+                ContentUnavailableView("Open day", systemImage: "calendar.badge.plus")
+                    .frame(maxWidth: .infinity, minHeight: 110)
+            } else {
+                ForEach(dayCalls) { call in
+                    movableCard(call)
+                }
+            }
+
+            Spacer(minLength: 40)
+        }
+        .padding(12)
+        .frame(width: 190)
+        .frame(minHeight: 430, alignment: .topLeading)
+        .background(
+            Calendar.current.isDateInToday(day) ? Color.brandGold.opacity(0.10) : Color.secondary.opacity(0.06),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Calendar.current.isDateInToday(day) ? Color.brandGold.opacity(0.55) : Color.secondary.opacity(0.14))
+        }
+        .dropDestination(for: String.self) { values, _ in
+            guard let rawID = values.first, let callID = UUID(uuidString: rawID) else { return false }
+            performMove(callID, to: day)
+            return true
+        }
+        .accessibilityHint("Drop a job here to keep its appointment time and move it to this day.")
+    }
+
+    @ViewBuilder
+    private func movableCard(_ call: ServiceCall) -> some View {
+        let card = dispatchCard(call)
+        if DispatchBoardScheduling.canMove(call) {
+            card.draggable(call.id.uuidString) {
+                dispatchCard(call)
+                    .frame(width: 170)
+            }
+        } else {
+            card.opacity(0.65)
+        }
+    }
+
+    private func dispatchCard(_ call: ServiceCall) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(call.eventTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? call.eventTitle! : call.customer.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                    Text(call.scheduledDate.formatted(date: .omitted, time: .shortened))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.brandGold)
+                }
+                Spacer()
+                moveMenu(for: call)
+            }
+            Text(call.customer.name)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Label(call.assignedTechnician?.name ?? "Unassigned", systemImage: call.assignedTechnician == nil ? "person.slash" : "person.fill")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            HStack(spacing: 6) {
+                Text(call.type.displayName)
+                Text("•")
+                Text(call.status.rawValue.capitalized)
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(call.dispatchUrgency == .normal ? Color.secondary.opacity(0.12) : Color.orange.opacity(0.55))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(call.customer.name), \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened)), \(call.assignedTechnician?.name ?? "unassigned")")
+    }
+
+    @ViewBuilder
+    private func moveMenu(for call: ServiceCall) -> some View {
+        if DispatchBoardScheduling.canMove(call) {
+            Menu {
+                ForEach(days, id: \.self) { day in
+                    Button(day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())) {
+                        performMove(call.id, to: day)
+                    }
+                    .disabled(Calendar.current.isDate(call.scheduledDate, inSameDayAs: day))
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .frame(width: 28, height: 28)
+            }
+            .accessibilityLabel("Move \(call.customer.name)")
+        } else {
+            Image(systemName: "lock.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("This job cannot be moved")
+        }
+    }
+
+    private func performMove(_ callID: UUID, to day: Date) {
+        let result = onMove(callID, day)
+        actionMessage = result.message
+        lastMoveSucceeded = result.isSuccess
+    }
+
+    private func moveWeek(by offset: Int) {
+        guard let next = Calendar.current.date(byAdding: .day, value: offset * 7, to: weekAnchor) else { return }
+        withAnimation { weekAnchor = next }
+        actionMessage = nil
+    }
 }
 
 private struct NewServiceRequestView: View {

@@ -102,6 +102,31 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testDispatchWeekBoardOpensAsDedicatedIPadWorkspace() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let weekBoard = app.buttons["Week Board"]
+        XCTAssertTrue(weekBoard.waitForExistence(timeout: 3))
+        weekBoard.tap()
+
+        XCTAssertTrue(app.navigationBars["Dispatch Week"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Drag a job to another day. Its time stays the same."].exists)
+        XCTAssertTrue(app.buttons["Today"].exists)
+        XCTAssertTrue(app.buttons["Done"].exists)
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         let app = XCUIApplication()

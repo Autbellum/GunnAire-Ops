@@ -35,6 +35,107 @@ struct GunnAire_OpsTests {
         #expect(GunnAireCloudKit.AccountReadiness.couldNotDetermine.userFacingDetail.localizedCaseInsensitiveContains("could not verify"))
     }
 
+    @Test func dispatchWeekBoardUsesMondayThroughSunday() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let wednesday = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 26, hour: 10)))
+        let days = DispatchBoardScheduling.daysInWeek(containing: wednesday, calendar: calendar)
+
+        #expect(days.count == 7)
+        #expect(calendar.component(.weekday, from: try #require(days.first)) == 2)
+        #expect(calendar.component(.weekday, from: try #require(days.last)) == 1)
+    }
+
+    @Test func dispatchWeekBoardMovePreservesLocalAppointmentTime() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let original = try #require(calendar.date(from: DateComponents(year: 2026, month: 3, day: 6, hour: 14, minute: 45)))
+        let targetDay = try #require(calendar.date(from: DateComponents(year: 2026, month: 3, day: 9, hour: 8)))
+        let proposed = DispatchBoardScheduling.proposedStart(
+            preservingTimeOf: original,
+            on: targetDay,
+            calendar: calendar
+        )
+
+        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: proposed)
+        #expect(components.year == 2026)
+        #expect(components.month == 3)
+        #expect(components.day == 9)
+        #expect(components.hour == 14)
+        #expect(components.minute == 45)
+    }
+
+    @Test func dispatchWeekBoardRejectsTechnicianAndAvailabilityConflicts() throws {
+        let customer = Customer(name: "Dispatch Customer")
+        let otherCustomer = Customer(name: "Existing Customer")
+        let technician = Technician(name: "Taylor Tech")
+        let proposed = Date(timeIntervalSinceReferenceDate: 900_000)
+        let moving = ServiceCall(
+            type: .service,
+            scheduledDate: proposed.addingTimeInterval(-86_400),
+            duration: 3_600,
+            assignedTechnician: technician,
+            customer: customer
+        )
+        let existing = ServiceCall(
+            type: .maintenance,
+            scheduledDate: proposed.addingTimeInterval(1_800),
+            duration: 3_600,
+            assignedTechnician: technician,
+            customer: otherCustomer
+        )
+
+        let jobConflict = DispatchBoardScheduling.conflictSummary(
+            for: moving,
+            proposedStart: proposed,
+            serviceCalls: [moving, existing],
+            availabilityBlocks: [],
+            technicians: [technician]
+        )
+        #expect(jobConflict?.contains("Taylor Tech") == true)
+        #expect(jobConflict?.contains("Existing Customer") == true)
+
+        let unavailable = TechnicianAvailabilityBlock(
+            technicianID: technician.id,
+            startsAt: proposed,
+            endsAt: proposed.addingTimeInterval(7_200),
+            kind: .training,
+            reason: "Safety class"
+        )
+        let availabilityConflict = DispatchBoardScheduling.conflictSummary(
+            for: moving,
+            proposedStart: proposed,
+            serviceCalls: [moving],
+            availabilityBlocks: [unavailable],
+            technicians: [technician]
+        )
+        #expect(availabilityConflict?.contains("Taylor Tech") == true)
+        #expect(availabilityConflict?.localizedCaseInsensitiveContains("training") == true)
+    }
+
+    @Test func dispatchWeekBoardProtectsFinishedAndGoogleOwnedEvents() {
+        let customer = Customer(name: "Protected Schedule Customer")
+        let completed = ServiceCall(type: .service, scheduledDate: Date(), customer: customer, status: .completed)
+        let externalGoogleEvent = ServiceCall(
+            googleEventID: "external-event",
+            googleEventManagedByApp: false,
+            type: .meeting,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        let managedGoogleEvent = ServiceCall(
+            googleEventID: "managed-event",
+            googleEventManagedByApp: true,
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+
+        #expect(!DispatchBoardScheduling.canMove(completed))
+        #expect(!DispatchBoardScheduling.canMove(externalGoogleEvent))
+        #expect(DispatchBoardScheduling.canMove(managedGoogleEvent))
+    }
+
     @MainActor
     @Test func cloudKitCompatibleRelationshipsCanPersistWhileTemporarilyUnresolved() throws {
         let container = try ModelContainer(
