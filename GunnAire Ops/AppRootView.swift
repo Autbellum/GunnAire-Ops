@@ -30,19 +30,31 @@ struct AppRootView: View {
         }
     }
 
-    /// UI tests need to reach the authenticated iPad workspace without
-    /// obtaining a real Google credential. This path exists only in Debug
-    /// builds and is deliberately keyed to an explicit process argument.
+    /// UI tests need to reach role-specific iPad workspaces without obtaining
+    /// a real Google credential. These paths exist only in Debug builds and
+    /// are deliberately keyed to explicit process arguments.
     private func applyUITestAuthenticationIfRequested() {
         #if DEBUG
-        guard ProcessInfo.processInfo.arguments.contains("-uiTestAuthenticatedAdmin") else {
+        let arguments = ProcessInfo.processInfo.arguments
+        let email: String
+        if arguments.contains("-uiTestAuthenticatedAdmin") {
+            email = AppAccess.primaryAdminEmail
+        } else if arguments.contains("-uiTestAuthenticatedStandard") {
+            email = GunnAireUITestIdentity.standardEmail
+        } else {
             return
         }
-        UserDefaults.standard.set(AppAccess.primaryAdminEmail, forKey: "SignedInGoogleEmail")
+        UserDefaults.standard.set(email, forKey: "SignedInGoogleEmail")
         hasAuthenticatedUser = true
         #endif
     }
 }
+
+#if DEBUG
+enum GunnAireUITestIdentity {
+    static let standardEmail = "standard-ui-test@gunnaire.com"
+}
+#endif
 
 private struct VideoSplashView: View {
     let onFinished: () -> Void

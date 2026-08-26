@@ -299,6 +299,50 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testStandardCustomerRecordIsReadOnlyAndKeepsReviewNavigation() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedStandard",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        let customers = app.staticTexts["Customers"]
+        XCTAssertTrue(customers.waitForExistence(timeout: 5))
+        customers.tap()
+        XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["Add Customer"].exists)
+        XCTAssertFalse(app.buttons["Sync"].exists)
+
+        let customerRecord = app.buttons["OpenCustomerRecord-A1000000-0000-4000-8000-000000000001"]
+        for _ in 0..<5 {
+            if customerRecord.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(customerRecord.waitForExistence(timeout: 3))
+        customerRecord.tap()
+        XCTAssertTrue(app.navigationBars["Customer Record"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["CustomerRecordReadOnlyNotice"].exists)
+        XCTAssertFalse(app.buttons["Save"].exists)
+        XCTAssertTrue(app.buttons["Done"].exists)
+
+        let workspacePicker = app.segmentedControls["CustomerProfileWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.exists)
+        workspacePicker.buttons["Systems"].tap()
+        XCTAssertTrue(app.staticTexts["Equipment Profiles"].exists)
+        XCTAssertFalse(app.buttons["Add Equipment Profile"].exists)
+        XCTAssertFalse(app.buttons["Edit"].exists)
+
+        workspacePicker.buttons["Files"].tap()
+        XCTAssertTrue(app.staticTexts["Documents & Photos"].exists)
+        XCTAssertFalse(app.buttons["Camera"].exists)
+        XCTAssertFalse(app.staticTexts["Attachment Type"].exists)
+    }
+
+    @MainActor
     func testQuickBooksManagementUsesFocusedAccountingWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

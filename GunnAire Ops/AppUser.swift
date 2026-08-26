@@ -88,8 +88,10 @@ enum AppAccess {
     static func canAccessSidebarItem(_ item: SidebarItem, email: String?, users: [AppUser]) -> Bool {
         guard let role = activeRole(email: email, users: users) else { return false }
         switch item {
-        case .commandCenter, .customers:
+        case .commandCenter:
             return true
+        case .customers:
+            return role != .fieldTechnician
         case .timeClock:
             return role != .accounting
         case .scheduleAndJobs, .onsiteDocumentation:
@@ -122,6 +124,26 @@ enum AppAccess {
     static func canManageDispatch(email: String?, users: [AppUser]) -> Bool {
         guard let role = activeRole(email: email, users: users) else { return false }
         return role == .dispatcher || role == .admin
+    }
+
+    /// Customer contact, consent, installed-system, file, and agreement changes
+    /// alter the durable operational record. Dispatch and Admin own that work;
+    /// Standard and Accounting accounts receive a review-only customer record.
+    static func canManageCustomerRecords(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .dispatcher || role == .admin
+    }
+
+    /// Removing a customer cascades through local operational and financial
+    /// records, so it remains an administrator-only destructive action.
+    static func canDeleteCustomerRecords(email: String?, users: [AppUser]) -> Bool {
+        activeRole(email: email, users: users) == .admin
+    }
+
+    /// Customer synchronization is an accounting-integration mutation, not
+    /// ordinary account review. Keep it aligned with the Admin-only QBO console.
+    static func canSyncCustomerRecordsWithAccounting(email: String?, users: [AppUser]) -> Bool {
+        activeRole(email: email, users: users) == .admin
     }
 
     /// Job-level scope is enforced independently of whether a workspace is visible.

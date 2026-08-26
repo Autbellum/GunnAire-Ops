@@ -66,10 +66,19 @@ private enum GunnAireUITestFixtures {
     private static let customerID = UUID(uuidString: "A1000000-0000-4000-8000-000000000001")!
     private static let serviceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000002")!
     private static let invoiceID = UUID(uuidString: "A1000000-0000-4000-8000-000000000003")!
+    private static let standardUserID = UUID(uuidString: "A1000000-0000-4000-8000-000000000004")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
         guard arguments.contains("-disableCloudKitForTesting") else { return }
+
+        let appUsers = try context.fetch(FetchDescriptor<AppUser>())
+        for user in appUsers where user.id == standardUserID || user.email == GunnAireUITestIdentity.standardEmail {
+            context.delete(user)
+        }
+        if arguments.contains("-uiTestAuthenticatedStandard") {
+            context.insert(AppUser(id: standardUserID, email: GunnAireUITestIdentity.standardEmail, role: .standard))
+        }
 
         let payments = try context.fetch(FetchDescriptor<Payment>())
         for payment in payments where payment.invoice.id == invoiceID {

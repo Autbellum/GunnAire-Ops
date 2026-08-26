@@ -309,6 +309,7 @@ struct ContentView: View {
     }
 
     private func cleanupCalendarCreatedCustomersIfNeeded() {
+        guard AppAccess.canDeleteCustomerRecords(email: currentUserEmail, users: users) else { return }
         _ = CustomerDataMaintenance.cleanupCalendarNamedCustomers(modelContext: modelContext)
     }
 

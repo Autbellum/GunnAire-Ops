@@ -201,6 +201,10 @@ struct CustomersView: View {
     @State private var customerSyncMessage: String?
     @State private var isSyncingCustomers = false
 
+    private var currentEmail: String? {
+        GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+    }
+
     private var filteredCustomers: [Customer] {
         let search = customerSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let visibleCustomers = customers.filter { !CustomerDataMaintenance.isSystemCalendarCustomer($0) }
@@ -218,9 +222,25 @@ struct CustomersView: View {
 
     private var canViewFinancials: Bool {
         AppAccess.canViewBillingFinancialDetails(
-            email: GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
+            email: currentEmail,
             users: users
         )
+    }
+
+    private var canManageCustomerRecords: Bool {
+        AppAccess.canManageCustomerRecords(email: currentEmail, users: users)
+    }
+
+    private var canDeleteCustomerRecords: Bool {
+        AppAccess.canDeleteCustomerRecords(email: currentEmail, users: users)
+    }
+
+    private var canSyncCustomerRecords: Bool {
+        AppAccess.canSyncCustomerRecordsWithAccounting(email: currentEmail, users: users)
+    }
+
+    private var canOpenSchedule: Bool {
+        AppAccess.canAccessSidebarItem(.scheduleAndJobs, email: currentEmail, users: users)
     }
 
     private var customerSnapshotsByID: [UUID: CustomerIntelligenceSnapshot] {
@@ -240,6 +260,7 @@ struct CustomersView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if canManageCustomerRecords {
                 Section("Add Customer") {
                     TextField("Customer Name", text: $newCustomerName)
                     TextField("Address", text: $newCustomerAddress, axis: .vertical)
@@ -250,6 +271,10 @@ struct CustomersView: View {
                         .keyboardType(.phonePad)
 
                     Button("Save Customer") {
+                        guard canManageCustomerRecords else {
+                            customerSyncMessage = "This account can review customers but cannot create them."
+                            return
+                        }
                         let customer = Customer(
                             name: newCustomerName.trimmingCharacters(in: .whitespacesAndNewlines),
                             phone: newCustomerPhone.nilIfBlank,
@@ -266,6 +291,7 @@ struct CustomersView: View {
                     .tint(Color.brandGold)
                     .foregroundStyle(Color.primaryBlack)
                     .disabled(newCustomerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
                 }
 
                 Section("Customer Directory") {
@@ -343,7 +369,8 @@ struct CustomersView: View {
                                             .buttonStyle(.bordered)
                                             .accessibilityIdentifier("OpenCustomerRecord-\(customer.id.uuidString)")
 
-                                            if let nextCall = nextActiveServiceCall(for: customer) {
+                                            if canOpenSchedule,
+                                               let nextCall = nextActiveServiceCall(for: customer) {
                                                 Button("Open Job") {
                                                     GunnAireAppIntentRouter.storeScheduleCallRoute(nextCall.id)
                                                 }
@@ -368,7 +395,7 @@ struct CustomersView: View {
             .navigationTitle("Customers")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if canViewFinancials {
+                    if canDeleteCustomerRecords {
                         Button {
                             cleanupCalendarCreatedCustomers()
                         } label: {
@@ -377,7 +404,7 @@ struct CustomersView: View {
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    if canViewFinancials {
+                    if canSyncCustomerRecords {
                         Button {
                             syncCustomersToQuickBooks()
                         } label: {
@@ -398,7 +425,8 @@ struct CustomersView: View {
     }
 
     private func applyPendingIntentCustomerIfNeeded() {
-        guard let pendingID = GunnAireAppIntentRouter.consumePendingCustomerID(),
+        guard AppAccess.canAccessSidebarItem(.customers, email: currentEmail, users: users),
+              let pendingID = GunnAireAppIntentRouter.consumePendingCustomerID(),
               let customer = customers.first(where: { $0.id == pendingID }) else {
             return
         }
@@ -516,11 +544,19 @@ struct CustomersView: View {
     }
 
     private func cleanupCalendarCreatedCustomers() {
+        guard canDeleteCustomerRecords else {
+            customerSyncMessage = "Only an administrator can remove imported customer records."
+            return
+        }
         let summary = CustomerDataMaintenance.cleanupCalendarNamedCustomers(modelContext: modelContext)
         customerSyncMessage = summary.customerScreenMessage
     }
 
     private func syncCustomersToQuickBooks() {
+        guard canSyncCustomerRecords else {
+            customerSyncMessage = "Only an administrator can sync customers to QuickBooks."
+            return
+        }
         guard QuickBooksDataAPI.shared.isAuthenticated else {
             customerSyncMessage = "Connect QuickBooks before syncing customers."
             return
@@ -539,6 +575,11 @@ struct CustomersView: View {
     }
 
     private func syncCustomerBatch(_ pendingCustomers: [Customer], created: Int, failed: Int) {
+        guard canSyncCustomerRecords else {
+            isSyncingCustomers = false
+            customerSyncMessage = "Customer sync stopped because this account no longer has integration access."
+            return
+        }
         guard let customer = pendingCustomers.first else {
             isSyncingCustomers = false
             customerSyncMessage = "Customer sync complete: \(created) created, \(failed) failed."
@@ -2095,6 +2136,22 @@ private struct CustomerEditorView: View {
         )
     }
 
+    private var currentEmail: String? {
+        GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+    }
+
+    private var canEditCustomerRecords: Bool {
+        AppAccess.canManageCustomerRecords(email: currentEmail, users: users)
+    }
+
+    private var canDeleteCustomerRecords: Bool {
+        AppAccess.canDeleteCustomerRecords(email: currentEmail, users: users)
+    }
+
+    private var canSyncCustomerRecords: Bool {
+        AppAccess.canSyncCustomerRecordsWithAccounting(email: currentEmail, users: users)
+    }
+
     private var customerFileImporterContentTypes: [UTType] {
         forcedCustomerAttachmentKind == .customerProfilePhoto
             ? [.image]
@@ -2166,6 +2223,13 @@ private struct CustomerEditorView: View {
                     Label(selectedWorkspace.guidance, systemImage: selectedWorkspace.systemImage)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    if !canEditCustomerRecords {
+                        Label("Read-only customer record for this account role.", systemImage: "lock")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("CustomerRecordReadOnlyNotice")
+                    }
                 }
 
                 if selectedWorkspace == .overview {
@@ -2173,6 +2237,7 @@ private struct CustomerEditorView: View {
                     if let profilePhoto = ServiceDocumentAttachment.primaryCustomerPhoto(for: customer, in: customerAttachments) {
                         customerAttachmentRow(profilePhoto)
                     }
+                    if canEditCustomerRecords {
                     HStack {
                         if UIImagePickerController.isSourceTypeAvailable(.camera) {
                             Button {
@@ -2190,16 +2255,21 @@ private struct CustomerEditorView: View {
                         }
                         .buttonStyle(.bordered)
                     }
+                    }
                 }
 
                 TextField("Customer Name", text: $name)
+                    .disabled(!canEditCustomerRecords)
                 TextField("Address", text: $address, axis: .vertical)
                     .lineLimit(2...3)
+                    .disabled(!canEditCustomerRecords)
                 TextField("Email", text: $email)
                     .keyboardType(.emailAddress)
                     .textInputAutocapitalization(.never)
+                    .disabled(!canEditCustomerRecords)
                 TextField("Phone", text: $phone)
                     .keyboardType(.phonePad)
+                    .disabled(!canEditCustomerRecords)
                 Section("Contact Preferences") {
                     Picker("Preferred Contact", selection: $preferredContactMethod) {
                         ForEach(CustomerContactMethod.allCases) { method in
@@ -2214,6 +2284,7 @@ private struct CustomerEditorView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+                .disabled(!canEditCustomerRecords)
                 if canViewFinancials, let quickBooksID = customer.quickBooksID, !quickBooksID.isEmpty {
                     Text("QuickBooks ID: \(quickBooksID)")
                         .font(.caption)
@@ -2352,6 +2423,7 @@ private struct CustomerEditorView: View {
                                         .foregroundColor(.secondary)
                                         .lineLimit(2)
                                 }
+                                if canEditCustomerRecords {
                                 HStack {
                                     Button("Edit") {
                                         beginEditingEquipment(equipment)
@@ -2371,11 +2443,13 @@ private struct CustomerEditorView: View {
                                     }
                                     .buttonStyle(.bordered)
                                 }
+                                }
                             }
                             .padding(.vertical, 3)
                         }
                     }
 
+                    if canEditCustomerRecords {
                     Picker("Type", selection: $newEquipmentType) {
                         ForEach(HVACEquipmentType.allCases) { type in
                             Text(type.displayName).tag(type)
@@ -2412,11 +2486,13 @@ private struct CustomerEditorView: View {
                         }
                         .buttonStyle(.bordered)
                     }
+                    }
                 }
                 }
 
                 if selectedWorkspace == .files {
                 Section("Documents & Photos") {
+                    if canEditCustomerRecords {
                     Picker("Attachment Type", selection: $customerAttachmentKind) {
                         Text(ServiceDocumentAttachmentKind.customerProfilePhoto.label).tag(ServiceDocumentAttachmentKind.customerProfilePhoto)
                         Text(ServiceDocumentAttachmentKind.customerDocument.label).tag(ServiceDocumentAttachmentKind.customerDocument)
@@ -2457,6 +2533,7 @@ private struct CustomerEditorView: View {
                             Label("Files", systemImage: "paperclip")
                         }
                         .buttonStyle(.bordered)
+                    }
                     }
 
                     if let customerAttachmentMessage {
@@ -2609,11 +2686,13 @@ private struct CustomerEditorView: View {
                                     get: { contract.active },
                                     set: { contract.active = $0 }
                                 ))
+                                .disabled(!canEditCustomerRecords)
                             }
                             .padding(.vertical, 2)
                         }
                     }
 
+                    if canEditCustomerRecords {
                     DisclosureGroup("Add Service Agreement") {
                         TextField("Plan Name (optional)", text: $newContractName)
                         TextField("Schedule Pattern", text: $newContractPattern)
@@ -2664,12 +2743,14 @@ private struct CustomerEditorView: View {
                         }
                         .disabled(newContractPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
+                    }
                 }
                 }
 
-                if selectedWorkspace == .overview {
+                if selectedWorkspace == .overview,
+                   canSyncCustomerRecords || canDeleteCustomerRecords {
                 Section("Customer Actions") {
-                    if canViewFinancials {
+                    if canSyncCustomerRecords {
                         Button {
                             syncCustomerToQuickBooks()
                         } label: {
@@ -2678,19 +2759,21 @@ private struct CustomerEditorView: View {
                         .disabled(isSyncingCustomer || !QuickBooksDataAPI.shared.isAuthenticated)
                     }
 
-                    Button(role: .destructive) {
-                        showingDeleteConfirmation = true
-                    } label: {
-                        Label("Remove Customer from App", systemImage: "trash")
-                    }
+                    if canDeleteCustomerRecords {
+                        Button(role: .destructive) {
+                            showingDeleteConfirmation = true
+                        } label: {
+                            Label("Remove Customer from App", systemImage: "trash")
+                        }
 
-                    Text("This removes the customer and related local app records. It does not delete QuickBooks records.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        Text("This removes the customer and related local app records. It does not delete QuickBooks records.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 }
             }
-            .navigationTitle("Edit Customer")
+            .navigationTitle(canEditCustomerRecords ? "Edit Customer" : "Customer Record")
             .onAppear {
                 if selectedWorkspace == .files,
                    canViewFinancials,
@@ -2713,9 +2796,12 @@ private struct CustomerEditorView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    if canEditCustomerRecords {
+                        Button("Cancel") { dismiss() }
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
+                    if canEditCustomerRecords {
                     Button("Save") {
                         customer.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
                         customer.address = address.nilIfBlank
@@ -2729,6 +2815,9 @@ private struct CustomerEditorView: View {
                         dismiss()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    } else {
+                        Button("Done") { dismiss() }
+                    }
                 }
             }
             .confirmationDialog("Remove this customer from the app?", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
@@ -2954,6 +3043,10 @@ private struct CustomerEditorView: View {
     }
 
     private func saveCustomerAttachment(data: Data, filename: String, contentType: String) {
+        guard canEditCustomerRecords else {
+            customerAttachmentMessage = "This account can review customer files but cannot add them."
+            return
+        }
         do {
             let storedURL = try persistCustomerAttachmentData(data, filename: filename)
             let requestedKind = forcedCustomerAttachmentKind ?? customerAttachmentKind
@@ -3071,6 +3164,10 @@ private struct CustomerEditorView: View {
     }
 
     private func removeCustomerAttachment(_ attachment: ServiceDocumentAttachment) {
+        guard canEditCustomerRecords else {
+            customerAttachmentMessage = "This account can review customer files but cannot remove them."
+            return
+        }
         let fileURL = attachment.localFileURL
         modelContext.delete(attachment)
         try? modelContext.save()
@@ -3305,13 +3402,15 @@ private struct CustomerEditorView: View {
                 .font(.caption)
             }
             Spacer()
-            Button(role: .destructive) {
-                removeCustomerAttachment(attachment)
-            } label: {
-                Image(systemName: "trash")
+            if canEditCustomerRecords {
+                Button(role: .destructive) {
+                    removeCustomerAttachment(attachment)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Delete attachment")
             }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Delete attachment")
         }
         .padding(.vertical, 3)
     }
@@ -3349,6 +3448,10 @@ private struct CustomerEditorView: View {
     }
 
     private func addCustomerEquipmentProfile() {
+        guard canEditCustomerRecords else {
+            customerActionMessage = "This account can review installed systems but cannot change them."
+            return
+        }
         let trimmedName = newEquipmentName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
         let equipment: CustomerEquipment
@@ -3423,6 +3526,10 @@ private struct CustomerEditorView: View {
     }
 
     private func removeEquipmentProfile(_ equipment: CustomerEquipment) {
+        guard canEditCustomerRecords else {
+            customerActionMessage = "This account can review installed systems but cannot remove them."
+            return
+        }
         let preservedAttachmentCount = ServiceDocumentAttachment.equipmentAttachments(
             for: equipment,
             in: documentAttachments,
@@ -3447,6 +3554,10 @@ private struct CustomerEditorView: View {
     }
 
     private func deleteCustomer() {
+        guard canDeleteCustomerRecords else {
+            customerActionMessage = "Only an administrator can remove a customer record."
+            return
+        }
         _ = CustomerDataMaintenance.deleteCustomer(
             customer,
             modelContext: modelContext,
@@ -3465,6 +3576,10 @@ private struct CustomerEditorView: View {
     }
 
     private func syncCustomerToQuickBooks() {
+        guard canSyncCustomerRecords else {
+            customerActionMessage = "Only an administrator can sync customer records to QuickBooks."
+            return
+        }
         guard QuickBooksDataAPI.shared.isAuthenticated else {
             customerActionMessage = "Connect QuickBooks before syncing this customer."
             return
