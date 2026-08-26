@@ -303,6 +303,14 @@ struct GunnAire_OpsTests {
         #expect(ServiceCallDetailWorkspace.billing.guidance.localizedCaseInsensitiveContains("payment"))
     }
 
+    @Test func customerProfileWorkspacesSeparateAccountSystemsFilesAndHistory() {
+        #expect(CustomerProfileWorkspace.allCases.map(\.label) == ["Overview", "Systems", "Files", "History"])
+        #expect(CustomerProfileWorkspace.overview.guidance.localizedCaseInsensitiveContains("consent"))
+        #expect(CustomerProfileWorkspace.systems.guidance.localizedCaseInsensitiveContains("equipment"))
+        #expect(CustomerProfileWorkspace.files.guidance.localizedCaseInsensitiveContains("receipt"))
+        #expect(CustomerProfileWorkspace.history.guidance.localizedCaseInsensitiveContains("jobs"))
+    }
+
     @Test func fieldPaymentPromptQueueAnnouncesEveryPendingTaskOnce() {
         let first = BackendFieldPaymentAssignmentRecord(
             id: "assignment-1",

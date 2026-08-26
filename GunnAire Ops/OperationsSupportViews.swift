@@ -217,7 +217,7 @@ struct CustomersView: View {
     }
 
     private var canViewFinancials: Bool {
-        AppAccess.isAdmin(
+        AppAccess.canViewBillingFinancialDetails(
             email: GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
             users: users
         )
@@ -283,14 +283,11 @@ struct CustomersView: View {
                             .foregroundColor(.secondary)
                     } else {
                         ForEach(filteredCustomers) { customer in
-                            Button {
-                                selectedCustomer = customer
-                            } label: {
-                                let snapshot = customerSnapshotsByID[customer.id]
-                                HStack(alignment: .top, spacing: 12) {
-                                    customerProfileThumbnail(for: customer, size: 54)
+                            let snapshot = customerSnapshotsByID[customer.id]
+                            HStack(alignment: .top, spacing: 12) {
+                                customerProfileThumbnail(for: customer, size: 54)
 
-                                    VStack(alignment: .leading, spacing: 8) {
+                                VStack(alignment: .leading, spacing: 8) {
                                         HStack {
                                             Text(customer.name)
                                                 .font(.headline)
@@ -344,6 +341,7 @@ struct CustomersView: View {
                                                 selectedCustomer = customer
                                             }
                                             .buttonStyle(.bordered)
+                                            .accessibilityIdentifier("OpenCustomerRecord-\(customer.id.uuidString)")
 
                                             if let nextCall = nextActiveServiceCall(for: customer) {
                                                 Button("Open Job") {
@@ -360,11 +358,8 @@ struct CustomersView: View {
                                                 .tint(.green)
                                             }
                                         }
-                                    }
                                 }
-                                .padding(.vertical, 2)
                             }
-                            .buttonStyle(.plain)
                             .padding(.vertical, 2)
                         }
                     }
@@ -1834,6 +1829,46 @@ private extension String {
     }
 }
 
+enum CustomerProfileWorkspace: String, CaseIterable, Identifiable {
+    case overview
+    case systems
+    case files
+    case history
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .overview: "Overview"
+        case .systems: "Systems"
+        case .files: "Files"
+        case .history: "History"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview: "person.crop.rectangle"
+        case .systems: "wrench.and.screwdriver"
+        case .files: "folder"
+        case .history: "clock.arrow.circlepath"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .overview:
+            "Maintain contact and consent details, review account health, and resolve open balances."
+        case .systems:
+            "Maintain installed equipment, warranty context, service trends, and maintenance agreements."
+        case .files:
+            "Capture and review customer, equipment, service, estimate, invoice, and receipt files."
+        case .history:
+            "Review recent jobs and the customer-facing email and document delivery trail."
+        }
+    }
+}
+
 private struct CustomerEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -1895,6 +1930,7 @@ private struct CustomerEditorView: View {
     @State private var newEquipmentInstallDate = Date()
     @State private var includeNewEquipmentWarranty = false
     @State private var newEquipmentWarranty = Date()
+    @State private var selectedWorkspace: CustomerProfileWorkspace = .overview
 
     private var customerServiceCalls: [ServiceCall] {
         serviceCalls.filter { $0.customer.id == customer.id }
@@ -2053,7 +2089,7 @@ private struct CustomerEditorView: View {
     }
 
     private var canViewFinancials: Bool {
-        AppAccess.isAdmin(
+        AppAccess.canViewBillingFinancialDetails(
             email: GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
             users: users
         )
@@ -2118,6 +2154,21 @@ private struct CustomerEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Customer Workspace") {
+                    Picker("Workspace", selection: $selectedWorkspace) {
+                        ForEach(CustomerProfileWorkspace.allCases) { workspace in
+                            Text(workspace.label).tag(workspace)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("CustomerProfileWorkspacePicker")
+
+                    Label(selectedWorkspace.guidance, systemImage: selectedWorkspace.systemImage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if selectedWorkspace == .overview {
                 Section("Profile Photo") {
                     if let profilePhoto = ServiceDocumentAttachment.primaryCustomerPhoto(for: customer, in: customerAttachments) {
                         customerAttachmentRow(profilePhoto)
@@ -2228,7 +2279,9 @@ private struct CustomerEditorView: View {
                         .tint(customerHealthTint)
                     }
                 }
+                }
 
+                if selectedWorkspace == .systems {
                 Section("Equipment Profiles") {
                     if customerEquipmentProfiles.isEmpty {
                         Text("No equipment profiles saved for this customer.")
@@ -2360,7 +2413,9 @@ private struct CustomerEditorView: View {
                         .buttonStyle(.bordered)
                     }
                 }
+                }
 
+                if selectedWorkspace == .files {
                 Section("Documents & Photos") {
                     Picker("Attachment Type", selection: $customerAttachmentKind) {
                         Text(ServiceDocumentAttachmentKind.customerProfilePhoto.label).tag(ServiceDocumentAttachmentKind.customerProfilePhoto)
@@ -2469,8 +2524,10 @@ private struct CustomerEditorView: View {
                         }
                     }
                 }
+                }
 
-                if !customerCommunicationsForCustomer.isEmpty {
+                if selectedWorkspace == .history,
+                   !customerCommunicationsForCustomer.isEmpty {
                     Section("Sent Documents & Emails") {
                         Text("A delivery record is kept for customer-facing email. Full message content remains in the connected Gmail mailbox.")
                             .font(.caption)
@@ -2482,7 +2539,8 @@ private struct CustomerEditorView: View {
                     }
                 }
 
-                if !recentCustomerServiceCalls.isEmpty {
+                if selectedWorkspace == .history,
+                   !recentCustomerServiceCalls.isEmpty {
                     Section("Recent Jobs") {
                         ForEach(recentCustomerServiceCalls) { call in
                             recentCustomerJobRow(for: call)
@@ -2490,7 +2548,9 @@ private struct CustomerEditorView: View {
                     }
                 }
 
-                if canViewFinancials && !openCustomerInvoiceBalances.isEmpty {
+                if selectedWorkspace == .overview,
+                   canViewFinancials,
+                   !openCustomerInvoiceBalances.isEmpty {
                     Section("Open Invoices") {
                         ForEach(openCustomerInvoiceBalances.prefix(5), id: \.invoice.id) { entry in
                             openInvoiceBalanceRow(for: entry)
@@ -2498,6 +2558,7 @@ private struct CustomerEditorView: View {
                     }
                 }
 
+                if selectedWorkspace == .systems {
                 Section("Service Agreements") {
                     if customer.recurringContracts.isEmpty {
                         Text("No service agreements on file.")
@@ -2604,7 +2665,9 @@ private struct CustomerEditorView: View {
                         .disabled(newContractPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
+                }
 
+                if selectedWorkspace == .overview {
                 Section("Customer Actions") {
                     if canViewFinancials {
                         Button {
@@ -2625,10 +2688,24 @@ private struct CustomerEditorView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+                }
             }
             .navigationTitle("Edit Customer")
             .onAppear {
-                if canViewFinancials, GunnAireBackendService.isConfigured, sharedCustomerDocuments.isEmpty {
+                if selectedWorkspace == .files,
+                   canViewFinancials,
+                   GunnAireBackendService.isConfigured,
+                   sharedCustomerDocuments.isEmpty {
+                    Task {
+                        await refreshSharedCustomerDocuments()
+                    }
+                }
+            }
+            .onChange(of: selectedWorkspace) { _, workspace in
+                if workspace == .files,
+                   canViewFinancials,
+                   GunnAireBackendService.isConfigured,
+                   sharedCustomerDocuments.isEmpty {
                     Task {
                         await refreshSharedCustomerDocuments()
                     }
