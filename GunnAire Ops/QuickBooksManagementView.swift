@@ -95,6 +95,7 @@ struct QuickBooksManagementView: View {
     @State private var catalogSearchText = ""
     @State private var estimateSearchText = ""
     @State private var invoiceSearchText = ""
+    @State private var selectedWorkspace: QuickBooksManagementWorkspace = .overview
 
     private var isAuthenticated: Bool {
         quickBooksDataAPI.isAuthenticated
@@ -263,6 +264,21 @@ struct QuickBooksManagementView: View {
             WatermarkBackground()
             NavigationStack {
                 Form {
+                    Section("QuickBooks Workspace") {
+                        Picker("Workspace", selection: $selectedWorkspace) {
+                            ForEach(QuickBooksManagementWorkspace.allCases) { workspace in
+                                Text(workspace.label).tag(workspace)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityIdentifier("QuickBooksWorkspacePicker")
+
+                        Label(selectedWorkspace.guidance, systemImage: selectedWorkspace.systemImage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if selectedWorkspace == .overview {
                     Section("Connection") {
                         connectionRow(
                             title: "Environment",
@@ -379,7 +395,9 @@ struct QuickBooksManagementView: View {
                         summaryRow(title: "Payment Methods", count: paymentMethods.count)
                         summaryRow(title: "Stored Cards", count: storedCards.count)
                     }
+                    }
 
+                    if selectedWorkspace == .sales {
                     Section(header: Text("Customers").foregroundColor(Color.brandGold)) {
                         DisclosureGroup("Customers (\(customers.count))", isExpanded: $showCustomersList) {
                             if customers.isEmpty {
@@ -625,7 +643,9 @@ struct QuickBooksManagementView: View {
                             .foregroundStyle(Color.primaryBlack)
                             .disabled(!isAuthenticated || customers.isEmpty)
                     }
+                    }
 
+                    if selectedWorkspace == .expenses {
                     Section(header: Text("Bills").foregroundColor(Color.brandGold)) {
                         if bills.isEmpty {
                             emptyState("No QuickBooks bills loaded.")
@@ -704,7 +724,9 @@ struct QuickBooksManagementView: View {
                             .foregroundStyle(Color.primaryBlack)
                             .disabled(!isAuthenticated)
                     }
+                    }
 
+                    if selectedWorkspace == .payments {
                     Section(header: Text("Payments").foregroundColor(Color.brandGold)) {
                         if payments.isEmpty {
                             emptyState("No QuickBooks payments loaded.")
@@ -937,7 +959,9 @@ struct QuickBooksManagementView: View {
                             }
                         }
                     }
+                    }
 
+                    if selectedWorkspace == .overview {
                     Section(header: Text("Sync Status").foregroundColor(Color.brandGold)) {
                         if isLoading {
                             ProgressView()
@@ -960,10 +984,22 @@ struct QuickBooksManagementView: View {
                         .foregroundStyle(Color.primaryBlack)
                         .disabled(isLoading || !isAuthenticated || !quickBooksConfigReady)
                     }
+                    }
                 }
                 .scrollContentBackground(.hidden)
                 .background(Color.primaryBlack)
                 .navigationTitle("QuickBooks Management")
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            syncAllQuickBooksData()
+                        } label: {
+                            Label(isLoading ? "Syncing" : "Sync", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .disabled(isLoading || !isAuthenticated || !quickBooksConfigReady)
+                        .accessibilityHint("Refreshes all supported QuickBooks resources for the connected company realm.")
+                    }
+                }
                 .sheet(isPresented: $showingNewCustomerSheet) {
                     QuickBooksCustomerComposeView { name, email, phone in
                         createCustomer(name: name, email: email, phone: phone)
@@ -2128,6 +2164,46 @@ struct QuickBooksManagementView: View {
             Text(value)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.trailing)
+        }
+    }
+}
+
+enum QuickBooksManagementWorkspace: String, CaseIterable, Identifiable {
+    case overview
+    case sales
+    case expenses
+    case payments
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .overview: "Overview"
+        case .sales: "Sales"
+        case .expenses: "Expenses"
+        case .payments: "Payments"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview: "gauge.with.dots.needle.50percent"
+        case .sales: "doc.text"
+        case .expenses: "cart"
+        case .payments: "creditcard"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .overview:
+            "Review the company realm, authorization health, resource status, and latest sync."
+        case .sales:
+            "Work with customers, catalog items, estimates, invoices, and walk-in sales."
+        case .expenses:
+            "Review vendors, bills, and purchases without mixing them into sales activity."
+        case .payments:
+            "Review invoice payments, methods, deposits, stored cards, charges, and refunds."
         }
     }
 }

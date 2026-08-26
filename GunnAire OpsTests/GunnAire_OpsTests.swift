@@ -266,6 +266,14 @@ struct GunnAire_OpsTests {
         #expect(JobDocumentationStage.recommended(for: .completed, hasInvoice: false, invoiceIsPaid: false) == .closeout)
     }
 
+    @Test func quickBooksManagementWorkspacesSeparateAccountingLanes() {
+        #expect(QuickBooksManagementWorkspace.allCases.map(\.label) == ["Overview", "Sales", "Expenses", "Payments"])
+        #expect(Set(QuickBooksManagementWorkspace.allCases.map(\.guidance)).count == 4)
+        #expect(QuickBooksManagementWorkspace.overview.guidance.localizedCaseInsensitiveContains("realm"))
+        #expect(QuickBooksManagementWorkspace.expenses.guidance.localizedCaseInsensitiveContains("vendors"))
+        #expect(QuickBooksManagementWorkspace.payments.guidance.localizedCaseInsensitiveContains("refunds"))
+    }
+
     @Test func fieldPaymentPromptQueueAnnouncesEveryPendingTaskOnce() {
         let first = BackendFieldPaymentAssignmentRecord(
             id: "assignment-1",

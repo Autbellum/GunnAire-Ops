@@ -196,6 +196,35 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testQuickBooksManagementUsesFocusedAccountingWorkspaces() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin"
+        ]
+        app.launch()
+
+        let quickBooks = app.staticTexts["QuickBooks Management"]
+        XCTAssertTrue(quickBooks.waitForExistence(timeout: 5))
+        quickBooks.tap()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 3))
+
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.exists)
+        XCTAssertTrue(workspacePicker.buttons["Overview"].isSelected)
+        XCTAssertTrue(app.staticTexts["Connection"].exists)
+        XCTAssertTrue(app.staticTexts["Sync Health"].exists)
+
+        workspacePicker.buttons["Sales"].tap()
+        XCTAssertTrue(workspacePicker.buttons["Sales"].isSelected)
+        XCTAssertTrue(app.staticTexts["Customers"].exists)
+        XCTAssertTrue(app.staticTexts["Product Catalog"].exists)
+        XCTAssertFalse(app.staticTexts["Sync Health"].exists)
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         let app = XCUIApplication()
