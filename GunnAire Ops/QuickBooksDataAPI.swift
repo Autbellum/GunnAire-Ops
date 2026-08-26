@@ -1035,7 +1035,7 @@ final class QuickBooksDataAPI: ObservableObject {
         ) { result in
             switch result {
             case .success(let response):
-                completion(.success(response.items))
+                completion(.success(response.items.map { $0.associated(withCustomerID: trimmedID) }))
             case .failure(let error):
                 if Self.isStoredCardsNotAvailable(error) {
                     completion(.success([]))
@@ -2619,6 +2619,7 @@ struct QuickBooksPaymentsStoredCardCreateRequest: Codable {
 
 struct QuickBooksPaymentsCardRecord: Decodable, Identifiable {
     let id: String
+    let customerID: String?
     let name: String?
     let expMonth: String?
     let expYear: String?
@@ -2635,6 +2636,7 @@ struct QuickBooksPaymentsCardRecord: Decodable, Identifiable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = QuickBooksFlexibleDecoding.string(container, .id) ?? UUID().uuidString
+        customerID = nil
         name = QuickBooksFlexibleDecoding.string(container, .name)
         expMonth = QuickBooksFlexibleDecoding.string(container, .expMonth)
         expYear = QuickBooksFlexibleDecoding.string(container, .expYear)
@@ -2642,6 +2644,72 @@ struct QuickBooksPaymentsCardRecord: Decodable, Identifiable {
         number = QuickBooksFlexibleDecoding.string(container, .number)
         address = (try? container.decodeIfPresent(QuickBooksPaymentsCardAddress.self, forKey: .address)) ?? nil
         context = (try? container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)) ?? nil
+    }
+
+    private init(
+        id: String,
+        customerID: String?,
+        name: String?,
+        expMonth: String?,
+        expYear: String?,
+        cardType: String?,
+        number: String?,
+        address: QuickBooksPaymentsCardAddress?,
+        context: QuickBooksPaymentsResponseContext?
+    ) {
+        self.id = id
+        self.customerID = customerID
+        self.name = name
+        self.expMonth = expMonth
+        self.expYear = expYear
+        self.cardType = cardType
+        self.number = number
+        self.address = address
+        self.context = context
+    }
+
+    func associated(withCustomerID customerID: String) -> Self {
+        Self(
+            id: id,
+            customerID: customerID,
+            name: name,
+            expMonth: expMonth,
+            expYear: expYear,
+            cardType: cardType,
+            number: number,
+            address: address,
+            context: context
+        )
+    }
+
+    var safeLastFour: String? {
+        StoredPaymentMethodReference.safeLastFour(number)
+    }
+
+    var safeDisplayLabel: String {
+        StoredPaymentMethodReference(
+            id: id,
+            providerCustomerID: customerID ?? "provider-customer",
+            cardholderName: name,
+            cardBrand: cardType,
+            lastFour: safeLastFour,
+            expirationMonth: expMonth,
+            expirationYear: expYear
+        ).displayLabel
+    }
+
+    func storedPaymentMethodReference(updatedAt: Date = Date()) -> StoredPaymentMethodReference? {
+        guard let customerID, !customerID.isEmpty, !id.isEmpty else { return nil }
+        return StoredPaymentMethodReference(
+            id: id,
+            providerCustomerID: customerID,
+            cardholderName: name,
+            cardBrand: cardType,
+            lastFour: safeLastFour,
+            expirationMonth: expMonth,
+            expirationYear: expYear,
+            updatedAt: updatedAt
+        )
     }
 }
 

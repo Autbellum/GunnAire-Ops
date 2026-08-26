@@ -11573,6 +11573,52 @@ struct GunnAire_OpsTests {
         #expect(contract.coveredEquipmentIDs.isEmpty)
     }
 
+    @MainActor
+    @Test func storedQuickBooksPaymentMethodKeepsOnlySafeCustomerScopedMetadata() throws {
+        let cardJSON = Data("""
+        {
+          "id": "card-42",
+          "name": "Agreement Customer",
+          "cardType": "Visa",
+          "number": "4111111111114242",
+          "expMonth": "12",
+          "expYear": "2030"
+        }
+        """.utf8)
+        let providerCard = try JSONDecoder().decode(QuickBooksPaymentsCardRecord.self, from: cardJSON)
+            .associated(withCustomerID: "qbo-customer-42")
+        let reference = try #require(providerCard.storedPaymentMethodReference())
+
+        #expect(providerCard.safeLastFour == "4242")
+        #expect(providerCard.safeDisplayLabel == "Visa •••• 4242")
+        #expect(reference.displayLabel == "Visa •••• 4242")
+        #expect(reference.providerCustomerID == "qbo-customer-42")
+
+        let customer = Customer(quickBooksID: "qbo-customer-42", name: "Agreement Customer")
+        customer.upsertStoredPaymentMethod(reference)
+
+        #expect(customer.activeStoredPaymentMethods.count == 1)
+        #expect(customer.activeStoredPaymentMethods[0].lastFour == "4242")
+        #expect(customer.storedPaymentMethodsJSON?.contains("4111111111114242") == false)
+        #expect(customer.storedPaymentMethodsJSON?.localizedCaseInsensitiveContains("cvc") == false)
+
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        context.insert(customer)
+        try context.save()
+
+        let persisted = try #require(try context.fetch(FetchDescriptor<Customer>()).first)
+        #expect(persisted.activeStoredPaymentMethods.first?.displayLabel == "Visa •••• 4242")
+
+        persisted.reconcileQuickBooksStoredPaymentMethods([], providerCustomerID: "qbo-customer-42")
+        #expect(persisted.activeStoredPaymentMethods.isEmpty)
+        #expect(persisted.storedPaymentMethods.first?.active == false)
+    }
+
     @Test func reusableFieldFormKeepsItsTemplateSnapshotAndJobLink() async throws {
         let customer = Customer(name: "Form Customer")
         let call = ServiceCall(type: .install, scheduledDate: Date(), customer: customer)

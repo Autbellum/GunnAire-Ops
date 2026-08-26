@@ -22,6 +22,9 @@ final class Customer {
     var allowsMarketing: Bool = false
     var preferredContactMethodRaw: String = CustomerContactMethod.email.rawValue
     var communicationConsentUpdatedAt: Date?
+    /// JSON-encoded, non-sensitive processor references. Full card numbers,
+    /// CVC values, and one-time card tokens are never stored in SwiftData.
+    var storedPaymentMethodsJSON: String?
     // CloudKit can deliver a parent and its related records separately. Keep
     // storage optional while exposing stable, empty-by-default collections to
     // the rest of the field-service UI.
@@ -44,7 +47,8 @@ final class Customer {
         allowsServiceText: Bool = false,
         allowsMarketing: Bool = false,
         preferredContactMethod: CustomerContactMethod = .email,
-        communicationConsentUpdatedAt: Date? = nil
+        communicationConsentUpdatedAt: Date? = nil,
+        storedPaymentMethods: [StoredPaymentMethodReference] = []
     ) {
         self.id = id
         self.quickBooksID = quickBooksID
@@ -57,6 +61,7 @@ final class Customer {
         self.allowsMarketing = allowsMarketing
         self.preferredContactMethodRaw = preferredContactMethod.rawValue
         self.communicationConsentUpdatedAt = communicationConsentUpdatedAt
+        self.storedPaymentMethodsJSON = Self.encodeStoredPaymentMethods(storedPaymentMethods)
     }
 }
 
@@ -100,9 +105,70 @@ extension Customer {
         recurringContracts.filter(\.active).count
     }
 
+    var storedPaymentMethods: [StoredPaymentMethodReference] {
+        guard let storedPaymentMethodsJSON,
+              let data = storedPaymentMethodsJSON.data(using: .utf8),
+              let methods = try? JSONDecoder().decode([StoredPaymentMethodReference].self, from: data) else {
+            return []
+        }
+        return methods.sorted { lhs, rhs in
+            if lhs.active != rhs.active { return lhs.active && !rhs.active }
+            return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
+        }
+    }
+
+    var activeStoredPaymentMethods: [StoredPaymentMethodReference] {
+        storedPaymentMethods.filter(\.active)
+    }
+
+    func upsertStoredPaymentMethod(_ method: StoredPaymentMethodReference) {
+        guard !method.id.isEmpty, !method.provider.isEmpty, !method.providerCustomerID.isEmpty else { return }
+        var methods = storedPaymentMethods
+        if let index = methods.firstIndex(where: { $0.id == method.id && $0.provider == method.provider }) {
+            methods[index] = method
+        } else {
+            methods.append(method)
+        }
+        storedPaymentMethodsJSON = Self.encodeStoredPaymentMethods(methods)
+    }
+
+    func reconcileQuickBooksStoredPaymentMethods(
+        _ currentMethods: [StoredPaymentMethodReference],
+        providerCustomerID: String,
+        reconciledAt: Date = Date()
+    ) {
+        let currentIDs = Set(currentMethods.map(\.id))
+        var methods = storedPaymentMethods.map { method in
+            guard method.provider == StoredPaymentMethodReference.quickBooksPaymentsProvider,
+                  method.providerCustomerID == providerCustomerID,
+                  !currentIDs.contains(method.id) else { return method }
+            var inactive = method
+            inactive.active = false
+            inactive.updatedAt = reconciledAt
+            return inactive
+        }
+        for method in currentMethods {
+            if let index = methods.firstIndex(where: { $0.id == method.id && $0.provider == method.provider }) {
+                methods[index] = method
+            } else {
+                methods.append(method)
+            }
+        }
+        storedPaymentMethodsJSON = Self.encodeStoredPaymentMethods(methods)
+    }
+
     var preferredContactMethod: CustomerContactMethod {
         get { CustomerContactMethod(rawValue: preferredContactMethodRaw) ?? .email }
         set { preferredContactMethodRaw = newValue.rawValue }
+    }
+
+    private static func encodeStoredPaymentMethods(_ methods: [StoredPaymentMethodReference]) -> String? {
+        guard !methods.isEmpty,
+              let data = try? JSONEncoder().encode(methods.sorted { lhs, rhs in
+                  if lhs.provider != rhs.provider { return lhs.provider < rhs.provider }
+                  return lhs.id < rhs.id
+              }) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 }
 

@@ -2745,6 +2745,28 @@ private struct CustomerEditorView: View {
                     }
                     }
                 }
+
+                if canViewFinancials, !customer.activeStoredPaymentMethods.isEmpty {
+                    Section("Payment Method on File") {
+                        DisclosureGroup("\(customer.activeStoredPaymentMethods.count) QuickBooks payment method\(customer.activeStoredPaymentMethods.count == 1 ? "" : "s")") {
+                            ForEach(customer.activeStoredPaymentMethods) { method in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(method.displayLabel)
+                                    if let expirationLabel = method.expirationLabel {
+                                        Text(expirationLabel)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                        Text("QuickBooks retains the payment credentials. GunnAire keeps only masked operational references; recurring charges remain disabled until customer authorization and accounting approval are recorded.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .accessibilityIdentifier("CustomerStoredPaymentMethods")
+                }
                 }
 
                 if selectedWorkspace == .overview,

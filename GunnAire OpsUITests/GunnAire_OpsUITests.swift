@@ -472,15 +472,27 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(workspacePicker.buttons["Systems"].isSelected)
         XCTAssertTrue(app.staticTexts["Equipment Profiles"].exists)
         XCTAssertTrue(app.staticTexts["Maintain installed equipment, warranty context, service trends, and maintenance agreements."].exists)
+        let storedPaymentMethods = app.descendants(matching: .any)["CustomerStoredPaymentMethods"]
+        for _ in 0..<6 {
+            if storedPaymentMethods.exists { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(storedPaymentMethods.waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["Contact Preferences"].exists)
 
-        workspacePicker.buttons["Files"].tap()
-        XCTAssertTrue(workspacePicker.buttons["Files"].isSelected)
+        for _ in 0..<6 {
+            if app.segmentedControls["CustomerProfileWorkspacePicker"].exists { break }
+            app.swipeDown()
+        }
+        let restoredWorkspacePicker = app.segmentedControls["CustomerProfileWorkspacePicker"]
+        XCTAssertTrue(restoredWorkspacePicker.waitForExistence(timeout: 3))
+        restoredWorkspacePicker.buttons["Files"].tap()
+        XCTAssertTrue(restoredWorkspacePicker.buttons["Files"].isSelected)
         XCTAssertTrue(app.staticTexts["Documents & Photos"].exists)
         XCTAssertFalse(app.staticTexts["Service Agreements"].exists)
 
-        workspacePicker.buttons["History"].tap()
-        XCTAssertTrue(workspacePicker.buttons["History"].isSelected)
+        restoredWorkspacePicker.buttons["History"].tap()
+        XCTAssertTrue(restoredWorkspacePicker.buttons["History"].isSelected)
         XCTAssertTrue(app.staticTexts["Recent Jobs"].exists)
         XCTAssertFalse(app.staticTexts["Documents & Photos"].exists)
     }
@@ -520,6 +532,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(workspacePicker.exists)
         workspacePicker.buttons["Systems"].tap()
         XCTAssertTrue(app.staticTexts["Equipment Profiles"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["CustomerStoredPaymentMethods"].exists)
         XCTAssertFalse(app.buttons["Add Equipment Profile"].exists)
         XCTAssertFalse(app.buttons["Edit"].exists)
 
@@ -563,6 +576,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Customers"].exists)
         XCTAssertTrue(app.staticTexts["Product Catalog"].exists)
         XCTAssertFalse(app.staticTexts["Sync Health"].exists)
+
+        workspacePicker.buttons["Payments"].tap()
+        XCTAssertTrue(workspacePicker.buttons["Payments"].isSelected)
+        XCTAssertTrue(app.descendants(matching: .any)["QuickBooksLinkedPaymentMethods"].exists)
     }
 
     @MainActor

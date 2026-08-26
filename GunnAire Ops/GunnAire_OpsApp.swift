@@ -128,10 +128,22 @@ private enum GunnAireUITestFixtures {
 
         let customer = Customer(
             id: customerID,
+            quickBooksID: "QBO-UI-CUSTOMER",
             name: isScreenshotFixture ? "Blue Ridge Dental" : "UI Test Collectible Customer",
             phone: isScreenshotFixture ? "(336) 555-0148" : "555-0100",
             email: isScreenshotFixture ? "office@example.com" : "uitest@gunnaire.com",
-            address: isScreenshotFixture ? "2450 Robinhood Rd, Winston-Salem, NC" : "100 Test Air Way"
+            address: isScreenshotFixture ? "2450 Robinhood Rd, Winston-Salem, NC" : "100 Test Air Way",
+            storedPaymentMethods: [
+                StoredPaymentMethodReference(
+                    id: "QBO-UI-CARD",
+                    providerCustomerID: "QBO-UI-CUSTOMER",
+                    cardholderName: isScreenshotFixture ? "Blue Ridge Dental" : "UI Test Collectible Customer",
+                    cardBrand: "Visa",
+                    lastFour: "4242",
+                    expirationMonth: "12",
+                    expirationYear: "2030"
+                )
+            ]
         )
         let technician = Technician(
             id: technicianID,

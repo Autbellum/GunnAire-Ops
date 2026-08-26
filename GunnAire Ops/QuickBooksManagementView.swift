@@ -205,6 +205,16 @@ struct QuickBooksManagementView: View {
         quickBooksDataAPI.canUseQuickBooksPaymentsAPI
     }
 
+    private var customersWithStoredPaymentMethods: [Customer] {
+        localCustomers
+            .filter { !$0.activeStoredPaymentMethods.isEmpty }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var linkedStoredPaymentMethodCount: Int {
+        customersWithStoredPaymentMethods.reduce(0) { $0 + $1.activeStoredPaymentMethods.count }
+    }
+
     private var quickBooksPaymentsUnavailableMessage: String {
         if let diagnostic = quickBooksDataAPI.paymentsAuthorizationDiagnostic {
             return diagnostic
@@ -1037,6 +1047,12 @@ struct QuickBooksManagementView: View {
                             Text("\(quickBooksChargePayments.filter(\.isRefund).count)")
                                 .foregroundColor(.secondary)
                         }
+                        HStack {
+                            Text("Linked payment methods")
+                            Spacer()
+                            Text("\(linkedStoredPaymentMethodCount)")
+                                .foregroundColor(.secondary)
+                        }
 
                         Button("Process Card Charge") {
                             showingProcessCardPaymentSheet = true
@@ -1054,9 +1070,33 @@ struct QuickBooksManagementView: View {
                         .foregroundStyle(Color.primaryBlack)
                         .disabled(!quickBooksPaymentsEnabled || customers.isEmpty)
 
-                        Text("Stored cards are fetched and created with the customer-scoped QuickBooks Payments Cards API.")
+                        Text("QuickBooks holds the payment credentials. GunnAire stores only the customer link, card brand, last four digits, and expiration for operational readiness.")
                             .font(.caption)
                             .foregroundColor(.secondary)
+
+                        if !customersWithStoredPaymentMethods.isEmpty {
+                            DisclosureGroup("Linked customer payment methods") {
+                                ForEach(customersWithStoredPaymentMethods.prefix(10)) { customer in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(customer.name)
+                                            .font(.headline)
+                                        ForEach(customer.activeStoredPaymentMethods) { method in
+                                            HStack {
+                                                Text(method.displayLabel)
+                                                Spacer()
+                                                if let expirationLabel = method.expirationLabel {
+                                                    Text(expirationLabel)
+                                                        .foregroundColor(.secondary)
+                                                }
+                                            }
+                                            .font(.caption)
+                                        }
+                                    }
+                                    .padding(.vertical, 2)
+                                }
+                            }
+                            .accessibilityIdentifier("QuickBooksLinkedPaymentMethods")
+                        }
 
                         if storedCards.isEmpty {
                             Text("No stored QuickBooks payment cards loaded.")
@@ -1065,13 +1105,10 @@ struct QuickBooksManagementView: View {
                         } else {
                             ForEach(storedCards.prefix(10)) { card in
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(card.name ?? "Stored Card")
+                                    Text(card.safeDisplayLabel)
                                         .font(.headline)
-                                    Text(card.number ?? "Masked number unavailable")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    if let cardType = card.cardType, !cardType.isEmpty {
-                                        Text(cardType)
+                                    if let name = card.name, !name.isEmpty {
+                                        Text(name)
                                             .font(.caption2)
                                             .foregroundColor(.secondary)
                                     }
@@ -1434,6 +1471,7 @@ struct QuickBooksManagementView: View {
                     liveAPI.fetchCards(forCustomerIDs: customers.map(\.Id), completion: completion)
                 }, apply: { records in
                     storedCards = records
+                    reconcileStoredPaymentMethodReferences(records)
                 }) else { finishQuickBooksResourceSync(with: failures); return }
             } else if Config.QuickBooks.enablePaymentsScope {
                 storedCards = []
@@ -1913,7 +1951,19 @@ struct QuickBooksManagementView: View {
                         }
                     }
                     await MainActor.run {
-                        actionMessage = "Stored QuickBooks card for \(customer.DisplayName): \(card.number ?? card.id). Next step: add a local StoredPaymentMethod model to persist the customer-card mapping before using this card for recurring billing."
+                        let customerScopedCard = card.associated(withCustomerID: customer.Id)
+                        if let localCustomer = unambiguousLocalCustomer(for: customer),
+                           let reference = customerScopedCard.storedPaymentMethodReference() {
+                            localCustomer.upsertStoredPaymentMethod(reference)
+                            do {
+                                try modelContext.save()
+                                actionMessage = "Stored and linked \(reference.displayLabel) for \(localCustomer.name). Full card details were not saved in GunnAire."
+                            } catch {
+                                actionMessage = "The card was stored in QuickBooks, but its safe GunnAire customer link could not be saved. Sync and link the customer before recurring billing setup."
+                            }
+                        } else {
+                            actionMessage = "The card was stored in QuickBooks, but no unique local customer mapping was available. Sync or link the customer before recurring billing setup."
+                        }
                         syncAllQuickBooksData()
                     }
                 } catch {
@@ -2074,6 +2124,37 @@ struct QuickBooksManagementView: View {
         localCustomers.first {
             ($0.quickBooksID == quickBooksCustomer.Id) ||
             $0.name.caseInsensitiveCompare(quickBooksCustomer.DisplayName) == .orderedSame
+        }
+    }
+
+    private func unambiguousLocalCustomer(for quickBooksCustomer: QuickBooksCustomer) -> Customer? {
+        if let exact = localCustomers.first(where: { $0.quickBooksID == quickBooksCustomer.Id }) {
+            return exact
+        }
+        let nameMatches = localCustomers.filter {
+            $0.name.caseInsensitiveCompare(quickBooksCustomer.DisplayName) == .orderedSame
+        }
+        return nameMatches.count == 1 ? nameMatches[0] : nil
+    }
+
+    private func reconcileStoredPaymentMethodReferences(_ cards: [QuickBooksPaymentsCardRecord]) {
+        let reconciledAt = Date()
+        let referencesByCustomerID = Dictionary(
+            grouping: cards.compactMap { $0.storedPaymentMethodReference(updatedAt: reconciledAt) },
+            by: \.providerCustomerID
+        )
+        for quickBooksCustomer in customers {
+            guard let localCustomer = unambiguousLocalCustomer(for: quickBooksCustomer) else { continue }
+            localCustomer.reconcileQuickBooksStoredPaymentMethods(
+                referencesByCustomerID[quickBooksCustomer.Id] ?? [],
+                providerCustomerID: quickBooksCustomer.Id,
+                reconciledAt: reconciledAt
+            )
+        }
+        do {
+            try modelContext.save()
+        } catch {
+            actionMessage = "Stored cards loaded, but their safe customer links could not be saved. Retry Sync before relying on payment-method readiness."
         }
     }
 
