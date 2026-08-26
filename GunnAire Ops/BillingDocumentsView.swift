@@ -21,6 +21,8 @@ struct BillingDocumentsView: View {
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
 
     private let initialServiceCall: ServiceCall?
+    private let openCloseoutOnAppear: Bool
+    private let openTapToPayOnAppear: Bool
     private let showsDismissButton: Bool
     private let dismissButtonTitle: String
     private let liveAPI = QuickBooksDataAPI.shared
@@ -72,6 +74,7 @@ struct BillingDocumentsView: View {
     @State private var showingItemSelector = false
     @State private var showingItemCreator = false
     @State private var selectedInvoiceForCloseout: Invoice?
+    @State private var didResolveInitialCloseoutRequest = false
     @State private var generatedCustomerDocumentURL: URL?
     @State private var generatedCustomerDocumentRecipientID: UUID?
     @State private var generatedCustomerDocumentServiceCallID: UUID?
@@ -101,6 +104,8 @@ struct BillingDocumentsView: View {
         dismissButtonTitle: String = "Minimize"
     ) {
         self.initialServiceCall = initialServiceCall
+        self.openCloseoutOnAppear = openCloseoutOnAppear
+        self.openTapToPayOnAppear = openTapToPayOnAppear
         self.showsDismissButton = showsDismissButton
         self.dismissButtonTitle = dismissButtonTitle
         self.workspaceMode = workspaceMode
@@ -963,8 +968,31 @@ GunnAire
             }
     }
 
+    private var requestedInitialCloseoutInvoice: Invoice? {
+        let invoice = currentJobInvoice
+        let decision = BillingInitialCloseoutPolicy.resolve(
+            openCloseout: openCloseoutOnAppear,
+            autoStartTapToPay: openTapToPayOnAppear,
+            canCollectPayment: canCollectFieldPayments,
+            invoiceID: invoice?.id,
+            hasBalanceDue: invoice.map { !isInvoicePaid($0) } ?? false
+        )
+        guard case .present(let invoiceID, _) = decision,
+              let invoice,
+              invoice.id == invoiceID else { return nil }
+        return invoice
+    }
+
+    @ViewBuilder
     var body: some View {
-        NavigationStack {
+        if let invoice = requestedInitialCloseoutInvoice {
+            RecordInvoicePaymentView(
+                invoice: invoice,
+                autoStartTapToPay: openTapToPayOnAppear
+            )
+            .tint(Color.brandGold)
+        } else {
+            NavigationStack {
             List {
                 if let call = activeServiceCall {
                     Section("Job") {
@@ -2416,6 +2444,7 @@ GunnAire
                 populateCustomerFields(from: customer)
             }
         }
+        }
     }
 
     private func loadInitialContextIfNeeded() {
@@ -2450,6 +2479,29 @@ GunnAire
         }
 
         importQuickBooksItemsIfNeeded()
+        resolveInitialCloseoutRequestIfNeeded()
+    }
+
+    private func resolveInitialCloseoutRequestIfNeeded() {
+        guard !didResolveInitialCloseoutRequest else { return }
+        didResolveInitialCloseoutRequest = true
+
+        let invoice = currentJobInvoice
+        let decision = BillingInitialCloseoutPolicy.resolve(
+            openCloseout: openCloseoutOnAppear,
+            autoStartTapToPay: openTapToPayOnAppear,
+            canCollectPayment: canCollectFieldPayments,
+            invoiceID: invoice?.id,
+            hasBalanceDue: invoice.map { !isInvoicePaid($0) } ?? false
+        )
+        switch decision {
+        case .none:
+            break
+        case .present:
+            break
+        case .rejected(let message):
+            actionMessage = message
+        }
     }
 
     private func loadLinkedDocumentContextIfNeeded() {
@@ -5740,6 +5792,34 @@ private enum DocumentationCatalogFilter: String, CaseIterable, Identifiable {
         case .all:
             return "All"
         }
+    }
+}
+
+enum BillingInitialCloseoutPolicy {
+    enum Decision: Equatable {
+        case none
+        case present(invoiceID: UUID, autoStartTapToPay: Bool)
+        case rejected(String)
+    }
+
+    static func resolve(
+        openCloseout: Bool,
+        autoStartTapToPay: Bool,
+        canCollectPayment: Bool,
+        invoiceID: UUID?,
+        hasBalanceDue: Bool
+    ) -> Decision {
+        guard openCloseout else { return .none }
+        guard canCollectPayment else {
+            return .rejected("Your business account cannot collect invoice payments.")
+        }
+        guard let invoiceID else {
+            return .rejected("This job does not have an invoice to collect yet.")
+        }
+        guard hasBalanceDue else {
+            return .rejected("This invoice is already paid. No collection is needed.")
+        }
+        return .present(invoiceID: invoiceID, autoStartTapToPay: autoStartTapToPay)
     }
 }
 

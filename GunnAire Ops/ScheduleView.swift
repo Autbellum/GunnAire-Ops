@@ -1083,7 +1083,14 @@ struct ScheduleView: View {
                     .buttonStyle(.bordered)
                 }
 
-                if call.assignedTechnician == nil, let signedInTechnician {
+                if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
+                    Button(tapToPayReady ? "Pay" : "Collect") {
+                        openDocumentationInCloseout = true
+                        openDocumentationInTapToPay = tapToPayReady
+                        documentationCall = call
+                    }
+                    .buttonStyle(.bordered)
+                } else if call.assignedTechnician == nil, let signedInTechnician {
                     Button("Assign To Me") {
                         assign(call, to: signedInTechnician)
                     }
@@ -1092,13 +1099,6 @@ struct ScheduleView: View {
                     Button("Invoice") {
                         openDocumentationInCloseout = false
                         openDocumentationInTapToPay = false
-                        documentationCall = call
-                    }
-                    .buttonStyle(.bordered)
-                } else if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
-                    Button(tapToPayReady ? "Pay" : "Collect") {
-                        openDocumentationInCloseout = true
-                        openDocumentationInTapToPay = tapToPayReady
                         documentationCall = call
                     }
                     .buttonStyle(.bordered)
@@ -1740,7 +1740,7 @@ GunnAire
             availabilityBlocks: technicianAvailabilityBlocks,
             technicians: technicians
         ) {
-            return .rejected("Move blocked: \(conflict) Open the job editor to choose another time or deliberately resolve the conflict.")
+            return .rejected("Move blocked: \(conflict) Open the job to choose another time or deliberately resolve the conflict.")
         }
 
         let originalStart = call.scheduledDate
@@ -1929,6 +1929,7 @@ private struct DispatchWeekBoardView: View {
     @State private var weekAnchor: Date
     @State private var actionMessage: String?
     @State private var lastMoveSucceeded = false
+    @State private var editingCall: ServiceCall?
 
     init(
         initialDate: Date,
@@ -1976,7 +1977,7 @@ private struct DispatchWeekBoardView: View {
                         .foregroundStyle(lastMoveSucceeded ? .green : .orange)
                 }
 
-                ScrollView(.horizontal) {
+                ScrollView([.horizontal, .vertical]) {
                     HStack(alignment: .top, spacing: 12) {
                         ForEach(days, id: \.self) { day in
                             dayColumn(day)
@@ -2008,6 +2009,10 @@ private struct DispatchWeekBoardView: View {
                         Label("Next week", systemImage: "chevron.right")
                     }
                 }
+            }
+            .fullScreenCover(item: $editingCall) { call in
+                EditServiceCallView(call: call)
+                    .tint(Color.brandGold)
             }
         }
     }
@@ -2071,8 +2076,25 @@ private struct DispatchWeekBoardView: View {
                 dispatchCard(call)
                     .frame(width: 170)
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                editingCall = call
+            }
+            .accessibilityAction(named: "Open job") {
+                editingCall = call
+            }
+            .accessibilityIdentifier("DispatchJobCard-\(call.id.uuidString)")
         } else {
-            card.opacity(0.65)
+            card
+                .opacity(0.65)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    editingCall = call
+                }
+                .accessibilityAction(named: "Open job") {
+                    editingCall = call
+                }
+                .accessibilityIdentifier("DispatchJobCard-\(call.id.uuidString)")
         }
     }
 
@@ -2122,6 +2144,12 @@ private struct DispatchWeekBoardView: View {
     private func moveMenu(for call: ServiceCall) -> some View {
         if DispatchBoardScheduling.canMove(call) {
             Menu {
+                Button {
+                    editingCall = call
+                } label: {
+                    Label("Open Job", systemImage: "square.and.pencil")
+                }
+                Divider()
                 ForEach(days, id: \.self) { day in
                     Button(day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())) {
                         performMove(call.id, to: day)
@@ -2134,10 +2162,18 @@ private struct DispatchWeekBoardView: View {
             }
             .accessibilityLabel("Move \(call.customer.name)")
         } else {
-            Image(systemName: "lock.fill")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("This job cannot be moved")
+            Menu {
+                Button {
+                    editingCall = call
+                } label: {
+                    Label("Open Job", systemImage: "square.and.pencil")
+                }
+            } label: {
+                Image(systemName: "lock.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityLabel("Open locked job")
         }
     }
 

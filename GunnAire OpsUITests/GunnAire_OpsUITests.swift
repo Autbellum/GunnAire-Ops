@@ -107,7 +107,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         app.launchArguments = [
             "-enableSplashVideo", "NO",
             "-disableCloudKitForTesting",
-            "-uiTestAuthenticatedAdmin"
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
         ]
         app.launch()
 
@@ -124,6 +125,42 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Drag a job to another day. Its time stays the same."].exists)
         XCTAssertTrue(app.buttons["Today"].exists)
         XCTAssertTrue(app.buttons["Done"].exists)
+
+        let seededJob = app.descendants(matching: .any)["DispatchJobCard-A1000000-0000-4000-8000-000000000002"]
+        XCTAssertTrue(seededJob.waitForExistence(timeout: 3))
+        seededJob.tap()
+        XCTAssertTrue(app.navigationBars["Edit Service Call"].waitForExistence(timeout: 3))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Dispatch Week"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testScheduleCollectionActionOpensInvoiceCloseout() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let collect = app.buttons["Collect"].firstMatch
+        for _ in 0..<5 {
+            if collect.exists { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(collect.waitForExistence(timeout: 3))
+        collect.tap()
+
+        XCTAssertTrue(app.navigationBars["Finalize Invoice"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["UI Test Collectible Customer"].exists)
+        XCTAssertTrue(app.staticTexts["Balance due: $189.00"].exists)
     }
 
     @MainActor

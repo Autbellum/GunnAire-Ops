@@ -198,6 +198,60 @@ struct GunnAire_OpsTests {
         #expect(FieldPaymentHandoff.invoiceID(from: activity) == nil)
     }
 
+    @Test func billingCloseoutLaunchPolicyKeepsOrdinaryDocumentationClosed() {
+        let decision = BillingInitialCloseoutPolicy.resolve(
+            openCloseout: false,
+            autoStartTapToPay: true,
+            canCollectPayment: true,
+            invoiceID: UUID(),
+            hasBalanceDue: true
+        )
+
+        #expect(decision == .none)
+    }
+
+    @Test func billingCloseoutLaunchPolicyPreservesTapToPayIntent() {
+        let invoiceID = UUID()
+        let decision = BillingInitialCloseoutPolicy.resolve(
+            openCloseout: true,
+            autoStartTapToPay: true,
+            canCollectPayment: true,
+            invoiceID: invoiceID,
+            hasBalanceDue: true
+        )
+
+        #expect(decision == .present(invoiceID: invoiceID, autoStartTapToPay: true))
+    }
+
+    @Test func billingCloseoutLaunchPolicyRejectsUnsafeCollectionRoutes() {
+        let invoiceID = UUID()
+        let unauthorized = BillingInitialCloseoutPolicy.resolve(
+            openCloseout: true,
+            autoStartTapToPay: false,
+            canCollectPayment: false,
+            invoiceID: invoiceID,
+            hasBalanceDue: true
+        )
+        let missingInvoice = BillingInitialCloseoutPolicy.resolve(
+            openCloseout: true,
+            autoStartTapToPay: false,
+            canCollectPayment: true,
+            invoiceID: nil,
+            hasBalanceDue: false
+        )
+        let paidInvoice = BillingInitialCloseoutPolicy.resolve(
+            openCloseout: true,
+            autoStartTapToPay: false,
+            canCollectPayment: true,
+            invoiceID: invoiceID,
+            hasBalanceDue: false
+        )
+
+        #expect(unauthorized == .rejected("Your business account cannot collect invoice payments."))
+        #expect(missingInvoice == .rejected("This job does not have an invoice to collect yet."))
+        #expect(paidInvoice == .rejected("This invoice is already paid. No collection is needed."))
+    }
+
     @Test func fieldPaymentPromptQueueAnnouncesEveryPendingTaskOnce() {
         let first = BackendFieldPaymentAssignmentRecord(
             id: "assignment-1",
