@@ -102,3 +102,178 @@ enum GunnAireCloudKit {
         return ModelConfiguration(schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .none)
     }
 }
+
+#if DEBUG
+/// Development-only tooling for making SwiftData publish every production
+/// entity to the CloudKit development schema. SwiftData creates CloudKit
+/// record types lazily, so launching an empty store only creates types for
+/// entities that are actually saved. This path is never compiled into Release.
+@MainActor
+enum GunnAireCloudKitSchemaBootstrap {
+    static let initializeArgument = "-initializeCloudKitSchema"
+    static let cleanupArgument = "-cleanupCloudKitSchemaBootstrap"
+
+    private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
+    private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
+    private static let completionKey = "GunnAireCloudKitSchemaBootstrapV1"
+
+    static func runIfRequested(in modelContext: ModelContext) throws {
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains(initializeArgument) {
+            try initialize(in: modelContext)
+        } else if arguments.contains(cleanupArgument) {
+            try cleanup(in: modelContext)
+        }
+    }
+
+    private static func initialize(in modelContext: ModelContext) throws {
+        guard !UserDefaults.standard.bool(forKey: completionKey) else { return }
+
+        let now = Date()
+        let customer = Customer(name: marker)
+        let technician = Technician(name: marker, contactInfo: bootstrapEmail)
+        let item = Item(name: marker, unitPrice: 0)
+        let serviceCall = ServiceCall(
+            eventTitle: marker,
+            type: .service,
+            scheduledDate: now,
+            assignedTechnician: technician,
+            customer: customer,
+            notes: marker
+        )
+        let invoice = Invoice(customer: customer, notes: marker)
+        let estimate = Estimate(customer: customer, notes: marker)
+        let template = FieldFormTemplate(title: marker, questions: [])
+
+        let models: [any PersistentModel] = [
+            item,
+            serviceCall,
+            customer,
+            technician,
+            TechnicianAvailabilityBlock(
+                technicianID: technician.id,
+                startsAt: now,
+                endsAt: now.addingTimeInterval(3_600),
+                reason: marker
+            ),
+            RecurringMaintenanceContract(
+                customer: customer,
+                planName: marker,
+                schedulePattern: "Annual",
+                nextDate: now
+            ),
+            invoice,
+            estimate,
+            Payment(invoice: invoice, amount: 0, notes: marker),
+            TimeEntry(userEmail: bootstrapEmail, clockIn: now, clockOut: now, serviceCall: serviceCall, notes: marker),
+            Vendor(name: marker),
+            AppUser(email: bootstrapEmail),
+            ServiceDocumentAttachment(
+                customer: customer,
+                serviceCallID: serviceCall.id,
+                kind: .other,
+                displayName: marker,
+                localFilePath: "/tmp/gunnaire-cloudkit-schema-bootstrap",
+                contentType: "application/octet-stream",
+                fileSizeBytes: 0
+            ),
+            CustomerEquipment(customer: customer, name: marker),
+            CustomerCommunication(
+                customer: customer,
+                serviceCallID: serviceCall.id,
+                recipient: bootstrapEmail,
+                subject: marker,
+                deliveryStatus: "development_schema_bootstrap"
+            ),
+            PurchaseOrder(
+                vendorName: marker,
+                serviceCallID: serviceCall.id,
+                itemName: marker,
+                quantity: 1,
+                unitCost: 0,
+                notes: marker,
+                createdByEmail: bootstrapEmail
+            ),
+            InventoryMovement(item: item, type: .adjust, quantity: 0, notes: marker, createdByEmail: bootstrapEmail),
+            ServiceRequest(customerName: marker, summary: marker, createdByEmail: bootstrapEmail),
+            ServiceCallActivity(serviceCallID: serviceCall.id, action: marker, detail: marker, actorEmail: bootstrapEmail),
+            template,
+            FieldFormResponse(serviceCallID: serviceCall.id, template: template, answers: [:], completedByEmail: bootstrapEmail),
+        ]
+
+        for model in models {
+            modelContext.insert(model)
+        }
+        try modelContext.save()
+        UserDefaults.standard.set(true, forKey: completionKey)
+    }
+
+    private static func cleanup(in modelContext: ModelContext) throws {
+        for value in try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>()) where value.displayName == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<CustomerCommunication>()) where value.subject == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<Payment>()) where value.notes == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<TimeEntry>()) where value.notes == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<FieldFormResponse>()) where value.templateTitle == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<ServiceCallActivity>()) where value.action == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<InventoryMovement>()) where value.notes == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<PurchaseOrder>()) where value.notes == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<RecurringMaintenanceContract>()) where value.planName == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<Invoice>()) where value.notes == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<Estimate>()) where value.notes == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<ServiceCall>()) where value.eventTitle == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<CustomerEquipment>()) where value.name == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<TechnicianAvailabilityBlock>()) where value.reason == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<ServiceRequest>()) where value.summary == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<FieldFormTemplate>()) where value.title == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<Item>()) where value.name == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<Vendor>()) where value.name == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<Technician>()) where value.name == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<AppUser>()) where value.email == bootstrapEmail {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<Customer>()) where value.name == marker {
+            modelContext.delete(value)
+        }
+
+        try modelContext.save()
+    }
+}
+#endif

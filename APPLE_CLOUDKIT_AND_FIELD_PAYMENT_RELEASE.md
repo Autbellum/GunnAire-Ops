@@ -2,22 +2,20 @@
 
 ## CloudKit
 
-The app now uses the private CloudKit database container
-`iCloud.com.gunnaire.businesssuite` for its SwiftData store. Before a signed
-build can synchronize between the company iPad and Mac:
+The app uses the private CloudKit database container
+`iCloud.com.gunnaire.businesssuite` for its SwiftData store. Apple configuration
+and schema status as of 2026-08-26:
 
-1. In the Apple Developer account, enable iCloud/CloudKit for
-   `com.gunnaire.businesssuite` and create or select that exact container.
-2. Enable Background Modes with **Remote notifications** for the App ID. The
-   project already declares this runtime mode so SwiftData can apply CloudKit
-   server changes while the app is backgrounded.
-3. Regenerate the provisioning profile after enabling the capabilities.
-4. In CloudKit Console, use the development environment to validate the schema
-   with non-production data, then deploy the schema to production before an
-   App Store or TestFlight release.
-5. Sign the company iPad and Mac into the same approved business iCloud account
+1. The App ID `com.gunnaire.businesssuite` has the CloudKit container and Remote
+   notifications capability enabled. The project declares the matching runtime mode.
+2. A signed Mac Catalyst development build succeeds using the regenerated team
+   provisioning profile.
+3. All 21 SwiftData production record types were initialized in Development,
+   reviewed in CloudKit Console, deployed, and verified in Production. The
+   bootstrap records were then removed from the development store.
+4. Sign the company iPad and Mac into the same approved business iCloud account
    and sign every staff member into GunnAire Ops with their own business login.
-6. Verify offline edits made on each device merge after reconnection before
+5. Verify offline edits made on each physical device merge after reconnection before
    relying on CloudKit for live dispatch.
 
 The CloudKit private database keeps the company-owned iPad and Mac in sync. It

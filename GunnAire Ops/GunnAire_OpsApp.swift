@@ -41,7 +41,11 @@ struct GunnAire_OpsApp: App {
         let modelConfiguration = GunnAireCloudKit.modelConfiguration(for: schema)
 
         do {
-            return .ready(try ModelContainer(for: schema, configurations: [modelConfiguration]))
+            let modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
+            #if DEBUG
+            try GunnAireCloudKitSchemaBootstrap.runIfRequested(in: modelContainer.mainContext)
+            #endif
+            return .ready(modelContainer)
         } catch {
             logger.error("Persistent SwiftData store load failed: \(error.localizedDescription, privacy: .public)")
             return .failed(
