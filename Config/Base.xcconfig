@@ -29,7 +29,7 @@ GOOGLE_CALLBACK_SCHEME = com.googleusercontent.apps.y539751190237-oumf7hncfrbheg
 GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.y539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e
 GOOGLE_ALLOWED_HOSTED_DOMAIN = gunnaire.com
 
-GUNNAIRE_BACKEND_BASE_URL = https://gunnaire-api.onrender.com
+GUNNAIRE_BACKEND_BASE_URL = https:/$()/gunnaire-api.onrender.com
 GUNNAIRE_BACKEND_API_TOKEN =
 // Use google-id-token behind HTTPS in production. api-token is legacy LAN/development only.
 GUNNAIRE_BACKEND_AUTH_MODE = api-token

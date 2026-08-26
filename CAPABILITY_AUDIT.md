@@ -1,6 +1,6 @@
 # GunnAire Ops Capability Audit
 
-This audit compares GunnAire Ops with the practical operating capabilities described by ten leading field-service suites: ServiceTitan, Housecall Pro, FieldPulse, FieldEdge, Jobber, Workiz, Service Fusion, Simpro, ServiceM8, and Kickserv. It distinguishes implemented workflows from vendor- or provider-dependent capabilities that cannot be represented honestly as live until the business has credentials, contracts, and production approval.
+This audit compares GunnAire Ops with the practical operating capabilities described by ten leading field-service suites: ServiceTitan, Housecall Pro, FieldPulse, FieldEdge, Jobber, Workiz, Service Fusion, Simpro, BuildOps, and ServiceTrade. It distinguishes implemented workflows from vendor- or provider-dependent capabilities that cannot be represented honestly as live until the business has credentials, contracts, and production approval.
 
 ## Benchmark conclusion
 
@@ -39,7 +39,7 @@ The following are designed as handoffs, not falsely marked live:
 
 ## Deliberately sequenced next releases
 
-1. Deploy the included backend behind authenticated HTTPS with a managed database, backups, audit events, and tenant-scoped server authorization.
+1. Complete backup, recovery, monitoring, and role acceptance for the deployed authenticated HTTPS backend.
 2. Complete QBO and Google production approval, then exercise only test-company/test-account flows before accounting or customer communications are enabled live.
 3. Choose an SMS/booking/portal provider and implement its consent, opt-out, webhook, and delivery-retry lifecycle before presenting those as supported customer channels.
 4. Complete supplier onboarding and add server-side adapter tests before allowing a purchase order to transmit to Lennox, Johnstone, or another supplier.
@@ -59,22 +59,22 @@ provider-owned payment, location, financing, or supplier service.
 - Workiz: [feature catalog](https://www.workiz.com/features/) and [client portal](https://www.workiz.com/features/client-portal/).
 - Service Fusion: [field-service platform](https://www.servicefusion.com/) and [HVAC workflow](https://www.servicefusion.com/hvac-software).
 - Simpro: [field mobile app](https://www.simprogroup.com/features/field-service-mobile-app) and [field-service platform](https://www.simprogroup.com/solutions/field-service-management-software).
-- ServiceM8: [feature overview](https://www.servicem8.com/eu/about-us) and [mobile workflow](https://www.servicem8.com/uk/free-plan).
+- BuildOps: [service management suite](https://buildops.com/platform/service-management-suite) and [commercial HVAC platform](https://buildops.com/industries/hvac-software).
 - Intuit: [Tap to Pay in QuickBooks Mobile or GoPayment](https://quickbooks.intuit.com/learn-support/en-us/help-article/receive-payments/use-tap-pay-quickbooks-gopayment-quickbooks-mobile/L38jd9HdC_US_en_US).
-- Kickserv: [field-service platform](https://www.kickserv.com/) and [customer workflow](https://www.kickserv.com/tools/close-more-business).
+- ServiceTrade: [commercial HVAC platform](https://servicetrade.com/industries/mechanical-commercial-hvac/) and [platform overview](https://servicetrade.com/platform/).
 
 - ServiceTitan describes CRM, dispatch, pricebook, inventory, marketing, reporting, purchasing, QuickBooks, API, and field-mobile capabilities: <https://www.servicetitan.com/features>.
 - Housecall Pro describes field-service invoicing, payments, reminders, QuickBooks, and recurring-job capability: <https://www.housecallpro.com/features/>.
 - Jobber lists reviews, online booking, websites, email, and referral capability: <https://www.getjobber.com/features/>.
 - Workiz lists inventory, scheduling, equipment tracking, service plans, pricebooks, and reporting: <https://www.workiz.com/features/>.
-- ServiceM8 describes job cards, scheduling, quotes/invoices, payments, electronic forms, asset history, booking, and accounting integration: <https://www.servicem8.com/us/features-field-service-management>.
-- Kickserv describes lead/estimate/job management, scheduling, customer history, mobile operations, invoices/payments, QuickBooks sync, and a customer center: <https://www.kickserv.com/large-business>.
+- BuildOps describes dispatch, mobile field work, asset/service history, quoting, invoicing, reporting, and commercial contractor workflows: <https://buildops.com/platform/service-management-suite>.
+- ServiceTrade describes commercial HVAC service operations, asset history, customer experience, technician workflows, sales, and operational intelligence: <https://servicetrade.com/industries/mechanical-commercial-hvac/>.
 - FieldPulse lists scheduling/dispatch, customer and booking portals, estimates/invoices, payments, inventory, maintenance agreements, and equipment management: <https://www.fieldpulse.com/features>.
 - FieldEdge describes HVAC scheduling, dispatch, service agreements, inventory, invoicing, equipment history, reporting, and QuickBooks workflows: <https://fieldedge.com/hvac-business-software/>.
 - Service Fusion describes schedule/dispatch, GPS/provider routing, estimates, customer records, field invoices/payments, and QuickBooks: <https://www.servicefusion.com/>.
 - Simpro describes HVAC project/service operations, recurring maintenance, field forms, inventory, job costing, quotes, invoices, and payments: <https://www.simprogroup.com/industries/hvac-software>.
 - Jobber describes HVAC scheduling, field mobile work, route optimization, recurring maintenance, client portal, communications, and payments: <https://www.getjobber.com/industries/hvac/>.
 - Workiz describes scheduling/dispatch, location tracking, good-better-best proposals, inventory, booking, reporting, commissions, and field payments: <https://www.workiz.com/features/>.
-- ServiceM8 lists job management, scheduling, quoting/invoicing, payments, forms, asset management, online booking, and accounting integrations: <https://www.servicem8.com/us/features-field-service-management>.
+- BuildOps and ServiceTrade emphasize commercial asset history, planned service, technician workflows, customer visibility, and operational reporting: <https://buildops.com/platform/service-management-suite> and <https://servicetrade.com/platform/>.
 - FieldPulse describes equipment records linked to service agreements, maintenance schedules, warranty tracking, renewal reminders, and recurring service workflows: <https://www.fieldpulse.com/features/maintenance-agreements> and <https://www.fieldpulse.com/features/asset-management>.
 - ServiceTitan describes a connected pricebook for estimates, invoicing, purchasing, services, materials, equipment, and equipment-to-membership/job workflows: <https://help.servicetitan.com/docs/pricebook>.

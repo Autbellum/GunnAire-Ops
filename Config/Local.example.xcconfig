@@ -26,6 +26,6 @@ GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.539751190237-oumf7hncfrbh
 GOOGLE_ALLOWED_HOSTED_DOMAIN = gunnaire.com
 GOOGLE_iOS_URL_SCHEME = com.googleusercontent.apps.539751190237-oumf7hncfrbhegunnvovgr61mllgvt3e
 
-GUNNAIRE_BACKEND_BASE_URL = http://macstudio.local:8787
+GUNNAIRE_BACKEND_BASE_URL = http:/$()/macstudio.local:8787
 GUNNAIRE_BACKEND_API_TOKEN = replace-with-a-long-random-token
 GUNNAIRE_BACKEND_AUTH_MODE = api-token
