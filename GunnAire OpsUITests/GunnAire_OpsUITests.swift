@@ -9,6 +9,10 @@ import XCTest
 
 final class GunnAire_OpsUITests: XCTestCase {
 
+    private let screenshotCustomerID = "A1000000-0000-4000-8000-000000000001"
+    private let screenshotServiceCallID = "A1000000-0000-4000-8000-000000000002"
+    private let screenshotInvoiceID = "A1000000-0000-4000-8000-000000000003"
+
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
 
@@ -561,6 +565,110 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(workspacePicker.buttons["Recovery"].isSelected)
         XCTAssertTrue(app.staticTexts["Failed Upload Queue"].exists)
         XCTAssertFalse(app.staticTexts["Stock & Replenishment"].exists)
+    }
+
+    /// Produces customer-safe, repeatable App Store assets from Debug-only
+    /// fixture data. The same route-driven workflow runs on iPad and iPhone;
+    /// the capture command selects the appropriate simulator and orientation.
+    @MainActor
+    func testCaptureAppStoreScreenshots() throws {
+        XCUIDevice.shared.orientation = .portrait
+
+        captureAppStoreScreenshot(
+            name: "01-command-center",
+            expectedNavigationTitle: "Command Center"
+        )
+        captureAppStoreScreenshot(
+            name: "02-schedule",
+            route: "scheduleAndJobs",
+            expectedNavigationTitle: "Schedule"
+        )
+        captureAppStoreScreenshot(
+            name: "03-customer-systems",
+            route: "customers",
+            extraArguments: ["-GunnAirePendingCustomerID", screenshotCustomerID],
+            expectedNavigationTitle: "Edit Customer",
+            afterLaunch: { app in
+                let workspace = app.segmentedControls["CustomerProfileWorkspacePicker"]
+                XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+                workspace.buttons["Systems"].tap()
+                XCTAssertTrue(app.staticTexts["Equipment Profiles"].waitForExistence(timeout: 3))
+                let editEquipment = app.buttons["Edit"].firstMatch
+                XCTAssertTrue(editEquipment.waitForExistence(timeout: 3))
+                editEquipment.tap()
+                XCTAssertTrue(app.staticTexts["Heat Pump"].waitForExistence(timeout: 3))
+            }
+        )
+        captureAppStoreScreenshot(
+            name: "04-job-billing",
+            route: "onsiteDocumentation",
+            extraArguments: ["-GunnAirePendingServiceCallID", screenshotServiceCallID],
+            expectedNavigationTitle: "Job Documentation"
+        )
+        captureAppStoreScreenshot(
+            name: "05-field-collection",
+            route: "payments",
+            extraArguments: [
+                "-GunnAirePendingInvoiceID", screenshotInvoiceID,
+                "-GunnAirePendingOpenPaymentCollection", "YES"
+            ],
+            expectedNavigationTitle: "Record Payment"
+        )
+        captureAppStoreScreenshot(
+            name: "06-quickbooks-sales",
+            route: "quickBooksManagement",
+            expectedNavigationTitle: "QuickBooks Management",
+            afterLaunch: { app in
+                let workspace = app.segmentedControls["QuickBooksWorkspacePicker"]
+                XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+                workspace.buttons["Sales"].tap()
+                XCTAssertTrue(app.staticTexts["Local Invoice Publication"].waitForExistence(timeout: 3))
+            }
+        )
+    }
+
+    @MainActor
+    private func captureAppStoreScreenshot(
+        name: String,
+        route: String? = nil,
+        extraArguments: [String] = [],
+        expectedNavigationTitle: String,
+        afterLaunch: (XCUIApplication) -> Void = { _ in }
+    ) {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures"
+        ]
+        if let route {
+            app.launchArguments += ["-GunnAirePendingAppRoute", route]
+        }
+        app.launchArguments += extraArguments
+        app.launch()
+
+        XCTAssertTrue(
+            app.navigationBars[expectedNavigationTitle].waitForExistence(timeout: 8),
+            "Failed to reach screenshot route \(name)"
+        )
+        let window = app.windows.firstMatch
+        let orientationExpectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in window.frame.height > window.frame.width },
+            object: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [orientationExpectation], timeout: 5),
+            .completed,
+            "App window did not finish rotating for screenshot \(name)"
+        )
+        afterLaunch(app)
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        app.terminate()
     }
 
     @MainActor

@@ -3,6 +3,7 @@ import SwiftData
 
 struct OperationsDashboardView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \ServiceCall.scheduledDate, order: .forward) private var serviceCalls: [ServiceCall]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
@@ -357,31 +358,15 @@ struct OperationsDashboardView: View {
                 Spacer()
             }
 
-            HStack(spacing: 10) {
-                Button {
-                    showingCommandPalette = true
-                } label: {
-                    Label("Find", systemImage: "magnifyingglass")
-                }
-
-                Button {
-                    GunnAireAppIntentRouter.store(.schedule)
-                } label: {
-                    Label("Schedule", systemImage: "calendar.badge.clock")
-                }
-
-                if canCollectFieldPayments {
-                    Button {
-                        GunnAireAppIntentRouter.store(.payments)
-                    } label: {
-                        Label("Collect", systemImage: "creditcard")
+            Group {
+                if horizontalSizeClass == .compact {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                        commandCenterQuickActions
                     }
-                }
-
-                Button {
-                    GunnAireAppIntentRouter.store(.sync)
-                } label: {
-                    Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+                } else {
+                    HStack(spacing: 10) {
+                        commandCenterQuickActions
+                    }
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -390,6 +375,39 @@ struct OperationsDashboardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var commandCenterQuickActions: some View {
+        Button {
+            showingCommandPalette = true
+        } label: {
+            Label("Find", systemImage: "magnifyingglass")
+                .frame(maxWidth: .infinity)
+        }
+
+        Button {
+            GunnAireAppIntentRouter.store(.schedule)
+        } label: {
+            Label("Schedule", systemImage: "calendar.badge.clock")
+                .frame(maxWidth: .infinity)
+        }
+
+        if canCollectFieldPayments {
+            Button {
+                GunnAireAppIntentRouter.store(.payments)
+            } label: {
+                Label("Collect", systemImage: "creditcard")
+                    .frame(maxWidth: .infinity)
+            }
+        }
+
+        Button {
+            GunnAireAppIntentRouter.store(.sync)
+        } label: {
+            Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+                .frame(maxWidth: .infinity)
+        }
     }
 
     private var metricsGrid: some View {

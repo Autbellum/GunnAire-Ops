@@ -72,10 +72,12 @@ private enum GunnAireUITestFixtures {
     private static let catalogItemID = UUID(uuidString: "A1000000-0000-4000-8000-000000000007")!
     private static let correctiveSourceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000008")!
     private static let correctiveFollowUpCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000009")!
+    private static let equipmentID = UUID(uuidString: "A1000000-0000-4000-8000-000000000010")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
         guard arguments.contains("-disableCloudKitForTesting") else { return }
+        let isScreenshotFixture = arguments.contains("-appStoreScreenshotFixtures")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
         for user in appUsers where
@@ -104,6 +106,10 @@ private enum GunnAireUITestFixtures {
         for call in calls where call.id == serviceCallID || call.id == correctiveSourceCallID || call.id == correctiveFollowUpCallID {
             context.delete(call)
         }
+        let equipmentProfiles = try context.fetch(FetchDescriptor<CustomerEquipment>())
+        for equipment in equipmentProfiles where equipment.id == equipmentID {
+            context.delete(equipment)
+        }
         let customers = try context.fetch(FetchDescriptor<Customer>())
         for customer in customers where customer.id == customerID {
             context.delete(customer)
@@ -118,18 +124,18 @@ private enum GunnAireUITestFixtures {
         }
         try context.save()
 
-        guard arguments.contains("-uiTestSeedCollectibleJob") else { return }
+        guard arguments.contains("-uiTestSeedCollectibleJob") || isScreenshotFixture else { return }
 
         let customer = Customer(
             id: customerID,
-            name: "UI Test Collectible Customer",
-            phone: "555-0100",
-            email: "uitest@gunnaire.com",
-            address: "100 Test Air Way"
+            name: isScreenshotFixture ? "Blue Ridge Dental" : "UI Test Collectible Customer",
+            phone: isScreenshotFixture ? "(336) 555-0148" : "555-0100",
+            email: isScreenshotFixture ? "office@example.com" : "uitest@gunnaire.com",
+            address: isScreenshotFixture ? "2450 Robinhood Rd, Winston-Salem, NC" : "100 Test Air Way"
         )
         let technician = Technician(
             id: technicianID,
-            name: "UI Test Technician",
+            name: isScreenshotFixture ? "Jordan Lee" : "UI Test Technician",
             contactInfo: GunnAireUITestIdentity.technicianEmail
         )
         let catalogItem = Item(
@@ -140,6 +146,20 @@ private enum GunnAireUITestFixtures {
             purchaseCost: 42,
             itemDescription: "Diagnostic visit and system evaluation"
         )
+        let equipment = CustomerEquipment(
+            id: equipmentID,
+            customer: customer,
+            equipmentType: .heatPump,
+            name: isScreenshotFixture ? "Main Office Heat Pump" : "Test Heat Pump",
+            manufacturer: isScreenshotFixture ? "Lennox" : "GunnAire Test",
+            modelNumber: isScreenshotFixture ? "EL18XPV-036" : "UIT-100",
+            serialNumber: isScreenshotFixture ? "DEMO-2408" : "UITEST100",
+            location: isScreenshotFixture ? "Main Office" : "Test Location",
+            installDate: Calendar.current.date(byAdding: .year, value: -3, to: Date()),
+            warrantyExpiration: Calendar.current.date(byAdding: .year, value: 7, to: Date()),
+            filterSize: "20 x 25 x 1",
+            notes: isScreenshotFixture ? "Variable-capacity heat pump with communicating controls." : nil
+        )
         let scheduledDate = Calendar.current.date(
             bySettingHour: 9,
             minute: 0,
@@ -149,12 +169,13 @@ private enum GunnAireUITestFixtures {
         let call = ServiceCall(
             id: serviceCallID,
             googleEventManagedByApp: true,
-            eventTitle: "Collectible HVAC service",
+            eventTitle: isScreenshotFixture ? "Cooling system diagnostic" : "Collectible HVAC service",
             siteAddress: customer.address,
-            equipmentName: "Test Heat Pump",
-            equipmentManufacturer: "GunnAire Test",
-            equipmentModel: "UIT-100",
-            equipmentSerialNumber: "UITEST100",
+            equipmentName: isScreenshotFixture ? "Main Office Heat Pump" : "Test Heat Pump",
+            equipmentManufacturer: isScreenshotFixture ? "Lennox" : "GunnAire Test",
+            equipmentModel: isScreenshotFixture ? "EL18XPV-036" : "UIT-100",
+            equipmentSerialNumber: isScreenshotFixture ? "DEMO-2408" : "UITEST100",
+            customerEquipmentID: equipmentID,
             type: .service,
             scheduledDate: scheduledDate,
             assignedTechnician: technician,
@@ -177,6 +198,7 @@ private enum GunnAireUITestFixtures {
         context.insert(customer)
         context.insert(technician)
         context.insert(catalogItem)
+        context.insert(equipment)
         context.insert(call)
         context.insert(invoice)
 

@@ -4,7 +4,7 @@ Last reviewed: 2026-08-26
 
 ## Current result
 
-The iOS target builds for the configured iPhone and iPad simulators and launches successfully. The current iPad verification passed **384 unique tests** (**368 unit + 16 unique UI**) on an iPad (A16) simulator running iOS 26.5 on 2026-08-26 with **0 failures and 0 skipped tests**. The UI suite produced 19 device executions because one launch test runs in four appearance/orientation combinations. Generic arm64 iOS device and universal arm64/x86_64 Mac Catalyst **Release** builds also compile successfully, and both binaries are clean of the Debug-only test identities, fixtures, and CloudKit schema-bootstrap launch flags. Release builds use the deployed HTTPS Render backend and explicitly clear the legacy shared API token, preventing a developer LAN endpoint or static administrator-equivalent token from being archived accidentally. The corrective-work and invoice-sync CloudKit field migration is now deployed and verified in Production. The project is still **not ready to upload to TestFlight, Mac App Store, or submit to App Review** until the physical-device, OAuth, privacy, App Store Connect, and Mac Catalyst provisioning requirements below are complete. See `COMPLETION_EVIDENCE_MATRIX.md` for the product-by-product evidence and gate owners.
+The iOS target builds for the configured iPhone and iPad simulators and launches successfully. The current iPad verification passed **385 unique tests** (**368 unit + 17 unique UI**) on an iPad (A16) simulator running iOS 26.5 on 2026-08-26 with **0 failures and 0 skipped tests**. The UI suite produced 20 device executions because one launch test runs in four appearance/orientation combinations. Generic arm64 iOS device and universal arm64/x86_64 Mac Catalyst **Release** builds also compile successfully, and both binaries are clean of the Debug-only test identities, fixtures, and CloudKit schema-bootstrap launch flags. Release builds use the deployed HTTPS Render backend and explicitly clear the legacy shared API token, preventing a developer LAN endpoint or static administrator-equivalent token from being archived accidentally. The corrective-work and invoice-sync CloudKit field migration is now deployed and verified in Production. The project is still **not ready to upload to TestFlight, Mac App Store, or submit to App Review** until the physical-device, OAuth, privacy, App Store Connect, and Mac Catalyst provisioning requirements below are complete. See `COMPLETION_EVIDENCE_MATRIX.md` for the product-by-product evidence and gate owners.
 
 ## What is implemented
 
@@ -81,6 +81,11 @@ The Apple account and App Store Connect record were inspected read-only on
   app's exempt use of Apple platform encryption and uses a valid empty
   `UILaunchScreen` dictionary. Both values were verified in the compiled iOS
   and Mac Catalyst Release products.
+- Six fictional-data screenshots for each required device family are prepared
+  under `AppStoreAssets/Screenshots`: 2064 x 2752 for 13-inch iPad and
+  1320 x 2868 for 6.9-inch iPhone. All twelve PNG files passed orientation,
+  content, dimension, and no-alpha visual QA. They have not been uploaded to
+  App Store Connect.
 
 ## Verification commands
 
