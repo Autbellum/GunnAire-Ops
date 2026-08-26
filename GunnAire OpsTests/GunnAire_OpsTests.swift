@@ -984,6 +984,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canAccessSidebarItem(.onsiteDocumentation, email: standard.email, users: users) == true)
         #expect(AppAccess.canAccessSidebarItem(.invoices, email: standard.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.payments, email: standard.email, users: users) == false)
+        #expect(AppAccess.canAccessSidebarItem(.reports, email: standard.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.receiptsBills, email: standard.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.quickBooksManagement, email: standard.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.syncIntegrations, email: standard.email, users: users) == false)
@@ -1004,6 +1005,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canAccessSidebarItem(.invoices, email: technician.email, users: users) == true)
         #expect(AppAccess.canAccessSidebarItem(.payments, email: technician.email, users: users) == true)
         #expect(AppAccess.canAccessSidebarItem(.receiptsBills, email: technician.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.reports, email: technician.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.quickBooksManagement, email: technician.email, users: users) == false)
         #expect(AppAccess.canViewFinancialManagement(email: technician.email, users: users) == false)
         #expect(AppAccess.canViewBillingFinancialDetails(email: technician.email, users: users) == false)
@@ -1022,6 +1024,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canAccessSidebarItem(.customers, email: accounting.email, users: users) == true)
         #expect(AppAccess.canAccessSidebarItem(.scheduleAndJobs, email: accounting.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.invoices, email: accounting.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.reports, email: accounting.email, users: users) == true)
         #expect(AppAccess.canViewFinancialManagement(email: accounting.email, users: users) == true)
         #expect(AppAccess.canViewBillingFinancialDetails(email: accounting.email, users: users) == true)
         #expect(AppAccess.canCollectFieldPayments(email: accounting.email, users: users) == false)
@@ -1032,6 +1035,7 @@ struct GunnAire_OpsTests {
 
         #expect(AppAccess.canAccessSidebarItem(.customers, email: admin.email, users: users) == true)
         #expect(AppAccess.canAccessSidebarItem(.quickBooksManagement, email: admin.email, users: users) == true)
+        #expect(AppAccess.canAccessSidebarItem(.reports, email: admin.email, users: users) == true)
         #expect(AppAccess.canAccessSidebarItem(.syncIntegrations, email: admin.email, users: users) == true)
         #expect(AppAccess.canViewFinancialManagement(email: admin.email, users: users) == true)
         #expect(AppAccess.canViewBillingFinancialDetails(email: admin.email, users: users) == true)
@@ -11558,6 +11562,124 @@ struct GunnAire_OpsTests {
         #expect(activity.action == "Technician assigned")
         #expect(activity.detail == "Assigned to Taylor Technician.")
         #expect(activity.actorEmail == "dispatch@example.com")
+    }
+
+    @MainActor
+    @Test func businessReportingProducesTraceableSalesOperationsAndCostMetrics() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 26, hour: 12)))
+        let reportDate = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 10, hour: 9)))
+        let customer = Customer(name: "Reporting Customer")
+        let technician = Technician(name: "Reporting Technician", contactInfo: "reporting-tech@gunnaire.com", laborCostPerHour: 60)
+        let completedCall = ServiceCall(
+            type: .service,
+            scheduledDate: reportDate,
+            assignedTechnician: technician,
+            customer: customer,
+            status: .completed,
+            visitDisposition: .callback,
+            workCompletedChecklist: true,
+            documentationChecklist: true
+        )
+        let acceptedEstimate = Estimate(customer: customer, amount: 1_000, status: "accepted", createdAt: reportDate)
+        let declinedEstimate = Estimate(customer: customer, amount: 800, status: "rejected", createdAt: reportDate.addingTimeInterval(60))
+        let item = Item(name: "Reporting Repair", unitPrice: 300, purchaseCost: 100, createdAt: reportDate)
+        let invoice = Invoice(serviceCallID: completedCall.id, customer: customer, amount: 600, createdAt: reportDate)
+        invoice.catalogSnapshotJSON = CatalogLineItemSnapshot.encoded(from: [item], quantities: [item.id: 2])
+        let payment = Payment(invoice: invoice, amount: 250, date: reportDate.addingTimeInterval(3_600))
+        let timeEntry = TimeEntry(
+            userEmail: "reporting-tech@gunnaire.com",
+            clockIn: reportDate,
+            clockOut: reportDate.addingTimeInterval(7_200),
+            serviceCall: completedCall
+        )
+
+        let snapshot = BusinessReporting.snapshot(
+            period: .currentMonth,
+            now: now,
+            serviceCalls: [completedCall],
+            estimates: [acceptedEstimate, declinedEstimate],
+            invoices: [invoice],
+            payments: [payment],
+            timeEntries: [timeEntry],
+            technicians: [technician],
+            calendar: calendar
+        )
+
+        #expect(snapshot.invoicedRevenue == 600)
+        #expect(snapshot.collectedRevenue == 250)
+        #expect(snapshot.openBalance == 350)
+        #expect(snapshot.estimateCount == 2)
+        #expect(snapshot.acceptedEstimateCount == 1)
+        #expect(snapshot.estimateConversionRate == 0.5)
+        #expect(snapshot.completedJobCount == 1)
+        #expect(snapshot.correctiveVisitCount == 1)
+        #expect(snapshot.correctiveVisitRate == 1)
+        #expect(snapshot.materialCost == 200)
+        #expect(snapshot.laborCost == 120)
+        #expect(snapshot.missingLaborTrackingJobCount == 0)
+        #expect(snapshot.knownGrossProfit == 280)
+        #expect(abs((snapshot.knownGrossMargin ?? 0) - (280.0 / 600.0)) < 0.0001)
+        #expect(snapshot.costCoverageComplete)
+        #expect(snapshot.technicianRows.first?.recordedHours == 2)
+        #expect(snapshot.technicianRows.first?.completedJobs == 1)
+        let csv = BusinessReportCSV.render(snapshot)
+        #expect(csv.contains("Data Source,Current GunnAire operational records"))
+        #expect(csv.contains("Inclusion Rules,"))
+        #expect(csv.contains("Reporting Technician,1,2.00,120.00,0"))
+    }
+
+    @MainActor
+    @Test func businessReportingHidesProfitWhenMaterialOrLaborCostCoverageIsIncomplete() {
+        let now = Date()
+        let customer = Customer(name: "Incomplete Cost Customer")
+        let technician = Technician(name: "Uncosted Technician", contactInfo: "uncosted@gunnaire.com")
+        let call = ServiceCall(
+            type: .service,
+            scheduledDate: now.addingTimeInterval(-3_600),
+            assignedTechnician: technician,
+            customer: customer,
+            status: .completed
+        )
+        let invoice = Invoice(serviceCallID: call.id, customer: customer, amount: 200, createdAt: now.addingTimeInterval(-3_000))
+        let timeEntry = TimeEntry(
+            userEmail: "uncosted@gunnaire.com",
+            clockIn: now.addingTimeInterval(-3_600),
+            clockOut: now,
+            serviceCall: call
+        )
+
+        let snapshot = BusinessReporting.snapshot(
+            period: .currentMonth,
+            now: now,
+            serviceCalls: [call],
+            estimates: [],
+            invoices: [invoice],
+            payments: [],
+            timeEntries: [timeEntry],
+            technicians: [technician]
+        )
+
+        #expect(snapshot.missingMaterialCostLineCount == 1)
+        #expect(snapshot.uncostedLaborMinutes == 60)
+        #expect(!snapshot.costCoverageComplete)
+        #expect(snapshot.knownGrossProfit == nil)
+        #expect(snapshot.knownGrossMargin == nil)
+        #expect(BusinessReportCSV.render(snapshot).contains("Incomplete cost coverage"))
+
+        let noTimeSnapshot = BusinessReporting.snapshot(
+            period: .currentMonth,
+            now: now,
+            serviceCalls: [call],
+            estimates: [],
+            invoices: [invoice],
+            payments: [],
+            timeEntries: [],
+            technicians: [technician]
+        )
+        #expect(noTimeSnapshot.missingLaborTrackingJobCount == 1)
+        #expect(!noTimeSnapshot.costCoverageComplete)
     }
 
 }

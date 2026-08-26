@@ -62,7 +62,7 @@ struct ContentView: View {
     }
 
     private var backOfficeItems: [SidebarItem] {
-        [.mail, .estimates, .invoices, .payments, .receiptsBills]
+        [.mail, .estimates, .invoices, .payments, .reports, .receiptsBills]
             .filter { visibleSidebarItems.contains($0) }
     }
 
@@ -174,6 +174,8 @@ struct ContentView: View {
                             BillingDocumentsView(workspaceMode: .invoices)
                         case .payments:
                             PaymentsAndReceiptsView()
+                        case .reports:
+                            BusinessReportsView()
                         case .receiptsBills:
                             ReceiptsAndBillsView()
                         case .quickBooksManagement:
@@ -292,6 +294,7 @@ struct ContentView: View {
         case .estimates: return "doc.text.magnifyingglass"
         case .invoices: return "doc.text"
         case .payments: return "creditcard"
+        case .reports: return "chart.bar.xaxis"
         case .receiptsBills: return "tray.and.arrow.up"
         case .quickBooksManagement: return "banknote"
         case .syncIntegrations: return "arrow.triangle.2.circlepath"

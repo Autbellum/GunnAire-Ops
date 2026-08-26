@@ -10,6 +10,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     case estimates = "Estimates"
     case invoices = "Invoices"
     case payments = "Payments"
+    case reports = "Reports"
     case receiptsBills = "Receipts & Bills"
     case quickBooksManagement = "QuickBooks Management"
     case syncIntegrations = "Sync & Integrations"

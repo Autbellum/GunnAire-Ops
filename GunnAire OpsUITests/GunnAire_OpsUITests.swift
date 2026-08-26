@@ -88,6 +88,7 @@ final class GunnAire_OpsUITests: XCTestCase {
             ("Mail", "Mail"),
             ("Estimates", "Estimates"),
             ("Invoices", "Invoices"),
+            ("Reports", "Business Reports"),
             ("Receipts & Bills", "Receipts & Bills"),
             ("Sync & Integrations", "Sync & Integrations"),
             ("Onsite Documentation", "Onsite Documentation"),
@@ -103,6 +104,39 @@ final class GunnAire_OpsUITests: XCTestCase {
                 "Failed to open \(destination.title) from the iPad sidebar"
             )
         }
+    }
+
+    @MainActor
+    func testBusinessReportsUsesFocusedManagementWorkspaces() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        let reports = app.staticTexts["Reports"]
+        XCTAssertTrue(reports.waitForExistence(timeout: 5))
+        reports.tap()
+        XCTAssertTrue(app.navigationBars["Business Reports"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Financial Pulse"].exists)
+        XCTAssertTrue(app.buttons["Export CSV"].exists)
+
+        let overviewAttachment = XCTAttachment(screenshot: app.screenshot())
+        overviewAttachment.name = "Business Reports Overview"
+        overviewAttachment.lifetime = .keepAlways
+        add(overviewAttachment)
+
+        let workspace = app.segmentedControls["BusinessReportWorkspacePicker"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 3))
+        workspace.buttons["Sales"].tap()
+        XCTAssertTrue(app.staticTexts["Sales Performance"].waitForExistence(timeout: 3))
+        workspace.buttons["Operations"].tap()
+        XCTAssertTrue(app.staticTexts["Operations Quality"].waitForExistence(timeout: 3))
+        workspace.buttons["Team"].tap()
+        XCTAssertTrue(app.staticTexts["Team Activity"].waitForExistence(timeout: 3))
     }
 
     @MainActor

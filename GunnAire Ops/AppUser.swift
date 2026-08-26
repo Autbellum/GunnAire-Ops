@@ -100,6 +100,8 @@ enum AppAccess {
             return role == .dispatcher || role == .admin
         case .invoices, .payments, .receiptsBills:
             return role == .fieldTechnician || role == .accounting || role == .admin
+        case .reports:
+            return role == .accounting || role == .admin
         case .syncIntegrations, .quickBooksManagement:
             return role == .admin
         }
