@@ -13,6 +13,8 @@ export GUNNAIRE_QBO_CLIENT_ID="your-intuit-client-id"
 export GUNNAIRE_QBO_CLIENT_SECRET="your-intuit-client-secret"
 export GUNNAIRE_QBO_REDIRECT_URI="https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback"
 export GUNNAIRE_QBO_ENVIRONMENT="production" # or sandbox; must match the app build
+# Copy this value from Intuit's Webhooks settings; never invent or expose it.
+export GUNNAIRE_QBO_WEBHOOK_VERIFIER_TOKEN="your-intuit-webhook-verifier-token"
 # Generate once with: python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
 # Save this only in the host secret manager; do not rotate it while a QBO connection is active.
 export GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY="your-fernet-encryption-key"
@@ -73,6 +75,7 @@ GUNNAIRE_QBO_CLIENT_SECRET=your-intuit-client-secret
 GUNNAIRE_QBO_REDIRECT_URI=https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback
 GUNNAIRE_QBO_ENVIRONMENT=production
 GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY=your-fernet-encryption-key
+GUNNAIRE_QBO_WEBHOOK_VERIFIER_TOKEN=your-intuit-webhook-verifier-token
 GUNNAIRE_BACKEND_DATA_DIR=/var/data
 ```
 
@@ -84,6 +87,7 @@ Use `api.gunnaire.com` as the custom HTTPS domain after Render provides its DNS 
 - Active/inactive access state.
 - Uploaded receipt/document files under `Backend/storage`, retaining their service call, invoice, estimate, customer-equipment, equipment-name, and customer links for cross-device retrieval.
 - Field payment collection records for admin QuickBooks reconciliation.
+- QuickBooks change-event metadata for the currently authorized company realm. The raw provider payload, realm ID, customer content, and credentials are not retained or returned to the app.
 - Transactional email audit records, linked to the customer, job, estimate/invoice, and attachment names.
 - Administrator-only server activity events for role changes, shared-document uploads, payment metadata, customer-communication records, booking claims, and QuickBooks authorization lifecycle actions. Tokens, card data, and customer-content fields are intentionally not recorded.
 - An optional public online-booking request inbox. It never creates a job directly: dispatch imports, qualifies, and schedules each request.
@@ -115,13 +119,25 @@ An administrator can then create an expiring, revocable link from a job in GunnA
 
 `POST /api/qbo/exchange`, `/api/qbo/refresh`, and `/api/qbo/revoke` are administrator-only backend operations used by the app after the registered HTTPS callback hands the authorization code back to `gunnaireops://`. The bridge encrypts and retains the rotating Intuit refresh token in its persistent database; the app receives only a short-lived access token. The client realm and sandbox/production environment must match the saved backend connection before it can refresh. Set a valid `GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY` and `GUNNAIRE_QBO_ENVIRONMENT` before authorizing QuickBooks. Store that Fernet key only in the deployment secret manager, keep it stable while the QBO connection exists, and rotate it only through a planned decrypt/re-encrypt migration. Run this backend behind HTTPS and in Google ID-token mode before connecting a production QBO company.
 
+## QuickBooks change webhooks
+
+Configure Intuit's current CloudEvents v1.0 webhook destination as:
+
+```text
+https://gunnaire-api.onrender.com/api/qbo/webhooks
+```
+
+Copy the verifier token supplied by Intuit into the encrypted Render variable `GUNNAIRE_QBO_WEBHOOK_VERIFIER_TOKEN`. The receiver verifies the `intuit-signature` HMAC against the exact request body, rejects legacy or malformed payloads, accepts only events for the currently authorized QBO company realm, and deduplicates Intuit event IDs. It retains only the event ID, entity type/ID, operation, and timestamps. Admin clients can read pending metadata at `GET /api/qbo/webhook-events`; the app acknowledges the exact event IDs only after a complete successful QBO refresh. Failed syncs and events that arrive during a sync remain pending.
+
+Subscribe the entities the app reconciles: Customer, Item, Estimate, Invoice, Vendor, Bill, Purchase, Payment, SalesReceipt, Deposit, PaymentMethod, and Attachable. Use Intuit's portal test-event function after both sandbox and production are configured. Until the verifier token exists, the endpoint fails closed and backend readiness reports QuickBooks Change Alerts as requiring attention.
+
 ## Quick Checks
 
 ```sh
 curl http://macstudio.local:8787/health
 curl -H "Authorization: Bearer replace-with-a-long-random-token" http://macstudio.local:8787/api/users
 # Requires Backend/requirements.txt, including cryptography.
-python3 -m unittest Backend.test_deployment_entrypoint Backend.test_qbo_token_storage -v
+python3 -m unittest Backend.test_deployment_entrypoint Backend.test_qbo_token_storage Backend.test_backend_readiness Backend.test_backup_backend Backend.test_qbo_webhooks -v
 ```
 
 `/health` includes a non-secret `serviceVersion` marker. After every production

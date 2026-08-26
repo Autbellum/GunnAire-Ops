@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import html
 import json
 import os
@@ -25,7 +26,7 @@ from urllib.parse import unquote, urlparse
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.26.3"
+SERVICE_VERSION = "2026.08.26.4"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -63,6 +64,8 @@ QBO_ENVIRONMENT = os.environ.get("GUNNAIRE_QBO_ENVIRONMENT", "sandbox").strip().
 # rotating QBO refresh token. This deliberately fails closed instead of
 # downgrading production credentials to plaintext SQLite storage.
 QBO_TOKEN_ENCRYPTION_KEY = os.environ.get("GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY", "").strip()
+QBO_WEBHOOK_VERIFIER_TOKEN = os.environ.get("GUNNAIRE_QBO_WEBHOOK_VERIFIER_TOKEN", "").strip()
+QBO_WEBHOOK_MAX_BYTES = min(max(int(os.environ.get("GUNNAIRE_QBO_WEBHOOK_MAX_BYTES", str(1024 * 1024))), 1024), 5 * 1024 * 1024)
 QBO_TOKEN_ENDPOINT = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 QBO_REVOCATION_ENDPOINT = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
 PUBLIC_BOOKING_ENABLED = os.environ.get("GUNNAIRE_PUBLIC_BOOKING_ENABLED", "false").strip().lower() == "true"
@@ -211,6 +214,75 @@ def qbo_connection_matches(row: sqlite3.Row, realm_id: str, environment: str) ->
     return row["realm_id"] == realm_id and row["environment"] == environment
 
 
+QBO_WEBHOOK_TYPE_PATTERN = re.compile(
+    r"^qbo\.([a-z0-9-]{1,64})\.(created|updated|deleted|voided|merged|activated|deactivated)\.v1$"
+)
+
+
+def verify_qbo_webhook_signature(payload: bytes, signature: str | None) -> bool:
+    """Verify Intuit's base64 HMAC-SHA256 signature over the exact raw body."""
+    if not QBO_WEBHOOK_VERIFIER_TOKEN or not signature:
+        return False
+    expected = base64.b64encode(
+        hmac.new(
+            QBO_WEBHOOK_VERIFIER_TOKEN.encode("utf-8"),
+            payload,
+            hashlib.sha256,
+        ).digest()
+    ).decode("ascii")
+    return hmac.compare_digest(expected, signature.strip())
+
+
+def parse_qbo_cloudevents(payload: bytes) -> list[dict[str, str]]:
+    """Parse current Intuit CloudEvents v1 metadata without retaining event data."""
+    decoded = json.loads(payload.decode("utf-8"))
+    if not isinstance(decoded, list) or not 1 <= len(decoded) <= 200:
+        raise ValueError("QuickBooks webhook must contain 1 to 200 CloudEvents")
+
+    records: list[dict[str, str]] = []
+    for event in decoded:
+        if not isinstance(event, dict) or event.get("specversion") != "1.0":
+            raise ValueError("Unsupported QuickBooks webhook format")
+        event_id = str(event.get("id") or "").strip()
+        event_type = str(event.get("type") or "").strip().lower()
+        entity_id = str(event.get("intuitentityid") or "").strip()
+        realm_id = str(event.get("intuitaccountid") or "").strip()
+        occurred_at = str(event.get("time") or "").strip()
+        type_match = QBO_WEBHOOK_TYPE_PATTERN.fullmatch(event_type)
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{1,200}", event_id):
+            raise ValueError("Invalid QuickBooks event ID")
+        if type_match is None or not re.fullmatch(r"[A-Za-z0-9._:-]{1,200}", entity_id):
+            raise ValueError("Invalid QuickBooks entity event")
+        if not re.fullmatch(r"[0-9]{1,32}", realm_id):
+            raise ValueError("Invalid QuickBooks realm")
+        try:
+            occurred = datetime.fromisoformat(occurred_at.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("Invalid QuickBooks event time") from error
+        if occurred.tzinfo is None:
+            raise ValueError("QuickBooks event time must include a timezone")
+        records.append(
+            {
+                "eventID": event_id,
+                "realmID": realm_id,
+                "entityType": type_match.group(1),
+                "entityID": entity_id,
+                "operation": type_match.group(2),
+                "occurredAt": occurred.astimezone(timezone.utc).isoformat(),
+            }
+        )
+    return records
+
+
+def current_qbo_realm_id() -> str | None:
+    try:
+        with db() as connection:
+            row = connection.execute("SELECT realm_id FROM qbo_connections WHERE id = 1").fetchone()
+    except sqlite3.Error:
+        return None
+    return str(row["realm_id"]) if row is not None else None
+
+
 def db() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
@@ -289,6 +361,50 @@ def quickbooks_readiness_component() -> dict[str, str]:
     return readiness_component("quickbooks", "QuickBooks Bridge", "ready", f"Encrypted authorization is available for the {QBO_ENVIRONMENT} company realm.")
 
 
+def quickbooks_webhook_readiness_component() -> dict[str, str]:
+    if not QBO_WEBHOOK_VERIFIER_TOKEN:
+        return readiness_component(
+            "quickbooks-webhooks",
+            "QuickBooks Change Alerts",
+            "attention",
+            "Configure the Intuit webhook verifier token before accepting change notifications.",
+        )
+    realm_id = current_qbo_realm_id()
+    if realm_id is None:
+        return readiness_component(
+            "quickbooks-webhooks",
+            "QuickBooks Change Alerts",
+            "attention",
+            "Authorize the approved QuickBooks company before enabling its webhook subscription.",
+        )
+    try:
+        with db() as connection:
+            row = connection.execute(
+                "SELECT received_at FROM qbo_webhook_events WHERE realm_id = ? ORDER BY received_at DESC LIMIT 1",
+                (realm_id,),
+            ).fetchone()
+    except sqlite3.Error:
+        return readiness_component(
+            "quickbooks-webhooks",
+            "QuickBooks Change Alerts",
+            "error",
+            "QuickBooks change-event storage is unavailable.",
+        )
+    if row is None:
+        return readiness_component(
+            "quickbooks-webhooks",
+            "QuickBooks Change Alerts",
+            "attention",
+            "Receiver is configured; send and verify an Intuit test event before relying on change alerts.",
+        )
+    return readiness_component(
+        "quickbooks-webhooks",
+        "QuickBooks Change Alerts",
+        "ready",
+        "A signed event has been received for the authorized company realm.",
+    )
+
+
 def backup_readiness_component(now: datetime | None = None) -> dict[str, str]:
     checked_at = now or datetime.now(timezone.utc)
     try:
@@ -317,6 +433,7 @@ def backend_readiness_snapshot(now: datetime | None = None) -> dict[str, object]
         storage_readiness_component(),
         authentication_readiness_component(),
         quickbooks_readiness_component(),
+        quickbooks_webhook_readiness_component(),
         backup_readiness_component(now=now),
     ]
     overall = "ready" if all(component["status"] == "ready" for component in components) else "attention"
@@ -493,6 +610,24 @@ def initialize_database() -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS qbo_webhook_events (
+                event_id TEXT PRIMARY KEY,
+                realm_id TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                received_at TEXT NOT NULL,
+                acknowledged_at TEXT,
+                acknowledged_by TEXT
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS qbo_webhook_events_realm_pending ON qbo_webhook_events(realm_id, acknowledged_at, received_at)"
+        )
         now = utc_now()
         connection.execute(
             """
@@ -641,6 +776,18 @@ def audit_event_record(row: sqlite3.Row) -> dict[str, object]:
     }
 
 
+def qbo_webhook_event_record(row: sqlite3.Row) -> dict[str, object]:
+    """Return only reconciliation metadata; webhook data and realm IDs stay server-side."""
+    return {
+        "id": row["event_id"],
+        "entityType": row["entity_type"],
+        "entityID": row["entity_id"],
+        "operation": row["operation"],
+        "occurredAt": row["occurred_at"],
+        "receivedAt": row["received_at"],
+    }
+
+
 def record_audit_event(actor_email: str | None, action: str, subject_type: str, subject_id: str | None = None) -> None:
     """Record high-impact actions without storing tokens, payment details, or customer content."""
     actor = normalize_email(actor_email)
@@ -686,6 +833,24 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if not self.require_admin():
                 return
             self.write_json(backend_readiness_snapshot())
+            return
+        if parsed.path == "/api/qbo/webhook-events":
+            if not self.require_admin():
+                return
+            realm_id = current_qbo_realm_id()
+            if realm_id is None:
+                self.write_json({"events": []})
+                return
+            with db() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM qbo_webhook_events
+                    WHERE realm_id = ? AND acknowledged_at IS NULL
+                    ORDER BY occurred_at ASC, event_id ASC LIMIT 500
+                    """,
+                    (realm_id,),
+                ).fetchall()
+            self.write_json({"events": [qbo_webhook_event_record(row) for row in rows]})
             return
         if parsed.path == "/api/users":
             if not self.require_admin():
@@ -777,6 +942,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/qbo/webhooks":
+            self.receive_qbo_webhook()
+            return
         if parsed.path == "/api/public/service-requests":
             self.store_public_service_request()
             return
@@ -837,6 +1005,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if not self.require_admin():
                 return
             self.revoke_qbo_token()
+            return
+        if parsed.path == "/api/qbo/webhook-events/acknowledge":
+            if not self.require_admin():
+                return
+            self.acknowledge_qbo_webhook_events()
             return
         self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -986,6 +1159,99 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return {}
         data = self.rfile.read(length)
         return json.loads(data.decode("utf-8"))
+
+    def read_limited_body(self, maximum_bytes: int) -> bytes:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise ValueError("Invalid content length") from error
+        if not 1 <= length <= maximum_bytes:
+            raise ValueError("Request body size is invalid")
+        data = self.rfile.read(length)
+        if len(data) != length:
+            raise ValueError("Request body is incomplete")
+        return data
+
+    def receive_qbo_webhook(self) -> None:
+        if not QBO_WEBHOOK_VERIFIER_TOKEN:
+            self.write_json(
+                {"error": "QuickBooks webhook receiver is not configured"},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                require_auth=False,
+            )
+            return
+        try:
+            raw_payload = self.read_limited_body(QBO_WEBHOOK_MAX_BYTES)
+        except ValueError:
+            self.write_json({"error": "Invalid webhook body"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        if not verify_qbo_webhook_signature(raw_payload, self.headers.get("intuit-signature")):
+            self.write_json({"error": "Invalid webhook signature"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
+            return
+        try:
+            events = parse_qbo_cloudevents(raw_payload)
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+            self.write_json({"error": "Invalid QuickBooks CloudEvents payload"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+
+        expected_realm = current_qbo_realm_id()
+        received_at = utc_now()
+        stored = 0
+        if expected_realm is not None:
+            with db() as connection:
+                for event in events:
+                    if event["realmID"] != expected_realm:
+                        continue
+                    stored += connection.execute(
+                        """
+                        INSERT INTO qbo_webhook_events(
+                            event_id, realm_id, entity_type, entity_id, operation,
+                            occurred_at, received_at, acknowledged_at, acknowledged_by
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                        ON CONFLICT(event_id) DO NOTHING
+                        """,
+                        (
+                            event["eventID"], event["realmID"], event["entityType"],
+                            event["entityID"], event["operation"], event["occurredAt"], received_at,
+                        ),
+                    ).rowcount
+        # Always acknowledge a valid signed delivery. Realm-mismatched or duplicate
+        # events are intentionally ignored so Intuit does not retry them forever.
+        self.write_json({"accepted": True, "stored": stored}, status=HTTPStatus.OK, require_auth=False)
+
+    def acknowledge_qbo_webhook_events(self) -> None:
+        try:
+            payload = self.read_json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        raw_ids = payload.get("eventIDs") if isinstance(payload, dict) else None
+        if not isinstance(raw_ids, list) or not 1 <= len(raw_ids) <= 500:
+            self.write_json({"error": "Provide 1 to 500 event IDs"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        event_ids = list(dict.fromkeys(str(value).strip() for value in raw_ids))
+        if any(not re.fullmatch(r"[A-Za-z0-9._:-]{1,200}", value) for value in event_ids):
+            self.write_json({"error": "Invalid event ID"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        realm_id = current_qbo_realm_id()
+        principal = self.principal() or {}
+        actor = principal.get("email") if isinstance(principal.get("email"), str) else None
+        acknowledged_at = utc_now()
+        updated = 0
+        if realm_id is not None:
+            placeholders = ",".join("?" for _ in event_ids)
+            with db() as connection:
+                updated = connection.execute(
+                    f"""
+                    UPDATE qbo_webhook_events
+                    SET acknowledged_at = ?, acknowledged_by = ?
+                    WHERE realm_id = ? AND acknowledged_at IS NULL
+                      AND event_id IN ({placeholders})
+                    """,
+                    (acknowledged_at, actor, realm_id, *event_ids),
+                ).rowcount
+        record_audit_event(actor, "acknowledge", "qbo-webhook-events", str(updated))
+        self.write_json({"acknowledged": updated})
 
     def create_customer_portal_link(self) -> None:
         if not CUSTOMER_PORTAL_ENABLED or portal_url("test") is None:

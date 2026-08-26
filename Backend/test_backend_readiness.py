@@ -33,6 +33,7 @@ class BackendReadinessTests(unittest.TestCase):
             QBO_REDIRECT_URI="https://gunnaire.com/qbo/callback",
             QBO_ENVIRONMENT="production",
             QBO_TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode("utf-8"),
+            QBO_WEBHOOK_VERIFIER_TOKEN="webhook-verifier-token",
         )
 
     def seed_ready_state(self, root: Path, now: datetime) -> None:
@@ -49,6 +50,15 @@ class BackendReadinessTests(unittest.TestCase):
                 ) VALUES (1, 'realm-123', ?, 'production', ?, ?, ?)
                 """,
                 (encrypted_token, fingerprint, now.isoformat(), now.isoformat()),
+            )
+            connection.execute(
+                """
+                INSERT INTO qbo_webhook_events(
+                    event_id, realm_id, entity_type, entity_id, operation,
+                    occurred_at, received_at
+                ) VALUES ('event-ready-1', 'realm-123', 'invoice', '42', 'updated', ?, ?)
+                """,
+                (now.isoformat(), now.isoformat()),
             )
         backend.BACKUP_STATUS_PATH.write_text(
             json.dumps({"artifactID": "backup-verified-123", "verifiedAt": now.isoformat()}),
@@ -75,6 +85,7 @@ class BackendReadinessTests(unittest.TestCase):
                 "storage": "ready",
                 "authentication": "ready",
                 "quickbooks": "ready",
+                "quickbooks-webhooks": "ready",
                 "backup": "ready",
             },
         )
@@ -121,7 +132,7 @@ class BackendReadinessTests(unittest.TestCase):
                         payload = json.loads(response.read().decode("utf-8"))
                     self.assertEqual(response.status, 200)
                     self.assertEqual(payload["serviceVersion"], backend.SERVICE_VERSION)
-                    self.assertEqual(len(payload["components"]), 6)
+                    self.assertEqual(len(payload["components"]), 7)
                 finally:
                     server.shutdown()
                     server.server_close()

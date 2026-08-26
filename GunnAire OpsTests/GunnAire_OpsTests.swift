@@ -10584,6 +10584,34 @@ struct GunnAire_OpsTests {
         #expect(String(decoding: json, as: UTF8.self).contains("client_secret") == false)
     }
 
+    @Test func backendQuickBooksWebhookEventsDecodeSafeChangeMetadata() async throws {
+        let json = Data("""
+        {
+          "events": [
+            {
+              "id": "event-1",
+              "entityType": "item",
+              "entityID": "84",
+              "operation": "created",
+              "occurredAt": "2026-08-26T20:00:00Z",
+              "receivedAt": "2026-08-26T20:00:01Z"
+            }
+          ]
+        }
+        """.utf8)
+
+        let events = try GunnAireBackendService.decodeQuickBooksWebhookEvents(from: json)
+        let source = String(decoding: json, as: UTF8.self)
+
+        #expect(events.count == 1)
+        #expect(events[0].id == "event-1")
+        #expect(events[0].entityLabel == "Item")
+        #expect(events[0].summary == "Item created")
+        #expect(source.contains("realmID") == false)
+        #expect(source.contains("data") == false)
+        #expect(source.contains("token") == false)
+    }
+
     @Test func backendDocumentsDecodeSharedDocumentInventoryResponse() async throws {
         let json = Data("""
         {

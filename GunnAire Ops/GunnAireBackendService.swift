@@ -221,6 +221,29 @@ struct BackendReadinessSnapshot: Codable, Equatable {
     var attentionCount: Int { components.filter { !$0.isReady }.count }
 }
 
+/// Non-sensitive QuickBooks change metadata received by the backend's signed
+/// CloudEvents webhook. The raw provider payload and company realm stay on the server.
+struct BackendQuickBooksWebhookEvent: Codable, Identifiable, Equatable {
+    let id: String
+    let entityType: String
+    let entityID: String
+    let operation: String
+    let occurredAt: String
+    let receivedAt: String
+
+    var entityLabel: String {
+        entityType
+            .replacingOccurrences(of: "-", with: " ")
+            .split(separator: " ")
+            .map { $0.capitalized }
+            .joined(separator: " ")
+    }
+
+    var summary: String {
+        "\(entityLabel) \(operation.lowercased())"
+    }
+}
+
 struct BackendCustomerPortalLink: Codable, Identifiable {
     let id: String
     let url: String
@@ -310,6 +333,14 @@ enum GunnAireBackendService {
 
     private struct AuditEventsResponse: Codable {
         let events: [BackendAuditEventRecord]
+    }
+
+    private struct QuickBooksWebhookEventsResponse: Codable {
+        let events: [BackendQuickBooksWebhookEvent]
+    }
+
+    private struct QuickBooksWebhookAcknowledgementPayload: Codable {
+        let eventIDs: [String]
     }
 
     private struct CustomerPortalLinksResponse: Codable {
@@ -530,6 +561,22 @@ enum GunnAireBackendService {
 
     static func decodeReadiness(from data: Data) throws -> BackendReadinessSnapshot {
         try JSONDecoder().decode(BackendReadinessSnapshot.self, from: data)
+    }
+
+    static func fetchQuickBooksWebhookEvents() async throws -> [BackendQuickBooksWebhookEvent] {
+        let data = try await send(path: "/api/qbo/webhook-events", method: "GET")
+        return try decodeQuickBooksWebhookEvents(from: data)
+    }
+
+    static func decodeQuickBooksWebhookEvents(from data: Data) throws -> [BackendQuickBooksWebhookEvent] {
+        try JSONDecoder().decode(QuickBooksWebhookEventsResponse.self, from: data).events
+    }
+
+    static func acknowledgeQuickBooksWebhookEvents(ids: [String]) async throws {
+        let uniqueIDs = Array(Set(ids.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })).sorted()
+        guard !uniqueIDs.isEmpty else { return }
+        let body = try JSONEncoder().encode(QuickBooksWebhookAcknowledgementPayload(eventIDs: uniqueIDs))
+        _ = try await send(path: "/api/qbo/webhook-events/acknowledge", method: "POST", body: body)
     }
 
     static func claimServiceRequest(id: String) async throws {

@@ -97,6 +97,13 @@ as part of restore validation without accounting-owner approval.
   do not clear the warning manually.
 - QuickBooks mismatch/decryption error: stop QBO mutations and reconnect only
   with the accounting owner. Never replace the encryption key opportunistically.
+- QuickBooks Change Alerts attention: confirm the Intuit-supplied verifier token
+  is present in Render, the CloudEvents v1.0 destination is
+  `https://gunnaire-api.onrender.com/api/qbo/webhooks`, and the Intuit app is
+  subscribed in the matching sandbox or production environment. Send an Intuit
+  portal test event and inspect Render logs plus Admin readiness. Never bypass
+  signature verification, realm binding, event-ID deduplication, or the rule
+  that acknowledgement follows a complete successful reconciliation.
 - Google authentication attention: keep shared routes closed until approved
   business identity mode is restored.
 - Customer communication is required when an outage delays a confirmed visit,

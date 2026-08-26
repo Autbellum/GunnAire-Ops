@@ -551,6 +551,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(workspacePicker.buttons["Overview"].isSelected)
         XCTAssertTrue(app.staticTexts["Connection"].exists)
         XCTAssertTrue(app.staticTexts["Sync Health"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["QuickBooksWebhookPendingCount"].exists)
 
         workspacePicker.buttons["Sales"].tap()
         XCTAssertTrue(workspacePicker.buttons["Sales"].isSelected)

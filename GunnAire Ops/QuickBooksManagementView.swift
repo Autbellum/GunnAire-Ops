@@ -191,6 +191,11 @@ struct QuickBooksManagementView: View {
     @State private var estimateSearchText = ""
     @State private var invoiceSearchText = ""
     @State private var selectedWorkspace: QuickBooksManagementWorkspace = .overview
+    @State private var quickBooksWebhookEvents: [BackendQuickBooksWebhookEvent] = []
+    @State private var activeSyncWebhookEventIDs: Set<String> = []
+    @State private var isLoadingWebhookEvents = false
+    @State private var webhookStatusMessage: String?
+    @State private var showWebhookEventDetails = false
 
     private var isAuthenticated: Bool {
         quickBooksDataAPI.isAuthenticated
@@ -432,6 +437,51 @@ struct QuickBooksManagementView: View {
                             title: "Sync Issues",
                             value: "\(syncFailureCount) failed • \(syncWarningCount) warnings"
                         )
+                        connectionRow(
+                            title: "QBO Changes",
+                            value: isLoadingWebhookEvents
+                                ? "Checking…"
+                                : "\(quickBooksWebhookEvents.count) pending"
+                        )
+                        .accessibilityIdentifier("QuickBooksWebhookPendingCount")
+
+                        if !quickBooksWebhookEvents.isEmpty {
+                            Label(
+                                "QuickBooks changed outside GunnAire. Run a full sync before relying on balances or catalog data.",
+                                systemImage: "arrow.triangle.2.circlepath.circle.fill"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+
+                            Button {
+                                syncAllQuickBooksData()
+                            } label: {
+                                Label("Sync QBO Changes", systemImage: "arrow.triangle.2.circlepath")
+                            }
+                            .disabled(isLoading || !isAuthenticated)
+                            .accessibilityIdentifier("QuickBooksWebhookSyncButton")
+
+                            DisclosureGroup("Pending change details", isExpanded: $showWebhookEventDetails) {
+                                ForEach(quickBooksWebhookEvents.prefix(8)) { event in
+                                    HStack(alignment: .firstTextBaseline) {
+                                        Text(event.summary)
+                                        Spacer()
+                                        Text("ID \(event.entityID)")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .font(.caption)
+                                }
+                                if quickBooksWebhookEvents.count > 8 {
+                                    Text("\(quickBooksWebhookEvents.count - 8) additional changes will be included in the next sync.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        } else if let webhookStatusMessage {
+                            Text(webhookStatusMessage)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         Text(quickBooksDataAPI.connectionDiagnosticSummary)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1267,6 +1317,7 @@ struct QuickBooksManagementView: View {
                 }
                 .onAppear {
                     QuickBooksDataAPI.shared.loadTokens()
+                    Task { await loadQuickBooksWebhookEvents() }
                     if isAuthenticated {
                         syncAllQuickBooksData()
                     } else if !quickBooksConfigReady {
@@ -1291,6 +1342,7 @@ struct QuickBooksManagementView: View {
         actionMessage = nil
         quickBooksReconnectRequired = false
         lastSyncStartedAt = Date()
+        activeSyncWebhookEventIDs = Set(quickBooksWebhookEvents.map(\.id))
         resetSyncStatusesForRun()
         statusMessage = "Syncing customers, catalog, estimates, invoices, sales receipts, bills, purchases, vendors, payments, payment methods, stored cards, and deposits from QuickBooks..."
 
@@ -2397,8 +2449,45 @@ struct QuickBooksManagementView: View {
             lastSuccessfulSyncAt = now
             UserDefaults.standard.set(now, forKey: "QuickBooksLastSuccessfulSyncAt")
             statusMessage = "All QuickBooks features synced successfully. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, \(storedCards.count) stored cards, and \(deposits.count) deposits."
+            let acknowledgedEventIDs = Array(activeSyncWebhookEventIDs)
+            activeSyncWebhookEventIDs.removeAll()
+            if !acknowledgedEventIDs.isEmpty {
+                Task { await acknowledgeQuickBooksWebhookEvents(acknowledgedEventIDs) }
+            }
         } else {
             statusMessage = "QuickBooks sync incomplete. Required features must sync successfully.\n" + completedFailures.joined(separator: "\n")
+        }
+    }
+
+    @MainActor
+    private func loadQuickBooksWebhookEvents() async {
+        guard GunnAireBackendService.isConfigured else {
+            webhookStatusMessage = "Shared-server change alerts are not configured."
+            return
+        }
+        isLoadingWebhookEvents = true
+        defer { isLoadingWebhookEvents = false }
+        do {
+            quickBooksWebhookEvents = try await GunnAireBackendService.fetchQuickBooksWebhookEvents()
+            webhookStatusMessage = quickBooksWebhookEvents.isEmpty
+                ? "No pending QuickBooks changes reported by the server."
+                : nil
+        } catch {
+            webhookStatusMessage = "QuickBooks change alerts need attention in Shared Server Readiness."
+        }
+    }
+
+    @MainActor
+    private func acknowledgeQuickBooksWebhookEvents(_ eventIDs: [String]) async {
+        do {
+            try await GunnAireBackendService.acknowledgeQuickBooksWebhookEvents(ids: eventIDs)
+            quickBooksWebhookEvents.removeAll { eventIDs.contains($0.id) }
+            webhookStatusMessage = quickBooksWebhookEvents.isEmpty
+                ? "All QuickBooks changes included in the successful sync are reconciled."
+                : "New QuickBooks changes arrived during sync. Run sync again to include them."
+            await loadQuickBooksWebhookEvents()
+        } catch {
+            webhookStatusMessage = "QuickBooks data synced, but the server change queue could not be cleared. Refresh and try again."
         }
     }
 
