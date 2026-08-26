@@ -56,6 +56,12 @@ Deploy this directory as a Python **Web Service** with the start command:
 python3 gunnaire_backend.py
 ```
 
+Render's existing repository-root start command is supported by a thin launcher
+that imports this canonical module. Do not copy backend implementation into the
+root file. The deployment regression tests verify that the launcher resolves to
+`Backend.gunnaire_backend.main`, that the root dependency file delegates here,
+and that the deployed QBO client contract cannot return a refresh token.
+
 Render provides `PORT` automatically. Attach a persistent disk at `/var/data` and set `GUNNAIRE_BACKEND_DATA_DIR=/var/data`; this keeps both the SQLite database and uploaded field documents outside Render's ephemeral filesystem. Configure the following as encrypted Render environment variables, never in the repository:
 
 ```sh
@@ -115,8 +121,12 @@ An administrator can then create an expiring, revocable link from a job in GunnA
 curl http://macstudio.local:8787/health
 curl -H "Authorization: Bearer replace-with-a-long-random-token" http://macstudio.local:8787/api/users
 # Requires Backend/requirements.txt, including cryptography.
-python3 -m unittest Backend.test_qbo_token_storage -v
+python3 -m unittest Backend.test_deployment_entrypoint Backend.test_qbo_token_storage -v
 ```
+
+`/health` includes a non-secret `serviceVersion` marker. After every production
+backend change, verify that the live HTTPS response reports the expected marker
+before treating the deployment as current.
 
 Field payment records are accepted at `POST /api/payments`. The app sends metadata only: amount, method, customer/invoice references, last four digits, authorization reference, notes, and collector email. Full card numbers, CVC values, and bank account numbers are not stored by this backend.
 
