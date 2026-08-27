@@ -158,7 +158,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(settingsArea.waitForExistence(timeout: 3))
         settingsArea.buttons["Sync"].tap()
 
-        let settingsForm = app.collectionViews.allElementsBoundByIndex.last!
+        let settingsForm = app.collectionViews["SettingsForm"]
+        XCTAssertTrue(settingsForm.waitForExistence(timeout: 3))
         func reveal(_ element: XCUIElement, maximumSwipes: Int = 4) -> Bool {
             if element.waitForExistence(timeout: 1) {
                 return true
@@ -392,8 +393,9 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(updateInvoice.isEnabled)
         updateInvoice.tap()
 
+        XCTAssertTrue(app.staticTexts["QuickBooks update pending"].waitForExistence(timeout: 3))
         XCTAssertTrue(
-            app.staticTexts["Invoice updated locally. QuickBooks publication is pending."].waitForExistence(timeout: 3)
+            app.staticTexts["QuickBooks is not connected. Reconnect and update this invoice again to publish its current line items."].exists
         )
         XCTAssertTrue(app.buttons["Update Invoice"].exists)
     }

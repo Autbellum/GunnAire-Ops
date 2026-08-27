@@ -20,6 +20,7 @@ struct PaymentsAndReceiptsView: View {
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
 
     @StateObject private var onsitePaymentManager = OnsitePaymentManager.shared
     @State private var selectedWorkspace: PaymentsWorkspace = .overview
@@ -84,17 +85,13 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private var visibleInvoiceIDsForFieldUser: Set<UUID> {
-        guard !isAdminUser else { return Set(invoices.map(\.id)) }
-        let currentEmail = AppAccess.normalizedEmail(signedInEmail)
-        guard !currentEmail.isEmpty else { return [] }
-        let assignedCallIDs = Set(serviceCalls.compactMap { call -> UUID? in
-            AppAccess.normalizedEmail(call.assignedTechnician?.contactInfo) == currentEmail ? call.id : nil
-        })
-        return Set(invoices.compactMap { invoice in
-            guard let serviceCallID = invoice.serviceCallID,
-                  assignedCallIDs.contains(serviceCallID) else { return nil }
-            return invoice.id
-        })
+        AppAccess.visibleFieldPaymentInvoiceIDs(
+            email: signedInEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            invoices: invoices,
+            technicians: technicians
+        )
     }
 
     private var visibleInvoices: [Invoice] {

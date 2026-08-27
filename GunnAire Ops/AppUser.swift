@@ -220,6 +220,40 @@ enum AppAccess {
         return authorizedIDs.union([activeServiceCall.id])
     }
 
+    /// Resolves the invoices a signed-in account may see in the collection
+    /// workspace. Financial-management roles review the complete ledger, while
+    /// field technicians receive only invoices for jobs where they are the lead
+    /// or an explicitly assigned crew member. Keeping this rule beside job
+    /// authorization prevents a payment handoff from silently narrowing a
+    /// two-person crew to the lead technician's email.
+    static func visibleFieldPaymentInvoiceIDs(
+        email: String?,
+        users: [AppUser],
+        serviceCalls: [ServiceCall],
+        invoices: [Invoice],
+        technicians: [Technician] = []
+    ) -> Set<UUID> {
+        if canViewFinancialManagement(email: email, users: users) {
+            return Set(invoices.map(\.id))
+        }
+
+        guard canCollectFieldPayments(email: email, users: users) else {
+            return []
+        }
+
+        let authorizedCallIDs = visibleServiceCallIDs(
+            email: email,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+        return Set(invoices.compactMap { invoice in
+            guard let serviceCallID = invoice.serviceCallID,
+                  authorizedCallIDs.contains(serviceCallID) else { return nil }
+            return invoice.id
+        })
+    }
+
     @discardableResult
     static func ensureTechnicianRecord(
         for email: String,

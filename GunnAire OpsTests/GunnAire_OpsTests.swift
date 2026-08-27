@@ -769,6 +769,72 @@ struct GunnAire_OpsTests {
         ))
     }
 
+    @Test func additionalCrewTechnicianCanCollectOnlyTheAssignedJobInvoice() async throws {
+        let customer = Customer(name: "Crew Payment Customer")
+        let lead = Technician(name: "Lead", contactInfo: "lead@gunnaire.com")
+        let helper = Technician(name: "Helper", contactInfo: "helper@gunnaire.com")
+        let unrelatedTechnician = Technician(name: "Other", contactInfo: "other@gunnaire.com")
+        let assignedCall = ServiceCall(
+            type: .install,
+            scheduledDate: Date(),
+            assignedTechnician: lead,
+            additionalTechnicianIDs: [helper.id],
+            customer: customer
+        )
+        let unrelatedCall = ServiceCall(
+            type: .service,
+            scheduledDate: Date(),
+            assignedTechnician: unrelatedTechnician,
+            customer: customer
+        )
+        let assignedInvoice = Invoice(
+            serviceCallID: assignedCall.id,
+            customer: customer,
+            amount: 4_200,
+            status: "unpaid"
+        )
+        let unrelatedInvoice = Invoice(
+            serviceCallID: unrelatedCall.id,
+            customer: customer,
+            amount: 275,
+            status: "unpaid"
+        )
+        let orphanInvoice = Invoice(customer: customer, amount: 100, status: "unpaid")
+        let helperUser = AppUser(email: "helper@gunnaire.com", role: .fieldTechnician)
+
+        let visibleInvoiceIDs = AppAccess.visibleFieldPaymentInvoiceIDs(
+            email: helperUser.email,
+            users: [helperUser],
+            serviceCalls: [assignedCall, unrelatedCall],
+            invoices: [assignedInvoice, unrelatedInvoice, orphanInvoice],
+            technicians: [lead, helper, unrelatedTechnician]
+        )
+
+        #expect(visibleInvoiceIDs == [assignedInvoice.id])
+    }
+
+    @Test func paymentInvoiceVisibilityPreservesFinancialRolesAndRejectsNonCollectors() async throws {
+        let customer = Customer(name: "Payment Role Customer")
+        let call = ServiceCall(type: .service, scheduledDate: Date(), customer: customer)
+        let invoice = Invoice(serviceCallID: call.id, customer: customer, amount: 350, status: "unpaid")
+        let accounting = AppUser(email: "accounting@gunnaire.com", role: .accounting)
+        let dispatcher = AppUser(email: "dispatch@gunnaire.com", role: .dispatcher)
+        let users = [accounting, dispatcher]
+
+        #expect(AppAccess.visibleFieldPaymentInvoiceIDs(
+            email: accounting.email,
+            users: users,
+            serviceCalls: [call],
+            invoices: [invoice]
+        ) == [invoice.id])
+        #expect(AppAccess.visibleFieldPaymentInvoiceIDs(
+            email: dispatcher.email,
+            users: users,
+            serviceCalls: [call],
+            invoices: [invoice]
+        ).isEmpty)
+    }
+
     @Test func estimateCustomerApprovalRecordsAnAttributableStableApprovalEvent() async throws {
         let customer = Customer(name: "Approval Customer")
         let estimate = Estimate(customer: customer, amount: 3_500)

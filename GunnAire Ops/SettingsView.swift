@@ -411,6 +411,7 @@ struct SettingsView: View {
                     }
                 }
             }
+            .accessibilityIdentifier("SettingsForm")
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
