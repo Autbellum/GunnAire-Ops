@@ -111,6 +111,12 @@ enum GunnAireAppRoute: String, CaseIterable {
     }
 }
 
+enum GunnAireMailWorkflow: String, Codable, Sendable {
+    case general
+    case estimateFollowUp
+    case paymentReminder
+}
+
 enum GunnAireAppIntentRouter {
     nonisolated static func store(_ route: GunnAireAppRoute) {
         UserDefaults.standard.set(route.rawValue, forKey: "GunnAirePendingAppRoute")
@@ -149,6 +155,7 @@ enum GunnAireAppIntentRouter {
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailServiceCallID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailInvoiceID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailEstimateID")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailWorkflow")
         case .commandCenter, .timeClock, .estimates, .invoicesEstimates, .receiptsBills, .sync, .quickBooks:
             break
         }
@@ -171,7 +178,8 @@ enum GunnAireAppIntentRouter {
             "GunnAirePendingMailCustomerID",
             "GunnAirePendingMailServiceCallID",
             "GunnAirePendingMailInvoiceID",
-            "GunnAirePendingMailEstimateID"
+            "GunnAirePendingMailEstimateID",
+            "GunnAirePendingMailWorkflow"
         ]
         for key in keys {
             UserDefaults.standard.removeObject(forKey: key)
@@ -250,7 +258,8 @@ enum GunnAireAppIntentRouter {
         customerID: UUID? = nil,
         serviceCallID: UUID? = nil,
         invoiceID: UUID? = nil,
-        estimateID: UUID? = nil
+        estimateID: UUID? = nil,
+        workflow: GunnAireMailWorkflow = .general
     ) {
         UserDefaults.standard.set(to, forKey: "GunnAirePendingMailTo")
         UserDefaults.standard.set(subject, forKey: "GunnAirePendingMailSubject")
@@ -260,10 +269,11 @@ enum GunnAireAppIntentRouter {
         UserDefaults.standard.set(serviceCallID?.uuidString, forKey: "GunnAirePendingMailServiceCallID")
         UserDefaults.standard.set(invoiceID?.uuidString, forKey: "GunnAirePendingMailInvoiceID")
         UserDefaults.standard.set(estimateID?.uuidString, forKey: "GunnAirePendingMailEstimateID")
+        UserDefaults.standard.set(workflow.rawValue, forKey: "GunnAirePendingMailWorkflow")
         store(.mail)
     }
 
-    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String, attachmentPaths: [String], customerID: UUID?, serviceCallID: UUID?, invoiceID: UUID?, estimateID: UUID?)? {
+    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String, attachmentPaths: [String], customerID: UUID?, serviceCallID: UUID?, invoiceID: UUID?, estimateID: UUID?, workflow: GunnAireMailWorkflow)? {
         guard let to = UserDefaults.standard.string(forKey: "GunnAirePendingMailTo"),
               let subject = UserDefaults.standard.string(forKey: "GunnAirePendingMailSubject"),
               let body = UserDefaults.standard.string(forKey: "GunnAirePendingMailBody") else {
@@ -274,6 +284,8 @@ enum GunnAireAppIntentRouter {
         let serviceCallID = UserDefaults.standard.string(forKey: "GunnAirePendingMailServiceCallID").flatMap(UUID.init(uuidString:))
         let invoiceID = UserDefaults.standard.string(forKey: "GunnAirePendingMailInvoiceID").flatMap(UUID.init(uuidString:))
         let estimateID = UserDefaults.standard.string(forKey: "GunnAirePendingMailEstimateID").flatMap(UUID.init(uuidString:))
+        let workflow = UserDefaults.standard.string(forKey: "GunnAirePendingMailWorkflow")
+            .flatMap(GunnAireMailWorkflow.init(rawValue:)) ?? .general
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailTo")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailSubject")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailBody")
@@ -282,7 +294,8 @@ enum GunnAireAppIntentRouter {
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailServiceCallID")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailInvoiceID")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailEstimateID")
-        return (to, subject, body, attachmentPaths, customerID, serviceCallID, invoiceID, estimateID)
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailWorkflow")
+        return (to, subject, body, attachmentPaths, customerID, serviceCallID, invoiceID, estimateID, workflow)
     }
 }
 

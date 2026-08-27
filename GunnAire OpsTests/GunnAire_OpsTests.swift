@@ -10598,18 +10598,26 @@ struct GunnAire_OpsTests {
         #expect(CustomerDocumentExporter.invoiceDocumentCaption(for: paidByBalance, payments: [fullPayment]) == "Generated paid invoice PDF")
     }
 
-    @Test func mailDraftRoutePersistsAttachmentPaths() async throws {
+    @Test func mailDraftRoutePersistsAttachmentsRecordLinksAndWorkflow() async throws {
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: "GunnAirePendingMailTo")
         defaults.removeObject(forKey: "GunnAirePendingMailSubject")
         defaults.removeObject(forKey: "GunnAirePendingMailBody")
         defaults.removeObject(forKey: "GunnAirePendingMailAttachmentPaths")
+        defaults.removeObject(forKey: "GunnAirePendingMailWorkflow")
+        let customerID = UUID()
+        let serviceCallID = UUID()
+        let invoiceID = UUID()
 
         GunnAireAppIntentRouter.storeMailDraftRoute(
             to: "customer@example.com",
             subject: "Service Report",
             body: "Attached.",
-            attachmentPaths: ["/tmp/report.pdf"]
+            attachmentPaths: ["/tmp/report.pdf"],
+            customerID: customerID,
+            serviceCallID: serviceCallID,
+            invoiceID: invoiceID,
+            workflow: .paymentReminder
         )
         let draft = GunnAireAppIntentRouter.consumePendingMailDraft()
 
@@ -10617,6 +10625,121 @@ struct GunnAire_OpsTests {
         #expect(draft?.subject == "Service Report")
         #expect(draft?.body == "Attached.")
         #expect(draft?.attachmentPaths == ["/tmp/report.pdf"])
+        #expect(draft?.customerID == customerID)
+        #expect(draft?.serviceCallID == serviceCallID)
+        #expect(draft?.invoiceID == invoiceID)
+        #expect(draft?.workflow == .paymentReminder)
+    }
+
+    @MainActor
+    @Test func confirmedEstimateFollowUpUpdatesOnlyAfterProviderSuccess() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let now = Date(timeIntervalSinceReferenceDate: 800_000)
+        let customer = Customer(name: "Follow-Up Customer")
+        let call = ServiceCall(type: .estimate, scheduledDate: now, customer: customer)
+        let estimate = Estimate(serviceCallID: call.id, customer: customer, amount: 4_200)
+        context.insert(customer)
+        context.insert(call)
+        context.insert(estimate)
+
+        let applied = CustomerCommunicationWorkflow.applyConfirmedSend(
+            workflow: .estimateFollowUp,
+            customerID: customer.id,
+            serviceCallID: call.id,
+            invoiceID: nil,
+            estimateID: estimate.id,
+            estimates: [estimate],
+            invoices: [],
+            serviceCalls: [call],
+            now: now,
+            actorEmail: "dispatch@gunnaire.com",
+            in: context
+        )
+
+        #expect(applied)
+        #expect(estimate.status == "follow-up")
+        #expect(call.followUpRequired)
+        #expect(call.followUpAction == "Follow up on estimate")
+        #expect(call.followUpDueDate == Calendar.current.date(byAdding: .day, value: 3, to: now))
+        let activities = try context.fetch(FetchDescriptor<ServiceCallActivity>())
+        #expect(activities.count == 1)
+        #expect(activities.first?.action == "Estimate follow-up sent")
+    }
+
+    @MainActor
+    @Test func confirmedPaymentReminderSchedulesCollectionWithoutMarkingInvoicePaid() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let now = Date(timeIntervalSinceReferenceDate: 900_000)
+        let customer = Customer(name: "Collections Customer")
+        let call = ServiceCall(type: .service, scheduledDate: now, customer: customer)
+        let invoice = Invoice(serviceCallID: call.id, customer: customer, amount: 550, status: "overdue")
+        context.insert(customer)
+        context.insert(call)
+        context.insert(invoice)
+
+        let applied = CustomerCommunicationWorkflow.applyConfirmedSend(
+            workflow: .paymentReminder,
+            customerID: customer.id,
+            serviceCallID: call.id,
+            invoiceID: invoice.id,
+            estimateID: nil,
+            estimates: [],
+            invoices: [invoice],
+            serviceCalls: [call],
+            now: now,
+            actorEmail: "office@gunnaire.com",
+            in: context
+        )
+
+        #expect(applied)
+        #expect(invoice.status == "overdue")
+        #expect(call.followUpRequired)
+        #expect(call.followUpAction == "Collect payment")
+        #expect(call.followUpDueDate == Calendar.current.date(byAdding: .day, value: 1, to: now))
+        let activities = try context.fetch(FetchDescriptor<ServiceCallActivity>())
+        #expect(activities.first?.action == "Payment reminder sent")
+    }
+
+    @MainActor
+    @Test func confirmedMailWorkflowFailsClosedForMismatchedCustomerContext() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(name: "Correct Customer")
+        let differentCustomer = Customer(name: "Different Customer")
+        let call = ServiceCall(type: .estimate, scheduledDate: Date(), customer: customer)
+        let estimate = Estimate(serviceCallID: call.id, customer: customer, amount: 1_200)
+
+        let applied = CustomerCommunicationWorkflow.applyConfirmedSend(
+            workflow: .estimateFollowUp,
+            customerID: differentCustomer.id,
+            serviceCallID: call.id,
+            invoiceID: nil,
+            estimateID: estimate.id,
+            estimates: [estimate],
+            invoices: [],
+            serviceCalls: [call],
+            actorEmail: nil,
+            in: context
+        )
+
+        #expect(!applied)
+        #expect(estimate.status == "pending")
+        #expect(!call.followUpRequired)
+        #expect(try context.fetch(FetchDescriptor<ServiceCallActivity>()).isEmpty)
     }
 
     @MainActor

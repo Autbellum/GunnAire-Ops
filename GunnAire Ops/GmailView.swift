@@ -5,6 +5,9 @@ struct GmailView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
+    @Query private var estimates: [Estimate]
+    @Query private var invoices: [Invoice]
+    @Query private var serviceCalls: [ServiceCall]
 
     @State private var messages: [GmailMessageDetail] = []
     @State private var isLoading = false
@@ -193,12 +196,12 @@ struct GmailView: View {
             subject: draft.subject,
             body: draft.body,
             threadID: nil,
-            attachments: attachments(from: draft.attachmentPaths)
-            ,
+            attachments: attachments(from: draft.attachmentPaths),
             customerID: draft.customerID,
             serviceCallID: draft.serviceCallID,
             invoiceID: draft.invoiceID,
-            estimateID: draft.estimateID
+            estimateID: draft.estimateID,
+            workflow: draft.workflow
         )
     }
 
@@ -223,6 +226,18 @@ struct GmailView: View {
             providerMessageID: providerMessageID
         )
         modelContext.insert(communication)
+        CustomerCommunicationWorkflow.applyConfirmedSend(
+            workflow: draft.workflow,
+            customerID: draft.customerID,
+            serviceCallID: draft.serviceCallID,
+            invoiceID: draft.invoiceID,
+            estimateID: draft.estimateID,
+            estimates: estimates,
+            invoices: invoices,
+            serviceCalls: serviceCalls,
+            actorEmail: googleAuth.signedInEmail,
+            in: modelContext
+        )
         try? modelContext.save()
         guard GunnAireBackendService.isConfigured else { return }
         Task {
@@ -580,6 +595,7 @@ private struct GmailDraft: Identifiable {
     let serviceCallID: UUID?
     let invoiceID: UUID?
     let estimateID: UUID?
+    let workflow: GunnAireMailWorkflow
 
     init(
         to: String,
@@ -590,7 +606,8 @@ private struct GmailDraft: Identifiable {
         customerID: UUID? = nil,
         serviceCallID: UUID? = nil,
         invoiceID: UUID? = nil,
-        estimateID: UUID? = nil
+        estimateID: UUID? = nil,
+        workflow: GunnAireMailWorkflow = .general
     ) {
         self.to = to
         self.subject = subject
@@ -601,6 +618,7 @@ private struct GmailDraft: Identifiable {
         self.serviceCallID = serviceCallID
         self.invoiceID = invoiceID
         self.estimateID = estimateID
+        self.workflow = workflow
     }
 }
 

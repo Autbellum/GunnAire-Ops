@@ -701,7 +701,15 @@ GunnAire
 
     private func openReminderEmail(fallbackURL: URL) {
         if let linkedInvoice, googleAuth.isAuthenticated, let draft = reminderEmailDraft(for: linkedInvoice) {
-            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: draft.to,
+                subject: draft.subject,
+                body: draft.body,
+                customerID: call.customer.id,
+                serviceCallID: call.id,
+                invoiceID: linkedInvoice.id,
+                workflow: .paymentReminder
+            )
         } else {
             openURL(fallbackURL)
         }
@@ -724,7 +732,15 @@ GunnAire
 
     private func openEstimateFollowUpEmail(fallbackURL: URL) {
         if let linkedEstimate, googleAuth.isAuthenticated, let draft = estimateFollowUpEmailDraft(for: linkedEstimate) {
-            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: draft.to,
+                subject: draft.subject,
+                body: draft.body,
+                customerID: call.customer.id,
+                serviceCallID: call.id,
+                estimateID: linkedEstimate.id,
+                workflow: .estimateFollowUp
+            )
         } else {
             openURL(fallbackURL)
         }
@@ -1491,12 +1507,8 @@ GunnAire
                                     .buttonStyle(.bordered)
 
                                     if let estimateFollowUpEmailURL {
-                                        Button("Follow Up") {
+                                        Button("Draft Follow-Up") {
                                             openEstimateFollowUpEmail(fallbackURL: estimateFollowUpEmailURL)
-                                            linkedEstimate.status = "follow-up"
-                                            call.followUpRequired = true
-                                            call.followUpAction = "Follow up on estimate"
-                                            call.followUpDueDate = Calendar.current.date(byAdding: .day, value: 3, to: Date())
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -1710,7 +1722,7 @@ GunnAire
                                 Button {
                                     openReminderEmail(fallbackURL: reminderEmailURL)
                                 } label: {
-                                    Label("Send Payment Reminder", systemImage: "envelope.badge")
+                                    Label("Draft Payment Reminder", systemImage: "envelope.badge")
                                         .frame(maxWidth: .infinity)
                                 }
                                 .buttonStyle(.bordered)

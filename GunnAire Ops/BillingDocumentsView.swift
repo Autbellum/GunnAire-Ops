@@ -680,7 +680,11 @@ GunnAire
                 to: draft.to,
                 subject: draft.subject,
                 body: draft.body,
-                attachmentPaths: estimateEmailAttachmentPaths(for: estimate)
+                attachmentPaths: estimateEmailAttachmentPaths(for: estimate),
+                customerID: estimate.customer.id,
+                serviceCallID: estimate.serviceCallID,
+                estimateID: estimate.id,
+                workflow: .estimateFollowUp
             )
         } else {
             openURL(fallbackURL)
@@ -783,7 +787,11 @@ GunnAire
                 to: draft.to,
                 subject: draft.subject,
                 body: draft.body,
-                attachmentPaths: invoiceEmailAttachmentPaths(for: invoice)
+                attachmentPaths: invoiceEmailAttachmentPaths(for: invoice),
+                customerID: invoice.customer.id,
+                serviceCallID: invoice.serviceCallID,
+                invoiceID: invoice.id,
+                workflow: .paymentReminder
             )
         } else {
             openURL(fallbackURL)
@@ -1651,12 +1659,8 @@ GunnAire
                                 }
 
                                 if let estimateFollowUpEmailURL {
-                                    Button("Send Estimate Follow-Up") {
+                                    Button("Draft Estimate Follow-Up") {
                                         openEstimateFollowUpEmail(for: estimate, fallbackURL: estimateFollowUpEmailURL)
-                                        estimate.status = "follow-up"
-                                        activeServiceCall?.followUpRequired = true
-                                        activeServiceCall?.followUpAction = "Follow up on estimate"
-                                        activeServiceCall?.followUpDueDate = Calendar.current.date(byAdding: .day, value: 3, to: Date())
                                     }
                                     .buttonStyle(.bordered)
                                 }
@@ -1847,11 +1851,8 @@ GunnAire
                                     }
 
                                     if let followUpURL = followUpEmailURL(for: estimate) {
-                                        Button("Send Follow-Up") {
+                                        Button("Draft Follow-Up") {
                                             openEstimateFollowUpEmail(for: estimate, fallbackURL: followUpURL)
-                                            if let linkedCall {
-                                                markEstimateFollowUp(on: linkedCall)
-                                            }
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -1961,11 +1962,8 @@ GunnAire
                                     }
 
                                     if let reminderURL = paymentReminderEmailURL(for: invoice) {
-                                        Button("Send Reminder") {
+                                        Button("Draft Reminder") {
                                             openPaymentReminderEmail(for: invoice, fallbackURL: reminderURL)
-                                            if let linkedCall {
-                                                markPaymentFollowUp(on: linkedCall)
-                                            }
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -2009,11 +2007,8 @@ GunnAire
                                     }
 
                                     if let reminderURL = paymentReminderEmailURL(for: invoice) {
-                                        Button("Send Reminder") {
+                                        Button("Draft Reminder") {
                                             openPaymentReminderEmail(for: invoice, fallbackURL: reminderURL)
-                                            if let linkedCall {
-                                                markPaymentFollowUp(on: linkedCall)
-                                            }
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -5576,18 +5571,6 @@ GunnAire
 
     private func openDocumentation(for serviceCall: ServiceCall) {
         GunnAireAppIntentRouter.storeDocumentationRoute(serviceCall.id)
-    }
-
-    private func markEstimateFollowUp(on serviceCall: ServiceCall) {
-        serviceCall.followUpRequired = true
-        serviceCall.followUpAction = "Follow up on estimate"
-        serviceCall.followUpDueDate = Calendar.current.date(byAdding: .day, value: 3, to: Date())
-    }
-
-    private func markPaymentFollowUp(on serviceCall: ServiceCall) {
-        serviceCall.followUpRequired = true
-        serviceCall.followUpAction = "Collect payment"
-        serviceCall.followUpDueDate = Calendar.current.date(byAdding: .day, value: 1, to: Date())
     }
 
     private func matchingItemIDs(from lineItemSummary: String) -> Set<UUID> {

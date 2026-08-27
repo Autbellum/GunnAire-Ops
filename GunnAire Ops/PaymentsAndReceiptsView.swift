@@ -344,9 +344,8 @@ struct PaymentsAndReceiptsView: View {
                                         }
 
                                         if let reminderURL = reminderEmailURL(for: entry.invoice, balanceDue: entry.balanceDue) {
-                                            Button("Email Reminder") {
+                                            Button("Draft Reminder") {
                                                 openReminderEmail(for: entry.invoice, balanceDue: entry.balanceDue, fallbackURL: reminderURL)
-                                                markCollectionFollowUp(for: entry.invoice)
                                             }
                                             .buttonStyle(.bordered)
                                         }
@@ -1419,13 +1418,6 @@ struct PaymentsAndReceiptsView: View {
         return invoice.customer.serviceCalls.first(where: { $0.id == serviceCallID })
     }
 
-    private func markCollectionFollowUp(for invoice: Invoice) {
-        guard let linkedCall = serviceCall(for: invoice) else { return }
-        linkedCall.followUpRequired = true
-        linkedCall.followUpAction = isOverdue(invoice) ? "Urgent payment collection" : "Collect payment"
-        linkedCall.followUpDueDate = Calendar.current.date(byAdding: .day, value: isOverdue(invoice) ? 1 : 3, to: Date())
-    }
-
     private func customerPhoneURL(for invoice: Invoice) -> URL? {
         guard let phone = invoice.customer.phone?.trimmingCharacters(in: .whitespacesAndNewlines),
               !phone.isEmpty else { return nil }
@@ -1500,7 +1492,15 @@ GunnAire
 
     private func openReminderEmail(for invoice: Invoice, balanceDue: Double, fallbackURL: URL) {
         if googleAuth.isAuthenticated, let draft = reminderEmailDraft(for: invoice, balanceDue: balanceDue) {
-            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: draft.to,
+                subject: draft.subject,
+                body: draft.body,
+                customerID: invoice.customer.id,
+                serviceCallID: invoice.serviceCallID,
+                invoiceID: invoice.id,
+                workflow: .paymentReminder
+            )
         } else {
             openURL(fallbackURL)
         }
@@ -1508,7 +1508,14 @@ GunnAire
 
     private func openReceiptEmail(for payment: Payment, fallbackURL: URL) {
         if googleAuth.isAuthenticated, let draft = receiptEmailDraft(for: payment) {
-            GunnAireAppIntentRouter.storeMailDraftRoute(to: draft.to, subject: draft.subject, body: draft.body)
+            GunnAireAppIntentRouter.storeMailDraftRoute(
+                to: draft.to,
+                subject: draft.subject,
+                body: draft.body,
+                customerID: payment.invoice.customer.id,
+                serviceCallID: payment.invoice.serviceCallID,
+                invoiceID: payment.invoice.id
+            )
         } else {
             openURL(fallbackURL)
         }
