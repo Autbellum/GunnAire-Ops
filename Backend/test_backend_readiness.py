@@ -28,6 +28,8 @@ class BackendReadinessTests(unittest.TestCase):
             STORAGE_ROOT=storage,
             BACKUP_STATUS_PATH=backup_status,
             AUTH_MODE="google-id-token",
+            CUSTOMER_PORTAL_ENABLED=True,
+            CUSTOMER_PORTAL_BASE_URL="https://portal.gunnaire.com",
             QBO_CLIENT_ID="production-client",
             QBO_CLIENT_SECRET="server-secret",
             QBO_REDIRECT_URI="https://gunnaire.com/qbo/callback",
@@ -84,6 +86,7 @@ class BackendReadinessTests(unittest.TestCase):
                 "database": "ready",
                 "storage": "ready",
                 "authentication": "ready",
+                "customer-portal": "ready",
                 "quickbooks": "ready",
                 "quickbooks-webhooks": "ready",
                 "backup": "ready",
@@ -132,7 +135,7 @@ class BackendReadinessTests(unittest.TestCase):
                         payload = json.loads(response.read().decode("utf-8"))
                     self.assertEqual(response.status, 200)
                     self.assertEqual(payload["serviceVersion"], backend.SERVICE_VERSION)
-                    self.assertEqual(len(payload["components"]), 7)
+                    self.assertEqual(len(payload["components"]), 8)
                 finally:
                     server.shutdown()
                     server.server_close()

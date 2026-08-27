@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import html
 import json
+import math
 import os
 import re
 import secrets
@@ -26,7 +27,7 @@ from urllib.parse import unquote, urlparse
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.27.6"
+SERVICE_VERSION = "2026.08.27.7"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -124,6 +125,27 @@ def normalize_email(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
+def is_valid_email(value: str) -> bool:
+    """Apply conservative syntax checks without sending or disclosing an address."""
+    if not value or len(value) > 254 or value.count("@") != 1:
+        return False
+    local_part, domain = value.rsplit("@", 1)
+    if (
+        not 1 <= len(local_part) <= 64
+        or local_part.startswith(".")
+        or local_part.endswith(".")
+        or ".." in local_part
+        or not re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+", local_part)
+    ):
+        return False
+    labels = domain.split(".")
+    return len(labels) >= 2 and all(
+        1 <= len(label) <= 63
+        and re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", label) is not None
+        for label in labels
+    )
+
+
 def normalize_text_recipient(value: str | None) -> str:
     raw_value = (value or "").strip()
     if not raw_value:
@@ -143,10 +165,51 @@ def portal_token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def portal_url(token: str) -> str | None:
-    if not CUSTOMER_PORTAL_BASE_URL.startswith("https://"):
+def customer_portal_origin(value: str | None = None) -> str | None:
+    """Return one normalized HTTPS origin or fail closed on ambiguous URLs."""
+    raw_value = (CUSTOMER_PORTAL_BASE_URL if value is None else value).strip()
+    try:
+        parsed = urlparse(raw_value)
+        port = parsed.port
+    except ValueError:
         return None
-    return f"{CUSTOMER_PORTAL_BASE_URL}/portal/{token}"
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        return None
+    hostname = parsed.hostname.lower()
+    hostname_labels = hostname.split(".")
+    if not all(
+        1 <= len(label) <= 63
+        and re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", label) is not None
+        for label in hostname_labels
+    ):
+        return None
+    try:
+        host = f"[{hostname}]" if ":" in hostname else hostname
+        return f"https://{host}{f':{port}' if port is not None else ''}"
+    except ValueError:
+        return None
+
+
+def portal_url(token: str) -> str | None:
+    origin = customer_portal_origin()
+    return f"{origin}/portal/{token}" if origin is not None else None
+
+
+def redact_capability_tokens(value: str) -> str:
+    """Keep bearer-style portal secrets out of ordinary HTTP access logs."""
+    return re.sub(
+        r"(?i)(/portal/)[A-Za-z0-9_-]{32,128}",
+        r"\1[REDACTED]",
+        value,
+    )
 
 
 def qbo_is_configured() -> bool:
@@ -366,6 +429,31 @@ def authentication_readiness_component() -> dict[str, str]:
     return readiness_component("authentication", "Authentication", "attention", "Shared API-token mode is for a physically controlled development server only.")
 
 
+def customer_portal_readiness_component() -> dict[str, str]:
+    if not CUSTOMER_PORTAL_ENABLED:
+        return readiness_component(
+            "customer-portal",
+            "Customer Portal",
+            "attention",
+            "Customer portal links are disabled; complete public-route acceptance before enabling them.",
+        )
+    origin = customer_portal_origin()
+    if origin is None:
+        return readiness_component(
+            "customer-portal",
+            "Customer Portal",
+            "error",
+            "Configure one HTTPS origin with no credentials, path, query, or fragment.",
+        )
+    hostname = urlparse(origin).hostname or "configured host"
+    return readiness_component(
+        "customer-portal",
+        "Customer Portal",
+        "ready",
+        f"Expiring capability links are restricted to HTTPS on {hostname}.",
+    )
+
+
 def quickbooks_readiness_component() -> dict[str, str]:
     if not qbo_is_configured() or not qbo_token_storage_is_configured():
         return readiness_component("quickbooks", "QuickBooks Bridge", "attention", "Configure Intuit credentials, redirect URI, and encrypted refresh-token storage.")
@@ -457,6 +545,7 @@ def backend_readiness_snapshot(now: datetime | None = None) -> dict[str, object]
         database_readiness_component(),
         storage_readiness_component(),
         authentication_readiness_component(),
+        customer_portal_readiness_component(),
         quickbooks_readiness_component(),
         quickbooks_webhook_readiness_component(),
         backup_readiness_component(now=now),
@@ -641,11 +730,15 @@ def initialize_database() -> None:
                 balance_due REAL,
                 expires_at TEXT NOT NULL,
                 revoked_at TEXT,
+                opened_count INTEGER NOT NULL DEFAULT 0,
+                last_opened_at TEXT,
                 created_at TEXT NOT NULL,
                 created_by TEXT NOT NULL
             )
             """
         )
+        ensure_column(connection, "customer_portal_links", "opened_count", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(connection, "customer_portal_links", "last_opened_at", "TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS qbo_connections (
@@ -889,6 +982,8 @@ def customer_portal_link_record(row: sqlite3.Row) -> dict[str, object]:
         "balanceDue": row["balance_due"],
         "expiresAt": row["expires_at"],
         "revokedAt": row["revoked_at"],
+        "openedCount": max(int(row["opened_count"] or 0), 0),
+        "lastOpenedAt": row["last_opened_at"],
         "createdAt": row["created_at"],
         "createdBy": row["created_by"],
     }
@@ -1419,27 +1514,62 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self.read_json()
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
             self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
             return
-        customer_name = str(payload.get("customerName") or "").strip()
-        customer_email = normalize_email(payload.get("customerEmail") if isinstance(payload.get("customerEmail"), str) else None)
-        service_call_id = str(payload.get("serviceCallID") or "").strip() or None
-        invoice_id = str(payload.get("invoiceID") or "").strip() or None
-        title = str(payload.get("title") or "GunnAire service update").strip()
-        appointment_summary = str(payload.get("appointmentSummary") or "").strip() or None
-        invoice_reference = str(payload.get("invoiceReference") or "").strip() or None
-        balance_due = payload.get("balanceDue")
-        if not isinstance(balance_due, (int, float)):
-            balance_due = None
-        if not customer_name or not customer_email or not (service_call_id or invoice_id):
+        if not isinstance(payload, dict):
+            self.write_json({"error": "Portal link body must be an object"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        text_fields = (
+            "customerName", "customerEmail", "serviceCallID", "invoiceID",
+            "title", "appointmentSummary", "invoiceReference",
+        )
+        if any(payload.get(key) is not None and not isinstance(payload.get(key), str) for key in text_fields):
+            self.write_json({"error": "Portal link text fields are invalid"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        customer_name = (payload.get("customerName") or "").strip()
+        customer_email = normalize_email(payload.get("customerEmail"))
+        service_call_id = (payload.get("serviceCallID") or "").strip() or None
+        invoice_id = (payload.get("invoiceID") or "").strip() or None
+        title = (payload.get("title") or "GunnAire service update").strip()
+        appointment_summary = (payload.get("appointmentSummary") or "").strip() or None
+        invoice_reference = (payload.get("invoiceReference") or "").strip() or None
+
+        if not customer_name or not is_valid_email(customer_email) or not (service_call_id or invoice_id):
             self.write_json({"error": "Customer, email, and a job or invoice reference are required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            service_call_id = str(uuid.UUID(service_call_id)) if service_call_id else None
+            invoice_id = str(uuid.UUID(invoice_id)) if invoice_id else None
+        except ValueError:
+            self.write_json({"error": "Job and invoice references must be valid UUIDs"}, status=HTTPStatus.BAD_REQUEST)
             return
         if any(len(value) > limit for value, limit in ((customer_name, 300), (customer_email, 254), (title, 200), (appointment_summary or "", 600), (invoice_reference or "", 160), (service_call_id or "", 80), (invoice_id or "", 80))):
             self.write_json({"error": "Portal link fields are too long"}, status=HTTPStatus.BAD_REQUEST)
             return
+
+        raw_balance_due = payload.get("balanceDue")
+        balance_due: float | None = None
+        if raw_balance_due is not None:
+            if isinstance(raw_balance_due, bool) or not isinstance(raw_balance_due, (int, float)):
+                self.write_json({"error": "Balance due must be a non-negative amount"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            balance_due = float(raw_balance_due)
+            if not math.isfinite(balance_due) or not 0 <= balance_due <= 999_999_999.99:
+                self.write_json({"error": "Balance due must be a non-negative amount"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            balance_due = round(balance_due, 2)
+
         requested_days = payload.get("expiresInDays", 14)
+        if isinstance(requested_days, bool):
+            self.write_json({"error": "Invalid portal expiry"}, status=HTTPStatus.BAD_REQUEST)
+            return
         try:
+            if isinstance(requested_days, str) and re.fullmatch(r"[0-9]+", requested_days.strip()) is None:
+                raise ValueError("non-integral expiry")
+            if isinstance(requested_days, float) and not requested_days.is_integer():
+                raise ValueError("non-integral expiry")
             expires_in_days = int(requested_days)
         except (TypeError, ValueError):
             self.write_json({"error": "Invalid portal expiry"}, status=HTTPStatus.BAD_REQUEST)
@@ -1468,7 +1598,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.write_json({"id": link_id, "url": portal_url(token), "expiresAt": expires_at}, status=HTTPStatus.CREATED)
 
     def render_customer_portal(self, token: str) -> None:
-        if not CUSTOMER_PORTAL_ENABLED or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
+        if (
+            not CUSTOMER_PORTAL_ENABLED
+            or customer_portal_origin() is None
+            or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token)
+        ):
             self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
             return
         with db() as connection:
@@ -1476,14 +1610,42 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 "SELECT * FROM customer_portal_links WHERE token_hash = ? AND revoked_at IS NULL",
                 (portal_token_hash(token),),
             ).fetchone()
-        if row is None or datetime.fromisoformat(row["expires_at"]) <= datetime.now(timezone.utc):
+            try:
+                expires_at = datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00")) if row is not None else None
+            except (TypeError, ValueError):
+                expires_at = None
+            if expires_at is not None and expires_at.tzinfo is None:
+                expires_at = None
+            if row is not None and expires_at is not None and expires_at > datetime.now(timezone.utc):
+                opened_at = utc_now()
+                updated = connection.execute(
+                    """
+                    UPDATE customer_portal_links
+                    SET opened_count = opened_count + 1, last_opened_at = ?
+                    WHERE id = ? AND revoked_at IS NULL
+                    """,
+                    (opened_at, row["id"]),
+                ).rowcount
+            else:
+                updated = 0
+        if row is None or expires_at is None or updated != 1:
             self.write_json({"error": "This customer link is unavailable"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
             return
         items = [("Appointment", row["appointment_summary"]), ("Invoice", row["invoice_reference"])]
         if row["balance_due"] is not None:
             items.append(("Balance due", f"${float(row['balance_due']):,.2f}"))
         detail_rows = "".join(f"<dt>{html.escape(label)}</dt><dd>{html.escape(str(value))}</dd>" for label, value in items if value)
-        content = f"""<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>GunnAire service update</title><style>body{{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:42rem;margin:3rem auto;padding:0 1.25rem;color:#171717}}main{{border:1px solid #ddd;border-radius:16px;padding:1.5rem}}dt{{font-weight:600;margin-top:1rem}}dd{{margin:.2rem 0}}small{{color:#666}}</style><main><h1>{html.escape(row['title'])}</h1><p>Hello {html.escape(row['customer_name'])},</p><dl>{detail_rows}</dl><p>Please contact GunnAire to request changes or ask a question.</p><small>This secure link expires {html.escape(row['expires_at'])}. Do not forward it.</small></main></html>"""
+        content = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>GunnAire service update</title>
+<style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:42rem;margin:clamp(1rem,7vw,3rem) auto;padding:0 1.25rem;color:CanvasText;background:Canvas}}main{{border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:16px;padding:clamp(1.25rem,5vw,2rem);box-shadow:0 12px 32px color-mix(in srgb,CanvasText 8%,transparent)}}h1{{font-size:clamp(1.55rem,5vw,2.2rem);line-height:1.15}}dt{{font-weight:650;margin-top:1rem}}dd{{margin:.25rem 0}}small{{color:color-mix(in srgb,CanvasText 65%,transparent);line-height:1.45}} </style>
+</head>
+<body><main aria-labelledby="portal-title"><h1 id="portal-title">{html.escape(str(row['title']))}</h1><p>Hello {html.escape(str(row['customer_name']))},</p><dl>{detail_rows}</dl><p>Please contact GunnAire to request changes or ask a question.</p><small>This secure link expires <time datetime="{html.escape(str(row['expires_at']))}">{html.escape(str(row['expires_at']))}</time>. Do not forward it.</small></main></body>
+</html>"""
         data = content.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1491,6 +1653,14 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        )
         self.end_headers()
         self.wfile.write(data)
 
@@ -2380,6 +2550,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.send_cors_headers()
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(data)
 
@@ -2393,7 +2565,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"{timestamp} {self.address_string()} {format % args}")
+        message = redact_capability_tokens(format % args)
+        print(f"{timestamp} {self.address_string()} {message}")
 
 
 def main() -> None:
