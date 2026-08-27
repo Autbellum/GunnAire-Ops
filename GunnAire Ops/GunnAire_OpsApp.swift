@@ -78,6 +78,7 @@ private enum GunnAireUITestFixtures {
     private static let inventoryItemID = UUID(uuidString: "A1000000-0000-4000-8000-000000000013")!
     private static let inventoryReceiptID = UUID(uuidString: "A1000000-0000-4000-8000-000000000014")!
     private static let inventoryReservationID = UUID(uuidString: "A1000000-0000-4000-8000-000000000015")!
+    private static let estimateID = UUID(uuidString: "A1000000-0000-4000-8000-000000000016")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -85,6 +86,7 @@ private enum GunnAireUITestFixtures {
         let isScreenshotFixture = arguments.contains("-appStoreScreenshotFixtures")
         let isInventoryShortageFixture = arguments.contains("-uiTestSeedInventoryShortage")
         let isInventoryFixture = arguments.contains("-uiTestSeedInventoryJob") || isInventoryShortageFixture
+        let isPendingEstimateFixture = arguments.contains("-uiTestSeedPendingEstimate")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
         for user in appUsers where
@@ -108,6 +110,10 @@ private enum GunnAireUITestFixtures {
         let invoices = try context.fetch(FetchDescriptor<Invoice>())
         for invoice in invoices where invoice.id == invoiceID {
             context.delete(invoice)
+        }
+        let estimates = try context.fetch(FetchDescriptor<Estimate>())
+        for estimate in estimates where estimate.id == estimateID {
+            context.delete(estimate)
         }
         let calls = try context.fetch(FetchDescriptor<ServiceCall>())
         for call in calls where call.id == serviceCallID || call.id == correctiveSourceCallID || call.id == correctiveFollowUpCallID || call.id == maintenanceServiceCallID {
@@ -233,7 +239,17 @@ private enum GunnAireUITestFixtures {
             status: .invoiced,
             workCompletedChecklist: true,
             documentationChecklist: true,
+            linkedEstimateID: isPendingEstimateFixture ? estimateID : nil,
             linkedInvoiceID: invoiceID
+        )
+        let estimate = Estimate(
+            id: estimateID,
+            serviceCallID: serviceCallID,
+            customer: customer,
+            lineItemSummary: "Replace failed dual run capacitor and verify operation",
+            amount: 425,
+            status: "pending",
+            notes: "Customer authorization required before repair."
         )
         let invoice = Invoice(
             id: invoiceID,
@@ -310,6 +326,9 @@ private enum GunnAireUITestFixtures {
         context.insert(equipment)
         context.insert(call)
         context.insert(invoice)
+        if isPendingEstimateFixture {
+            context.insert(estimate)
+        }
         context.insert(maintenanceAgreement)
         context.insert(maintenanceCall)
 

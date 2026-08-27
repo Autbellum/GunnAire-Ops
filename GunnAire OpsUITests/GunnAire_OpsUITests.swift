@@ -273,6 +273,67 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testPendingEstimateRequiresTraceableCustomerApprovalEvidence() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedPendingEstimate"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+
+        let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
+        for _ in 0..<6 {
+            if documentation.exists && documentation.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(documentation.waitForExistence(timeout: 3))
+        documentation.tap()
+
+        let approval = app.buttons["Record Customer Approval"]
+        for _ in 0..<10 {
+            if approval.exists && approval.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(approval.waitForExistence(timeout: 3))
+        approval.tap()
+
+        XCTAssertTrue(app.navigationBars["Customer Approval"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Customer"].exists)
+        XCTAssertTrue(app.staticTexts["Total"].exists)
+        XCTAssertFalse(app.buttons["Approve"].isEnabled)
+
+        app.buttons["EstimateApprovalMethodPicker"].tap()
+        app.buttons["Email approval"].tap()
+        let reference = app.textFields["Email subject, message ID, or brief note"]
+        XCTAssertTrue(reference.waitForExistence(timeout: 2))
+        reference.tap()
+        reference.typeText("Approved by reply to estimate email")
+        if app.keyboards.buttons["Hide keyboard"].exists {
+            app.keyboards.buttons["Hide keyboard"].tap()
+        }
+        let confirmation = app.switches["Customer reviewed the scope, total price, and terms"]
+        confirmation.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(confirmation.value as? String, "1")
+        let approveButton = app.buttons["Approve"]
+        let enabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"),
+            object: approveButton
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 3), .completed)
+        approveButton.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Method: Email approval"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testAssignedTechnicianAddsInvoiceItemAndUpdatesExistingInvoice() throws {
         let app = XCUIApplication()
         app.launchArguments = [

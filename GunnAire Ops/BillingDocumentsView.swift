@@ -77,6 +77,7 @@ struct BillingDocumentsView: View {
     @State private var showingItemSelector = false
     @State private var showingItemCreator = false
     @State private var selectedInvoiceForCloseout: Invoice?
+    @State private var selectedEstimateForApproval: Estimate?
     @State private var didResolveInitialCloseoutRequest = false
     @State private var generatedCustomerDocumentURL: URL?
     @State private var generatedCustomerDocumentRecipientID: UUID?
@@ -1530,6 +1531,11 @@ GunnAire
                                     Text("Customer approval: \(estimate.customerApprovedByName ?? estimate.customer.name) • \(approvedAt.formatted(date: .abbreviated, time: .shortened))")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                    if let method = estimate.customerApprovalMethod {
+                                        Text("Method: \(method.displayName)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
                                 if currentJobProposalOptions.count > 1 {
                                     VStack(alignment: .leading, spacing: 5) {
@@ -1587,10 +1593,11 @@ GunnAire
                                 .disabled(!QuickBooksDataAPI.shared.isAuthenticated || estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
 
                                 HStack {
-                                    Button("Mark Customer Approved") {
-                                        recordCustomerApproval(for: estimate)
+                                    Button("Record Customer Approval") {
+                                        selectedEstimateForApproval = estimate
                                     }
                                     .buttonStyle(.bordered)
+                                    .disabled(estimate.hasRecordedCustomerApproval)
 
                                     Button("Mark Rejected") {
                                         estimate.status = "rejected"
@@ -2590,6 +2597,12 @@ GunnAire
             .sheet(item: $selectedInvoiceForCloseout) { invoice in
                 RecordInvoicePaymentView(invoice: invoice)
                     .tint(Color.brandGold)
+            }
+            .sheet(item: $selectedEstimateForApproval) { estimate in
+                EstimateApprovalSheet(estimate: estimate) { evidence in
+                    recordCustomerApproval(evidence, for: estimate)
+                }
+                .tint(Color.brandGold)
             }
             .fileImporter(
                 isPresented: $showingDocumentationFileImporter,
@@ -4990,8 +5003,16 @@ GunnAire
         actionMessage = "\(estimate.proposalOptionDisplayName) selected. Record customer approval when they choose this option."
     }
 
-    private func recordCustomerApproval(for estimate: Estimate) {
-        estimate.recordCustomerApproval(by: estimate.customer.name)
+    private func recordCustomerApproval(_ evidence: EstimateApprovalEvidence, for estimate: Estimate) -> Bool {
+        guard estimate.recordCustomerApproval(
+            by: evidence.customerName,
+            method: evidence.method,
+            reference: evidence.reference,
+            signatureImageBase64: evidence.signatureImageBase64,
+            recordedByEmail: currentUserEmail
+        ) else {
+            return false
+        }
         if let groupID = estimate.proposalGroupID {
             for option in estimates where option.proposalGroupID == groupID && option.id != estimate.id && option.status != "invoiced" {
                 option.status = "not-selected"
@@ -5001,7 +5022,17 @@ GunnAire
         activeServiceCall?.followUpRequired = false
         activeServiceCall?.followUpAction = nil
         activeServiceCall?.followUpDueDate = nil
-        actionMessage = "Customer approval recorded."
+        if let call = activeServiceCall {
+            ServiceCallActivity.record(
+                for: call,
+                action: estimate.isChangeOrder ? "Change order approved" : "Estimate approved",
+                detail: "Customer approval recorded by \(evidence.method.displayName.lowercased()) for \(estimate.amount.formatted(.currency(code: "USD"))).",
+                actorEmail: currentUserEmail,
+                in: modelContext
+            )
+        }
+        actionMessage = "Customer approval evidence recorded."
+        return true
     }
 
     private func prepareInvoiceFromEstimate(_ estimate: Estimate) {
@@ -7473,7 +7504,7 @@ private struct DocumentationItemCreatorView: View {
     }
 }
 
-private struct SignaturePad: View {
+struct SignaturePad: View {
     @Binding var strokes: [[CGPoint]]
 
     var body: some View {
@@ -7512,16 +7543,44 @@ private struct SignaturePad: View {
     }
 }
 
-private enum SignatureRenderer {
+enum SignatureRenderer {
     static func image(from strokes: [[CGPoint]], size: CGSize = CGSize(width: 600, height: 240)) -> UIImage? {
         let validStrokes = strokes.filter { !$0.isEmpty }
         guard !validStrokes.isEmpty else { return nil }
+
+        let points = validStrokes.flatMap { $0 }
+        guard let minX = points.map(\.x).min(),
+              let maxX = points.map(\.x).max(),
+              let minY = points.map(\.y).min(),
+              let maxY = points.map(\.y).max() else {
+            return nil
+        }
+        let padding: CGFloat = 18
+        let sourceWidth = max(maxX - minX, 1)
+        let sourceHeight = max(maxY - minY, 1)
+        let scale = min(
+            (size.width - padding * 2) / sourceWidth,
+            (size.height - padding * 2) / sourceHeight
+        )
+        let renderedWidth = sourceWidth * scale
+        let renderedHeight = sourceHeight * scale
+        let offset = CGPoint(
+            x: (size.width - renderedWidth) / 2,
+            y: (size.height - renderedHeight) / 2
+        )
+
+        func renderedPoint(_ point: CGPoint) -> CGPoint {
+            CGPoint(
+                x: offset.x + (point.x - minX) * scale,
+                y: offset.y + (point.y - minY) * scale
+            )
+        }
 
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { context in
             UIColor.clear.setFill()
             context.fill(CGRect(origin: .zero, size: size))
-            UIColor.label.setStroke()
+            UIColor.black.setStroke()
             let bezier = UIBezierPath()
             bezier.lineWidth = 3
             bezier.lineCapStyle = .round
@@ -7529,11 +7588,9 @@ private enum SignatureRenderer {
 
             for stroke in validStrokes {
                 guard let first = stroke.first else { continue }
-                let scaledFirst = CGPoint(x: first.x * (size.width / 320), y: first.y * (size.height / 180))
-                bezier.move(to: scaledFirst)
+                bezier.move(to: renderedPoint(first))
                 for point in stroke.dropFirst() {
-                    let scaledPoint = CGPoint(x: point.x * (size.width / 320), y: point.y * (size.height / 180))
-                    bezier.addLine(to: scaledPoint)
+                    bezier.addLine(to: renderedPoint(point))
                 }
             }
 

@@ -391,6 +391,7 @@ struct ServiceCallDetailView: View {
     let call: ServiceCall
     @State private var showingEditSheet = false
     @State private var showingCustomerPortalComposer = false
+    @State private var selectedEstimateForApproval: Estimate?
     @State private var selectedWorkspace: ServiceCallDetailWorkspace = .overview
     @State private var hasSelectedInitialWorkspace = false
     private var resolvedAddress: String? {
@@ -1435,12 +1436,18 @@ GunnAire
                                     Text("Customer approval: \(linkedEstimate.customerApprovedByName ?? call.customer.name) • \(approvedAt.formatted(date: .abbreviated, time: .shortened))")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                    if let method = linkedEstimate.customerApprovalMethod {
+                                        Text("Method: \(method.displayName)")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
                                 HStack {
-                                    Button("Mark Customer Approved") {
-                                        recordCustomerApproval(for: linkedEstimate)
+                                    Button("Record Customer Approval") {
+                                        selectedEstimateForApproval = linkedEstimate
                                     }
                                     .buttonStyle(.bordered)
+                                    .disabled(linkedEstimate.hasRecordedCustomerApproval)
 
                                     Button("Rejected") {
                                         linkedEstimate.status = "rejected"
@@ -1694,6 +1701,12 @@ GunnAire
             )
             .tint(Color.brandGold)
         }
+        .sheet(item: $selectedEstimateForApproval) { estimate in
+            EstimateApprovalSheet(estimate: estimate) { evidence in
+                recordCustomerApproval(evidence, for: estimate)
+            }
+            .tint(Color.brandGold)
+        }
         .onAppear {
             FieldFormTemplate.ensureStarterTemplates(in: modelContext)
             guard !hasSelectedInitialWorkspace else { return }
@@ -1794,8 +1807,16 @@ GunnAire
             .map(\.name)
     }
 
-    private func recordCustomerApproval(for estimate: Estimate) {
-        estimate.recordCustomerApproval(by: call.customer.name)
+    private func recordCustomerApproval(_ evidence: EstimateApprovalEvidence, for estimate: Estimate) -> Bool {
+        guard estimate.recordCustomerApproval(
+            by: evidence.customerName,
+            method: evidence.method,
+            reference: evidence.reference,
+            signatureImageBase64: evidence.signatureImageBase64,
+            recordedByEmail: currentActivityActor
+        ) else {
+            return false
+        }
         if let groupID = estimate.proposalGroupID {
             for option in estimates where option.proposalGroupID == groupID && option.id != estimate.id && option.status != "invoiced" {
                 option.status = "not-selected"
@@ -1805,6 +1826,14 @@ GunnAire
         call.followUpRequired = false
         call.followUpAction = nil
         call.followUpDueDate = nil
+        ServiceCallActivity.record(
+            for: call,
+            action: estimate.isChangeOrder ? "Change order approved" : "Estimate approved",
+            detail: "Customer approval recorded by \(evidence.method.displayName.lowercased()) for \(estimate.amount.formatted(.currency(code: "USD"))).",
+            actorEmail: currentActivityActor,
+            in: modelContext
+        )
+        return true
     }
 }
 

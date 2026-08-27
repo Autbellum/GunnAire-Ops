@@ -30,6 +30,35 @@ enum EstimateProposalOption: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+enum EstimateApprovalMethod: String, CaseIterable, Identifiable, Codable {
+    case inPersonSignature
+    case email
+    case textMessage
+    case phoneVerbal
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .inPersonSignature: "In-person signature"
+        case .email: "Email approval"
+        case .textMessage: "Text-message approval"
+        case .phoneVerbal: "Phone / verbal approval"
+        }
+    }
+
+    var requiresSignature: Bool { self == .inPersonSignature }
+
+    var referencePrompt: String {
+        switch self {
+        case .inPersonSignature: ""
+        case .email: "Email subject, message ID, or brief note"
+        case .textMessage: "Phone number, message time, or brief note"
+        case .phoneVerbal: "Call time and brief authorization note"
+        }
+    }
+}
+
 @Model
 final class Estimate {
     var id: UUID = UUID()
@@ -50,6 +79,11 @@ final class Estimate {
     var status: String = "pending" // pending, accepted, rejected, invoiced, etc.
     var customerApprovedByName: String?
     var customerApprovedAt: Date?
+    /// Evidence is stored on the exact estimate revision that the customer approved.
+    var customerApprovalMethodRaw: String?
+    var customerApprovalReference: String?
+    var customerApprovalRecordedByEmail: String?
+    var customerApprovalSignatureImageBase64: String?
     var notes: String?
     var createdAt: Date = Date()
     
@@ -69,6 +103,10 @@ final class Estimate {
         status: String = "pending",
         customerApprovedByName: String? = nil,
         customerApprovedAt: Date? = nil,
+        customerApprovalMethodRaw: String? = nil,
+        customerApprovalReference: String? = nil,
+        customerApprovalRecordedByEmail: String? = nil,
+        customerApprovalSignatureImageBase64: String? = nil,
         notes: String? = nil,
         createdAt: Date = Date()
     ) {
@@ -87,6 +125,10 @@ final class Estimate {
         self.status = status
         self.customerApprovedByName = customerApprovedByName
         self.customerApprovedAt = customerApprovedAt
+        self.customerApprovalMethodRaw = customerApprovalMethodRaw
+        self.customerApprovalReference = customerApprovalReference
+        self.customerApprovalRecordedByEmail = customerApprovalRecordedByEmail
+        self.customerApprovalSignatureImageBase64 = customerApprovalSignatureImageBase64
         self.notes = notes
         self.createdAt = createdAt
     }
@@ -96,7 +138,25 @@ final class Estimate {
     }
 
     var hasRecordedCustomerApproval: Bool {
-        status.caseInsensitiveCompare("accepted") == .orderedSame && customerApprovedAt != nil
+        guard status.caseInsensitiveCompare("accepted") == .orderedSame,
+              customerApprovedAt != nil,
+              customerApprovedByName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+              let customerApprovalMethod else {
+            return false
+        }
+        if customerApprovalMethod.requiresSignature {
+            guard let signature = customerApprovalSignatureImageBase64,
+                  Data(base64Encoded: signature)?.isEmpty == false else {
+                return false
+            }
+            return true
+        }
+        return customerApprovalReference?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    var customerApprovalMethod: EstimateApprovalMethod? {
+        guard let customerApprovalMethodRaw else { return nil }
+        return EstimateApprovalMethod(rawValue: customerApprovalMethodRaw)
     }
 
     var isChangeOrder: Bool {
@@ -125,13 +185,39 @@ final class Estimate {
         return proposalOptionKind?.displayName ?? "Estimate"
     }
 
-    func recordCustomerApproval(by name: String? = nil, at date: Date = Date()) {
-        status = "accepted"
-        let normalizedName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if customerApprovedByName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-            customerApprovedByName = normalizedName?.isEmpty == false ? normalizedName : customer.name
+    @discardableResult
+    func recordCustomerApproval(
+        by name: String,
+        method: EstimateApprovalMethod,
+        reference: String? = nil,
+        signatureImageBase64: String? = nil,
+        recordedByEmail: String? = nil,
+        at date: Date = Date()
+    ) -> Bool {
+        if hasRecordedCustomerApproval { return true }
+
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedName.isEmpty else { return false }
+
+        let normalizedReference = reference?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if method.requiresSignature {
+            guard let signatureImageBase64,
+                  Data(base64Encoded: signatureImageBase64)?.isEmpty == false else {
+                return false
+            }
+        } else if normalizedReference?.isEmpty != false {
+            return false
         }
-        customerApprovedAt = customerApprovedAt ?? date
+
+        status = "accepted"
+        customerApprovedByName = normalizedName
+        customerApprovedAt = date
+        customerApprovalMethodRaw = method.rawValue
+        customerApprovalReference = normalizedReference?.isEmpty == false ? normalizedReference : nil
+        customerApprovalSignatureImageBase64 = method.requiresSignature ? signatureImageBase64 : nil
+        let normalizedRecorder = recordedByEmail?.trimmingCharacters(in: .whitespacesAndNewlines)
+        customerApprovalRecordedByEmail = normalizedRecorder?.isEmpty == false ? normalizedRecorder : nil
+        return true
     }
 
     static func displayDeduplicated(_ estimates: [Estimate]) -> [Estimate] {

@@ -46,6 +46,13 @@ enum GunnAireCloudKit {
     }
 
     static func accountReadiness() async -> AccountReadiness {
+        // An unsigned XCTest host has no CloudKit entitlement. Constructing a
+        // named CKContainer in that process traps before Swift can catch an
+        // error, so mirror the test-store policy and report an indeterminate
+        // state without touching CloudKit.
+        if usesTestDatabase {
+            return .couldNotDetermine
+        }
         do {
             switch try await CKContainer(identifier: containerIdentifier).accountStatus() {
             case .available:

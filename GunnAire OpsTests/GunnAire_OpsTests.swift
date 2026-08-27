@@ -35,6 +35,10 @@ struct GunnAire_OpsTests {
         #expect(GunnAireCloudKit.AccountReadiness.couldNotDetermine.userFacingDetail.localizedCaseInsensitiveContains("could not verify"))
     }
 
+    @Test func cloudKitReadinessDoesNotConstructAnEntitledContainerInsideTests() async {
+        #expect(await GunnAireCloudKit.accountReadiness() == .couldNotDetermine)
+    }
+
     @Test func dispatchWeekBoardUsesMondayThroughSunday() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
@@ -769,14 +773,86 @@ struct GunnAire_OpsTests {
         let customer = Customer(name: "Approval Customer")
         let estimate = Estimate(customer: customer, amount: 3_500)
         let approvedAt = Date(timeIntervalSinceReferenceDate: 60_000)
+        let signature = Data("signature".utf8).base64EncodedString()
 
-        estimate.recordCustomerApproval(by: "Morgan Approval", at: approvedAt)
-        estimate.recordCustomerApproval(by: "Changed Name", at: approvedAt.addingTimeInterval(60))
+        #expect(estimate.recordCustomerApproval(
+            by: "Morgan Approval",
+            method: .inPersonSignature,
+            signatureImageBase64: signature,
+            recordedByEmail: "tech@gunnaire.com",
+            at: approvedAt
+        ))
+        #expect(estimate.recordCustomerApproval(
+            by: "Changed Name",
+            method: .email,
+            reference: "Later email",
+            at: approvedAt.addingTimeInterval(60)
+        ))
 
         #expect(estimate.status == "accepted")
         #expect(estimate.customerApprovedByName == "Morgan Approval")
         #expect(estimate.customerApprovedAt == approvedAt)
+        #expect(estimate.customerApprovalMethod == .inPersonSignature)
+        #expect(estimate.customerApprovalSignatureImageBase64 == signature)
+        #expect(estimate.customerApprovalRecordedByEmail == "tech@gunnaire.com")
         #expect(estimate.hasRecordedCustomerApproval)
+
+        let rows = CustomerDocumentExporter.estimateDetailRows(for: estimate)
+        #expect(rows.contains { $0.label == "Approval Method" && $0.value == "In-person signature" })
+        #expect(rows.contains { $0.label == "Recorded By" && $0.value == "tech@gunnaire.com" })
+    }
+
+    @Test func estimateApprovalRejectsIncompleteOrUnattributableEvidence() async throws {
+        let estimate = Estimate(customer: Customer(name: "Evidence Customer"), amount: 975)
+
+        #expect(!estimate.recordCustomerApproval(
+            by: "Evidence Customer",
+            method: .inPersonSignature
+        ))
+        #expect(!estimate.recordCustomerApproval(
+            by: "Evidence Customer",
+            method: .phoneVerbal,
+            reference: "   "
+        ))
+        #expect(!estimate.hasRecordedCustomerApproval)
+        #expect(estimate.status == "pending")
+
+        #expect(estimate.recordCustomerApproval(
+            by: "Evidence Customer",
+            method: .phoneVerbal,
+            reference: "Inbound call at 2:15 PM; approved option Better."
+        ))
+        #expect(estimate.customerApprovalMethod == .phoneVerbal)
+        #expect(estimate.customerApprovalReference == "Inbound call at 2:15 PM; approved option Better.")
+        #expect(estimate.hasRecordedCustomerApproval)
+    }
+
+    @MainActor
+    @Test func estimateApprovalEvidencePersistsInTheSharedModelSchema() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(name: "Persistent Approval Customer")
+        let estimate = Estimate(customer: customer, amount: 2_450)
+        context.insert(customer)
+        context.insert(estimate)
+
+        #expect(estimate.recordCustomerApproval(
+            by: "Persistent Approval Customer",
+            method: .textMessage,
+            reference: "Reply received from 555-0100 at 10:32 AM.",
+            recordedByEmail: "dispatch@gunnaire.com"
+        ))
+        try context.save()
+
+        let persisted = try #require(try context.fetch(FetchDescriptor<Estimate>()).first)
+        #expect(persisted.customerApprovalMethod == .textMessage)
+        #expect(persisted.customerApprovalReference == "Reply received from 555-0100 at 10:32 AM.")
+        #expect(persisted.customerApprovalRecordedByEmail == "dispatch@gunnaire.com")
+        #expect(persisted.hasRecordedCustomerApproval)
     }
 
     @Test func serviceRequestRequiresQualificationBeforeCreatingAJob() async throws {
@@ -11566,7 +11642,13 @@ struct GunnAire_OpsTests {
         let customer = Customer(name: "Change Order Customer")
         let approvedAt = Date(timeIntervalSinceReferenceDate: 72_000)
         let original = Estimate(customer: customer, amount: 4_200)
-        original.recordCustomerApproval(by: "Jordan Customer", at: approvedAt)
+        original.recordCustomerApproval(
+            by: "Jordan Customer",
+            method: .email,
+            reference: "Reply to estimate email on file.",
+            recordedByEmail: "dispatcher@gunnaire.com",
+            at: approvedAt
+        )
 
         let revision = Estimate(
             serviceCallID: UUID(),
@@ -11578,6 +11660,7 @@ struct GunnAire_OpsTests {
 
         #expect(original.hasRecordedCustomerApproval)
         #expect(original.customerApprovedAt == approvedAt)
+        #expect(original.customerApprovalMethod == .email)
         #expect(revision.isChangeOrder)
         #expect(revision.proposalLabel == "Change Order")
         #expect(revision.parentEstimateID == original.id)

@@ -18,6 +18,13 @@ and schema status as of 2026-08-26:
    `CD_scheduledFollowUpServiceCallID`, plus the 16-field `CD_Invoice` type
    containing `CD_quickBooksSyncStatus`. The temporary bootstrap records were
    then removed and the local development store was verified marker-free.
+   Seven later optional fields remain an explicit Production deployment gate:
+   `CD_Customer.storedPaymentMethodsJSON`,
+   `CD_ServiceCall.maintenanceAgreementID`,
+   `CD_ServiceCall.maintenanceAgreementDueDate`, and the four
+   `CD_Estimate` approval-evidence fields (`customerApprovalMethodRaw`,
+   `customerApprovalReference`, `customerApprovalRecordedByEmail`, and
+   `customerApprovalSignatureImageBase64`).
 4. Sign the company iPad and Mac into the same approved business iCloud account
    and sign every staff member into GunnAire Ops with their own business login.
 5. Verify offline edits made on each physical device merge after reconnection before

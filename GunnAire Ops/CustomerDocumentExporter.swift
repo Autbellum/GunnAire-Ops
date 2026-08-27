@@ -140,6 +140,7 @@ enum CustomerDocumentExporter {
                 invoiceID: nil,
                 estimateID: estimate.id
             ),
+            approvalSignatureImageBase64: estimate.customerApprovalSignatureImageBase64,
             fileName: fileName
         )
     }
@@ -173,6 +174,7 @@ enum CustomerDocumentExporter {
                 invoiceID: invoice.id,
                 estimateID: nil
             ),
+            approvalSignatureImageBase64: invoice.customerSignatureImageBase64,
             fileName: fileName
         )
     }
@@ -898,6 +900,15 @@ enum CustomerDocumentExporter {
                 ("Customer Approval", "\(estimate.customerApprovedByName ?? estimate.customer.name) • \(formattedDateTime(approvedAt))"),
                 at: 2
             )
+            if let method = estimate.customerApprovalMethod {
+                rows.insert(("Approval Method", method.displayName), at: 3)
+            }
+            if let reference = normalizedValue(estimate.customerApprovalReference) {
+                rows.insert(("Authorization Reference", reference), at: 4)
+            }
+            if let recorder = normalizedValue(estimate.customerApprovalRecordedByEmail) {
+                rows.insert(("Recorded By", recorder), at: 5)
+            }
         }
         if let documentationStatus {
             rows.append(("Documentation Status", documentationStatus.statusLabel))
@@ -1144,6 +1155,7 @@ enum CustomerDocumentExporter {
         imageAttachments: [ServiceDocumentAttachment] = [],
         imageServiceCall: ServiceCall? = nil,
         imageEquipmentProfiles: [CustomerEquipment] = [],
+        approvalSignatureImageBase64: String? = nil,
         fileName: String
     ) throws -> URL {
         let folder = try exportFolder()
@@ -1156,6 +1168,14 @@ enum CustomerDocumentExporter {
             for section in sections {
                 y = drawSection(section, at: y, in: pageBounds, context: context, title: title, customer: customer)
             }
+            y = drawApprovalSignature(
+                approvalSignatureImageBase64,
+                at: y,
+                in: pageBounds,
+                context: context,
+                title: title,
+                customer: customer
+            )
             y = drawImageAttachments(
                 imageAttachments,
                 at: y,
@@ -1170,6 +1190,38 @@ enum CustomerDocumentExporter {
         }
 
         return url
+    }
+
+    private static func drawApprovalSignature(
+        _ base64: String?,
+        at initialY: CGFloat,
+        in bounds: CGRect,
+        context: UIGraphicsPDFRendererContext,
+        title: String,
+        customer: Customer
+    ) -> CGFloat {
+        guard let base64,
+              let data = Data(base64Encoded: base64),
+              let image = UIImage(data: data) else {
+            return initialY
+        }
+
+        let margin: CGFloat = 42
+        var y = initialY
+        if y > bounds.height - 190 {
+            drawFooter(in: bounds)
+            y = startPage(context: context, bounds: bounds, title: title, customer: customer)
+        }
+        "Customer Signature".draw(at: CGPoint(x: margin, y: y), withAttributes: [
+            .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+            .foregroundColor: UIColor.black
+        ])
+        y += 24
+        let maxSize = CGSize(width: 260, height: 105)
+        let scale = min(maxSize.width / max(image.size.width, 1), maxSize.height / max(image.size.height, 1), 1)
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        image.draw(in: CGRect(x: margin, y: y, width: size.width, height: size.height))
+        return y + size.height + 18
     }
 
     private static func startPage(
