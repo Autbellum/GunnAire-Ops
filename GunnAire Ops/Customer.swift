@@ -35,6 +35,7 @@ final class Customer {
     @Relationship(originalName: "communications", inverse: \CustomerCommunication.customer) private var storedCommunications: [CustomerCommunication]?
     @Relationship(originalName: "documentAttachments", inverse: \ServiceDocumentAttachment.customer) private var storedDocumentAttachments: [ServiceDocumentAttachment]?
     @Relationship(originalName: "equipmentProfiles", inverse: \CustomerEquipment.customer) private var storedEquipmentProfiles: [CustomerEquipment]?
+    @Relationship(originalName: "serviceLocations", inverse: \CustomerServiceLocation.customer) private var storedServiceLocations: [CustomerServiceLocation]?
     
     init(
         id: UUID = UUID(),
@@ -99,6 +100,11 @@ extension Customer {
     var equipmentProfiles: [CustomerEquipment] {
         get { storedEquipmentProfiles ?? [] }
         set { storedEquipmentProfiles = newValue }
+    }
+
+    var serviceLocations: [CustomerServiceLocation] {
+        get { storedServiceLocations ?? [] }
+        set { storedServiceLocations = newValue }
     }
 
     var activeContractsCount: Int {

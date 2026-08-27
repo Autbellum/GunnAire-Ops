@@ -37,7 +37,7 @@ enum CustomerCommunicationWorkflow {
             let linkedCall = linkedCallID.flatMap { id in
                 serviceCalls.first { $0.id == id && $0.customer.id == customerID }
             }
-            if let serviceCallID, linkedCall == nil { return false }
+            if serviceCallID != nil, linkedCall == nil { return false }
 
             estimate.status = "follow-up"
             if let linkedCall {

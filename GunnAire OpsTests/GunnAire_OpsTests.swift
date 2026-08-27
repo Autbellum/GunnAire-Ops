@@ -11801,6 +11801,16 @@ struct GunnAire_OpsTests {
             container.mainContext.fetch(FetchDescriptor<ServiceCall>()).first(where: { $0.maintenanceAgreementID != nil })
         )
         #expect(serviceCall.maintenanceAgreementDueDate != nil)
+        #expect(serviceCall.serviceLocationID != nil)
+
+        let serviceLocation = try #require(container.mainContext.fetch(FetchDescriptor<CustomerServiceLocation>()).first)
+        #expect(serviceLocation.customer?.id == customer.id)
+        #expect(serviceLocation.contactName?.isEmpty == false)
+        #expect(serviceLocation.contactPhone?.isEmpty == false)
+        #expect(serviceLocation.accessNotes?.isEmpty == false)
+
+        let equipment = try #require(container.mainContext.fetch(FetchDescriptor<CustomerEquipment>()).first)
+        #expect(equipment.serviceLocationID == serviceLocation.id)
 
         let estimate = try #require(container.mainContext.fetch(FetchDescriptor<Estimate>()).first)
         #expect(estimate.scheduledServiceCallID != nil)
@@ -12539,6 +12549,172 @@ struct GunnAire_OpsTests {
         )
         #expect(noTimeSnapshot.missingLaborTrackingJobCount == 1)
         #expect(!noTimeSnapshot.costCoverageComplete)
+    }
+
+    @Test func serviceLocationPolicyKeepsCustomerIsolationAndPrimaryOrdering() {
+        let customer = Customer(name: "Multi-Site Customer", address: "1 Billing Lane")
+        let otherCustomer = Customer(name: "Other Customer")
+        let warehouse = CustomerServiceLocation(
+            customer: customer,
+            name: "Warehouse",
+            address: "200 Supply Road",
+            isPrimary: false
+        )
+        let office = CustomerServiceLocation(
+            customer: customer,
+            name: "Main Office",
+            address: "100 Office Drive",
+            isPrimary: true
+        )
+        let inactive = CustomerServiceLocation(
+            customer: customer,
+            name: "Former Shop",
+            address: "9 Old Road",
+            isActive: false
+        )
+        let unrelated = CustomerServiceLocation(
+            customer: otherCustomer,
+            name: "Other Site",
+            address: "100 Office Drive",
+            isPrimary: true
+        )
+        let locations = [warehouse, unrelated, inactive, office]
+
+        #expect(CustomerServiceLocationPolicy.locations(for: customer.id, in: locations).map(\.id) == [office.id, warehouse.id])
+        #expect(CustomerServiceLocationPolicy.preferredLocation(for: customer.id, in: locations)?.id == office.id)
+        #expect(CustomerServiceLocationPolicy.location(id: unrelated.id, customerID: customer.id, in: locations) == nil)
+        #expect(CustomerServiceLocationPolicy.location(id: inactive.id, customerID: customer.id, in: locations) == nil)
+        #expect(CustomerServiceLocationPolicy.location(id: inactive.id, customerID: customer.id, in: locations, includeInactive: true)?.id == inactive.id)
+        #expect(CustomerServiceLocationPolicy.matchingLocation(address: " 100 OFFICE DRIVE ", customerID: customer.id, in: locations)?.id == office.id)
+
+        CustomerServiceLocationPolicy.setPrimary(warehouse, among: locations, now: Date(timeIntervalSinceReferenceDate: 25_000))
+        #expect(warehouse.isPrimary)
+        #expect(!office.isPrimary)
+        #expect(warehouse.updatedAt == Date(timeIntervalSinceReferenceDate: 25_000))
+    }
+
+    @Test func serviceLocationHandoffsKeepStableIdentityAndHistoricalAddressSnapshots() throws {
+        let customer = Customer(name: "Property History Customer", address: "1 Billing Lane")
+        let locationID = UUID()
+        let source = ServiceCall(
+            siteAddress: "44 Original Service Road",
+            serviceLocationID: locationID,
+            type: .estimate,
+            scheduledDate: Date(timeIntervalSinceReferenceDate: 50_000),
+            customer: customer,
+            status: .completed,
+            followUpRequired: true
+        )
+
+        let followUp = source.makeFollowUpVisit(scheduledDate: Date(timeIntervalSinceReferenceDate: 60_000))
+        #expect(followUp.serviceLocationID == locationID)
+        #expect(followUp.siteAddress == "44 Original Service Road")
+
+        let estimate = Estimate(
+            serviceCallID: source.id,
+            customer: customer,
+            lineItemSummary: "Replace rooftop unit",
+            amount: 12_500
+        )
+        #expect(estimate.recordCustomerApproval(
+            by: "Alex Customer",
+            method: .email,
+            reference: "approval-message-42",
+            recordedByEmail: "dispatch@gunnaire.com"
+        ))
+        let workOrder = try ApprovedEstimateScheduling.makeWorkOrder(
+            for: estimate,
+            sourceCall: source,
+            scheduledDate: Date(timeIntervalSinceReferenceDate: 80_000),
+            duration: 7_200,
+            workType: .install,
+            now: Date(timeIntervalSinceReferenceDate: 70_000)
+        )
+        #expect(workOrder.serviceLocationID == locationID)
+        #expect(workOrder.siteAddress == "44 Original Service Road")
+    }
+
+    @MainActor
+    @Test func serviceLocationAndJobLinksPersistInTheSharedModelSchema() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(name: "Persistent Property Customer", address: "1 Billing Lane")
+        let location = CustomerServiceLocation(
+            customer: customer,
+            name: "North Plant",
+            address: "400 North Plant Road",
+            contactName: "Sam Facilities",
+            contactPhone: "555-0100",
+            accessNotes: "Use loading dock entrance",
+            isPrimary: true
+        )
+        let equipment = CustomerEquipment(
+            customer: customer,
+            serviceLocationID: location.id,
+            name: "North RTU"
+        )
+        let call = ServiceCall(
+            siteAddress: location.address,
+            serviceLocationID: location.id,
+            customerEquipmentID: equipment.id,
+            type: .service,
+            scheduledDate: Date(),
+            customer: customer
+        )
+        context.insert(customer)
+        context.insert(location)
+        context.insert(equipment)
+        context.insert(call)
+        try context.save()
+
+        let restoredLocation = try #require(context.fetch(FetchDescriptor<CustomerServiceLocation>()).first)
+        let restoredEquipment = try #require(context.fetch(FetchDescriptor<CustomerEquipment>()).first)
+        let restoredCall = try #require(context.fetch(FetchDescriptor<ServiceCall>()).first)
+        #expect(restoredLocation.customer?.id == customer.id)
+        #expect(restoredLocation.accessNotes == "Use loading dock entrance")
+        #expect(restoredEquipment.serviceLocationID == location.id)
+        #expect(restoredCall.serviceLocationID == location.id)
+        #expect(restoredCall.siteAddress == "400 North Plant Road")
+    }
+
+    @MainActor
+    @Test func deletingCustomerExplicitlyRemovesServiceLocations() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(name: "Deleted Property Customer")
+        let location = CustomerServiceLocation(customer: customer, name: "Shop", address: "9 Delete Lane")
+        context.insert(customer)
+        context.insert(location)
+        try context.save()
+
+        let summary = CustomerDataMaintenance.deleteCustomer(
+            customer,
+            modelContext: context,
+            serviceCalls: [],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            contracts: [],
+            timeEntries: [],
+            documentAttachments: [],
+            equipmentProfiles: [],
+            serviceLocations: [location],
+            customerCommunications: []
+        )
+        try context.save()
+
+        #expect(summary.customers == 1)
+        #expect(summary.serviceLocations == 1)
+        #expect(try context.fetch(FetchDescriptor<CustomerServiceLocation>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<Customer>()).isEmpty)
     }
 
 }

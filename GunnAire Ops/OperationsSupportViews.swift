@@ -18,6 +18,7 @@ enum CustomerDataMaintenance {
         var timeEntries = 0
         var documentAttachments = 0
         var equipmentProfiles = 0
+        var serviceLocations = 0
         var customerCommunications = 0
     }
 
@@ -69,6 +70,7 @@ enum CustomerDataMaintenance {
         let timeEntries = (try? modelContext.fetch(FetchDescriptor<TimeEntry>())) ?? []
         let documentAttachments = (try? modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>())) ?? []
         let equipmentProfiles = (try? modelContext.fetch(FetchDescriptor<CustomerEquipment>())) ?? []
+        let serviceLocations = (try? modelContext.fetch(FetchDescriptor<CustomerServiceLocation>())) ?? []
         let customerCommunications = (try? modelContext.fetch(FetchDescriptor<CustomerCommunication>())) ?? []
 
         var summary = DeletionSummary()
@@ -84,6 +86,7 @@ enum CustomerDataMaintenance {
                 timeEntries: timeEntries,
                 documentAttachments: documentAttachments,
                 equipmentProfiles: equipmentProfiles,
+                serviceLocations: serviceLocations,
                 customerCommunications: customerCommunications
             ))
         }
@@ -102,6 +105,7 @@ enum CustomerDataMaintenance {
         timeEntries: [TimeEntry],
         documentAttachments: [ServiceDocumentAttachment],
         equipmentProfiles: [CustomerEquipment],
+        serviceLocations: [CustomerServiceLocation],
         customerCommunications: [CustomerCommunication]
     ) -> DeletionSummary {
         var summary = DeletionSummary()
@@ -145,6 +149,10 @@ enum CustomerDataMaintenance {
             modelContext.delete(equipment)
             summary.equipmentProfiles += 1
         }
+        for location in serviceLocations where location.customer?.id == customerID {
+            modelContext.delete(location)
+            summary.serviceLocations += 1
+        }
         for communication in customerCommunications where communication.customer.id == customerID {
             modelContext.delete(communication)
             summary.customerCommunications += 1
@@ -166,16 +174,17 @@ private extension CustomerDataMaintenance.DeletionSummary {
         timeEntries += other.timeEntries
         documentAttachments += other.documentAttachments
         equipmentProfiles += other.equipmentProfiles
+        serviceLocations += other.serviceLocations
         customerCommunications += other.customerCommunications
     }
 
     var deletedAnything: Bool {
-        customers + serviceCalls + estimates + invoices + payments + contracts + timeEntries + documentAttachments + equipmentProfiles + customerCommunications > 0
+        customers + serviceCalls + estimates + invoices + payments + contracts + timeEntries + documentAttachments + equipmentProfiles + serviceLocations + customerCommunications > 0
     }
 
     var customerScreenMessage: String {
         deletedAnything
-            ? "Cleaned \(customers) calendar-created customer\(customers == 1 ? "" : "s"), \(serviceCalls) related local job\(serviceCalls == 1 ? "" : "s"), \(equipmentProfiles) equipment profile\(equipmentProfiles == 1 ? "" : "s"), and \(documentAttachments) attachment\(documentAttachments == 1 ? "" : "s")."
+            ? "Cleaned \(customers) calendar-created customer\(customers == 1 ? "" : "s"), \(serviceCalls) related local job\(serviceCalls == 1 ? "" : "s"), \(serviceLocations) service location\(serviceLocations == 1 ? "" : "s"), \(equipmentProfiles) equipment profile\(equipmentProfiles == 1 ? "" : "s"), and \(documentAttachments) attachment\(documentAttachments == 1 ? "" : "s")."
             : "No calendar-created generic customers found."
     }
 }
@@ -191,6 +200,7 @@ struct CustomersView: View {
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
+    @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
 
     @State private var newCustomerName = ""
     @State private var newCustomerEmail = ""
@@ -216,7 +226,11 @@ struct CustomersView: View {
                 serviceCalls: serviceCalls,
                 equipmentProfiles: equipmentProfiles,
                 contracts: recurringContracts
-            )
+            ) || CustomerServiceLocationPolicy.locations(for: customer.id, in: serviceLocations)
+                .contains { location in
+                    location.displayName.localizedCaseInsensitiveContains(search) ||
+                        location.address.localizedCaseInsensitiveContains(search)
+                }
         }
     }
 
@@ -263,7 +277,7 @@ struct CustomersView: View {
                 if canManageCustomerRecords {
                 Section("Add Customer") {
                     TextField("Customer Name", text: $newCustomerName)
-                    TextField("Address", text: $newCustomerAddress, axis: .vertical)
+                    TextField("Billing / Default Address", text: $newCustomerAddress, axis: .vertical)
                         .lineLimit(2...3)
                     TextField("Email", text: $newCustomerEmail)
                         .keyboardType(.emailAddress)
@@ -282,6 +296,14 @@ struct CustomersView: View {
                             address: newCustomerAddress.nilIfBlank
                         )
                         modelContext.insert(customer)
+                        if let address = customer.address {
+                            modelContext.insert(CustomerServiceLocation(
+                                customer: customer,
+                                name: "Primary Service Location",
+                                address: address,
+                                isPrimary: true
+                            ))
+                        }
                         newCustomerName = ""
                         newCustomerEmail = ""
                         newCustomerPhone = ""
@@ -330,8 +352,14 @@ struct CustomersView: View {
                                             }
                                         }
                                         if let address = customer.address, !address.isEmpty {
-                                            Text(address)
+                                            Text("Billing: \(address)")
                                                 .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        let locationCount = CustomerServiceLocationPolicy.locations(for: customer.id, in: serviceLocations).count
+                                        if locationCount > 0 {
+                                            Text("\(locationCount) active service location\(locationCount == 1 ? "" : "s")")
+                                                .font(.caption2)
                                                 .foregroundColor(.secondary)
                                         }
                                         if let email = customer.email, !email.isEmpty {
@@ -1925,6 +1953,7 @@ private struct CustomerEditorView: View {
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
+    @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
 
     let customer: Customer
 
@@ -1974,6 +2003,14 @@ private struct CustomerEditorView: View {
     @State private var includeNewEquipmentWarranty = false
     @State private var newEquipmentWarranty = Date()
     @State private var selectedWorkspace: CustomerProfileWorkspace = .overview
+    @State private var editingServiceLocationID: UUID?
+    @State private var newServiceLocationName = ""
+    @State private var newServiceLocationAddress = ""
+    @State private var newServiceLocationContactName = ""
+    @State private var newServiceLocationContactPhone = ""
+    @State private var newServiceLocationAccessNotes = ""
+    @State private var newServiceLocationIsPrimary = false
+    @State private var selectedEquipmentServiceLocationID: UUID?
 
     private var customerServiceCalls: [ServiceCall] {
         serviceCalls.filter { $0.customer.id == customer.id }
@@ -2053,6 +2090,18 @@ private struct CustomerEditorView: View {
 
     private var customerEquipmentProfiles: [CustomerEquipment] {
         equipmentProfiles.filter { $0.customer?.id == customer.id }
+    }
+
+    private var customerServiceLocations: [CustomerServiceLocation] {
+        CustomerServiceLocationPolicy.locations(
+            for: customer.id,
+            in: serviceLocations,
+            includeInactive: true
+        )
+    }
+
+    private var activeCustomerServiceLocations: [CustomerServiceLocation] {
+        customerServiceLocations.filter(\.isActive)
     }
 
     private var customerCommunicationsForCustomer: [CustomerCommunication] {
@@ -2262,7 +2311,7 @@ private struct CustomerEditorView: View {
 
                 TextField("Customer Name", text: $name)
                     .disabled(!canEditCustomerRecords)
-                TextField("Address", text: $address, axis: .vertical)
+                TextField("Billing / Default Address", text: $address, axis: .vertical)
                     .lineLimit(2...3)
                     .disabled(!canEditCustomerRecords)
                 TextField("Email", text: $email)
@@ -2355,6 +2404,104 @@ private struct CustomerEditorView: View {
                 }
 
                 if selectedWorkspace == .systems {
+                Section("Service Locations") {
+                    Text("Billing stays on the customer record for QuickBooks. Locations identify the physical properties where GunnAire performs work.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if customerServiceLocations.isEmpty {
+                        Text("No reusable service locations saved. Existing jobs still retain their address snapshots.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(customerServiceLocations) { location in
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack {
+                                    Text(location.displayName)
+                                        .font(.headline)
+                                    if location.isPrimary {
+                                        Label("Primary", systemImage: "star.fill")
+                                            .font(.caption2)
+                                            .foregroundStyle(Color.brandGold)
+                                    }
+                                    Spacer()
+                                    Text(location.isActive ? "Active" : "Inactive")
+                                        .font(.caption)
+                                        .foregroundStyle(location.isActive ? .green : .secondary)
+                                }
+                                Text(location.address)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if let contactSummary = location.contactSummary {
+                                    Text("Site contact: \(contactSummary)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if location.accessNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                                    Label("Access instructions on file", systemImage: "key")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                let jobCount = customerServiceCalls.filter { $0.serviceLocationID == location.id }.count
+                                let equipmentCount = customerEquipmentProfiles.filter { $0.serviceLocationID == location.id }.count
+                                Text("\(jobCount) job\(jobCount == 1 ? "" : "s") • \(equipmentCount) system\(equipmentCount == 1 ? "" : "s")")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+
+                                if canEditCustomerRecords {
+                                    HStack {
+                                        Button("Edit") { beginEditingServiceLocation(location) }
+                                            .buttonStyle(.bordered)
+                                            .accessibilityIdentifier("EditServiceLocation-\(location.id.uuidString)")
+                                        if !location.isPrimary {
+                                            Button("Make Primary") {
+                                                CustomerServiceLocationPolicy.setPrimary(location, among: customerServiceLocations)
+                                                try? modelContext.save()
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                        Button(location.isActive ? "Deactivate" : "Reactivate") {
+                                            setServiceLocation(location, active: !location.isActive)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 3)
+                        }
+                    }
+
+                    if canEditCustomerRecords {
+                        DisclosureGroup(editingServiceLocationID == nil ? "Add Service Location" : "Edit Service Location") {
+                            TextField("Location name", text: $newServiceLocationName)
+                            TextField("Service address", text: $newServiceLocationAddress, axis: .vertical)
+                                .lineLimit(2...3)
+                            TextField("Site contact name (optional)", text: $newServiceLocationContactName)
+                            TextField("Site contact phone (optional)", text: $newServiceLocationContactPhone)
+                                .keyboardType(.phonePad)
+                            TextField("Access instructions (optional)", text: $newServiceLocationAccessNotes, axis: .vertical)
+                                .lineLimit(2...4)
+                            Toggle("Primary service location", isOn: $newServiceLocationIsPrimary)
+                            HStack {
+                                Button("Use Billing Address") {
+                                    newServiceLocationAddress = address
+                                }
+                                .buttonStyle(.bordered)
+                                Button(editingServiceLocationID == nil ? "Add Location" : "Save Location") {
+                                    saveServiceLocation()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(Color.brandGold)
+                                .foregroundStyle(Color.primaryBlack)
+                                .disabled(newServiceLocationAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            }
+                            if editingServiceLocationID != nil {
+                                Button("Cancel Location Edit") { resetServiceLocationEditor() }
+                                    .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+                }
+
                 Section("Equipment Profiles") {
                     if customerEquipmentProfiles.isEmpty {
                         Text("No equipment profiles saved for this customer.")
@@ -2381,9 +2528,19 @@ private struct CustomerEditorView: View {
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                                 if let location = equipment.location, !location.isEmpty {
-                                    Text("Location: \(location)")
+                                    Text("Equipment area: \(location)")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                }
+                                if let serviceLocation = CustomerServiceLocationPolicy.location(
+                                    id: equipment.serviceLocationID,
+                                    customerID: customer.id,
+                                    in: serviceLocations,
+                                    includeInactive: true
+                                ) {
+                                    Text("Property: \(serviceLocation.displayName)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
                                 }
                                 if let warranty = equipment.warrantyExpiration {
                                     Text("Warranty: \(warranty.formatted(date: .abbreviated, time: .omitted))")
@@ -2431,6 +2588,7 @@ private struct CustomerEditorView: View {
                                         beginEditingEquipment(equipment)
                                     }
                                     .buttonStyle(.bordered)
+                                    .accessibilityIdentifier("EditEquipment-\(equipment.id.uuidString)")
 
                                     Button(equipment.isActive ? "Deactivate" : "Reactivate") {
                                         equipment.isActive.toggle()
@@ -2452,6 +2610,14 @@ private struct CustomerEditorView: View {
                     }
 
                     if canEditCustomerRecords {
+                    if !activeCustomerServiceLocations.isEmpty {
+                        Picker("Service Location", selection: $selectedEquipmentServiceLocationID) {
+                            Text("No linked location").tag(UUID?.none)
+                            ForEach(activeCustomerServiceLocations) { location in
+                                Text(location.displayName).tag(UUID?.some(location.id))
+                            }
+                        }
+                    }
                     Picker("Type", selection: $newEquipmentType) {
                         ForEach(HVACEquipmentType.allCases) { type in
                             Text(type.displayName).tag(type)
@@ -3479,6 +3645,88 @@ private struct CustomerEditorView: View {
         }
     }
 
+    private func saveServiceLocation() {
+        guard canEditCustomerRecords else { return }
+        let trimmedAddress = newServiceLocationAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAddress.isEmpty else { return }
+
+        if let duplicate = CustomerServiceLocationPolicy.matchingLocation(
+            address: trimmedAddress,
+            customerID: customer.id,
+            in: serviceLocations
+        ), duplicate.id != editingServiceLocationID {
+            customerActionMessage = "That service address is already saved as \(duplicate.displayName)."
+            return
+        }
+
+        let location: CustomerServiceLocation
+        if let editingServiceLocationID,
+           let existing = customerServiceLocations.first(where: { $0.id == editingServiceLocationID }) {
+            location = existing
+        } else {
+            location = CustomerServiceLocation(
+                customer: customer,
+                name: "",
+                address: trimmedAddress
+            )
+            modelContext.insert(location)
+        }
+
+        let trimmedName = newServiceLocationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        location.name = trimmedName.isEmpty
+            ? (customerServiceLocations.isEmpty ? "Primary Service Location" : "Service Location")
+            : trimmedName
+        location.address = trimmedAddress
+        location.contactName = newServiceLocationContactName.nilIfBlank
+        location.contactPhone = newServiceLocationContactPhone.nilIfBlank
+        location.accessNotes = newServiceLocationAccessNotes.nilIfBlank
+        location.isActive = true
+        location.updatedAt = Date()
+
+        if newServiceLocationIsPrimary || customerServiceLocations.filter({ $0.id != location.id && $0.isActive }).isEmpty {
+            CustomerServiceLocationPolicy.setPrimary(location, among: customerServiceLocations + [location])
+        }
+        try? modelContext.save()
+        customerActionMessage = "Saved service location \(location.displayName)."
+        resetServiceLocationEditor()
+    }
+
+    private func beginEditingServiceLocation(_ location: CustomerServiceLocation) {
+        editingServiceLocationID = location.id
+        newServiceLocationName = location.name
+        newServiceLocationAddress = location.address
+        newServiceLocationContactName = location.contactName ?? ""
+        newServiceLocationContactPhone = location.contactPhone ?? ""
+        newServiceLocationAccessNotes = location.accessNotes ?? ""
+        newServiceLocationIsPrimary = location.isPrimary
+        customerActionMessage = "Editing \(location.displayName)."
+    }
+
+    private func resetServiceLocationEditor() {
+        editingServiceLocationID = nil
+        newServiceLocationName = ""
+        newServiceLocationAddress = ""
+        newServiceLocationContactName = ""
+        newServiceLocationContactPhone = ""
+        newServiceLocationAccessNotes = ""
+        newServiceLocationIsPrimary = false
+    }
+
+    private func setServiceLocation(_ location: CustomerServiceLocation, active: Bool) {
+        guard canEditCustomerRecords else { return }
+        location.isActive = active
+        location.updatedAt = Date()
+        if !active, location.isPrimary,
+           let replacement = customerServiceLocations.first(where: { $0.id != location.id && $0.isActive }) {
+            CustomerServiceLocationPolicy.setPrimary(replacement, among: customerServiceLocations)
+        } else if active,
+                  customerServiceLocations.first(where: { $0.isActive && $0.isPrimary }) == nil {
+            CustomerServiceLocationPolicy.setPrimary(location, among: customerServiceLocations)
+        }
+        try? modelContext.save()
+        customerActionMessage = "\(active ? "Reactivated" : "Deactivated") \(location.displayName). Existing jobs keep their saved address."
+    }
+
     private func addCustomerEquipmentProfile() {
         guard canEditCustomerRecords else {
             customerActionMessage = "This account can review installed systems but cannot change them."
@@ -3496,6 +3744,7 @@ private struct CustomerEditorView: View {
         }
 
         equipment.updateFrom(
+            serviceLocationID: selectedEquipmentServiceLocationID,
             equipmentType: newEquipmentType,
             name: trimmedName,
             manufacturer: newEquipmentManufacturer.nilIfBlank,
@@ -3522,6 +3771,7 @@ private struct CustomerEditorView: View {
         newEquipmentModel = equipment.modelNumber ?? ""
         newEquipmentSerial = equipment.serialNumber ?? ""
         newEquipmentLocation = equipment.location ?? ""
+        selectedEquipmentServiceLocationID = equipment.serviceLocationID
         newEquipmentFilterSize = equipment.filterSize ?? ""
         newEquipmentNotes = equipment.notes ?? ""
         if let installDate = equipment.installDate {
@@ -3549,6 +3799,7 @@ private struct CustomerEditorView: View {
         newEquipmentModel = ""
         newEquipmentSerial = ""
         newEquipmentLocation = ""
+        selectedEquipmentServiceLocationID = nil
         newEquipmentFilterSize = ""
         newEquipmentNotes = ""
         includeNewEquipmentInstallDate = false
@@ -3601,6 +3852,7 @@ private struct CustomerEditorView: View {
             timeEntries: timeEntries,
             documentAttachments: documentAttachments,
             equipmentProfiles: equipmentProfiles,
+            serviceLocations: serviceLocations,
             customerCommunications: customerCommunications
         )
         try? modelContext.save()

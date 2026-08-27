@@ -122,7 +122,7 @@ enum GunnAireCloudKitSchemaBootstrap {
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
-    private static let completionKey = "GunnAireCloudKitSchemaBootstrapV6"
+    private static let completionKey = "GunnAireCloudKitSchemaBootstrapV7"
 
     static func runIfRequested(in modelContext: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -181,8 +181,22 @@ enum GunnAireCloudKitSchemaBootstrap {
             name: marker,
             unitPrice: 0
         )
+        let serviceLocation = CustomerServiceLocation(
+            customer: customer,
+            name: marker,
+            address: "1 Schema Bootstrap Way",
+            contactName: marker,
+            contactPhone: "000-000-0000",
+            accessNotes: marker,
+            isPrimary: true,
+            isActive: false,
+            createdAt: now,
+            updatedAt: now
+        )
         let serviceCall = ServiceCall(
             eventTitle: marker,
+            siteAddress: serviceLocation.address,
+            serviceLocationID: serviceLocation.id,
             type: .service,
             scheduledDate: now,
             assignedTechnician: technician,
@@ -223,6 +237,7 @@ enum GunnAireCloudKitSchemaBootstrap {
 
         let models: [any PersistentModel] = [
             item,
+            serviceLocation,
             serviceCall,
             correctiveFollowUp,
             customer,
@@ -254,7 +269,7 @@ enum GunnAireCloudKitSchemaBootstrap {
                 contentType: "application/octet-stream",
                 fileSizeBytes: 0
             ),
-            CustomerEquipment(customer: customer, name: marker),
+            CustomerEquipment(customer: customer, serviceLocationID: serviceLocation.id, name: marker),
             CustomerCommunication(
                 customer: customer,
                 serviceCallID: serviceCall.id,
@@ -285,6 +300,9 @@ enum GunnAireCloudKitSchemaBootstrap {
     }
 
     private static func cleanup(in modelContext: ModelContext) throws {
+        for value in try modelContext.fetch(FetchDescriptor<CustomerServiceLocation>()) where value.name == marker {
+            modelContext.delete(value)
+        }
         for value in try modelContext.fetch(FetchDescriptor<ServiceDocumentAttachment>()) where value.displayName == marker {
             modelContext.delete(value)
         }

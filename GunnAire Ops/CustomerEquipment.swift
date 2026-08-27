@@ -5,6 +5,8 @@ import SwiftData
 final class CustomerEquipment {
     var id: UUID = UUID()
     var customer: Customer?
+    /// Stable property identity; `location` remains the room/area within that property.
+    var serviceLocationID: UUID?
     var equipmentTypeRaw: String?
     var name: String = ""
     var manufacturer: String?
@@ -22,6 +24,7 @@ final class CustomerEquipment {
     init(
         id: UUID = UUID(),
         customer: Customer? = nil,
+        serviceLocationID: UUID? = nil,
         equipmentType: HVACEquipmentType? = nil,
         name: String,
         manufacturer: String? = nil,
@@ -38,6 +41,7 @@ final class CustomerEquipment {
     ) {
         self.id = id
         self.customer = customer
+        self.serviceLocationID = serviceLocationID
         self.equipmentTypeRaw = equipmentType?.rawValue
         self.name = name
         self.manufacturer = manufacturer
@@ -80,6 +84,7 @@ final class CustomerEquipment {
 
     func apply(to serviceCall: ServiceCall) {
         serviceCall.customerEquipmentID = id
+        serviceCall.serviceLocationID = serviceLocationID
         serviceCall.equipmentType = equipmentType
         serviceCall.equipmentName = name
         serviceCall.equipmentManufacturer = manufacturer
@@ -357,6 +362,7 @@ final class CustomerEquipment {
     }
 
     func updateFrom(
+        serviceLocationID: UUID? = nil,
         equipmentType: HVACEquipmentType,
         name: String,
         manufacturer: String?,
@@ -369,6 +375,7 @@ final class CustomerEquipment {
         notes: String?,
         isActive: Bool
     ) {
+        self.serviceLocationID = serviceLocationID
         self.equipmentType = equipmentType
         self.name = name
         self.manufacturer = manufacturer

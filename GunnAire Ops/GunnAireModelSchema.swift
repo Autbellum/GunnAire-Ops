@@ -6,6 +6,7 @@ enum GunnAireModelSchema {
             Item.self,
             ServiceCall.self,
             Customer.self,
+            CustomerServiceLocation.self,
             Technician.self,
             TechnicianAvailabilityBlock.self,
             RecurringMaintenanceContract.self,

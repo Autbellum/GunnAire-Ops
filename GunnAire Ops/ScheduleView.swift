@@ -16,6 +16,7 @@ struct ScheduleView: View {
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \ServiceRequest.createdAt, order: .forward) private var serviceRequests: [ServiceRequest]
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
+    @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
@@ -558,9 +559,11 @@ struct ScheduleView: View {
             modelContext.insert(customer)
         }
         let scheduledDate = request.preferredDate ?? defaultRequestScheduleDate()
+        let serviceLocation = serviceLocationForScheduledRequest(request, customer: customer)
         let call = ServiceCall(
             eventTitle: "\(request.requestedServiceType.displayName) request",
-            siteAddress: request.address,
+            siteAddress: serviceLocation?.address ?? request.address,
+            serviceLocationID: serviceLocation?.id,
             type: request.requestedServiceType,
             dispatchUrgency: request.urgency,
             scheduledDate: scheduledDate,
@@ -585,6 +588,29 @@ struct ScheduleView: View {
         } catch {
             requestMessage = "Could not schedule this request: \(error.localizedDescription)"
         }
+    }
+
+    private func serviceLocationForScheduledRequest(_ request: ServiceRequest, customer: Customer) -> CustomerServiceLocation? {
+        if let existing = CustomerServiceLocationPolicy.matchingLocation(
+            address: request.address,
+            customerID: customer.id,
+            in: serviceLocations
+        ) {
+            return existing
+        }
+        guard let address = request.address?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !address.isEmpty else {
+            return CustomerServiceLocationPolicy.preferredLocation(for: customer.id, in: serviceLocations)
+        }
+        let hasActiveLocation = CustomerServiceLocationPolicy.preferredLocation(for: customer.id, in: serviceLocations) != nil
+        let location = CustomerServiceLocation(
+            customer: customer,
+            name: hasActiveLocation ? "Service Location" : "Primary Service Location",
+            address: address,
+            isPrimary: !hasActiveLocation
+        )
+        modelContext.insert(location)
+        return location
     }
 
     private func importOnlineRequests() {
@@ -1656,10 +1682,19 @@ GunnAire
             return
         }
         let agreementDueDate = contract.nextDate
-        let serviceAddress = contract.customer.address?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let coveredEquipment = equipmentProfiles.first(where: {
+            $0.customer?.id == contract.customer.id && contract.coveredEquipmentIDs.contains($0.id)
+        })
+        let serviceLocation = CustomerServiceLocationPolicy.location(
+            id: coveredEquipment?.serviceLocationID,
+            customerID: contract.customer.id,
+            in: serviceLocations
+        ) ?? CustomerServiceLocationPolicy.preferredLocation(for: contract.customer.id, in: serviceLocations)
+        let serviceAddress = serviceLocation?.address ?? contract.customer.address?.trimmingCharacters(in: .whitespacesAndNewlines)
         let call = ServiceCall(
             googleEventManagedByApp: true,
             siteAddress: serviceAddress?.isEmpty == false ? serviceAddress : nil,
+            serviceLocationID: serviceLocation?.id,
             type: .maintenance,
             scheduledDate: contract.nextDate,
             duration: 90 * 60,
@@ -1670,9 +1705,7 @@ GunnAire
             maintenanceAgreementID: contract.id,
             maintenanceAgreementDueDate: agreementDueDate
         )
-        if let coveredEquipment = equipmentProfiles.first(where: {
-            $0.customer?.id == contract.customer.id && contract.coveredEquipmentIDs.contains($0.id)
-        }) {
+        if let coveredEquipment {
             call.customerEquipmentID = coveredEquipment.id
             call.equipmentName = coveredEquipment.name
             call.equipmentManufacturer = coveredEquipment.manufacturer

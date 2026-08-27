@@ -379,6 +379,7 @@ struct ServiceCallDetailView: View {
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \FieldFormTemplate.createdAt, order: .forward) private var fieldFormTemplates: [FieldFormTemplate]
     @Query(sort: \FieldFormResponse.completedAt, order: .reverse) private var fieldFormResponses: [FieldFormResponse]
+    @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
@@ -401,6 +402,15 @@ struct ServiceCallDetailView: View {
             return nil
         }
         return address
+    }
+
+    private var serviceLocation: CustomerServiceLocation? {
+        CustomerServiceLocationPolicy.location(
+            id: call.serviceLocationID,
+            customerID: call.customer.id,
+            in: serviceLocations,
+            includeInactive: true
+        )
     }
 
     private var callActivity: [ServiceCallActivity] {
@@ -1033,6 +1043,27 @@ GunnAire
                                 Label(resolvedAddress, systemImage: "map")
                             }
                             .buttonStyle(.plain)
+                        }
+                        if let serviceLocation {
+                            GroupBox("Service Location") {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(serviceLocation.displayName)
+                                        .font(.headline)
+                                    if let contact = serviceLocation.contactSummary {
+                                        Label(contact, systemImage: "person.crop.circle")
+                                    }
+                                    if let accessNotes = serviceLocation.accessNotes,
+                                       !accessNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Label(accessNotes, systemImage: "key")
+                                            .foregroundStyle(.orange)
+                                    }
+                                    Text("The address above is the job snapshot; these contact and access details come from the active property record.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .accessibilityIdentifier("ServiceCallServiceLocation")
                         }
                         if let notes = call.notes, !notes.isEmpty {
                             Text("Notes: \(notes)")
@@ -2171,6 +2202,7 @@ struct AddServiceCallView: View {
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query private var existingServiceCalls: [ServiceCall]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
+    @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("defaultJobDurationMinutes") private var defaultJobDurationMinutes = 90
     
@@ -2192,6 +2224,7 @@ struct AddServiceCallView: View {
     @State private var newCustomerEmail = ""
     @State private var newCustomerAddress = ""
     @State private var siteAddress: String = ""
+    @State private var selectedServiceLocationID: UUID?
     @State private var equipmentType: HVACEquipmentType = .splitSystemAC
     @State private var equipmentName = ""
     @State private var equipmentManufacturer = ""
@@ -2295,6 +2328,11 @@ struct AddServiceCallView: View {
         guard let customer else { return [] }
         return equipmentProfiles.filter { $0.customer?.id == customer.id && $0.isActive }
     }
+
+    private var selectedCustomerServiceLocations: [CustomerServiceLocation] {
+        guard let customer else { return [] }
+        return CustomerServiceLocationPolicy.locations(for: customer.id, in: serviceLocations)
+    }
     
     var body: some View {
         ZStack {
@@ -2367,9 +2405,7 @@ struct AddServiceCallView: View {
                                 Button {
                                     customer = matchedCustomer
                                     customerSearchText = matchedCustomer.name
-                                    if siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                        siteAddress = matchedCustomer.address ?? ""
-                                    }
+                                    applyPreferredServiceLocation(for: matchedCustomer)
                                 } label: {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(matchedCustomer.name)
@@ -2409,7 +2445,7 @@ struct AddServiceCallView: View {
                         TextField("Email", text: $newCustomerEmail)
                             .keyboardType(.emailAddress)
                             .textInputAutocapitalization(.never)
-                        TextField("Address", text: $newCustomerAddress, axis: .vertical)
+                        TextField("Billing / Default Address", text: $newCustomerAddress, axis: .vertical)
                             .lineLimit(2...3)
 
                         Button("Save New Customer") {
@@ -2421,11 +2457,19 @@ struct AddServiceCallView: View {
                                 address: newCustomerAddress.nilIfBlank
                             )
                             modelContext.insert(createdCustomer)
+                            if let address = createdCustomer.address {
+                                let primaryLocation = CustomerServiceLocation(
+                                    customer: createdCustomer,
+                                    name: "Primary Service Location",
+                                    address: address,
+                                    isPrimary: true
+                                )
+                                modelContext.insert(primaryLocation)
+                                selectedServiceLocationID = primaryLocation.id
+                            }
                             customer = createdCustomer
                             customerSearchText = createdCustomer.name
-                            if siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                siteAddress = createdCustomer.address ?? ""
-                            }
+                            siteAddress = createdCustomer.address ?? ""
                             creatingNewCustomer = false
                             resetNewCustomerFields()
                         }
@@ -2435,8 +2479,22 @@ struct AddServiceCallView: View {
                         .disabled(!canSaveNewCustomer)
                     }
                 }
-                TextField("Service Address", text: $siteAddress, axis: .vertical)
+                if !selectedCustomerServiceLocations.isEmpty {
+                    Picker("Service Location", selection: $selectedServiceLocationID) {
+                        Text("Custom / billing address").tag(UUID?.none)
+                        ForEach(selectedCustomerServiceLocations) { location in
+                            Text(location.displayName).tag(UUID?.some(location.id))
+                        }
+                    }
+                    .onChange(of: selectedServiceLocationID) { _, selectedID in
+                        applyServiceLocation(id: selectedID)
+                    }
+                }
+                TextField("Service Address Snapshot", text: $siteAddress, axis: .vertical)
                     .lineLimit(2...3)
+                Text("The job keeps this address snapshot even if the reusable location is edited later.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Section("Equipment") {
                     if !selectedCustomerEquipmentProfiles.isEmpty {
                         Picker("Customer Equipment", selection: $selectedCustomerEquipmentID) {
@@ -2621,8 +2679,12 @@ struct AddServiceCallView: View {
         }
         .onChange(of: customer) { _, newCustomer in
             selectedCustomerEquipmentID = nil
-            guard siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            siteAddress = newCustomer?.address ?? ""
+            selectedServiceLocationID = nil
+            if let newCustomer {
+                applyPreferredServiceLocation(for: newCustomer)
+            } else {
+                siteAddress = ""
+            }
         }
         .onChange(of: scheduledTime) { oldValue, newValue in
             guard usesArrivalWindow else { return }
@@ -2646,6 +2708,7 @@ struct AddServiceCallView: View {
             googleEventManagedByApp: true,
             eventTitle: eventTitle.nilIfBlank,
             siteAddress: resolvedSiteAddress,
+            serviceLocationID: selectedServiceLocationID,
             equipmentName: equipmentName.nilIfBlank,
             equipmentManufacturer: equipmentManufacturer.nilIfBlank,
             equipmentModel: equipmentModel.nilIfBlank,
@@ -2691,6 +2754,10 @@ struct AddServiceCallView: View {
     }
 
     private func applyEquipmentProfile(_ equipment: CustomerEquipment) {
+        if let serviceLocationID = equipment.serviceLocationID {
+            selectedServiceLocationID = serviceLocationID
+            applyServiceLocation(id: serviceLocationID)
+        }
         selectedCustomerEquipmentID = equipment.id
         equipmentType = equipment.equipmentType ?? .splitSystemAC
         equipmentName = equipment.name
@@ -2711,6 +2778,27 @@ struct AddServiceCallView: View {
             includeWarrantyExpiration = true
         } else {
             includeWarrantyExpiration = false
+        }
+    }
+
+    private func applyPreferredServiceLocation(for customer: Customer) {
+        let preferred = CustomerServiceLocationPolicy.preferredLocation(for: customer.id, in: serviceLocations)
+        selectedServiceLocationID = preferred?.id
+        siteAddress = preferred?.address ?? customer.address ?? ""
+    }
+
+    private func applyServiceLocation(id: UUID?) {
+        guard let customer else { return }
+        if let location = CustomerServiceLocationPolicy.location(id: id, customerID: customer.id, in: serviceLocations) {
+            siteAddress = location.address
+            if let selectedCustomerEquipmentID,
+               let equipment = selectedCustomerEquipmentProfiles.first(where: { $0.id == selectedCustomerEquipmentID }),
+               let equipmentLocationID = equipment.serviceLocationID,
+               equipmentLocationID != location.id {
+                self.selectedCustomerEquipmentID = nil
+            }
+        } else if id == nil {
+            siteAddress = customer.address ?? siteAddress
         }
     }
 
@@ -2783,6 +2871,7 @@ struct EditServiceCallView: View {
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query private var existingServiceCalls: [ServiceCall]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
+    @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     let call: ServiceCall
@@ -2801,6 +2890,7 @@ struct EditServiceCallView: View {
     @State private var status: JobStatus
     @State private var cancellationReason: String
     @State private var siteAddress: String
+    @State private var selectedServiceLocationID: UUID?
     @State private var equipmentType: HVACEquipmentType
     @State private var equipmentName: String
     @State private var equipmentManufacturer: String
@@ -2852,6 +2942,7 @@ struct EditServiceCallView: View {
         _status = State(initialValue: call.status)
         _cancellationReason = State(initialValue: call.cancellationReason ?? "")
         _siteAddress = State(initialValue: call.siteAddress ?? call.customer.address ?? "")
+        _selectedServiceLocationID = State(initialValue: call.serviceLocationID)
         _equipmentType = State(initialValue: call.equipmentType ?? .splitSystemAC)
         _equipmentName = State(initialValue: call.equipmentName ?? "")
         _equipmentManufacturer = State(initialValue: call.equipmentManufacturer ?? "")
@@ -2925,6 +3016,11 @@ struct EditServiceCallView: View {
     private var selectedCustomerEquipmentProfiles: [CustomerEquipment] {
         guard let customer else { return [] }
         return equipmentProfiles.filter { $0.customer?.id == customer.id && $0.isActive }
+    }
+
+    private var selectedCustomerServiceLocations: [CustomerServiceLocation] {
+        guard let customer else { return [] }
+        return CustomerServiceLocationPolicy.locations(for: customer.id, in: serviceLocations)
     }
 
     var body: some View {
@@ -3006,7 +3102,19 @@ struct EditServiceCallView: View {
                 Text(ServiceCalendarRouting.routingMessage(for: technician, selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars))
                     .font(.caption)
                     .foregroundColor(ServiceCalendarRouting.routingTint(for: technician, selectedCalendarID: selectedCalendarID, calendars: accessibleCalendars))
-                TextField("Service Address", text: $siteAddress, axis: .vertical)
+                if !selectedCustomerServiceLocations.isEmpty {
+                    Picker("Service Location", selection: $selectedServiceLocationID) {
+                        Text("Custom / billing address").tag(UUID?.none)
+                        ForEach(selectedCustomerServiceLocations) { location in
+                            Text(location.displayName).tag(UUID?.some(location.id))
+                        }
+                    }
+                    .disabled(isExternalGoogleCalendarEvent)
+                    .onChange(of: selectedServiceLocationID) { _, selectedID in
+                        applyServiceLocation(id: selectedID)
+                    }
+                }
+                TextField("Service Address Snapshot", text: $siteAddress, axis: .vertical)
                     .lineLimit(2...3)
                     .disabled(isExternalGoogleCalendarEvent)
                 Section("Equipment") {
@@ -3162,6 +3270,20 @@ struct EditServiceCallView: View {
             selectedCalendarID = ServiceCalendarRouting.preferredCalendarID(for: newTechnician, calendars: accessibleCalendars)
         }
         .onChange(of: customer) { _, _ in
+            if let customer {
+                let selectedLocation = CustomerServiceLocationPolicy.location(
+                    id: selectedServiceLocationID,
+                    customerID: customer.id,
+                    in: serviceLocations
+                )
+                if selectedLocation == nil {
+                    let preferred = CustomerServiceLocationPolicy.preferredLocation(for: customer.id, in: serviceLocations)
+                    selectedServiceLocationID = preferred?.id
+                    siteAddress = preferred?.address ?? customer.address ?? ""
+                }
+            } else {
+                selectedServiceLocationID = nil
+            }
             if let selectedCustomerEquipmentID,
                !selectedCustomerEquipmentProfiles.contains(where: { $0.id == selectedCustomerEquipmentID }) {
                 self.selectedCustomerEquipmentID = nil
@@ -3176,6 +3298,10 @@ struct EditServiceCallView: View {
     }
 
     private func applyEquipmentProfile(_ equipment: CustomerEquipment) {
+        if let serviceLocationID = equipment.serviceLocationID {
+            selectedServiceLocationID = serviceLocationID
+            applyServiceLocation(id: serviceLocationID)
+        }
         selectedCustomerEquipmentID = equipment.id
         equipmentType = equipment.equipmentType ?? .splitSystemAC
         equipmentName = equipment.name
@@ -3196,6 +3322,21 @@ struct EditServiceCallView: View {
             includeWarrantyExpiration = true
         } else {
             includeWarrantyExpiration = false
+        }
+    }
+
+    private func applyServiceLocation(id: UUID?) {
+        guard let customer else { return }
+        if let location = CustomerServiceLocationPolicy.location(id: id, customerID: customer.id, in: serviceLocations) {
+            siteAddress = location.address
+            if let selectedCustomerEquipmentID,
+               let equipment = selectedCustomerEquipmentProfiles.first(where: { $0.id == selectedCustomerEquipmentID }),
+               let equipmentLocationID = equipment.serviceLocationID,
+               equipmentLocationID != location.id {
+                self.selectedCustomerEquipmentID = nil
+            }
+        } else if id == nil {
+            siteAddress = customer.address ?? siteAddress
         }
     }
 
@@ -3230,6 +3371,7 @@ struct EditServiceCallView: View {
         }
         if !preserveExternalCalendarDetails {
             call.siteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? customer.address : siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+            call.serviceLocationID = selectedServiceLocationID
         }
         call.equipmentName = equipmentName.nilIfBlank
         call.equipmentManufacturer = equipmentManufacturer.nilIfBlank

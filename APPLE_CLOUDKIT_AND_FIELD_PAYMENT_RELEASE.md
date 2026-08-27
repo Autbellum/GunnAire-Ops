@@ -10,7 +10,7 @@ and schema status as of 2026-08-27:
    notifications capability enabled. The project declares the matching runtime mode.
 2. A signed Mac Catalyst development build succeeds using the regenerated team
    provisioning profile.
-3. All 21 SwiftData production record types were initialized in Development,
+3. The prior 21 SwiftData production record types were initialized in Development,
    reviewed in CloudKit Console, deployed, and verified in Production. On
    2026-08-26 the follow-up deployment also verified 36 `CD_ServiceCall`
    fields, including `CD_correctiveWorkReasonRaw`,
@@ -39,6 +39,15 @@ and schema status as of 2026-08-27:
    retained as `cloudkit-development.ckdb` and `cloudkit-production.ckdb`.
    The version-six bootstrap removes only its synthetic marker graph, and its
    pending-field seed has a focused regression test.
+   On 2026-08-27 the signed version-seven bootstrap initialized all 22 current
+   model types in Development. CloudKit Console verified the new 18-field
+   `CD_CustomerServiceLocation` type, the 13th
+   `CD_CustomerEquipment` field (`CD_serviceLocationID`), and the 39th and 40th
+   `CD_ServiceCall` fields (`CD_serviceLocationID` and `CD_siteAddress`). The
+   exact three-record-type deployment review is ready, but Production deployment
+   and the refreshed matching schema exports are still pending authenticated
+   Apple approval. The version-seven bootstrap and cleanup paths are covered by
+   focused persistence and deletion tests.
 4. Sign the company iPad and Mac into the same approved business iCloud account
    and sign every staff member into GunnAire Ops with their own business login.
 5. Verify offline edits made on each physical device merge after reconnection before

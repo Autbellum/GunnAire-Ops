@@ -3881,6 +3881,7 @@ GunnAire
         }
 
         equipment.updateFrom(
+            serviceLocationID: call.serviceLocationID,
             equipmentType: equipmentType,
             name: equipmentName,
             manufacturer: call.equipmentManufacturer,
@@ -6611,6 +6612,7 @@ enum ApprovedEstimateScheduling {
             googleEventManagedByApp: true,
             eventTitle: "\(workType.displayName) — \(estimate.customer.name)",
             siteAddress: sourceCall?.siteAddress ?? estimate.customer.address,
+            serviceLocationID: sourceCall?.serviceLocationID,
             equipmentName: sourceCall?.equipmentName,
             equipmentManufacturer: sourceCall?.equipmentManufacturer,
             equipmentModel: sourceCall?.equipmentModel,

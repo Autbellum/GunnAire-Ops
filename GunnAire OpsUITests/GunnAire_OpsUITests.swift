@@ -12,6 +12,7 @@ final class GunnAire_OpsUITests: XCTestCase {
     private let screenshotCustomerID = "A1000000-0000-4000-8000-000000000001"
     private let screenshotServiceCallID = "A1000000-0000-4000-8000-000000000002"
     private let screenshotInvoiceID = "A1000000-0000-4000-8000-000000000003"
+    private let screenshotEquipmentID = "A1000000-0000-4000-8000-000000000010"
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
@@ -748,6 +749,8 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         workspacePicker.buttons["Systems"].tap()
         XCTAssertTrue(workspacePicker.buttons["Systems"].isSelected)
+        XCTAssertTrue(app.staticTexts["Service Locations"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Primary Service Location"].exists)
         XCTAssertTrue(app.staticTexts["Equipment Profiles"].exists)
         XCTAssertTrue(app.staticTexts["Maintain installed equipment, warranty context, service trends, and maintenance agreements."].exists)
         let agreementVisitHistory = app.staticTexts["Visit history: 0 completed • 1 scheduled"]
@@ -1036,7 +1039,10 @@ final class GunnAire_OpsUITests: XCTestCase {
                 XCTAssertTrue(workspace.waitForExistence(timeout: 5))
                 workspace.buttons["Systems"].tap()
                 XCTAssertTrue(app.staticTexts["Equipment Profiles"].waitForExistence(timeout: 3))
-                let editEquipment = app.buttons["Edit"].firstMatch
+                let editEquipment = app.buttons["EditEquipment-\(screenshotEquipmentID)"]
+                for _ in 0..<5 where !editEquipment.exists || !editEquipment.isHittable {
+                    app.swipeUp()
+                }
                 XCTAssertTrue(editEquipment.waitForExistence(timeout: 3))
                 editEquipment.tap()
                 XCTAssertTrue(app.staticTexts["Heat Pump"].waitForExistence(timeout: 3))

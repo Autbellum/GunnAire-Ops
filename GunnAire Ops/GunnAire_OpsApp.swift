@@ -79,6 +79,7 @@ private enum GunnAireUITestFixtures {
     private static let inventoryReceiptID = UUID(uuidString: "A1000000-0000-4000-8000-000000000014")!
     private static let inventoryReservationID = UUID(uuidString: "A1000000-0000-4000-8000-000000000015")!
     private static let estimateID = UUID(uuidString: "A1000000-0000-4000-8000-000000000016")!
+    private static let serviceLocationID = UUID(uuidString: "A1000000-0000-4000-8000-000000000017")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -139,6 +140,10 @@ private enum GunnAireUITestFixtures {
         let equipmentProfiles = try context.fetch(FetchDescriptor<CustomerEquipment>())
         for equipment in equipmentProfiles where equipment.id == equipmentID {
             context.delete(equipment)
+        }
+        let serviceLocations = try context.fetch(FetchDescriptor<CustomerServiceLocation>())
+        for location in serviceLocations where location.id == serviceLocationID {
+            context.delete(location)
         }
         let customers = try context.fetch(FetchDescriptor<Customer>())
         for customer in customers where customer.id == customerID {
@@ -215,9 +220,20 @@ private enum GunnAireUITestFixtures {
             reorderPoint: 1,
             defaultInventoryLocation: "Truck – UI Test Technician"
         )
+        let serviceLocation = CustomerServiceLocation(
+            id: serviceLocationID,
+            customer: customer,
+            name: isScreenshotFixture ? "Main Office" : "Primary Service Location",
+            address: customer.address ?? "100 Test Air Way",
+            contactName: isScreenshotFixture ? "Morgan Reed" : nil,
+            contactPhone: customer.phone,
+            accessNotes: isScreenshotFixture ? "Check in at the front desk before entering mechanical areas." : nil,
+            isPrimary: true
+        )
         let equipment = CustomerEquipment(
             id: equipmentID,
             customer: customer,
+            serviceLocationID: serviceLocationID,
             equipmentType: .heatPump,
             name: isScreenshotFixture ? "Main Office Heat Pump" : "Test Heat Pump",
             manufacturer: isScreenshotFixture ? "Lennox" : "GunnAire Test",
@@ -240,6 +256,7 @@ private enum GunnAireUITestFixtures {
             googleEventManagedByApp: true,
             eventTitle: isScreenshotFixture ? "Cooling system diagnostic" : "Collectible HVAC service",
             siteAddress: customer.address,
+            serviceLocationID: serviceLocationID,
             equipmentName: isScreenshotFixture ? "Main Office Heat Pump" : "Test Heat Pump",
             equipmentManufacturer: isScreenshotFixture ? "Lennox" : "GunnAire Test",
             equipmentModel: isScreenshotFixture ? "EL18XPV-036" : "UIT-100",
@@ -301,6 +318,7 @@ private enum GunnAireUITestFixtures {
             googleEventManagedByApp: true,
             eventTitle: "Comfort Care maintenance",
             siteAddress: customer.address,
+            serviceLocationID: serviceLocationID,
             equipmentName: equipment.name,
             equipmentManufacturer: equipment.manufacturer,
             equipmentModel: equipment.modelNumber,
@@ -342,6 +360,7 @@ private enum GunnAireUITestFixtures {
             ))
         }
         context.insert(equipment)
+        context.insert(serviceLocation)
         context.insert(call)
         context.insert(invoice)
         if isPendingEstimateFixture || isAcceptedStandaloneEstimateFixture {

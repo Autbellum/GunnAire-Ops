@@ -1170,6 +1170,9 @@ final class ServiceCall {
     var googleEventManagedByApp: Bool = false
     var eventTitle: String?
     var siteAddress: String?
+    /// Stable link to a reusable customer property. `siteAddress` is the immutable
+    /// visit snapshot used offline and retained if the property is later edited.
+    var serviceLocationID: UUID?
     var equipmentName: String?
     var equipmentManufacturer: String?
     var equipmentModel: String?
@@ -1258,6 +1261,7 @@ final class ServiceCall {
         googleEventManagedByApp: Bool = false,
         eventTitle: String? = nil,
         siteAddress: String? = nil,
+        serviceLocationID: UUID? = nil,
         equipmentName: String? = nil,
         equipmentManufacturer: String? = nil,
         equipmentModel: String? = nil,
@@ -1328,6 +1332,7 @@ final class ServiceCall {
         self.googleEventManagedByApp = googleEventManagedByApp
         self.eventTitle = eventTitle
         self.siteAddress = siteAddress
+        self.serviceLocationID = serviceLocationID
         self.equipmentName = equipmentName
         self.equipmentManufacturer = equipmentManufacturer
         self.equipmentModel = equipmentModel
@@ -1483,6 +1488,7 @@ final class ServiceCall {
     /// Live diagnostic readings, service checklist results, and arrival state are
     /// intentionally excluded: each visit must capture its own field evidence.
     func inheritEquipmentProfile(from source: ServiceCall) {
+        serviceLocationID = source.serviceLocationID
         customerEquipmentID = source.customerEquipmentID
         equipmentName = source.equipmentName
         equipmentManufacturer = source.equipmentManufacturer
@@ -1528,6 +1534,7 @@ final class ServiceCall {
         let followUpCall = ServiceCall(
             googleEventManagedByApp: true,
             siteAddress: siteAddress ?? customer.address,
+            serviceLocationID: serviceLocationID,
             equipmentName: equipmentName,
             equipmentManufacturer: equipmentManufacturer,
             equipmentModel: equipmentModel,
