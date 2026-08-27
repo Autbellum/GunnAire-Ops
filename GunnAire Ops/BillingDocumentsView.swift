@@ -7476,9 +7476,8 @@ private struct RecordInvoicePaymentView: View {
             try? modelContext.save()
             return
         }
-        let signedInEmail = GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
         do {
-            _ = try await GunnAireBackendService.uploadPaymentCollection(payment, collectedBy: signedInEmail)
+            _ = try await GunnAireBackendService.uploadPaymentCollection(payment)
             payment.markSharedCompanyQueued()
         } catch {
             payment.markSharedCompanyQueueFailed(error.localizedDescription)

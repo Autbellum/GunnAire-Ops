@@ -83,6 +83,15 @@ final class Payment {
 }
 
 extension Payment {
+    /// Canonical trust-boundary value accepted by shared company storage.
+    /// The durable local method may include masked display details.
+    var backendCollectionMethod: String? {
+        let normalized = method.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["card", "ach", "cash", "check"].first { code in
+            normalized == code || normalized.hasPrefix("\(code) ")
+        }
+    }
+
     var processorDisplayName: String? {
         guard let processor, !processor.isEmpty else { return nil }
         switch processor {

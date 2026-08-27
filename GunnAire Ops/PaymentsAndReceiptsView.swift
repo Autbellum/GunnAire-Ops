@@ -727,6 +727,18 @@ struct PaymentsAndReceiptsView: View {
                         Text("\(assignment.status.capitalized) • Assigned to \(assignment.assignedTo)")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        if let collectedAmount = assignment.collectedAmount, collectedAmount > 0 {
+                            Text("Collected \(collectedAmount.formatted(.currency(code: "USD"))) of \(assignment.amount.formatted(.currency(code: "USD")))")
+                                .font(.caption2)
+                                .foregroundColor(assignment.status == "completed" ? .green : .secondary)
+                        }
+                        if assignment.status == "completed",
+                           let completedBy = assignment.completedBy,
+                           !completedBy.isEmpty {
+                            Text("Completed by \(completedBy)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
 
                         HStack {
                             if !isAdminUser, assignment.status == "pending" {
@@ -1082,9 +1094,16 @@ struct PaymentsAndReceiptsView: View {
         }
 
         do {
-            _ = try await GunnAireBackendService.uploadPaymentCollection(payment, collectedBy: signedInEmail)
+            let upload = try await GunnAireBackendService.uploadPaymentCollection(payment)
             payment.markSharedCompanyQueued()
-            backendUploadMessage = "Payment queued to shared company storage."
+            if let updates = upload.assignmentUpdates, !updates.isEmpty {
+                await refreshFieldPaymentAssignments()
+                backendUploadMessage = updates.contains(where: { $0.status == "completed" })
+                    ? "Payment queued and the field collection task was completed."
+                    : "Payment queued and the field collection task now shows the partial amount."
+            } else {
+                backendUploadMessage = "Payment queued to shared company storage."
+            }
         } catch {
             payment.markSharedCompanyQueueFailed(error.localizedDescription)
             backendUploadMessage = "Payment saved locally, but company queue upload failed: \(error.localizedDescription)"
@@ -1143,7 +1162,7 @@ struct PaymentsAndReceiptsView: View {
             announceNewFieldCollectionIfNeeded(from: assignments)
             fieldPaymentAssignmentMessage = fieldPaymentAssignments.isEmpty
                 ? "No active field collection tasks."
-                : "Loaded \(fieldPaymentAssignments.count) active field collection task\(fieldPaymentAssignments.count == 1 ? "" : "s")."
+                : "Loaded \(fieldPaymentAssignments.count) field collection assignment\(fieldPaymentAssignments.count == 1 ? "" : "s")."
         } catch {
             fieldPaymentAssignmentMessage = "Field collection task refresh failed: \(error.localizedDescription)"
         }

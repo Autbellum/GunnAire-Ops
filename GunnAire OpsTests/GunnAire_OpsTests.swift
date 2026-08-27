@@ -192,7 +192,7 @@ struct GunnAire_OpsTests {
     @Test func fieldPaymentHandoffOnlyAcceptsItsOwnActivityAndValidInvoiceID() {
         let activity = NSUserActivity(activityType: FieldPaymentHandoff.activityType)
         let invoiceID = UUID()
-        activity.userInfo = ["invoiceID": invoiceID.uuidString, "amount": 125.0]
+        activity.userInfo = ["invoiceID": invoiceID.uuidString]
         #expect(FieldPaymentHandoff.invoiceID(from: activity) == invoiceID)
         #expect(FieldPaymentHandoff.requirementsDetail.localizedCaseInsensitiveContains("same approved business Apple Account"))
         #expect(FieldPaymentHandoff.quickBooksTapToPayDetail.localizedCaseInsensitiveContains("QuickBooks Mobile"))
@@ -326,7 +326,11 @@ struct GunnAire_OpsTests {
             status: "pending",
             createdAt: "2026-08-26T15:00:00Z",
             acceptedAt: nil,
-            cancelledAt: nil
+            cancelledAt: nil,
+            collectedAmount: nil,
+            completedAt: nil,
+            completedBy: nil,
+            completionPaymentID: nil
         )
         let second = BackendFieldPaymentAssignmentRecord(
             id: "assignment-2",
@@ -338,7 +342,11 @@ struct GunnAire_OpsTests {
             status: "pending",
             createdAt: "2026-08-26T15:01:00Z",
             acceptedAt: nil,
-            cancelledAt: nil
+            cancelledAt: nil,
+            collectedAmount: nil,
+            completedAt: nil,
+            completedBy: nil,
+            completionPaymentID: nil
         )
 
         let initial: Set<String> = []
@@ -360,6 +368,25 @@ struct GunnAire_OpsTests {
 
         let paidPayment = Payment(invoice: invoice, amount: 300)
         #expect(PaymentCollectionGuard.validationMessage(invoice: invoice, amount: 1, payments: [paidPayment])?.contains("no open balance") == true)
+    }
+
+    @Test func sharedPaymentUploadUsesCanonicalMethodWithoutDiscardingMaskedDisplayDetail() {
+        let customer = Customer(name: "Canonical Payment Customer")
+        let invoice = Invoice(customer: customer, amount: 300)
+        let decoratedCard = Payment(
+            invoice: invoice,
+            amount: 125,
+            method: "card ••••1234 auth APPROVED-42",
+            cardLast4: "1234",
+            authorizationReference: "APPROVED-42"
+        )
+        let ach = Payment(invoice: invoice, amount: 75, method: "ACH")
+        let unsupported = Payment(invoice: invoice, amount: 50, method: "gift certificate")
+
+        #expect(decoratedCard.backendCollectionMethod == "card")
+        #expect(decoratedCard.method == "card ••••1234 auth APPROVED-42")
+        #expect(ach.backendCollectionMethod == "ach")
+        #expect(unsupported.backendCollectionMethod == nil)
     }
 
     @Test func technicianServiceAreaMatchingIsVisibleAndNeverBlocksDispatch() {

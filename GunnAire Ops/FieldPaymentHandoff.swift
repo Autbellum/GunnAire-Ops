@@ -29,8 +29,14 @@ final class FieldPaymentHandoff {
 
         let activity = NSUserActivity(activityType: Self.activityType)
         activity.title = "Collect field payment"
-        activity.userInfo = ["invoiceID": invoiceID.uuidString, "amount": amount]
+        // The destination resolves the current balance from its authorized local
+        // invoice. Do not place customer or financial values in Handoff metadata.
+        activity.userInfo = ["invoiceID": invoiceID.uuidString]
+        activity.requiredUserInfoKeys = ["invoiceID"]
         activity.isEligibleForHandoff = true
+        activity.isEligibleForSearch = false
+        activity.isEligibleForPublicIndexing = false
+        activity.isEligibleForPrediction = false
         activity.becomeCurrent()
         currentActivity?.resignCurrent()
         currentActivity = activity

@@ -81,10 +81,28 @@ sole accounting, authorization, or external-ID deduplication control.
 ## Field iPhone payment handoff
 
 The Payments workspace can hand an unpaid invoice from the iPad to the company
-iPhone with Apple Handoff. The handoff contains only an invoice identifier and
-amount; it never transfers card data, customer contact details, processor
+iPhone with Apple Handoff. The handoff contains only an invoice identifier; the
+receiving device resolves the current balance from its authorized local invoice.
+It never transfers an amount, card data, customer contact details, processor
 tokens, or QuickBooks credentials. The iPhone opens the existing payment flow,
-then applies the field user's role and assigned-job restrictions.
+then reapplies the field user's current role, invoice visibility, assigned-job,
+and unpaid-balance restrictions. Apple Handoff requires nearby devices signed
+into the same Apple Account. Staff using separate business accounts instead use
+the server-authorized field collection assignment path.
+
+The shared server permits only one active field collection assignment per
+invoice. It derives the collector from the authenticated principal instead of
+trusting a client-provided email, recomputes partial totals from idempotent
+payment records, and closes the assignment only when its target is met. A
+completed assignment retains its completion time, collector, and final payment
+ID and cannot be cancelled. Local display methods such as a masked card or
+authorization reference are reduced to the canonical `card`, `ach`, `cash`, or
+`check` code before crossing the server validation boundary.
+
+For the currently supported production card-present route, the field user opens
+the matching invoice in QuickBooks Mobile or GoPayment on a compatible iPhone.
+GunnAire Ops does not claim that Intuit provides an embedded custom-app Tap to
+Pay SDK.
 
 Live **Tap to Pay on iPhone** is intentionally not represented as available
 until all external prerequisites are complete:
@@ -97,7 +115,10 @@ until all external prerequisites are complete:
 4. Perform PSP sandbox and production certification, then test successful,
    declined, interrupted, duplicate, and accounting-retry cases.
 
-Apple documents that Tap to Pay on iPhone is iPhone-only and requires both an
-approved PSP and the entitlement; it is not available on iPadOS or macOS.
+Apple documents that a custom Tap to Pay integration requires a participating
+Level 3 certified PSP, the managed
+`com.apple.developer.proximity-reader.payment.acceptance` entitlement, updated
+App ID/provisioning, PSP-linked merchant terms, and a compatible iPhone (iPhone
+XS or later). It is not available as an iPadOS or macOS card reader.
 
 Primary references: [Apple Tap to Pay on iPhone](https://developer.apple.com/tap-to-pay/), [Apple entitlement setup](https://developer.apple.com/documentation/ProximityReader/setting-up-the-entitlement-for-tap-to-pay-on-iPhone), and [Apple payment-card reader integration](https://developer.apple.com/documentation/ProximityReader/adding-support-for-tap-to-pay-on-iphone-to-your-app).

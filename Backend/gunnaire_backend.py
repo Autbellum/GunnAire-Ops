@@ -26,7 +26,7 @@ from urllib.parse import unquote, urlparse
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.26.4"
+SERVICE_VERSION = "2026.08.27.1"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -539,10 +539,18 @@ def initialize_database() -> None:
                 created_at TEXT NOT NULL,
                 accepted_at TEXT,
                 cancelled_at TEXT,
-                cancelled_by TEXT
+                cancelled_by TEXT,
+                collected_amount REAL NOT NULL DEFAULT 0,
+                completed_at TEXT,
+                completed_by TEXT,
+                completion_payment_id TEXT
             )
             """
         )
+        ensure_column(connection, "field_payment_assignments", "collected_amount", "REAL NOT NULL DEFAULT 0")
+        ensure_column(connection, "field_payment_assignments", "completed_at", "TEXT")
+        ensure_column(connection, "field_payment_assignments", "completed_by", "TEXT")
+        ensure_column(connection, "field_payment_assignments", "completion_payment_id", "TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -680,7 +688,80 @@ def field_payment_assignment_record(row: sqlite3.Row) -> dict[str, object]:
         "createdAt": row["created_at"],
         "acceptedAt": row["accepted_at"],
         "cancelledAt": row["cancelled_at"],
+        "collectedAmount": row["collected_amount"],
+        "completedAt": row["completed_at"],
+        "completedBy": row["completed_by"],
+        "completionPaymentID": row["completion_payment_id"],
     }
+
+
+def reconcile_field_payment_assignments(
+    connection: sqlite3.Connection,
+    *,
+    invoice_id: str | None,
+    actor_email: str,
+    actor_role: object,
+    payment_id: str,
+    occurred_at: str,
+) -> list[tuple[str, str]]:
+    """Advance only authorized active tasks from durable payment records.
+
+    A field technician may affect only their own assignment. Office collectors
+    may close the active task because the invoice was collected centrally. The
+    total is recomputed from idempotent payment rows, so retries never double
+    count a partial collection.
+    """
+    if not invoice_id or not actor_email:
+        return []
+
+    query = """
+        SELECT * FROM field_payment_assignments
+        WHERE invoice_id = ? AND status IN ('pending', 'accepted')
+    """
+    parameters: tuple[object, ...] = (invoice_id,)
+    if actor_role == "Field Technician":
+        query += " AND assigned_to = ?"
+        parameters += (actor_email,)
+
+    changes: list[tuple[str, str]] = []
+    for assignment in connection.execute(query, parameters).fetchall():
+        payment_query = """
+            SELECT COALESCE(SUM(amount), 0) AS collected_amount
+            FROM payment_collections
+            WHERE invoice_id = ? AND created_at >= ?
+        """
+        payment_parameters: tuple[object, ...] = (invoice_id, assignment["created_at"])
+        if actor_role == "Field Technician":
+            payment_query += " AND collected_by = ?"
+            payment_parameters += (actor_email,)
+        total = float(connection.execute(payment_query, payment_parameters).fetchone()["collected_amount"] or 0)
+        completed = total + 0.0001 >= float(assignment["amount"])
+        next_status = "completed" if completed else "accepted"
+        connection.execute(
+            """
+            UPDATE field_payment_assignments
+            SET status = ?, collected_amount = ?,
+                accepted_at = COALESCE(accepted_at, ?),
+                completed_at = CASE WHEN ? THEN COALESCE(completed_at, ?) ELSE completed_at END,
+                completed_by = CASE WHEN ? THEN COALESCE(completed_by, ?) ELSE completed_by END,
+                completion_payment_id = CASE WHEN ? THEN COALESCE(completion_payment_id, ?) ELSE completion_payment_id END
+            WHERE id = ?
+            """,
+            (
+                next_status,
+                total,
+                occurred_at,
+                completed,
+                occurred_at,
+                completed,
+                actor_email,
+                completed,
+                payment_id,
+                assignment["id"],
+            ),
+        )
+        changes.append((assignment["id"], next_status))
+    return changes
 
 
 def document_record(row: sqlite3.Row) -> dict[str, object]:
@@ -1730,12 +1811,18 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             existing = connection.execute(
                 """
                 SELECT * FROM field_payment_assignments
-                WHERE invoice_id = ? AND assigned_to = ? AND status IN ('pending', 'accepted')
+                WHERE invoice_id = ? AND status IN ('pending', 'accepted')
                 ORDER BY created_at DESC LIMIT 1
                 """,
-                (invoice_id, assigned_to),
+                (invoice_id,),
             ).fetchone()
             if existing is not None:
+                if existing["assigned_to"] != assigned_to:
+                    self.write_json(
+                        {"error": f"This invoice already has an active collection task assigned to {existing['assigned_to']}"},
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
                 self.write_json(
                     {"assignment": field_payment_assignment_record(existing), "idempotentReplay": True},
                     status=HTTPStatus.OK,
@@ -1778,6 +1865,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if row["status"] == "cancelled":
                 self.write_json({"error": "This collection assignment was cancelled"}, status=HTTPStatus.CONFLICT)
                 return
+            if row["status"] == "completed":
+                self.write_json({"error": "This collection assignment is already completed"}, status=HTTPStatus.CONFLICT)
+                return
             if row["status"] == "pending":
                 connection.execute(
                     "UPDATE field_payment_assignments SET status = 'accepted', accepted_at = ? WHERE id = ?",
@@ -1801,6 +1891,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             ).fetchone()
             if row is None:
                 self.write_json({"error": "Field collection assignment not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            if row["status"] == "completed":
+                self.write_json({"error": "Completed collection assignments cannot be cancelled"}, status=HTTPStatus.CONFLICT)
                 return
             if row["status"] != "cancelled":
                 connection.execute(
@@ -1856,7 +1949,13 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         authorization_reference = payload.get("authorizationReference") if isinstance(payload.get("authorizationReference"), str) else None
         processor = payload.get("processor") if isinstance(payload.get("processor"), str) else None
         notes = payload.get("notes") if isinstance(payload.get("notes"), str) else None
-        collected_by = payload.get("collectedBy") if isinstance(payload.get("collectedBy"), str) else None
+        principal = self.principal() or {}
+        collected_by = normalize_email(principal.get("email") if isinstance(principal.get("email"), str) else None)
+        collector_role = principal.get("role")
+        if not collected_by:
+            self.write_json({"error": "Authenticated collector identity is required"}, status=HTTPStatus.UNAUTHORIZED)
+            return
+        assignment_changes: list[tuple[str, str]] = []
         with db() as connection:
             existing = connection.execute(
                 "SELECT * FROM payment_collections WHERE payment_id = ?",
@@ -1877,12 +1976,24 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                         status=HTTPStatus.CONFLICT,
                     )
                     return
+                assignment_changes = reconcile_field_payment_assignments(
+                    connection,
+                    invoice_id=invoice_id,
+                    actor_email=collected_by,
+                    actor_role=collector_role,
+                    payment_id=payment_id,
+                    occurred_at=collected_at,
+                )
                 self.write_json(
                     {
                         "id": existing["id"],
                         "paymentID": existing["payment_id"],
                         "createdAt": existing["created_at"],
                         "idempotentReplay": True,
+                        "assignmentUpdates": [
+                            {"id": assignment_id, "status": status}
+                            for assignment_id, status in assignment_changes
+                        ],
                     },
                     status=HTTPStatus.OK,
                 )
@@ -1918,15 +2029,28 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 "SELECT id, payment_id, created_at FROM payment_collections WHERE payment_id = ?",
                 (payment_id,),
             ).fetchone()
+            assignment_changes = reconcile_field_payment_assignments(
+                connection,
+                invoice_id=invoice_id,
+                actor_email=collected_by,
+                actor_role=collector_role,
+                payment_id=payment_id,
+                occurred_at=collected_at,
+            )
 
-        principal = self.principal() or {}
-        record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "upsert", "payment", payment_id)
+        record_audit_event(collected_by, "upsert", "payment", payment_id)
+        for assignment_id, status in assignment_changes:
+            record_audit_event(collected_by, status, "field-payment", assignment_id)
 
         self.write_json(
             {
                 "id": row["id"],
                 "paymentID": row["payment_id"],
                 "createdAt": row["created_at"],
+                "assignmentUpdates": [
+                    {"id": assignment_id, "status": status}
+                    for assignment_id, status in assignment_changes
+                ],
             },
             status=HTTPStatus.CREATED,
         )

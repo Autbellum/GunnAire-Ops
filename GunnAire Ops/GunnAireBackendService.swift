@@ -90,6 +90,12 @@ struct BackendPaymentUploadResponse: Codable {
     let id: String
     let paymentID: String
     let createdAt: String?
+    let assignmentUpdates: [BackendFieldPaymentAssignmentUpdate]?
+}
+
+struct BackendFieldPaymentAssignmentUpdate: Codable {
+    let id: String
+    let status: String
 }
 
 struct BackendPaymentCollectionRecord: Codable, Identifiable {
@@ -124,6 +130,10 @@ struct BackendFieldPaymentAssignmentRecord: Codable, Identifiable {
     let createdAt: String
     let acceptedAt: String?
     let cancelledAt: String?
+    let collectedAmount: Double?
+    let completedAt: String?
+    let completedBy: String?
+    let completionPaymentID: String?
 
     var invoiceUUID: UUID? {
         UUID(uuidString: invoiceID.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -272,6 +282,7 @@ enum GunnAireBackendError: LocalizedError {
     case invalidResponse
     case server(statusCode: Int, message: String)
     case missingGoogleIdentityToken
+    case invalidPaymentMethod(String)
 
     var errorDescription: String? {
         switch self {
@@ -285,6 +296,8 @@ enum GunnAireBackendError: LocalizedError {
             return "The GunnAire backend returned HTTP \(statusCode): \(message)"
         case .missingGoogleIdentityToken:
             return "Sign in with Google again before accessing the shared business server."
+        case .invalidPaymentMethod(let method):
+            return "The payment method \(method) cannot be uploaded to the shared company queue."
         }
     }
 }
@@ -395,7 +408,6 @@ enum GunnAireBackendService {
         let authorizationReference: String?
         let processor: String?
         let notes: String?
-        let collectedBy: String?
         let collectedAt: String
     }
 
@@ -792,7 +804,10 @@ enum GunnAireBackendService {
     }
 
     @discardableResult
-    static func uploadPaymentCollection(_ payment: Payment, collectedBy: String?) async throws -> BackendPaymentUploadResponse {
+    static func uploadPaymentCollection(_ payment: Payment) async throws -> BackendPaymentUploadResponse {
+        guard let method = payment.backendCollectionMethod else {
+            throw GunnAireBackendError.invalidPaymentMethod(payment.method)
+        }
         let payload = PaymentCollectionPayload(
             paymentID: payment.id.uuidString,
             invoiceID: payment.invoice.id.uuidString,
@@ -800,12 +815,11 @@ enum GunnAireBackendService {
             customerName: payment.invoice.customer.name,
             customerEmail: payment.invoice.customer.email,
             amount: payment.amount,
-            method: payment.method,
+            method: method,
             cardLast4: payment.cardLast4,
             authorizationReference: payment.authorizationReference,
             processor: payment.processor,
             notes: payment.notes,
-            collectedBy: AppAccess.normalizedEmail(collectedBy).nilIfBlank,
             collectedAt: ISO8601DateFormatter().string(from: payment.date)
         )
         let body = try JSONEncoder().encode(payload)
