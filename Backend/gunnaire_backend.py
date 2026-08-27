@@ -26,7 +26,7 @@ from urllib.parse import unquote, urlparse
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.27.5"
+SERVICE_VERSION = "2026.08.27.6"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -122,6 +122,16 @@ def utc_now() -> str:
 
 def normalize_email(value: str | None) -> str:
     return (value or "").strip().lower()
+
+
+def normalize_text_recipient(value: str | None) -> str:
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return ""
+    digits = "".join(character for character in raw_value if character.isdigit())
+    if not 7 <= len(digits) <= 15:
+        return ""
+    return f"+{digits}" if raw_value.startswith("+") else digits
 
 
 def safe_filename(value: str) -> str:
@@ -2154,9 +2164,15 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         record_id = str(payload.get("id") or "").strip()
         customer_name = str(payload.get("customerName") or "").strip()
         customer_email = normalize_email(payload.get("customerEmail") if isinstance(payload.get("customerEmail"), str) else None)
-        recipient = normalize_email(payload.get("recipient") if isinstance(payload.get("recipient"), str) else None)
         subject = str(payload.get("subject") or "").strip()
         channel = str(payload.get("channel") or "email").strip().lower()
+        raw_recipient = payload.get("recipient") if isinstance(payload.get("recipient"), str) else None
+        if channel == "email":
+            recipient = normalize_email(raw_recipient)
+        elif channel == "text":
+            recipient = normalize_text_recipient(raw_recipient)
+        else:
+            recipient = (raw_recipient or "").strip()
         direction = str(payload.get("direction") or "outbound").strip().lower()
         delivery_status = str(payload.get("deliveryStatus") or "").strip().lower()
         workflow = str(payload.get("workflow") or "general").strip()
@@ -2179,7 +2195,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if not customer_name or len(customer_name) > 200 or not recipient or not subject or len(subject) > 500:
             self.write_json({"error": "Missing communication identity, customer, recipient, or subject"}, status=HTTPStatus.BAD_REQUEST)
             return
-        if channel != "email" or direction != "outbound" or delivery_status not in {"sent", "failed", "suppressed"}:
+        if channel not in {"email", "text"} or direction != "outbound" or delivery_status not in {"sent", "failed", "suppressed"}:
             self.write_json({"error": "Unsupported communication state"}, status=HTTPStatus.BAD_REQUEST)
             return
         if workflow not in SUPPORTED_COMMUNICATION_WORKFLOWS:
@@ -2257,9 +2273,13 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if existing is not None:
                 same_operation = (
                     existing["customer_name"] == customer_name
+                    and existing["channel"] == channel
+                    and existing["direction"] == direction
                     and existing["recipient"] == recipient
                     and existing["subject"] == subject
                     and existing["delivery_status"] == delivery_status
+                    and existing["workflow"] == workflow
+                    and existing["template_version"] == template_version
                 )
                 if not same_operation:
                     self.write_json(

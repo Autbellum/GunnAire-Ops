@@ -26,6 +26,79 @@ class FieldTechnicianCommunicationHandler(backend.GunnAireBackendHandler):
 
 
 class CustomerCommunicationTests(unittest.TestCase):
+    def test_field_technician_can_store_consent_aware_apple_messages_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.multiple(
+                backend,
+                DB_PATH=root / "gunnaire_backend.sqlite3",
+                STORAGE_ROOT=root / "storage",
+            ):
+                backend.initialize_database()
+                server = ThreadingHTTPServer(("127.0.0.1", 0), FieldTechnicianCommunicationHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                url = f"http://127.0.0.1:{server.server_port}/api/communications"
+                payload = {
+                    "id": str(uuid.uuid4()),
+                    "customerName": "Service Text Customer",
+                    "customerEmail": "customer@example.com",
+                    "serviceCallID": str(uuid.uuid4()),
+                    "channel": "text",
+                    "direction": "outbound",
+                    "recipient": "+1 (863) 555-0134",
+                    "subject": "On-my-way update",
+                    "deliveryStatus": "sent",
+                    "workflow": "technicianEnRoute",
+                    "templateVersion": "technicianEnRoute-text-v1",
+                    "consentSnapshot": {
+                        "allowsTransactionalEmail": True,
+                        "allowsServiceText": True,
+                        "allowsMarketing": False,
+                        "preferredContactMethod": "text",
+                        "consentUpdatedAt": "2026-08-27T14:00:00Z",
+                    },
+                    "providerStatusDetail": "Apple Messages composer reported sent.",
+                    "deliveredAt": "2026-08-27T14:05:00Z",
+                    "attachmentFileNames": [],
+                    "providerMessageID": None,
+                    "occurredAt": "2026-08-27T14:05:00Z",
+                }
+
+                try:
+                    request = urllib.request.Request(
+                        url,
+                        data=json.dumps(payload).encode("utf-8"),
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        created = json.loads(response.read().decode("utf-8"))
+                    self.assertEqual(response.status, 201)
+                    self.assertEqual(created["channel"], "text")
+                    self.assertEqual(created["recipient"], "+18635550134")
+                    self.assertEqual(created["templateVersion"], "technicianEnRoute-text-v1")
+                    self.assertTrue(created["consentSnapshot"]["allowsServiceText"])
+
+                    invalid_payload = {
+                        **payload,
+                        "id": str(uuid.uuid4()),
+                        "recipient": "555",
+                    }
+                    invalid_request = urllib.request.Request(
+                        url,
+                        data=json.dumps(invalid_payload).encode("utf-8"),
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with self.assertRaises(urllib.error.HTTPError) as invalid:
+                        urllib.request.urlopen(invalid_request, timeout=5)
+                    self.assertEqual(invalid.exception.code, 400)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+
     def test_field_technician_can_store_typed_immutable_delivery_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
