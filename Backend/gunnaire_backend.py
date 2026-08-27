@@ -26,7 +26,7 @@ from urllib.parse import unquote, urlparse
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.27.3"
+SERVICE_VERSION = "2026.08.27.4"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -508,6 +508,7 @@ def initialize_database() -> None:
                 service_call_id TEXT,
                 invoice_id TEXT,
                 estimate_id TEXT,
+                maintenance_contract_id TEXT,
                 customer_equipment_id TEXT,
                 equipment_name TEXT,
                 customer_name TEXT,
@@ -518,6 +519,7 @@ def initialize_database() -> None:
         )
         ensure_column(connection, "documents", "invoice_id", "TEXT")
         ensure_column(connection, "documents", "estimate_id", "TEXT")
+        ensure_column(connection, "documents", "maintenance_contract_id", "TEXT")
         ensure_column(connection, "documents", "customer_equipment_id", "TEXT")
         ensure_column(connection, "documents", "equipment_name", "TEXT")
         connection.execute(
@@ -821,10 +823,13 @@ def document_contains_financial_data(row: sqlite3.Row) -> bool:
     """
     financial_kinds = {
         "invoice", "estimate", "payment", "receipt", "bill", "financial",
-        "credit", "statement", "transaction",
+        "credit", "statement", "transaction", "maintenance_agreement",
     }
     kind = str(row["kind"] or "").strip().lower()
-    return bool(row["invoice_id"] or row["estimate_id"] or kind in financial_kinds)
+    return bool(
+        row["invoice_id"] or row["estimate_id"] or
+        row["maintenance_contract_id"] or kind in financial_kinds
+    )
 
 
 def communication_record(row: sqlite3.Row) -> dict[str, object]:
@@ -1748,6 +1753,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             ("serviceCallID", "service_call_id"),
             ("invoiceID", "invoice_id"),
             ("estimateID", "estimate_id"),
+            ("maintenanceContractID", "maintenance_contract_id"),
             ("customerEquipmentID", "customer_equipment_id"),
         ):
             value = payload.get(payload_key) if isinstance(payload.get(payload_key), str) else None
@@ -1758,10 +1764,17 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         service_call_id = references["service_call_id"]
         invoice_id = references["invoice_id"]
         estimate_id = references["estimate_id"]
+        maintenance_contract_id = references["maintenance_contract_id"]
         customer_equipment_id = references["customer_equipment_id"]
-        if (invoice_id or estimate_id or kind in {
+        if maintenance_contract_id is not None:
+            try:
+                maintenance_contract_id = str(uuid.UUID(maintenance_contract_id))
+            except ValueError:
+                self.write_json({"error": "maintenanceContractID must be a UUID"}, status=HTTPStatus.BAD_REQUEST)
+                return
+        if (invoice_id or estimate_id or maintenance_contract_id or kind in {
             "invoice", "estimate", "payment", "receipt", "bill", "financial",
-            "credit", "statement", "transaction",
+            "credit", "statement", "transaction", "maintenance_agreement",
         }) and not self.has_billing_document_access():
             self.write_json(
                 {"error": "Financial access is required to store billing documents"},
@@ -1790,8 +1803,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 """
                 INSERT INTO documents(
                     id, filename, content_type, kind, service_call_id, invoice_id, estimate_id,
-                    customer_equipment_id, equipment_name, customer_name, stored_path, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    maintenance_contract_id, customer_equipment_id, equipment_name, customer_name,
+                    stored_path, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document_id,
@@ -1801,6 +1815,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     service_call_id,
                     invoice_id,
                     estimate_id,
+                    maintenance_contract_id,
                     customer_equipment_id,
                     equipment_name,
                     customer_name,
