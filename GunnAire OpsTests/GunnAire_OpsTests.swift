@@ -11662,6 +11662,41 @@ struct GunnAire_OpsTests {
         #expect(restored.pricebookReviewedAt == Date(timeIntervalSinceReferenceDate: 80_000))
     }
 
+    @Test @MainActor func cloudKitDevelopmentBootstrapSeedsEveryPendingOptionalField() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+
+        try GunnAireCloudKitSchemaBootstrap.seedDevelopmentSchemaForTesting(in: container.mainContext)
+
+        let customer = try #require(container.mainContext.fetch(FetchDescriptor<Customer>()).first)
+        #expect(customer.storedPaymentMethodsJSON?.isEmpty == false)
+
+        let serviceCall = try #require(
+            container.mainContext.fetch(FetchDescriptor<ServiceCall>()).first(where: { $0.maintenanceAgreementID != nil })
+        )
+        #expect(serviceCall.maintenanceAgreementDueDate != nil)
+
+        let estimate = try #require(container.mainContext.fetch(FetchDescriptor<Estimate>()).first)
+        #expect(estimate.scheduledServiceCallID != nil)
+        #expect(estimate.customerApprovalMethodRaw?.isEmpty == false)
+        #expect(estimate.customerApprovalReference?.isEmpty == false)
+        #expect(estimate.customerApprovalRecordedByEmail?.isEmpty == false)
+        #expect(estimate.customerApprovalSignatureImageBase64?.isEmpty == false)
+
+        let technician = try #require(container.mainContext.fetch(FetchDescriptor<Technician>()).first)
+        #expect(technician.quickBooksTimeEntityKindRawValue?.isEmpty == false)
+        #expect(technician.quickBooksTimeEntityRef?.isEmpty == false)
+
+        let item = try #require(container.mainContext.fetch(FetchDescriptor<Item>()).first)
+        #expect(item.pricebookReviewStatusRawValue == PricebookReviewStatus.approved.rawValue)
+        #expect(item.pricebookCreatedByEmail?.isEmpty == false)
+        #expect(item.pricebookReviewedByEmail?.isEmpty == false)
+        #expect(item.pricebookReviewedAt != nil)
+    }
+
     @Test func approvedPricebookPublicationReconcilesUniqueQuickBooksMatchesAndRejectsAmbiguity() throws {
         let local = Item(
             name: "Dual Run Capacitor",

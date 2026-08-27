@@ -4,7 +4,7 @@
 
 The app uses the private CloudKit database container
 `iCloud.com.gunnaire.businesssuite` for its SwiftData store. Apple configuration
-and schema status as of 2026-08-26:
+and schema status as of 2026-08-27:
 
 1. The App ID `com.gunnaire.businesssuite` has the CloudKit container and Remote
    notifications capability enabled. The project declares the matching runtime mode.
@@ -18,7 +18,8 @@ and schema status as of 2026-08-26:
    `CD_scheduledFollowUpServiceCallID`, plus the 16-field `CD_Invoice` type
    containing `CD_quickBooksSyncStatus`. The temporary bootstrap records were
    then removed and the local development store was verified marker-free.
-   Fourteen later optional fields remain an explicit Production deployment gate:
+   On 2026-08-27 the version-six signed bootstrap initialized and Apple
+   deployed the following fourteen optional fields to Production:
    `CD_Customer.storedPaymentMethodsJSON`,
    `CD_ServiceCall.maintenanceAgreementID`,
    `CD_ServiceCall.maintenanceAgreementDueDate`, and the four
@@ -32,6 +33,12 @@ and schema status as of 2026-08-26:
    TimeActivity ownership, plus `CD_Item.pricebookReviewStatusRawValue`,
    `CD_Item.pricebookCreatedByEmail`, `CD_Item.pricebookReviewedByEmail`, and
    `CD_Item.pricebookReviewedAt` for the field-created item review trail.
+   CloudKit Console then verified the complete Production counts and exact
+   fields: Customer 14, Estimate 23, Item 20, ServiceCall 38, Technician 12,
+   and Invoice 16. Matching Development and Production schema exports are
+   retained as `cloudkit-development.ckdb` and `cloudkit-production.ckdb`.
+   The version-six bootstrap removes only its synthetic marker graph, and its
+   pending-field seed has a focused regression test.
 4. Sign the company iPad and Mac into the same approved business iCloud account
    and sign every staff member into GunnAire Ops with their own business login.
 5. Verify offline edits made on each physical device merge after reconnection before

@@ -122,7 +122,7 @@ enum GunnAireCloudKitSchemaBootstrap {
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
-    private static let completionKey = "GunnAireCloudKitSchemaBootstrapV5"
+    private static let completionKey = "GunnAireCloudKitSchemaBootstrapV6"
 
     static func runIfRequested(in modelContext: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -136,8 +136,36 @@ enum GunnAireCloudKitSchemaBootstrap {
     private static func initialize(in modelContext: ModelContext) throws {
         guard !UserDefaults.standard.bool(forKey: completionKey) else { return }
 
+        try seedDevelopmentSchema(in: modelContext)
+        UserDefaults.standard.set(true, forKey: completionKey)
+    }
+
+    /// Keeps the Debug-only CloudKit migration seed directly testable without
+    /// changing the process arguments or completion state used by the app.
+    static func seedDevelopmentSchemaForTesting(in modelContext: ModelContext) throws {
+        try seedDevelopmentSchema(in: modelContext)
+    }
+
+    private static func seedDevelopmentSchema(in modelContext: ModelContext) throws {
+        // Versioned bootstraps can be run repeatedly as the shared schema grows.
+        // Remove only prior marker records so one migration does not leave a
+        // second synthetic company graph in the Development database.
+        try cleanup(in: modelContext)
+
         let now = Date()
-        let customer = Customer(name: marker)
+        let customer = Customer(
+            name: marker,
+            storedPaymentMethods: [
+                StoredPaymentMethodReference(
+                    id: "SCHEMA-BOOTSTRAP-PAYMENT-METHOD",
+                    providerCustomerID: "SCHEMA-BOOTSTRAP-CUSTOMER",
+                    cardBrand: "Test",
+                    lastFour: "0000",
+                    active: false,
+                    updatedAt: now
+                )
+            ]
+        )
         let technician = Technician(
             name: marker,
             contactInfo: bootstrapEmail,
@@ -161,6 +189,8 @@ enum GunnAireCloudKitSchemaBootstrap {
             customer: customer,
             notes: marker,
             visitDisposition: .callback,
+            maintenanceAgreementID: UUID(),
+            maintenanceAgreementDueDate: now,
             correctiveWorkReason: .unresolvedConcern
         )
         let correctiveFollowUp = ServiceCall(
@@ -180,6 +210,13 @@ enum GunnAireCloudKitSchemaBootstrap {
             serviceCallID: serviceCall.id,
             scheduledServiceCallID: correctiveFollowUp.id,
             customer: customer,
+            status: "accepted",
+            customerApprovedByName: marker,
+            customerApprovedAt: now,
+            customerApprovalMethodRaw: EstimateApprovalMethod.inPersonSignature.rawValue,
+            customerApprovalReference: marker,
+            customerApprovalRecordedByEmail: bootstrapEmail,
+            customerApprovalSignatureImageBase64: Data(marker.utf8).base64EncodedString(),
             notes: marker
         )
         let template = FieldFormTemplate(title: marker, questions: [])
@@ -245,7 +282,6 @@ enum GunnAireCloudKitSchemaBootstrap {
             modelContext.insert(model)
         }
         try modelContext.save()
-        UserDefaults.standard.set(true, forKey: completionKey)
     }
 
     private static func cleanup(in modelContext: ModelContext) throws {
