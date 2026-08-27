@@ -37,6 +37,8 @@ struct ScheduleView: View {
     @State private var showingDispatchWeekBoard = false
     @State private var requestMessage: String?
     @State private var maintenanceMessage: String?
+    @State private var approvedWorkMessage: String?
+    @State private var selectedEstimateForScheduling: Estimate?
     @State private var isImportingOnlineRequests = false
 
     private var selectedDayCalls: [ServiceCall] {
@@ -94,7 +96,9 @@ struct ScheduleView: View {
         callsForSignedInUser
             .filter { call in
                 guard let estimate = estimate(for: call) else { return false }
-                return estimate.status == "accepted" && call.linkedInvoiceID == nil
+                return estimate.status == "accepted" &&
+                    call.linkedInvoiceID == nil &&
+                    ApprovedEstimateScheduling.existingWorkOrder(for: estimate, in: serviceCalls) == nil
             }
             .sorted { $0.scheduledDate > $1.scheduledDate }
     }
@@ -374,6 +378,20 @@ struct ScheduleView: View {
                 .sheet(isPresented: $showingAvailabilityBlocks) {
                     TechnicianAvailabilityView()
                         .tint(Color.brandGold)
+                }
+                .sheet(item: $selectedEstimateForScheduling) { estimate in
+                    ApprovedEstimateSchedulingSheet(
+                        estimate: estimate,
+                        sourceCall: sourceCall(for: estimate)
+                    ) { scheduledDate, duration, workType in
+                        createApprovedWorkOrder(
+                            for: estimate,
+                            scheduledDate: scheduledDate,
+                            duration: duration,
+                            workType: workType
+                        )
+                    }
+                    .tint(Color.brandGold)
                 }
                 .fullScreenCover(isPresented: $showingDispatchWeekBoard) {
                     DispatchWeekBoardView(
@@ -788,7 +806,7 @@ struct ScheduleView: View {
                 }
             }
 
-            if isAdminUser && !approvedEstimateCalls.isEmpty {
+            if canManageDispatch && !approvedEstimateCalls.isEmpty {
                 Divider()
                 Text("Approved Work")
                     .font(.subheadline.weight(.semibold))
@@ -812,11 +830,19 @@ struct ScheduleView: View {
                         }
 
                         Button("Schedule Approved Work") {
-                            scheduleApprovedWork(for: job)
+                            if let estimate = estimate(for: job) {
+                                presentApprovedWorkSchedule(for: estimate)
+                            }
                         }
                         .buttonStyle(.bordered)
                         .tint(Color.brandGold)
+                        .disabled(estimate(for: job)?.hasRecordedCustomerApproval != true)
                     }
+                }
+                if let approvedWorkMessage {
+                    Text(approvedWorkMessage)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
             }
 
@@ -1697,47 +1723,85 @@ GunnAire
         navigationPath.append(followUpCall)
     }
 
-    private func scheduleApprovedWork(for sourceCall: ServiceCall) {
-        let scheduledDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
-        let generatedNotes = [sourceCall.recommendedWorkSummary, sourceCall.notes]
-            .compactMap { value in
-                guard let value, !value.isEmpty else { return nil }
-                return value
-            }
-            .joined(separator: "\n\n")
+    private func sourceCall(for estimate: Estimate) -> ServiceCall? {
+        guard let sourceID = estimate.serviceCallID else { return nil }
+        return serviceCalls.first { $0.id == sourceID }
+    }
 
-        let approvedWorkCall = ServiceCall(
-            googleEventManagedByApp: true,
-            siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
-            equipmentName: sourceCall.equipmentName,
-            equipmentManufacturer: sourceCall.equipmentManufacturer,
-            equipmentModel: sourceCall.equipmentModel,
-            equipmentSerialNumber: sourceCall.equipmentSerialNumber,
-            equipmentLocation: sourceCall.equipmentLocation,
-            equipmentInstallDate: sourceCall.equipmentInstallDate,
-            equipmentWarrantyExpiration: sourceCall.equipmentWarrantyExpiration,
-            customerEquipmentID: sourceCall.customerEquipmentID,
-            type: sourceCall.type == .estimate ? .install : sourceCall.type,
-            scheduledDate: scheduledDate,
-            duration: sourceCall.duration,
-            assignedTechnician: sourceCall.assignedTechnician,
-            additionalTechnicianIDs: sourceCall.additionalTechnicianIDs,
-            customer: sourceCall.customer,
-            status: .scheduled,
-            notes: generatedNotes.isEmpty ? "Scheduled from approved estimate" : "Scheduled from approved estimate\n\n\(generatedNotes)",
-            findingsSummary: sourceCall.findingsSummary,
-            recommendedWorkSummary: sourceCall.recommendedWorkSummary,
-            followUpRequired: false
-        )
-        approvedWorkCall.inheritEquipmentProfile(from: sourceCall)
-        approvedWorkCall.dispatchUrgency = sourceCall.dispatchUrgency
-        modelContext.insert(approvedWorkCall)
-        sourceCall.followUpRequired = false
-        sourceCall.followUpAction = nil
-        sourceCall.followUpDueDate = nil
-        publishToGoogleCalendar(approvedWorkCall)
-        selectedDate = Calendar.current.startOfDay(for: approvedWorkCall.scheduledDate)
-        navigationPath.append(approvedWorkCall)
+    private func presentApprovedWorkSchedule(for estimate: Estimate) {
+        guard canManageDispatch else { return }
+        if let existing = ApprovedEstimateScheduling.existingWorkOrder(for: estimate, in: serviceCalls) {
+            selectedDate = Calendar.current.startOfDay(for: existing.scheduledDate)
+            navigationPath.append(existing)
+            return
+        }
+        guard estimate.hasRecordedCustomerApproval else {
+            approvedWorkMessage = "Record traceable customer approval before scheduling this estimate."
+            return
+        }
+        approvedWorkMessage = nil
+        selectedEstimateForScheduling = estimate
+    }
+
+    @discardableResult
+    private func createApprovedWorkOrder(
+        for estimate: Estimate,
+        scheduledDate: Date,
+        duration: TimeInterval,
+        workType: ServiceCallType
+    ) -> Bool {
+        guard canManageDispatch else { return false }
+        if let existing = ApprovedEstimateScheduling.existingWorkOrder(for: estimate, in: serviceCalls) {
+            selectedDate = Calendar.current.startOfDay(for: existing.scheduledDate)
+            navigationPath.append(existing)
+            return true
+        }
+        let sourceCall = sourceCall(for: estimate)
+        do {
+            let approvedWorkCall = try ApprovedEstimateScheduling.makeWorkOrder(
+                for: estimate,
+                sourceCall: sourceCall,
+                scheduledDate: scheduledDate,
+                duration: duration,
+                workType: workType
+            )
+            modelContext.insert(approvedWorkCall)
+            estimate.scheduledServiceCallID = approvedWorkCall.id
+            if estimate.serviceCallID == nil {
+                estimate.serviceCallID = approvedWorkCall.id
+            }
+            sourceCall?.followUpRequired = false
+            sourceCall?.followUpAction = nil
+            sourceCall?.followUpDueDate = nil
+            let actorEmail = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+            ServiceCallActivity.record(
+                for: approvedWorkCall,
+                action: "Approved estimate scheduled",
+                detail: "Created unassigned \(workType.displayName.lowercased()) work from approved estimate \(String(estimate.id.uuidString.prefix(8)).uppercased()) for \(estimate.amount.formatted(.currency(code: "USD"))).",
+                actorEmail: actorEmail,
+                in: modelContext
+            )
+            if let sourceCall, sourceCall.id != approvedWorkCall.id {
+                ServiceCallActivity.record(
+                    for: sourceCall,
+                    action: "Approved work scheduled",
+                    detail: "Created work order \(String(approvedWorkCall.id.uuidString.prefix(8)).uppercased()) for \(scheduledDate.formatted(date: .abbreviated, time: .shortened)).",
+                    actorEmail: actorEmail,
+                    in: modelContext
+                )
+            }
+            try modelContext.save()
+            selectedEstimateForScheduling = nil
+            approvedWorkMessage = nil
+            publishToGoogleCalendar(approvedWorkCall)
+            selectedDate = Calendar.current.startOfDay(for: approvedWorkCall.scheduledDate)
+            navigationPath.append(approvedWorkCall)
+            return true
+        } catch {
+            modelContext.rollback()
+            approvedWorkMessage = "Could not schedule approved work: \(error.localizedDescription)"
+            return false
+        }
     }
 
     private func publishToGoogleCalendar(_ call: ServiceCall) {

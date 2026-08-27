@@ -373,6 +373,54 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAcceptedStandaloneEstimateCreatesOneScheduledWorkOrderAndHandsOffToDispatch() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedAcceptedStandaloneEstimate"
+        ]
+        app.launch()
+
+        let estimates = app.staticTexts["Estimates"]
+        if !estimates.waitForExistence(timeout: 2) {
+            let sidebarButton = app.buttons["GunnAire Ops"]
+            XCTAssertTrue(sidebarButton.waitForExistence(timeout: 3))
+            sidebarButton.tap()
+        }
+        XCTAssertTrue(estimates.waitForExistence(timeout: 3))
+        estimates.tap()
+        XCTAssertTrue(app.navigationBars["Estimates"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Accepted Estimates"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Choose the work type and appointment time to create an unassigned work order."].exists)
+
+        let scheduleWork = app.buttons["Schedule Work"]
+        for _ in 0..<6 {
+            if scheduleWork.exists && scheduleWork.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(scheduleWork.waitForExistence(timeout: 3))
+        scheduleWork.tap()
+
+        XCTAssertTrue(app.navigationBars["Schedule Approved Work"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Approved Scope"].exists)
+        let unassignedGuidance = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH 'The work order starts unassigned'")
+        ).firstMatch
+        XCTAssertTrue(unassignedGuidance.exists)
+        let createWorkOrder = app.buttons["Create Work Order"]
+        XCTAssertTrue(createWorkOrder.isEnabled)
+        createWorkOrder.tap()
+
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Customer: UI Test Collectible Customer"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Technician: Unassigned"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testAssignedTechnicianAddsInvoiceItemAndUpdatesExistingInvoice() throws {
         let app = XCUIApplication()
         app.launchArguments = [

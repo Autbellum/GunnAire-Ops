@@ -122,7 +122,7 @@ enum GunnAireCloudKitSchemaBootstrap {
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
-    private static let completionKey = "GunnAireCloudKitSchemaBootstrapV4"
+    private static let completionKey = "GunnAireCloudKitSchemaBootstrapV5"
 
     static func runIfRequested(in modelContext: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -176,7 +176,12 @@ enum GunnAireCloudKitSchemaBootstrap {
         )
         serviceCall.scheduledFollowUpServiceCallID = correctiveFollowUp.id
         let invoice = Invoice(customer: customer, notes: marker)
-        let estimate = Estimate(customer: customer, notes: marker)
+        let estimate = Estimate(
+            serviceCallID: serviceCall.id,
+            scheduledServiceCallID: correctiveFollowUp.id,
+            customer: customer,
+            notes: marker
+        )
         let template = FieldFormTemplate(title: marker, questions: [])
 
         let models: [any PersistentModel] = [

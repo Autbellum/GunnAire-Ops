@@ -78,6 +78,7 @@ struct BillingDocumentsView: View {
     @State private var showingItemCreator = false
     @State private var selectedInvoiceForCloseout: Invoice?
     @State private var selectedEstimateForApproval: Estimate?
+    @State private var selectedEstimateForScheduling: Estimate?
     @State private var didResolveInitialCloseoutRequest = false
     @State private var generatedCustomerDocumentURL: URL?
     @State private var generatedCustomerDocumentRecipientID: UUID?
@@ -435,7 +436,11 @@ struct BillingDocumentsView: View {
     }
 
     private var acceptedEstimatesReadyToSchedule: [Estimate] {
-        displayedEstimates.filter { isCurrentProposal($0) && $0.status == "accepted" }
+        displayedEstimates.filter {
+            isCurrentProposal($0) &&
+            $0.status == "accepted" &&
+            scheduledApprovedWork(for: $0) == nil
+        }
     }
 
     private var collectibleInvoices: [Invoice] {
@@ -594,6 +599,10 @@ struct BillingDocumentsView: View {
 
     private var canApprovePricebookItems: Bool {
         AppAccess.canApprovePricebookItems(email: currentUserEmail, users: users)
+    }
+
+    private var canScheduleApprovedWork: Bool {
+        AppAccess.canManageDispatch(email: currentUserEmail, users: users)
     }
 
     private var canRecordJobMaterials: Bool {
@@ -1617,11 +1626,28 @@ GunnAire
                                     .buttonStyle(.bordered)
                                 }
 
-                                if estimate.status == "accepted", let call = activeServiceCall {
-                                    Button("Schedule Approved Work") {
-                                        scheduleApprovedWork(from: call)
+                                if estimate.status == "accepted" {
+                                    if let scheduledWork = scheduledApprovedWork(for: estimate) {
+                                        Button("Open Scheduled Work") {
+                                            GunnAireAppIntentRouter.storeScheduleCallRoute(scheduledWork.id)
+                                        }
+                                        .buttonStyle(.bordered)
+                                    } else if canScheduleApprovedWork {
+                                        Button("Schedule Approved Work") {
+                                            presentApprovedWorkSchedule(for: estimate)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(!estimate.hasRecordedCustomerApproval)
+                                    } else {
+                                        Text("Dispatch or an administrator must schedule approved work.")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
                                     }
-                                    .buttonStyle(.bordered)
+                                    if !estimate.hasRecordedCustomerApproval {
+                                        Text("Record traceable customer approval before scheduling work.")
+                                            .font(.caption2)
+                                            .foregroundStyle(.orange)
+                                    }
                                 }
 
                                 if let estimateFollowUpEmailURL {
@@ -1860,8 +1886,8 @@ GunnAire
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                                 Text(linkedCall == nil
-                                     ? "This accepted estimate is ready to become scheduled work."
-                                     : "This accepted estimate can move straight into scheduled work.")
+                                     ? "Choose the work type and appointment time to create an unassigned work order."
+                                     : "Choose the appointment time to create a separate approved-work order.")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
                                 HStack {
@@ -1871,13 +1897,15 @@ GunnAire
                                         }
                                         .buttonStyle(.bordered)
 
-                                        Button("Schedule Work") {
-                                            scheduleApprovedWork(from: linkedCall)
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(Color.brandGold)
-                                        .foregroundStyle(Color.primaryBlack)
                                     }
+
+                                    Button("Schedule Work") {
+                                        presentApprovedWorkSchedule(for: estimate)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(Color.brandGold)
+                                    .foregroundStyle(Color.primaryBlack)
+                                    .disabled(!canScheduleApprovedWork || !estimate.hasRecordedCustomerApproval)
 
                                     Button("Create Invoice") {
                                         createInvoiceFromEstimate(estimate)
@@ -1889,6 +1917,11 @@ GunnAire
                                     Text(message)
                                         .font(.caption2)
                                         .foregroundColor(.orange)
+                                }
+                                if !estimate.hasRecordedCustomerApproval {
+                                    Text("Record traceable customer approval before scheduling work.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
                                 }
                             }
                             .padding(.vertical, 2)
@@ -2624,6 +2657,20 @@ GunnAire
             .sheet(item: $selectedEstimateForApproval) { estimate in
                 EstimateApprovalSheet(estimate: estimate) { evidence in
                     recordCustomerApproval(evidence, for: estimate)
+                }
+                .tint(Color.brandGold)
+            }
+            .sheet(item: $selectedEstimateForScheduling) { estimate in
+                ApprovedEstimateSchedulingSheet(
+                    estimate: estimate,
+                    sourceCall: serviceCall(for: estimate)
+                ) { scheduledDate, duration, workType in
+                    createApprovedWorkOrder(
+                        for: estimate,
+                        scheduledDate: scheduledDate,
+                        duration: duration,
+                        workType: workType
+                    )
                 }
                 .tint(Color.brandGold)
             }
@@ -5630,45 +5677,97 @@ GunnAire
         actionMessage = "Scheduled follow-up visit for \(followUpCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))."
     }
 
-    private func scheduleApprovedWork(from sourceCall: ServiceCall) {
-        let scheduledDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
-        let generatedNotes = [sourceCall.recommendedWorkSummary, sourceCall.notes]
-            .compactMap { value in
-                guard let value, !value.isEmpty else { return nil }
-                return value
-            }
-            .joined(separator: "\n\n")
+    private func scheduledApprovedWork(for estimate: Estimate) -> ServiceCall? {
+        ApprovedEstimateScheduling.existingWorkOrder(for: estimate, in: serviceCalls)
+    }
 
-        let approvedWorkCall = ServiceCall(
-            googleEventManagedByApp: true,
-            siteAddress: sourceCall.siteAddress ?? sourceCall.customer.address,
-            equipmentName: sourceCall.equipmentName,
-            equipmentManufacturer: sourceCall.equipmentManufacturer,
-            equipmentModel: sourceCall.equipmentModel,
-            equipmentSerialNumber: sourceCall.equipmentSerialNumber,
-            equipmentLocation: sourceCall.equipmentLocation,
-            equipmentInstallDate: sourceCall.equipmentInstallDate,
-            equipmentWarrantyExpiration: sourceCall.equipmentWarrantyExpiration,
-            customerEquipmentID: sourceCall.customerEquipmentID,
-            type: sourceCall.type == .estimate ? .install : sourceCall.type,
-            scheduledDate: scheduledDate,
-            duration: sourceCall.duration,
-            assignedTechnician: sourceCall.assignedTechnician,
-            additionalTechnicianIDs: sourceCall.additionalTechnicianIDs,
-            customer: sourceCall.customer,
-            status: .scheduled,
-            notes: generatedNotes.isEmpty ? "Scheduled from approved estimate" : "Scheduled from approved estimate\n\n\(generatedNotes)",
-            findingsSummary: sourceCall.findingsSummary,
-            recommendedWorkSummary: sourceCall.recommendedWorkSummary,
-            followUpRequired: false
-        )
-        approvedWorkCall.inheritEquipmentProfile(from: sourceCall)
-        approvedWorkCall.dispatchUrgency = sourceCall.dispatchUrgency
-        modelContext.insert(approvedWorkCall)
-        sourceCall.followUpRequired = false
-        sourceCall.followUpAction = nil
-        sourceCall.followUpDueDate = nil
-        actionMessage = "Scheduled approved work for \(approvedWorkCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))."
+    private func presentApprovedWorkSchedule(for estimate: Estimate) {
+        guard canScheduleApprovedWork else {
+            actionMessage = "Only Dispatch or an administrator can create scheduled work from an approved estimate."
+            return
+        }
+        guard estimate.hasRecordedCustomerApproval else {
+            actionMessage = "Record traceable customer approval before scheduling this estimate."
+            return
+        }
+        if let existing = scheduledApprovedWork(for: estimate) {
+            actionMessage = "This approved estimate already has scheduled work. Opening that work order instead."
+            GunnAireAppIntentRouter.storeScheduleCallRoute(existing.id)
+            return
+        }
+        selectedEstimateForScheduling = estimate
+    }
+
+    @discardableResult
+    private func createApprovedWorkOrder(
+        for estimate: Estimate,
+        scheduledDate: Date,
+        duration: TimeInterval,
+        workType: ServiceCallType
+    ) -> Bool {
+        guard canScheduleApprovedWork else {
+            actionMessage = "Only Dispatch or an administrator can create scheduled work from an approved estimate."
+            return false
+        }
+        if let existing = scheduledApprovedWork(for: estimate) {
+            actionMessage = "This approved estimate already has scheduled work. Opening that work order instead."
+            GunnAireAppIntentRouter.storeScheduleCallRoute(existing.id)
+            return true
+        }
+
+        let sourceCall = serviceCall(for: estimate)
+        let priorServiceCallID = estimate.serviceCallID
+        let priorScheduledServiceCallID = estimate.scheduledServiceCallID
+        let priorFollowUp = sourceCall.map { ($0.followUpRequired, $0.followUpAction, $0.followUpDueDate) }
+        do {
+            let approvedWorkCall = try ApprovedEstimateScheduling.makeWorkOrder(
+                for: estimate,
+                sourceCall: sourceCall,
+                scheduledDate: scheduledDate,
+                duration: duration,
+                workType: workType
+            )
+            modelContext.insert(approvedWorkCall)
+            estimate.scheduledServiceCallID = approvedWorkCall.id
+            if estimate.serviceCallID == nil {
+                estimate.serviceCallID = approvedWorkCall.id
+            }
+            sourceCall?.followUpRequired = false
+            sourceCall?.followUpAction = nil
+            sourceCall?.followUpDueDate = nil
+            ServiceCallActivity.record(
+                for: approvedWorkCall,
+                action: "Approved estimate scheduled",
+                detail: "Created unassigned \(workType.displayName.lowercased()) work from approved estimate \(String(estimate.id.uuidString.prefix(8)).uppercased()) for \(estimate.amount.formatted(.currency(code: "USD"))).",
+                actorEmail: currentUserEmail,
+                in: modelContext
+            )
+            if let sourceCall, sourceCall.id != approvedWorkCall.id {
+                ServiceCallActivity.record(
+                    for: sourceCall,
+                    action: "Approved work scheduled",
+                    detail: "Created work order \(String(approvedWorkCall.id.uuidString.prefix(8)).uppercased()) for \(scheduledDate.formatted(date: .abbreviated, time: .shortened)).",
+                    actorEmail: currentUserEmail,
+                    in: modelContext
+                )
+            }
+            try modelContext.save()
+            selectedEstimateForScheduling = nil
+            actionMessage = "Approved work scheduled for \(scheduledDate.formatted(date: .abbreviated, time: .shortened)). Assign the crew from the Schedule workspace."
+            GunnAireAppIntentRouter.storeScheduleCallRoute(approvedWorkCall.id)
+            return true
+        } catch {
+            estimate.serviceCallID = priorServiceCallID
+            estimate.scheduledServiceCallID = priorScheduledServiceCallID
+            if let sourceCall, let priorFollowUp {
+                sourceCall.followUpRequired = priorFollowUp.0
+                sourceCall.followUpAction = priorFollowUp.1
+                sourceCall.followUpDueDate = priorFollowUp.2
+            }
+            modelContext.rollback()
+            actionMessage = "Could not schedule approved work: \(error.localizedDescription)"
+            return false
+        }
     }
 
     private func matchesCatalogFilter(_ item: Item) -> Bool {
@@ -6446,6 +6545,219 @@ private func workspaceMetricView(title: String, value: String) -> some View {
             .foregroundColor(.secondary)
         Text(value)
             .font(.headline)
+    }
+}
+
+enum ApprovedEstimateSchedulingError: LocalizedError, Equatable {
+    case approvalRequired
+    case appointmentMustBeFuture
+    case invalidDuration
+
+    var errorDescription: String? {
+        switch self {
+        case .approvalRequired:
+            return "Record traceable customer approval before scheduling this estimate."
+        case .appointmentMustBeFuture:
+            return "Choose an appointment time in the future."
+        case .invalidDuration:
+            return "Choose a work duration between 30 minutes and 12 hours."
+        }
+    }
+}
+
+enum ApprovedEstimateScheduling {
+    static let workTypes: [ServiceCallType] = [.service, .install, .maintenance, .siteVisit, .other]
+    static let durationOptions: [TimeInterval] = [3_600, 7_200, 14_400, 28_800]
+
+    static func existingWorkOrder(for estimate: Estimate, in serviceCalls: [ServiceCall]) -> ServiceCall? {
+        if let scheduledID = estimate.scheduledServiceCallID,
+           let linked = serviceCalls.first(where: { $0.id == scheduledID && $0.status != .cancelled }) {
+            return linked
+        }
+        return serviceCalls.first { call in
+            call.linkedEstimateID == estimate.id &&
+            call.id != estimate.serviceCallID &&
+            call.status != .cancelled
+        }
+    }
+
+    static func defaultScheduledDate(after date: Date = Date(), calendar: Calendar = .current) -> Date {
+        let nextDay = calendar.date(byAdding: .day, value: 1, to: date) ?? date.addingTimeInterval(86_400)
+        return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: nextDay) ?? nextDay
+    }
+
+    static func defaultWorkType(sourceCall: ServiceCall?) -> ServiceCallType {
+        guard let sourceCall else { return .install }
+        return sourceCall.type == .estimate ? .install : sourceCall.type
+    }
+
+    static func makeWorkOrder(
+        for estimate: Estimate,
+        sourceCall: ServiceCall?,
+        scheduledDate: Date,
+        duration: TimeInterval,
+        workType: ServiceCallType,
+        now: Date = Date()
+    ) throws -> ServiceCall {
+        guard estimate.hasRecordedCustomerApproval else {
+            throw ApprovedEstimateSchedulingError.approvalRequired
+        }
+        guard scheduledDate > now else {
+            throw ApprovedEstimateSchedulingError.appointmentMustBeFuture
+        }
+        guard duration >= 1_800, duration <= 43_200 else {
+            throw ApprovedEstimateSchedulingError.invalidDuration
+        }
+
+        let scope = estimate.lineItemSummary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let estimateNotes = estimate.notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceRecommendation = sourceCall?.recommendedWorkSummary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fieldRecommendation = sourceRecommendation.flatMap { value in
+            value.isEmpty ? nil : "Field recommendation:\n\(value)"
+        }
+        let notes = [
+            "Scheduled from approved estimate \(String(estimate.id.uuidString.prefix(8)).uppercased()).",
+            scope.isEmpty ? nil : "Approved scope:\n\(scope)",
+            estimateNotes?.isEmpty == false ? estimateNotes : nil,
+            fieldRecommendation
+        ]
+        .compactMap { $0 }
+        .joined(separator: "\n\n")
+
+        let workOrder = ServiceCall(
+            googleEventManagedByApp: true,
+            eventTitle: "\(workType.displayName) — \(estimate.customer.name)",
+            siteAddress: sourceCall?.siteAddress ?? estimate.customer.address,
+            equipmentName: sourceCall?.equipmentName,
+            equipmentManufacturer: sourceCall?.equipmentManufacturer,
+            equipmentModel: sourceCall?.equipmentModel,
+            equipmentSerialNumber: sourceCall?.equipmentSerialNumber,
+            equipmentLocation: sourceCall?.equipmentLocation,
+            equipmentInstallDate: sourceCall?.equipmentInstallDate,
+            equipmentWarrantyExpiration: sourceCall?.equipmentWarrantyExpiration,
+            customerEquipmentID: sourceCall?.customerEquipmentID,
+            type: workType,
+            scheduledDate: scheduledDate,
+            duration: duration,
+            customer: estimate.customer,
+            status: .scheduled,
+            notes: notes,
+            findingsSummary: sourceCall?.findingsSummary,
+            recommendedWorkSummary: scope.isEmpty ? sourceCall?.recommendedWorkSummary : scope,
+            followUpRequired: false,
+            linkedEstimateID: estimate.id
+        )
+        if let sourceCall {
+            workOrder.inheritEquipmentProfile(from: sourceCall)
+            workOrder.dispatchUrgency = sourceCall.dispatchUrgency
+        }
+        return workOrder
+    }
+}
+
+struct ApprovedEstimateSchedulingSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let estimate: Estimate
+    let sourceCall: ServiceCall?
+    let onSchedule: (Date, TimeInterval, ServiceCallType) -> Bool
+
+    @State private var scheduledDate: Date
+    @State private var duration: TimeInterval
+    @State private var workType: ServiceCallType
+    @State private var validationMessage: String?
+
+    init(
+        estimate: Estimate,
+        sourceCall: ServiceCall?,
+        onSchedule: @escaping (Date, TimeInterval, ServiceCallType) -> Bool
+    ) {
+        self.estimate = estimate
+        self.sourceCall = sourceCall
+        self.onSchedule = onSchedule
+        _scheduledDate = State(initialValue: ApprovedEstimateScheduling.defaultScheduledDate())
+        let sourceDuration = sourceCall?.duration
+        let initialDuration = sourceDuration.flatMap { duration in
+            ApprovedEstimateScheduling.durationOptions.contains(duration) ? duration : nil
+        } ?? 7_200
+        _duration = State(initialValue: initialDuration)
+        _workType = State(initialValue: ApprovedEstimateScheduling.defaultWorkType(sourceCall: sourceCall))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Approved Scope") {
+                    LabeledContent("Customer", value: estimate.customer.name)
+                    LabeledContent("Estimate", value: estimate.amount.formatted(.currency(code: "USD")))
+                    if let approvalDate = estimate.customerApprovedAt {
+                        LabeledContent("Approved", value: approvalDate.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    Text(estimate.lineItemSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Appointment") {
+                    DatePicker(
+                        "Start",
+                        selection: $scheduledDate,
+                        in: Date()...,
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                    Picker("Work type", selection: $workType) {
+                        ForEach(ApprovedEstimateScheduling.workTypes, id: \.rawValue) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
+                    Picker("Planned duration", selection: $duration) {
+                        ForEach(ApprovedEstimateScheduling.durationOptions, id: \.self) { seconds in
+                            Text(durationLabel(seconds)).tag(seconds)
+                        }
+                    }
+                }
+
+                Section {
+                    Label(
+                        "The work order starts unassigned so Dispatch can verify crew availability, qualifications, and travel before committing a technician.",
+                        systemImage: "person.2.badge.gearshape"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    if let validationMessage {
+                        Text(validationMessage)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+            .navigationTitle("Schedule Approved Work")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create Work Order") {
+                        guard scheduledDate > Date() else {
+                            validationMessage = ApprovedEstimateSchedulingError.appointmentMustBeFuture.localizedDescription
+                            return
+                        }
+                        if onSchedule(scheduledDate, duration, workType) {
+                            dismiss()
+                        } else {
+                            validationMessage = "The work order could not be saved. Review the appointment details and try again."
+                        }
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+
+    private func durationLabel(_ seconds: TimeInterval) -> String {
+        let hours = seconds / 3_600
+        return hours == 1 ? "1 hour" : "\(hours.formatted(.number.precision(.fractionLength(0...1)))) hours"
     }
 }
 

@@ -1025,6 +1025,8 @@ struct GunnAire_OpsTests {
             reference: "Reply received from 555-0100 at 10:32 AM.",
             recordedByEmail: "dispatch@gunnaire.com"
         ))
+        let scheduledServiceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000098")!
+        estimate.scheduledServiceCallID = scheduledServiceCallID
         try context.save()
 
         let persisted = try #require(try context.fetch(FetchDescriptor<Estimate>()).first)
@@ -1032,6 +1034,113 @@ struct GunnAire_OpsTests {
         #expect(persisted.customerApprovalReference == "Reply received from 555-0100 at 10:32 AM.")
         #expect(persisted.customerApprovalRecordedByEmail == "dispatch@gunnaire.com")
         #expect(persisted.hasRecordedCustomerApproval)
+        #expect(persisted.scheduledServiceCallID == scheduledServiceCallID)
+    }
+
+    @Test func approvedEstimateSchedulingCreatesAnUnassignedTraceableWorkOrder() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 90_000)
+        let appointment = now.addingTimeInterval(172_800)
+        let customer = Customer(name: "Scheduled Proposal Customer", address: "42 Comfort Lane")
+        let technician = Technician(name: "Original Estimator", contactInfo: "estimate@gunnaire.com")
+        let equipmentID = UUID(uuidString: "A1000000-0000-4000-8000-000000000099")!
+        let source = ServiceCall(
+            siteAddress: "42 Comfort Lane",
+            equipmentName: "Upstairs Heat Pump",
+            equipmentManufacturer: "Lennox",
+            equipmentModel: "EL18XPV",
+            equipmentSerialNumber: "APPROVED-ESTIMATE-1",
+            customerEquipmentID: equipmentID,
+            type: .estimate,
+            dispatchUrgency: .priority,
+            scheduledDate: now,
+            duration: 3_600,
+            assignedTechnician: technician,
+            customer: customer,
+            status: .completed,
+            recommendedWorkSummary: "Replace the upstairs heat pump."
+        )
+        let estimate = Estimate(
+            serviceCallID: source.id,
+            customer: customer,
+            lineItemSummary: "High-efficiency heat pump replacement",
+            amount: 12_400
+        )
+        #expect(estimate.recordCustomerApproval(
+            by: "Scheduled Proposal Customer",
+            method: .email,
+            reference: "Approved by reply to proposal 12400",
+            recordedByEmail: "dispatch@gunnaire.com",
+            at: now
+        ))
+
+        let workOrder = try ApprovedEstimateScheduling.makeWorkOrder(
+            for: estimate,
+            sourceCall: source,
+            scheduledDate: appointment,
+            duration: 28_800,
+            workType: .install,
+            now: now
+        )
+
+        #expect(workOrder.linkedEstimateID == estimate.id)
+        #expect(workOrder.customer.id == customer.id)
+        #expect(workOrder.type == .install)
+        #expect(workOrder.scheduledDate == appointment)
+        #expect(workOrder.duration == 28_800)
+        #expect(workOrder.assignedTechnician == nil)
+        #expect(workOrder.additionalTechnicianIDs.isEmpty)
+        #expect(workOrder.customerEquipmentID == equipmentID)
+        #expect(workOrder.equipmentSerialNumber == "APPROVED-ESTIMATE-1")
+        #expect(workOrder.dispatchUrgency == .priority)
+        #expect(workOrder.notes?.contains("High-efficiency heat pump replacement") == true)
+
+        estimate.scheduledServiceCallID = workOrder.id
+        #expect(ApprovedEstimateScheduling.existingWorkOrder(for: estimate, in: [source, workOrder])?.id == workOrder.id)
+        workOrder.status = .cancelled
+        #expect(ApprovedEstimateScheduling.existingWorkOrder(for: estimate, in: [source, workOrder]) == nil)
+    }
+
+    @Test func approvedEstimateSchedulingRejectsMissingApprovalAndUnsafeAppointmentValues() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 100_000)
+        let estimate = Estimate(customer: Customer(name: "Scheduling Guard Customer"), amount: 900)
+
+        #expect(throws: ApprovedEstimateSchedulingError.approvalRequired) {
+            try ApprovedEstimateScheduling.makeWorkOrder(
+                for: estimate,
+                sourceCall: nil,
+                scheduledDate: now.addingTimeInterval(3_600),
+                duration: 3_600,
+                workType: .service,
+                now: now
+            )
+        }
+
+        #expect(estimate.recordCustomerApproval(
+            by: "Scheduling Guard Customer",
+            method: .phoneVerbal,
+            reference: "Approved by phone",
+            at: now
+        ))
+        #expect(throws: ApprovedEstimateSchedulingError.appointmentMustBeFuture) {
+            try ApprovedEstimateScheduling.makeWorkOrder(
+                for: estimate,
+                sourceCall: nil,
+                scheduledDate: now,
+                duration: 3_600,
+                workType: .service,
+                now: now
+            )
+        }
+        #expect(throws: ApprovedEstimateSchedulingError.invalidDuration) {
+            try ApprovedEstimateScheduling.makeWorkOrder(
+                for: estimate,
+                sourceCall: nil,
+                scheduledDate: now.addingTimeInterval(3_600),
+                duration: 60,
+                workType: .service,
+                now: now
+            )
+        }
     }
 
     @Test func serviceRequestRequiresQualificationBeforeCreatingAJob() async throws {

@@ -392,6 +392,7 @@ struct ServiceCallDetailView: View {
     @State private var showingEditSheet = false
     @State private var showingCustomerPortalComposer = false
     @State private var selectedEstimateForApproval: Estimate?
+    @State private var selectedEstimateForScheduling: Estimate?
     @State private var selectedWorkspace: ServiceCallDetailWorkspace = .overview
     @State private var hasSelectedInitialWorkspace = false
     private var resolvedAddress: String? {
@@ -768,6 +769,10 @@ GunnAire
         return AppAccess.canViewBillingFinancialDetails(email: email, users: users)
     }
 
+    private var canScheduleApprovedWork: Bool {
+        AppAccess.canManageDispatch(email: currentActivityActor, users: users)
+    }
+
     private func canOpenRelatedCall(_ relatedCall: ServiceCall) -> Bool {
         let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
         return AppAccess.canAccessServiceCall(
@@ -858,44 +863,70 @@ GunnAire
         )
     }
 
-    private func scheduleApprovedWorkFromEstimate() {
-        let scheduledDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
-        let generatedNotes = [call.recommendedWorkSummary, call.notes]
-            .compactMap { value in
-                guard let value, !value.isEmpty else { return nil }
-                return value
-            }
-            .joined(separator: "\n\n")
+    private func scheduledApprovedWork(for estimate: Estimate) -> ServiceCall? {
+        ApprovedEstimateScheduling.existingWorkOrder(for: estimate, in: serviceCalls)
+    }
 
-        let approvedWorkCall = ServiceCall(
-            googleEventManagedByApp: true,
-            siteAddress: call.siteAddress ?? call.customer.address,
-            equipmentName: call.equipmentName,
-            equipmentManufacturer: call.equipmentManufacturer,
-            equipmentModel: call.equipmentModel,
-            equipmentSerialNumber: call.equipmentSerialNumber,
-            equipmentLocation: call.equipmentLocation,
-            equipmentInstallDate: call.equipmentInstallDate,
-            equipmentWarrantyExpiration: call.equipmentWarrantyExpiration,
-            customerEquipmentID: call.customerEquipmentID,
-            type: call.type == .estimate ? .install : call.type,
-            scheduledDate: scheduledDate,
-            duration: call.duration,
-            assignedTechnician: call.assignedTechnician,
-            additionalTechnicianIDs: call.additionalTechnicianIDs,
-            customer: call.customer,
-            status: .scheduled,
-            notes: generatedNotes.isEmpty ? "Scheduled from approved estimate" : "Scheduled from approved estimate\n\n\(generatedNotes)",
-            findingsSummary: call.findingsSummary,
-            recommendedWorkSummary: call.recommendedWorkSummary,
-            followUpRequired: false
-        )
-        approvedWorkCall.inheritEquipmentProfile(from: call)
-        approvedWorkCall.dispatchUrgency = call.dispatchUrgency
-        modelContext.insert(approvedWorkCall)
-        call.followUpRequired = false
-        call.followUpAction = nil
-        call.followUpDueDate = nil
+    private func presentApprovedWorkSchedule(for estimate: Estimate) {
+        guard canScheduleApprovedWork else { return }
+        if let existing = scheduledApprovedWork(for: estimate) {
+            GunnAireAppIntentRouter.storeScheduleCallRoute(existing.id)
+            return
+        }
+        guard estimate.hasRecordedCustomerApproval else {
+            selectedEstimateForApproval = estimate
+            return
+        }
+        selectedEstimateForScheduling = estimate
+    }
+
+    @discardableResult
+    private func createApprovedWorkOrder(
+        for estimate: Estimate,
+        scheduledDate: Date,
+        duration: TimeInterval,
+        workType: ServiceCallType
+    ) -> Bool {
+        guard canScheduleApprovedWork else { return false }
+        if let existing = scheduledApprovedWork(for: estimate) {
+            GunnAireAppIntentRouter.storeScheduleCallRoute(existing.id)
+            return true
+        }
+        do {
+            let approvedWorkCall = try ApprovedEstimateScheduling.makeWorkOrder(
+                for: estimate,
+                sourceCall: call,
+                scheduledDate: scheduledDate,
+                duration: duration,
+                workType: workType
+            )
+            modelContext.insert(approvedWorkCall)
+            estimate.scheduledServiceCallID = approvedWorkCall.id
+            call.followUpRequired = false
+            call.followUpAction = nil
+            call.followUpDueDate = nil
+            ServiceCallActivity.record(
+                for: approvedWorkCall,
+                action: "Approved estimate scheduled",
+                detail: "Created unassigned \(workType.displayName.lowercased()) work from approved estimate \(String(estimate.id.uuidString.prefix(8)).uppercased()) for \(estimate.amount.formatted(.currency(code: "USD"))).",
+                actorEmail: currentActivityActor,
+                in: modelContext
+            )
+            ServiceCallActivity.record(
+                for: call,
+                action: "Approved work scheduled",
+                detail: "Created work order \(String(approvedWorkCall.id.uuidString.prefix(8)).uppercased()) for \(scheduledDate.formatted(date: .abbreviated, time: .shortened)).",
+                actorEmail: currentActivityActor,
+                in: modelContext
+            )
+            try modelContext.save()
+            selectedEstimateForScheduling = nil
+            GunnAireAppIntentRouter.storeScheduleCallRoute(approvedWorkCall.id)
+            return true
+        } catch {
+            modelContext.rollback()
+            return false
+        }
     }
 
     var body: some View {
@@ -917,6 +948,8 @@ GunnAire
                         }
                         if let tech = call.assignedTechnician {
                             Text("Technician: \(tech.name)")
+                        } else {
+                            Text("Technician: Unassigned")
                         }
                         if !crewTechnicianNames.isEmpty {
                             Text("Crew: \(crewTechnicianNames.joined(separator: ", "))")
@@ -1469,11 +1502,24 @@ GunnAire
                                     }
 
                                     if linkedEstimate.status == "accepted" {
-                                        Button("Schedule Approved Work") {
-                                            scheduleApprovedWorkFromEstimate()
+                                        if let scheduledWork = scheduledApprovedWork(for: linkedEstimate) {
+                                            Button("Open Scheduled Work") {
+                                                GunnAireAppIntentRouter.storeScheduleCallRoute(scheduledWork.id)
+                                            }
+                                            .buttonStyle(.bordered)
+                                        } else if canScheduleApprovedWork {
+                                            Button("Schedule Approved Work") {
+                                                presentApprovedWorkSchedule(for: linkedEstimate)
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .disabled(!linkedEstimate.hasRecordedCustomerApproval)
                                         }
-                                        .buttonStyle(.bordered)
                                     }
+                                }
+                                if linkedEstimate.status == "accepted" && !canScheduleApprovedWork {
+                                    Text("Dispatch or an administrator must schedule approved work.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
                                 }
                             }
                             if let linkedInvoice {
@@ -1704,6 +1750,20 @@ GunnAire
         .sheet(item: $selectedEstimateForApproval) { estimate in
             EstimateApprovalSheet(estimate: estimate) { evidence in
                 recordCustomerApproval(evidence, for: estimate)
+            }
+            .tint(Color.brandGold)
+        }
+        .sheet(item: $selectedEstimateForScheduling) { estimate in
+            ApprovedEstimateSchedulingSheet(
+                estimate: estimate,
+                sourceCall: call
+            ) { scheduledDate, duration, workType in
+                createApprovedWorkOrder(
+                    for: estimate,
+                    scheduledDate: scheduledDate,
+                    duration: duration,
+                    workType: workType
+                )
             }
             .tint(Color.brandGold)
         }

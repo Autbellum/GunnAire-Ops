@@ -87,6 +87,7 @@ private enum GunnAireUITestFixtures {
         let isInventoryShortageFixture = arguments.contains("-uiTestSeedInventoryShortage")
         let isInventoryFixture = arguments.contains("-uiTestSeedInventoryJob") || isInventoryShortageFixture
         let isPendingEstimateFixture = arguments.contains("-uiTestSeedPendingEstimate")
+        let isAcceptedStandaloneEstimateFixture = arguments.contains("-uiTestSeedAcceptedStandaloneEstimate")
         let isPricebookReviewFixture = arguments.contains("-uiTestSeedPricebookReview")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
@@ -117,11 +118,18 @@ private enum GunnAireUITestFixtures {
             context.delete(estimate)
         }
         let calls = try context.fetch(FetchDescriptor<ServiceCall>())
-        for call in calls where call.id == serviceCallID || call.id == correctiveSourceCallID || call.id == correctiveFollowUpCallID || call.id == maintenanceServiceCallID {
+        let fixtureCallIDs = Set(calls.compactMap { call in
+            call.id == serviceCallID ||
+            call.id == correctiveSourceCallID ||
+            call.id == correctiveFollowUpCallID ||
+            call.id == maintenanceServiceCallID ||
+            call.linkedEstimateID == estimateID ? call.id : nil
+        })
+        for call in calls where fixtureCallIDs.contains(call.id) {
             context.delete(call)
         }
         let activities = try context.fetch(FetchDescriptor<ServiceCallActivity>())
-        for activity in activities where activity.serviceCallID == serviceCallID || activity.serviceCallID == correctiveSourceCallID || activity.serviceCallID == correctiveFollowUpCallID || activity.serviceCallID == maintenanceServiceCallID {
+        for activity in activities where fixtureCallIDs.contains(activity.serviceCallID) {
             context.delete(activity)
         }
         let maintenanceAgreements = try context.fetch(FetchDescriptor<RecurringMaintenanceContract>())
@@ -249,11 +257,16 @@ private enum GunnAireUITestFixtures {
         )
         let estimate = Estimate(
             id: estimateID,
-            serviceCallID: serviceCallID,
+            serviceCallID: isAcceptedStandaloneEstimateFixture ? nil : serviceCallID,
             customer: customer,
             lineItemSummary: "Replace failed dual run capacitor and verify operation",
             amount: 425,
-            status: "pending",
+            status: isAcceptedStandaloneEstimateFixture ? "accepted" : "pending",
+            customerApprovedByName: isAcceptedStandaloneEstimateFixture ? "UI Test Customer" : nil,
+            customerApprovedAt: isAcceptedStandaloneEstimateFixture ? Date() : nil,
+            customerApprovalMethodRaw: isAcceptedStandaloneEstimateFixture ? EstimateApprovalMethod.phoneVerbal.rawValue : nil,
+            customerApprovalReference: isAcceptedStandaloneEstimateFixture ? "Approved during UI test call" : nil,
+            customerApprovalRecordedByEmail: isAcceptedStandaloneEstimateFixture ? AppAccess.primaryAdminEmail : nil,
             notes: "Customer authorization required before repair."
         )
         let invoice = Invoice(
@@ -331,7 +344,7 @@ private enum GunnAireUITestFixtures {
         context.insert(equipment)
         context.insert(call)
         context.insert(invoice)
-        if isPendingEstimateFixture {
+        if isPendingEstimateFixture || isAcceptedStandaloneEstimateFixture {
             context.insert(estimate)
         }
         context.insert(maintenanceAgreement)

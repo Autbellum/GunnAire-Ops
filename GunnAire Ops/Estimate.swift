@@ -63,6 +63,10 @@ enum EstimateApprovalMethod: String, CaseIterable, Identifiable, Codable {
 final class Estimate {
     var id: UUID = UUID()
     var serviceCallID: UUID?
+    /// The approved proposal's operational work order. This is separate from
+    /// `serviceCallID`, which may point to the diagnostic/estimate visit that
+    /// produced the proposal.
+    var scheduledServiceCallID: UUID?
     /// The accepted or pending proposal this revision amends. The original remains immutable evidence.
     var parentEstimateID: UUID?
     var changeOrderReason: String?
@@ -90,6 +94,7 @@ final class Estimate {
     init(
         id: UUID = UUID(),
         serviceCallID: UUID? = nil,
+        scheduledServiceCallID: UUID? = nil,
         parentEstimateID: UUID? = nil,
         changeOrderReason: String? = nil,
         proposalGroupID: UUID? = nil,
@@ -112,6 +117,7 @@ final class Estimate {
     ) {
         self.id = id
         self.serviceCallID = serviceCallID
+        self.scheduledServiceCallID = scheduledServiceCallID
         self.parentEstimateID = parentEstimateID
         self.changeOrderReason = changeOrderReason
         self.proposalGroupID = proposalGroupID

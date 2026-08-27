@@ -18,13 +18,15 @@ and schema status as of 2026-08-26:
    `CD_scheduledFollowUpServiceCallID`, plus the 16-field `CD_Invoice` type
    containing `CD_quickBooksSyncStatus`. The temporary bootstrap records were
    then removed and the local development store was verified marker-free.
-   Thirteen later optional fields remain an explicit Production deployment gate:
+   Fourteen later optional fields remain an explicit Production deployment gate:
    `CD_Customer.storedPaymentMethodsJSON`,
    `CD_ServiceCall.maintenanceAgreementID`,
    `CD_ServiceCall.maintenanceAgreementDueDate`, and the four
    `CD_Estimate` approval-evidence fields (`customerApprovalMethodRaw`,
    `customerApprovalReference`, `customerApprovalRecordedByEmail`, and
    `customerApprovalSignatureImageBase64`), plus
+   `CD_Estimate.scheduledServiceCallID` for the accepted-estimate-to-work-order
+   handoff, plus
    `CD_Technician.quickBooksTimeEntityKindRawValue` and
    `CD_Technician.quickBooksTimeEntityRef` for explicit per-technician QBO
    TimeActivity ownership, plus `CD_Item.pricebookReviewStatusRawValue`,
