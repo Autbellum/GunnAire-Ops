@@ -34,6 +34,9 @@ struct GunnAire_OpsApp: App {
                 StartupFailureView(message: message)
             }
         }
+        .commands {
+            GunnAireNavigationCommands()
+        }
     }
 
     private static func buildStartupState() -> StartupState {
@@ -58,6 +61,47 @@ struct GunnAire_OpsApp: App {
     private enum StartupState {
         case ready(ModelContainer)
         case failed(String)
+    }
+}
+
+/// A deliberately short list of the destinations used repeatedly from an
+/// attached iPad keyboard or a Mac. Route authorization remains centralized in
+/// `ContentView`, so a shortcut never bypasses the signed-in business role.
+struct GunnAireNavigationCommandDefinition: Equatable, Identifiable {
+    let route: GunnAireAppRoute
+    let title: String
+    let systemImage: String
+    let key: Character
+
+    var id: String { route.rawValue }
+
+    static let primary: [Self] = [
+        .init(route: .commandCenter, title: "Command Center", systemImage: "rectangle.3.group", key: "1"),
+        .init(route: .schedule, title: "Schedule & Jobs", systemImage: "calendar", key: "2"),
+        .init(route: .customers, title: "Customers", systemImage: "person.3", key: "3"),
+        .init(route: .documentation, title: "Onsite Documentation", systemImage: "book", key: "4"),
+        .init(route: .invoices, title: "Invoices", systemImage: "doc.text", key: "5"),
+        .init(route: .payments, title: "Payments", systemImage: "creditcard", key: "6")
+    ]
+}
+
+struct GunnAireNavigationCommands: Commands {
+    var body: some Commands {
+        CommandMenu("Navigate") {
+            ForEach(GunnAireNavigationCommandDefinition.primary) { command in
+                Button(command.title, systemImage: command.systemImage) {
+                    GunnAireAppIntentRouter.store(command.route)
+                }
+                .keyboardShortcut(KeyEquivalent(command.key), modifiers: .command)
+            }
+
+            Divider()
+
+            Button("Business Reports", systemImage: "chart.bar.xaxis") {
+                GunnAireAppIntentRouter.store(.reports)
+            }
+            .keyboardShortcut("7", modifiers: .command)
+        }
     }
 }
 

@@ -13,6 +13,24 @@ import SwiftData
 @MainActor
 struct GunnAire_OpsTests {
 
+    @Test func primaryIPadMacNavigationCommandsStayFocusedUniqueAndRoleGuarded() {
+        let commands = GunnAireNavigationCommandDefinition.primary
+
+        #expect(commands.count == 6)
+        #expect(Set(commands.map(\.route.rawValue)).count == commands.count)
+        #expect(Set(commands.map(\.key)).count == commands.count)
+        #expect(commands.map(\.route) == [
+            .commandCenter,
+            .schedule,
+            .customers,
+            .documentation,
+            .invoices,
+            .payments
+        ])
+        #expect(GunnAireAppRoute.reports.sidebarItem == .reports)
+        #expect(GunnAireAppRoute.reports.shortTitle == "Reports")
+    }
+
     @Test func crossDeviceContinuityDisclosureDoesNotOverstateWhatIsShared() {
         #expect(OperationalDataContinuity.sharedCompanyRecordTypes.contains("uploaded customer files"))
         #expect(OperationalDataContinuity.deviceLocalRecordTypes.contains("jobs, dispatch assignments, and field forms"))

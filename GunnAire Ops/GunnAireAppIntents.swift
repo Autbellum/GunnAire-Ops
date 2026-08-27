@@ -12,6 +12,7 @@ enum GunnAireAppRoute: String, CaseIterable {
     case invoices = "invoices"
     case invoicesEstimates = "invoicesEstimates"
     case payments = "payments"
+    case reports = "reports"
     case receiptsBills = "receiptsBills"
     case documentation = "onsiteDocumentation"
     case sync = "syncIntegrations"
@@ -37,6 +38,8 @@ enum GunnAireAppRoute: String, CaseIterable {
             return .invoices
         case .payments:
             return .payments
+        case .reports:
+            return .reports
         case .receiptsBills:
             return .receiptsBills
         case .documentation:
@@ -68,6 +71,8 @@ enum GunnAireAppRoute: String, CaseIterable {
             return "Invoices"
         case .payments:
             return "Payments"
+        case .reports:
+            return "Reports"
         case .receiptsBills:
             return "Receipts"
         case .documentation:
@@ -99,6 +104,8 @@ enum GunnAireAppRoute: String, CaseIterable {
             return "doc.text"
         case .payments:
             return "creditcard"
+        case .reports:
+            return "chart.bar.xaxis"
         case .receiptsBills:
             return "tray.and.arrow.up"
         case .documentation:
@@ -156,7 +163,7 @@ enum GunnAireAppIntentRouter {
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailInvoiceID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailEstimateID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailWorkflow")
-        case .commandCenter, .timeClock, .estimates, .invoicesEstimates, .receiptsBills, .sync, .quickBooks:
+        case .commandCenter, .timeClock, .estimates, .invoicesEstimates, .reports, .receiptsBills, .sync, .quickBooks:
             break
         }
     }
@@ -708,6 +715,17 @@ struct OpenPaymentsIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         GunnAireAppIntentRouter.store(.payments)
         return .result(dialog: "Opening payments.")
+    }
+}
+
+struct OpenBusinessReportsIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Business Reports"
+    static let description = IntentDescription("Open GunnAire Ops to business reports.")
+    static let openAppWhenRun = true
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        GunnAireAppIntentRouter.store(.reports)
+        return .result(dialog: "Opening business reports.")
     }
 }
 

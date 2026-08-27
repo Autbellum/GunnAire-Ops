@@ -108,6 +108,21 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testIPadHardwareKeyboardShortcutOpensBusinessReports() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 5))
+        app.typeKey("7", modifierFlags: .command)
+        XCTAssertTrue(app.navigationBars["Business Reports"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testAdministratorCanMapTechnicianToAnExplicitQuickBooksTimeWorker() throws {
         let app = XCUIApplication()
         app.launchArguments = [
