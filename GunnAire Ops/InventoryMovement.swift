@@ -94,6 +94,32 @@ final class InventoryMovement {
     }
 }
 
+/// Job-facing material progress derived from the immutable invoice requirement
+/// and the durable stock ledger. Customer billing and physical stock remain
+/// separate records, but this summary makes any gap between them visible.
+struct InventoryJobMaterialStatus: Equatable {
+    let requiredQuantity: Double
+    let openReservedQuantity: Double
+    let consumedQuantity: Double
+    let returnedQuantity: Double
+
+    var netUsedQuantity: Double {
+        max(consumedQuantity - returnedQuantity, 0)
+    }
+
+    var remainingToRecord: Double {
+        max(requiredQuantity - netUsedQuantity, 0)
+    }
+
+    var overRecordedQuantity: Double {
+        max(netUsedQuantity - requiredQuantity, 0)
+    }
+
+    var isComplete: Bool {
+        remainingToRecord <= 0.0001 && overRecordedQuantity <= 0.0001
+    }
+}
+
 enum InventoryLedger {
     static func onHandQuantity(
         for itemID: UUID,
@@ -112,18 +138,22 @@ enum InventoryLedger {
         at location: String? = nil,
         movements: [InventoryMovement]
     ) -> Double {
-        movements
-            .filter { $0.itemID == itemID }
-            .reduce(0) { partial, movement in
-                switch movement.type {
-                case .reserve where matches(movement.sourceLocation, location):
-                    partial + movement.quantity
-                case .release where matches(movement.sourceLocation, location):
-                    partial - movement.quantity
-                default:
-                    partial
-                }
+        var openByJobAndLocation: [InventoryReservationKey: Double] = [:]
+        for movement in movements where movement.itemID == itemID && matches(movement.sourceLocation, location) {
+            let key = InventoryReservationKey(
+                serviceCallID: movement.serviceCallID,
+                location: normalizedLocation(movement.sourceLocation)
+            )
+            switch movement.type {
+            case .reserve:
+                openByJobAndLocation[key, default: 0] += movement.quantity
+            case .release, .consume:
+                openByJobAndLocation[key, default: 0] -= movement.quantity
+            case .receive, .transfer, .returnToStock, .adjust:
+                break
             }
+        }
+        return openByJobAndLocation.values.reduce(0) { $0 + max($1, 0) }
     }
 
     static func availableQuantity(for itemID: UUID, at location: String? = nil, movements: [InventoryMovement]) -> Double {
@@ -138,6 +168,38 @@ enum InventoryLedger {
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty })
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    static func jobMaterialStatus(
+        for itemID: UUID,
+        serviceCallID: UUID,
+        requiredQuantity: Double,
+        at location: String? = nil,
+        movements: [InventoryMovement]
+    ) -> InventoryJobMaterialStatus {
+        let matchingMovements = movements.filter {
+            $0.itemID == itemID && $0.serviceCallID == serviceCallID
+        }
+        let reserved = reservedQuantity(
+            for: itemID,
+            serviceCallID: serviceCallID,
+            at: location,
+            movements: matchingMovements
+        )
+        let consumed = matchingMovements.reduce(0) { partial, movement in
+            guard movement.type == .consume, matches(movement.sourceLocation, location) else { return partial }
+            return partial + movement.quantity
+        }
+        let returned = matchingMovements.reduce(0) { partial, movement in
+            guard movement.type == .returnToStock, matches(movement.destinationLocation, location) else { return partial }
+            return partial + movement.quantity
+        }
+        return InventoryJobMaterialStatus(
+            requiredQuantity: max(requiredQuantity, 0),
+            openReservedQuantity: reserved,
+            consumedQuantity: consumed,
+            returnedQuantity: returned
+        )
     }
 
     private static func onHandDelta(for movement: InventoryMovement, at location: String?) -> Double {
@@ -164,4 +226,39 @@ enum InventoryLedger {
         return movementLocation.trimmingCharacters(in: .whitespacesAndNewlines)
             .caseInsensitiveCompare(requestedLocation.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
     }
+
+    private static func reservedQuantity(
+        for itemID: UUID,
+        serviceCallID: UUID,
+        at location: String?,
+        movements: [InventoryMovement]
+    ) -> Double {
+        movements.reduce(0) { partial, movement in
+            guard movement.itemID == itemID,
+                  movement.serviceCallID == serviceCallID,
+                  matches(movement.sourceLocation, location) else { return partial }
+            switch movement.type {
+            case .reserve:
+                return partial + movement.quantity
+            case .release, .consume:
+                return partial - movement.quantity
+            case .receive, .transfer, .returnToStock, .adjust:
+                return partial
+            }
+        }
+        .clampedToNonnegative
+    }
+
+    private static func normalizedLocation(_ location: String?) -> String {
+        location?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    }
+}
+
+private struct InventoryReservationKey: Hashable {
+    let serviceCallID: UUID?
+    let location: String
+}
+
+private extension Double {
+    var clampedToNonnegative: Double { max(self, 0) }
 }

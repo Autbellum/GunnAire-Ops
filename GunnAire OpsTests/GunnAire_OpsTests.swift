@@ -458,9 +458,38 @@ struct GunnAire_OpsTests {
         #expect(InventoryLedger.onHandQuantity(for: item.id, at: "Warehouse", movements: movements) == 4)
         #expect(InventoryLedger.onHandQuantity(for: item.id, at: "Truck 1", movements: movements) == 3)
         #expect(InventoryLedger.onHandQuantity(for: item.id, movements: movements) == 7)
-        #expect(InventoryLedger.reservedQuantity(for: item.id, at: "Warehouse", movements: movements) == 2)
-        #expect(InventoryLedger.availableQuantity(for: item.id, at: "Warehouse", movements: movements) == 2)
+        #expect(InventoryLedger.reservedQuantity(for: item.id, at: "Warehouse", movements: movements) == 0)
+        #expect(InventoryLedger.availableQuantity(for: item.id, at: "Warehouse", movements: movements) == 4)
         #expect(InventoryLedger.locations(for: item.id, movements: movements) == ["Truck 1", "Warehouse"])
+    }
+
+    @Test func jobMaterialLedgerFulfillsOnlyTheMatchingReservationAndTracksReturns() async throws {
+        let item = Item(name: "45/5 Dual Run Capacitor", itemType: .nonInventory, unitPrice: 85, tracksInventory: true)
+        let firstJobID = UUID()
+        let secondJobID = UUID()
+        let movements = [
+            InventoryMovement(item: item, type: .receive, quantity: 10, destinationLocation: "Truck 1"),
+            InventoryMovement(item: item, type: .reserve, quantity: 2, sourceLocation: "Truck 1", serviceCallID: firstJobID),
+            InventoryMovement(item: item, type: .reserve, quantity: 1, sourceLocation: "Truck 1", serviceCallID: secondJobID),
+            InventoryMovement(item: item, type: .consume, quantity: 1.5, sourceLocation: "Truck 1", serviceCallID: firstJobID),
+            InventoryMovement(item: item, type: .returnToStock, quantity: 0.5, destinationLocation: "Truck 1", serviceCallID: firstJobID)
+        ]
+
+        let firstJob = InventoryLedger.jobMaterialStatus(
+            for: item.id,
+            serviceCallID: firstJobID,
+            requiredQuantity: 2,
+            movements: movements
+        )
+        #expect(firstJob.openReservedQuantity == 0.5)
+        #expect(firstJob.consumedQuantity == 1.5)
+        #expect(firstJob.returnedQuantity == 0.5)
+        #expect(firstJob.netUsedQuantity == 1)
+        #expect(firstJob.remainingToRecord == 1)
+        #expect(firstJob.isComplete == false)
+
+        #expect(InventoryLedger.reservedQuantity(for: item.id, at: "Truck 1", movements: movements) == 1.5)
+        #expect(InventoryLedger.availableQuantity(for: item.id, at: "Truck 1", movements: movements) == 7.5)
     }
 
     @Test func receivingTrackedPurchaseOrderIncludesSupplierAndOrderReferenceInStockLedger() async throws {
@@ -994,6 +1023,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canViewFinancialManagement(email: standard.email, users: users) == false)
         #expect(AppAccess.canViewBillingFinancialDetails(email: standard.email, users: users) == false)
         #expect(AppAccess.canCollectFieldPayments(email: standard.email, users: users) == false)
+        #expect(AppAccess.canRecordJobMaterials(email: standard.email, users: users) == false)
         #expect(AppAccess.canManageDispatch(email: standard.email, users: users) == false)
         #expect(AppAccess.canManageCustomerRecords(email: standard.email, users: users) == false)
         #expect(AppAccess.canDeleteCustomerRecords(email: standard.email, users: users) == false)
@@ -1010,12 +1040,14 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canViewFinancialManagement(email: technician.email, users: users) == false)
         #expect(AppAccess.canViewBillingFinancialDetails(email: technician.email, users: users) == false)
         #expect(AppAccess.canCollectFieldPayments(email: technician.email, users: users) == true)
+        #expect(AppAccess.canRecordJobMaterials(email: technician.email, users: users) == true)
         #expect(AppAccess.canManageDispatch(email: technician.email, users: users) == false)
         #expect(AppAccess.canManageCustomerRecords(email: technician.email, users: users) == false)
         #expect(AppAccess.canDeleteCustomerRecords(email: technician.email, users: users) == false)
         #expect(AppAccess.canSyncCustomerRecordsWithAccounting(email: technician.email, users: users) == false)
 
         #expect(AppAccess.canManageDispatch(email: dispatcher.email, users: users) == true)
+        #expect(AppAccess.canRecordJobMaterials(email: dispatcher.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.customers, email: dispatcher.email, users: users) == true)
         #expect(AppAccess.canManageCustomerRecords(email: dispatcher.email, users: users) == true)
         #expect(AppAccess.canDeleteCustomerRecords(email: dispatcher.email, users: users) == false)
@@ -1028,6 +1060,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canViewFinancialManagement(email: accounting.email, users: users) == true)
         #expect(AppAccess.canViewBillingFinancialDetails(email: accounting.email, users: users) == true)
         #expect(AppAccess.canCollectFieldPayments(email: accounting.email, users: users) == false)
+        #expect(AppAccess.canRecordJobMaterials(email: accounting.email, users: users) == false)
         #expect(AppAccess.canManageDispatch(email: accounting.email, users: users) == false)
         #expect(AppAccess.canManageCustomerRecords(email: accounting.email, users: users) == false)
         #expect(AppAccess.canDeleteCustomerRecords(email: accounting.email, users: users) == false)
@@ -1039,6 +1072,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canAccessSidebarItem(.syncIntegrations, email: admin.email, users: users) == true)
         #expect(AppAccess.canViewFinancialManagement(email: admin.email, users: users) == true)
         #expect(AppAccess.canViewBillingFinancialDetails(email: admin.email, users: users) == true)
+        #expect(AppAccess.canRecordJobMaterials(email: admin.email, users: users) == true)
         #expect(AppAccess.canManageDispatch(email: admin.email, users: users) == true)
         #expect(AppAccess.canManageCustomerRecords(email: admin.email, users: users) == true)
         #expect(AppAccess.canDeleteCustomerRecords(email: admin.email, users: users) == true)

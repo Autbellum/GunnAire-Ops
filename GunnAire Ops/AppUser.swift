@@ -121,6 +121,13 @@ enum AppAccess {
         return role == .fieldTechnician || role == .admin
     }
 
+    /// Physical stock use is a field custody mutation. Assigned technicians and
+    /// administrators may record it; office review roles keep the ledger read-only.
+    static func canRecordJobMaterials(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .fieldTechnician || role == .admin
+    }
+
     /// Creating a job from an incoming customer request changes the committed
     /// dispatch board, so it is limited to dispatch and administrative staff.
     static func canManageDispatch(email: String?, users: [AppUser]) -> Bool {

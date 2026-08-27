@@ -19,6 +19,7 @@ struct BillingDocumentsView: View {
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
+    @Query(sort: \InventoryMovement.createdAt, order: .reverse) private var inventoryMovements: [InventoryMovement]
 
     private let initialServiceCall: ServiceCall?
     private let openCloseoutOnAppear: Bool
@@ -94,6 +95,8 @@ struct BillingDocumentsView: View {
     @State private var sharedJobDocumentsMessage: String?
     @State private var isLoadingSharedJobDocuments = false
     @State private var downloadingSharedJobDocumentID: String?
+    @State private var materialSourceByItemID: [UUID: String] = [:]
+    @State private var jobMaterialMessage: String?
     private let workspaceMode: BillingWorkspaceMode
 
     init(
@@ -261,6 +264,42 @@ struct BillingDocumentsView: View {
 
     private var selectedCatalogSnapshotJSON: String? {
         CatalogLineItemSnapshot.encoded(from: selectedLineItems, quantities: selectedItemQuantities)
+    }
+
+    private var jobMaterialRequirements: [JobMaterialRequirement] {
+        var snapshots: [CatalogLineItemSnapshot]
+        if let currentJobInvoice {
+            snapshots = CatalogLineItemSnapshot.decoded(from: currentJobInvoice.catalogSnapshotJSON)
+            let snapshotIDs = Set(snapshots.map(\.catalogItemID))
+            let normalizedInvoiceSummary = currentJobInvoice.lineItemSummary.lowercased()
+            let legacyTrackedItems = selectedLineItems.filter {
+                itemHasInventoryLedger($0) &&
+                    !snapshotIDs.contains($0.id) &&
+                    normalizedInvoiceSummary.contains($0.name.lowercased())
+            }
+            snapshots.append(contentsOf: legacyTrackedItems.map {
+                CatalogLineItemSnapshot(item: $0, quantity: lineItemQuantity(for: $0))
+            })
+        } else if !selectedLineItems.isEmpty {
+            snapshots = selectedLineItems.map {
+                CatalogLineItemSnapshot(item: $0, quantity: lineItemQuantity(for: $0))
+            }
+        } else {
+            snapshots = []
+        }
+        return snapshots.compactMap { snapshot in
+            guard let item = items.first(where: { $0.id == snapshot.catalogItemID }), itemHasInventoryLedger(item) else {
+                return nil
+            }
+            return JobMaterialRequirement(item: item, quantity: snapshot.quantity)
+        }
+        .sorted { $0.item.name.localizedCaseInsensitiveCompare($1.item.name) == .orderedAscending }
+    }
+
+    private func itemHasInventoryLedger(_ item: Item) -> Bool {
+        item.itemType == .nonInventory ||
+            item.tracksInventory ||
+            inventoryMovements.contains { $0.itemID == item.id }
     }
 
     private var filteredItems: [Item] {
@@ -545,6 +584,10 @@ struct BillingDocumentsView: View {
 
     private var canCollectFieldPayments: Bool {
         AppAccess.canCollectFieldPayments(email: currentUserEmail, users: users)
+    }
+
+    private var canRecordJobMaterials: Bool {
+        AppAccess.canRecordJobMaterials(email: currentUserEmail, users: users)
     }
 
     private var mapsURL: URL? {
@@ -1290,6 +1333,7 @@ GunnAire
                                 .foregroundColor(.secondary)
                         }
                         }
+                        jobMaterialsSection(for: call)
                     }
 
                     if selectedJobStage == .files {
@@ -1954,6 +1998,7 @@ GunnAire
                     }
                 }
 
+                if !isJobDocumentationMode {
                 Section("Builder Details") {
                     Picker("Document", selection: $selectedDocumentKind) {
                         ForEach(BillingDocumentKind.allCases) { kind in
@@ -2317,6 +2362,7 @@ GunnAire
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
+                }
                 }
 
                 if canViewFinancials && !isJobDocumentationMode && workspaceMode.showsEstimates {
@@ -2719,6 +2765,232 @@ GunnAire
     }
 
     @ViewBuilder
+    private func jobMaterialsSection(for call: ServiceCall) -> some View {
+        let requirements = jobMaterialRequirements
+        if currentJobInvoice != nil, !requirements.isEmpty {
+            let completedCount = requirements.filter {
+                materialStatus(for: $0, call: call).isComplete
+            }.count
+            Section("Job Materials") {
+                HStack {
+                    Label(
+                        completedCount == requirements.count ? "Stock use recorded" : "Stock use needs review",
+                        systemImage: completedCount == requirements.count ? "checkmark.seal.fill" : "shippingbox.and.arrow.backward"
+                    )
+                    .foregroundStyle(completedCount == requirements.count ? Color.green : Color.orange)
+                    Spacer()
+                    Text("\(completedCount)/\(requirements.count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("The invoice keeps the customer charge. This compact ledger handoff records the physical part against this job and its stock location.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                ForEach(requirements) { requirement in
+                    let source = selectedMaterialSource(for: requirement, call: call)
+                    let status = materialStatus(for: requirement, call: call)
+                    let sourceStatus = materialStatus(for: requirement, call: call, at: source)
+                    let sourceAvailable = InventoryLedger.availableQuantity(
+                        for: requirement.item.id,
+                        at: source,
+                        movements: inventoryMovements
+                    ) + sourceStatus.openReservedQuantity
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(requirement.item.name)
+                                    .font(.subheadline.weight(.semibold))
+                                Text(materialProgressText(requirement: requirement, status: status))
+                                    .font(.caption)
+                                    .foregroundStyle(status.isComplete ? Color.secondary : Color.orange)
+                            }
+                            Spacer()
+                            if status.isComplete {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .accessibilityLabel("Stock use complete")
+                            }
+                        }
+
+                        Picker("Stock source", selection: materialSourceBinding(for: requirement, call: call)) {
+                            ForEach(materialSourceLocations(for: requirement.item), id: \.self) { location in
+                                Text(location).tag(location)
+                            }
+                        }
+                        .pickerStyle(.menu)
+
+                        HStack {
+                            Text("Available to this job: \(sourceAvailable.formatted(.number.precision(.fractionLength(0...2))))")
+                                .font(.caption2)
+                                .foregroundStyle(sourceAvailable < status.remainingToRecord ? Color.orange : Color.secondary)
+                            Spacer()
+                            if status.remainingToRecord > 0.0001, canRecordJobMaterials {
+                                Button("Record \(status.remainingToRecord.formatted(.number.precision(.fractionLength(0...2)))) Used") {
+                                    recordRemainingMaterialUse(requirement, call: call, source: source)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(Color.brandGold)
+                                .foregroundStyle(Color.primaryBlack)
+                                .accessibilityIdentifier("RecordJobMaterialUse-\(requirement.item.id.uuidString)")
+                            } else if status.remainingToRecord > 0.0001 {
+                                Text("Field or Admin account required")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        if status.overRecordedQuantity > 0.0001 {
+                            Text("Recorded use exceeds the invoiced quantity by \(status.overRecordedQuantity.formatted(.number.precision(.fractionLength(0...2)))). Review the invoice or record a return before closeout.")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+
+                if let jobMaterialMessage {
+                    Text(jobMaterialMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func materialStatus(
+        for requirement: JobMaterialRequirement,
+        call: ServiceCall,
+        at location: String? = nil
+    ) -> InventoryJobMaterialStatus {
+        InventoryLedger.jobMaterialStatus(
+            for: requirement.item.id,
+            serviceCallID: call.id,
+            requiredQuantity: requirement.quantity,
+            at: location,
+            movements: inventoryMovements
+        )
+    }
+
+    private func materialProgressText(
+        requirement: JobMaterialRequirement,
+        status: InventoryJobMaterialStatus
+    ) -> String {
+        let required = requirement.quantity.formatted(.number.precision(.fractionLength(0...2)))
+        let used = status.netUsedQuantity.formatted(.number.precision(.fractionLength(0...2)))
+        let reserved = status.openReservedQuantity.formatted(.number.precision(.fractionLength(0...2)))
+        return "Invoice \(required) • Used \(used) • Reserved \(reserved)"
+    }
+
+    private func materialSourceLocations(for item: Item) -> [String] {
+        var locations = Set(InventoryLedger.locations(for: item.id, movements: inventoryMovements))
+        if let configured = item.defaultInventoryLocation?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !configured.isEmpty {
+            locations.insert(configured)
+        }
+        if locations.isEmpty {
+            locations.insert("Warehouse")
+        }
+        return locations.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    private func selectedMaterialSource(for requirement: JobMaterialRequirement, call: ServiceCall) -> String {
+        let locations = materialSourceLocations(for: requirement.item)
+        if let selected = materialSourceByItemID[requirement.item.id], locations.contains(selected) {
+            return selected
+        }
+        if let reservedLocation = locations.first(where: {
+            materialStatus(for: requirement, call: call, at: $0).openReservedQuantity > 0.0001
+        }) {
+            return reservedLocation
+        }
+        if let configured = requirement.item.defaultInventoryLocation?.trimmingCharacters(in: .whitespacesAndNewlines),
+           locations.contains(configured) {
+            return configured
+        }
+        return locations.max {
+            InventoryLedger.onHandQuantity(for: requirement.item.id, at: $0, movements: inventoryMovements) <
+                InventoryLedger.onHandQuantity(for: requirement.item.id, at: $1, movements: inventoryMovements)
+        } ?? "Warehouse"
+    }
+
+    private func materialSourceBinding(for requirement: JobMaterialRequirement, call: ServiceCall) -> Binding<String> {
+        Binding(
+            get: { selectedMaterialSource(for: requirement, call: call) },
+            set: { materialSourceByItemID[requirement.item.id] = $0 }
+        )
+    }
+
+    private func recordRemainingMaterialUse(
+        _ requirement: JobMaterialRequirement,
+        call: ServiceCall,
+        source: String
+    ) {
+        guard canRecordJobMaterials, AppAccess.canAccessServiceCall(
+            call,
+            email: currentUserEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        ) else {
+            jobMaterialMessage = "A Field Technician or Admin account assigned to this job is required to record stock."
+            return
+        }
+        let status = materialStatus(for: requirement, call: call)
+        let quantity = status.remainingToRecord
+        guard quantity > 0.0001 else {
+            jobMaterialMessage = "The invoiced quantity for \(requirement.item.name) is already accounted for."
+            return
+        }
+        let normalizedSource = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSource.isEmpty else {
+            jobMaterialMessage = "Choose the truck or warehouse that supplied this part."
+            return
+        }
+        let onHandBeforeUse = InventoryLedger.onHandQuantity(
+            for: requirement.item.id,
+            at: normalizedSource,
+            movements: inventoryMovements
+        )
+        let wasTrackingInventory = requirement.item.tracksInventory
+        let priorDefaultLocation = requirement.item.defaultInventoryLocation
+        requirement.item.tracksInventory = true
+        requirement.item.defaultInventoryLocation = normalizedSource
+
+        let movement = InventoryMovement(
+            item: requirement.item,
+            type: .consume,
+            quantity: quantity,
+            sourceLocation: normalizedSource,
+            serviceCallID: call.id,
+            notes: "Recorded from the job invoice material handoff.",
+            createdByEmail: currentUserEmail
+        )
+        let activity = ServiceCallActivity(
+            serviceCallID: call.id,
+            action: "Material used",
+            detail: "\(quantity.formatted(.number.precision(.fractionLength(0...2)))) × \(requirement.item.name) from \(normalizedSource).",
+            actorEmail: currentUserEmail
+        )
+        modelContext.insert(movement)
+        modelContext.insert(activity)
+        do {
+            try modelContext.save()
+            let remainingOnHand = onHandBeforeUse - quantity
+            jobMaterialMessage = remainingOnHand < -0.0001
+                ? "Recorded \(requirement.item.name). \(normalizedSource) is now negative by \((-remainingOnHand).formatted(.number.precision(.fractionLength(0...2)))); replenish or reconcile the count."
+                : "Recorded \(quantity.formatted(.number.precision(.fractionLength(0...2)))) × \(requirement.item.name) from \(normalizedSource)."
+        } catch {
+            requirement.item.tracksInventory = wasTrackingInventory
+            requirement.item.defaultInventoryLocation = priorDefaultLocation
+            modelContext.delete(activity)
+            modelContext.delete(movement)
+            jobMaterialMessage = "Could not save material use: \(error.localizedDescription)"
+        }
+    }
+
+    @ViewBuilder
     private func closeoutReadinessSection(for call: ServiceCall) -> some View {
         let readiness = call.closeoutReadiness(
             invoice: currentJobInvoice,
@@ -2731,6 +3003,9 @@ GunnAire
             estimate: currentJobEstimate,
             attachments: activeJobAttachments
         )
+        let outstandingMaterialCount = jobMaterialRequirements.filter {
+            !materialStatus(for: $0, call: call).isComplete
+        }.count
         Section("Closeout Readiness") {
             HStack {
                 Label(
@@ -2750,6 +3025,16 @@ GunnAire
                 Text(documentationPackageSummary)
                     .font(.caption)
                     .foregroundColor(.secondary)
+            }
+            if !jobMaterialRequirements.isEmpty {
+                Label(
+                    outstandingMaterialCount == 0
+                        ? "Material ledger complete"
+                        : "\(outstandingMaterialCount) invoiced material record\(outstandingMaterialCount == 1 ? "" : "s") need review in Billing",
+                    systemImage: outstandingMaterialCount == 0 ? "shippingbox.fill" : "shippingbox.and.arrow.backward"
+                )
+                .font(.caption)
+                .foregroundStyle(outstandingMaterialCount == 0 ? Color.secondary : Color.orange)
             }
 
             if readiness.missingItems.isEmpty {
@@ -6045,6 +6330,13 @@ enum JobDocumentationStage: String, CaseIterable, Identifiable {
         }
         return .work
     }
+}
+
+private struct JobMaterialRequirement: Identifiable {
+    let item: Item
+    let quantity: Double
+
+    var id: UUID { item.id }
 }
 
 private enum DocumentationCatalogFilter: String, CaseIterable, Identifiable {

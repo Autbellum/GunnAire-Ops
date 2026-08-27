@@ -75,11 +75,15 @@ private enum GunnAireUITestFixtures {
     private static let equipmentID = UUID(uuidString: "A1000000-0000-4000-8000-000000000010")!
     private static let maintenanceAgreementID = UUID(uuidString: "A1000000-0000-4000-8000-000000000011")!
     private static let maintenanceServiceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000012")!
+    private static let inventoryItemID = UUID(uuidString: "A1000000-0000-4000-8000-000000000013")!
+    private static let inventoryReceiptID = UUID(uuidString: "A1000000-0000-4000-8000-000000000014")!
+    private static let inventoryReservationID = UUID(uuidString: "A1000000-0000-4000-8000-000000000015")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
         guard arguments.contains("-disableCloudKitForTesting") else { return }
         let isScreenshotFixture = arguments.contains("-appStoreScreenshotFixtures")
+        let isInventoryFixture = arguments.contains("-uiTestSeedInventoryJob")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
         for user in appUsers where
@@ -108,6 +112,10 @@ private enum GunnAireUITestFixtures {
         for call in calls where call.id == serviceCallID || call.id == correctiveSourceCallID || call.id == correctiveFollowUpCallID || call.id == maintenanceServiceCallID {
             context.delete(call)
         }
+        let activities = try context.fetch(FetchDescriptor<ServiceCallActivity>())
+        for activity in activities where activity.serviceCallID == serviceCallID || activity.serviceCallID == correctiveSourceCallID || activity.serviceCallID == correctiveFollowUpCallID || activity.serviceCallID == maintenanceServiceCallID {
+            context.delete(activity)
+        }
         let maintenanceAgreements = try context.fetch(FetchDescriptor<RecurringMaintenanceContract>())
         for agreement in maintenanceAgreements where agreement.id == maintenanceAgreementID {
             context.delete(agreement)
@@ -124,8 +132,12 @@ private enum GunnAireUITestFixtures {
         for technician in technicians where technician.id == technicianID || technician.contactInfo == GunnAireUITestIdentity.technicianEmail {
             context.delete(technician)
         }
+        let inventoryMovements = try context.fetch(FetchDescriptor<InventoryMovement>())
+        for movement in inventoryMovements where movement.itemID == inventoryItemID || movement.id == inventoryReceiptID || movement.id == inventoryReservationID {
+            context.delete(movement)
+        }
         let catalogItems = try context.fetch(FetchDescriptor<Item>())
-        for item in catalogItems where item.id == catalogItemID || item.name == "UI Test Added Repair" {
+        for item in catalogItems where item.id == catalogItemID || item.id == inventoryItemID || item.name == "UI Test Added Repair" {
             context.delete(item)
         }
         try context.save()
@@ -163,6 +175,18 @@ private enum GunnAireUITestFixtures {
             unitPrice: 189,
             purchaseCost: 42,
             itemDescription: "Diagnostic visit and system evaluation"
+        )
+        let inventoryItem = Item(
+            id: inventoryItemID,
+            name: "45/5 Dual Run Capacitor",
+            itemType: .nonInventory,
+            unitPrice: 50,
+            purchaseCost: 18.50,
+            itemDescription: "Field replacement capacitor",
+            sku: "CAP-45-5",
+            tracksInventory: true,
+            reorderPoint: 1,
+            defaultInventoryLocation: "Truck – UI Test Technician"
         )
         let equipment = CustomerEquipment(
             id: equipmentID,
@@ -208,9 +232,13 @@ private enum GunnAireUITestFixtures {
             serviceCallID: serviceCallID,
             customer: customer,
             workType: .service,
-            lineItemSummary: "HVAC Diagnostic Service - $189.00",
-            catalogSnapshotJSON: CatalogLineItemSnapshot.encoded(from: [catalogItem]),
-            amount: 189,
+            lineItemSummary: isInventoryFixture
+                ? "HVAC Diagnostic Service - $189.00\n45/5 Dual Run Capacitor - $50.00"
+                : "HVAC Diagnostic Service - $189.00",
+            catalogSnapshotJSON: CatalogLineItemSnapshot.encoded(
+                from: isInventoryFixture ? [catalogItem, inventoryItem] : [catalogItem]
+            ),
+            amount: isInventoryFixture ? 239 : 189,
             status: "unpaid"
         )
         let maintenanceDueDate = Calendar.current.date(byAdding: .day, value: 1, to: scheduledDate) ?? scheduledDate
@@ -249,6 +277,28 @@ private enum GunnAireUITestFixtures {
         context.insert(customer)
         context.insert(technician)
         context.insert(catalogItem)
+        if isInventoryFixture {
+            context.insert(inventoryItem)
+            context.insert(InventoryMovement(
+                id: inventoryReceiptID,
+                item: inventoryItem,
+                type: .receive,
+                quantity: 3,
+                destinationLocation: "Truck – UI Test Technician",
+                notes: "UI test truck stock.",
+                createdByEmail: GunnAireUITestIdentity.technicianEmail
+            ))
+            context.insert(InventoryMovement(
+                id: inventoryReservationID,
+                item: inventoryItem,
+                type: .reserve,
+                quantity: 1,
+                sourceLocation: "Truck – UI Test Technician",
+                serviceCallID: serviceCallID,
+                notes: "Reserved for UI test job.",
+                createdByEmail: GunnAireUITestIdentity.technicianEmail
+            ))
+        }
         context.insert(equipment)
         context.insert(call)
         context.insert(invoice)

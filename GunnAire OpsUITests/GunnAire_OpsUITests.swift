@@ -338,6 +338,51 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAssignedTechnicianRecordsBilledPartUseAgainstTruckStock() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedInventoryJob"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
+        for _ in 0..<6 {
+            if documentation.exists && documentation.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(documentation.waitForExistence(timeout: 3))
+        documentation.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        XCTAssertTrue(stagePicker.buttons["Billing"].isSelected)
+
+        let recordUse = app.buttons["RecordJobMaterialUse-A1000000-0000-4000-8000-000000000013"]
+        for _ in 0..<8 {
+            if recordUse.exists && recordUse.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(recordUse.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Invoice 1 • Used 0 • Reserved 1"].exists)
+        XCTAssertTrue(app.staticTexts["Available to this job: 3"].exists)
+        recordUse.tap()
+
+        XCTAssertTrue(app.staticTexts["Stock use recorded"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Invoice 1 • Used 1 • Reserved 0"].exists)
+        XCTAssertFalse(recordUse.exists)
+    }
+
+    @MainActor
     func testServiceCallDetailUsesStateAwareOperationalWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
