@@ -45,10 +45,15 @@ python3 -m pip install -r requirements.txt
 export GUNNAIRE_BACKEND_AUTH_MODE="google-id-token"
 export GUNNAIRE_GOOGLE_CLIENT_ID="your-iOS-google-client-id.apps.googleusercontent.com"
 export GUNNAIRE_GOOGLE_ALLOWED_DOMAIN="gunnaire.com"
+export GUNNAIRE_APPLE_CLIENT_ID="com.gunnaire.businesssuite"
+# Optional: application sessions are capped at 30 days and remain revocable server-side.
+export GUNNAIRE_APP_SESSION_DAYS=30
 python3 gunnaire_backend.py
 ```
 
-Then set `GUNNAIRE_BACKEND_AUTH_MODE = google-id-token` in the app build configuration, use an HTTPS `GUNNAIRE_BACKEND_BASE_URL`, and omit the shared API token. The backend verifies the signed-in Google identity, requires an approved active user, and enforces backend roles: only administrators manage users or customer-email/QBO operations; administrators and field technicians can submit payment metadata.
+Then set `GUNNAIRE_BACKEND_AUTH_MODE = google-id-token` in the app build configuration, use an HTTPS `GUNNAIRE_BACKEND_BASE_URL`, and omit the shared API token. This production mode accepts either a verified Google ID token or a short-lived GunnAire application session created from a verified Sign in with Apple identity. Both providers must resolve to an already-approved active backend user; neither provider creates or promotes a user. Apple private-relay addresses therefore require an explicit administrator-created user record and are never mapped automatically to another email.
+
+The Apple identity token is verified against Apple's current RS256 public keys, issuer, app audience, expiry, issue time, nonce, subject, and verified email. It is used once and is not stored. The backend persists only a SHA-256 hash of the random application-session token, rechecks the user's active status on every protected request, and supports immediate revocation at `POST /api/auth/logout`. The app stores only that opaque application session in Keychain and checks Apple's credential state on relaunch.
 
 ## Render deployment
 
@@ -70,6 +75,8 @@ Render provides `PORT` automatically. Attach a persistent disk at `/var/data` an
 GUNNAIRE_BACKEND_AUTH_MODE=google-id-token
 GUNNAIRE_GOOGLE_CLIENT_ID=your-iOS-google-client-id.apps.googleusercontent.com
 GUNNAIRE_GOOGLE_ALLOWED_DOMAIN=gunnaire.com
+GUNNAIRE_APPLE_CLIENT_ID=com.gunnaire.businesssuite
+GUNNAIRE_APP_SESSION_DAYS=30
 GUNNAIRE_QBO_CLIENT_ID=your-intuit-client-id
 GUNNAIRE_QBO_CLIENT_SECRET=your-intuit-client-secret
 GUNNAIRE_QBO_REDIRECT_URI=https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback
@@ -85,12 +92,14 @@ Use `api.gunnaire.com` as the custom HTTPS domain after Render provides its DNS 
 
 - Approved GunnAire app users and roles.
 - Active/inactive access state.
+- Revocable Sign in with Apple application sessions. Only a one-way SHA-256 session-token hash, provider subject, approved email, creation/use/expiry times, and revocation state are retained; Apple identity tokens are not stored.
 - Uploaded receipt/document files under `Backend/storage`, retaining their service call, invoice, estimate, customer-equipment, equipment-name, and customer links for cross-device retrieval.
 - Field payment collection records for admin QuickBooks reconciliation.
 - QuickBooks change-event metadata for the currently authorized company realm. The raw provider payload, realm ID, customer content, and credentials are not retained or returned to the app.
-- Transactional email audit records, linked to the customer, job, estimate/invoice, and attachment names.
+- Transactional email and staff-reviewed service-text audit records, linked to the customer, job, maintenance agreement, estimate/invoice, and attachment names. Each attempt retains its channel, typed workflow/template, authenticated staff actor, consent snapshot, sent/failed/suppressed state, safe provider detail, and result time. Text recipients are normalized and validated before storage. Active staff may append their own evidence; only administrators may list company-wide communication history. The backend stores no message body and does not itself send automated SMS.
 - Administrator-only server activity events for role changes, shared-document uploads, payment metadata, customer-communication records, booking claims, and QuickBooks authorization lifecycle actions. Tokens, card data, and customer-content fields are intentionally not recorded.
 - An optional public online-booking request inbox. It never creates a job directly: dispatch imports, qualifies, and schedules each request.
+- Optional customer-portal link metadata. Only a SHA-256 token hash is stored; management responses contain no URL or token. Open count and last-opened time are operational hints only and may include mail or security previews.
 - Backend metadata in `gunnaire_backend.sqlite3`.
 
 The primary admin `eric.gunn@gunnaire.com` is seeded automatically and cannot be deactivated.
@@ -101,7 +110,7 @@ Shared-document uploads validate all metadata before a file is written and rejec
 
 Keep public intake disabled by default. When a reviewed website form and HTTPS deployment are ready, set `GUNNAIRE_PUBLIC_BOOKING_ENABLED=true`. The form posts JSON to `POST /api/public/service-requests` with `customerName`, a `phone` or `email`, `summary`, `requestedServiceType` (`service`, `estimate`, `install`, or `maintenance`), `urgency`, and explicit `contactConsent: true`. An empty `website` honeypot may be included.
 
-The endpoint is rate-limited per source IP (default: five requests/hour), stores only request data, and returns an acknowledgement. It does not expose availability or create a customer/job. Dispatchers import requests from **Schedule → Incoming Requests → Import Online**, qualify them, and create the appointment; scheduling claims the server request so it cannot be imported again. Add website-specific bot protection, terms/privacy links, and a contact-consent notice before enabling it publicly.
+The endpoint is rate-limited per source IP (default: five requests/hour), stores only request data, and returns an acknowledgement. It does not expose availability or create a customer/job. Authenticated Dispatch/Admin inbox responses label these requests with `source: website`; production backend `2026.08.27.3` and newer clients support the attribution, while clients remain tolerant of older responses. Dispatchers import requests from **Schedule → Incoming Requests → Import Online**, qualify them, and create the appointment; scheduling claims the server request so it cannot be imported again. Add website-specific bot protection, terms/privacy links, and a contact-consent notice before enabling it publicly.
 
 ## Customer portal handoff
 
@@ -113,7 +122,11 @@ export GUNNAIRE_CUSTOMER_PORTAL_BASE_URL="https://portal.gunnaire.com"
 export GUNNAIRE_CUSTOMER_PORTAL_MAX_DAYS=30
 ```
 
-An administrator can then create an expiring, revocable link from a job in GunnAire Ops. The link shows only the sanitized appointment and linked-invoice snapshot provided at creation time. It cannot browse customer data, change scheduling, download files, or take a payment. Tokens are random, only their SHA-256 hashes are retained by the server, and create/revoke actions enter the server audit log. Staff must still explicitly share the link; no email is sent automatically. Host the public route on the configured HTTPS domain, set a customer-facing privacy policy, and test expiry and revocation before enabling it for customers.
+An administrator can then create an expiring, revocable link from a job in GunnAire Ops. The link shows only the escaped appointment and linked-invoice snapshot provided at creation time. It cannot browse customer data, change scheduling, download files, or take a payment. The server requires valid customer email and UUID business references, rejects malformed/negative/non-finite amounts and non-integral expiry values, and accepts one normalized HTTPS origin without credentials, path, query, or fragment.
+
+Tokens are random, only their SHA-256 hashes are retained, capability URLs are redacted from access logs, and create/revoke actions enter the audit log. Public responses are non-cacheable and use CSP, frame, referrer, MIME, permissions, and cross-origin isolation headers. Successful opens increment non-sensitive management metadata; this is deliberately labeled **Opened**, not **Viewed** or **Read**, because email and security scanners may follow a link. Staff must still explicitly share the link; no email is sent automatically.
+
+Before enabling it for customers, deploy the reviewed backend version, host the route on the exact configured HTTPS origin, publish a customer-facing privacy notice, add edge abuse/rate controls, and verify create/open/expiry/revocation from approved production accounts. Backend readiness reports the portal as needing attention while disabled, error for an unsafe origin, and ready only for a valid enabled HTTPS origin.
 
 ## QuickBooks OAuth bridge
 
@@ -136,8 +149,8 @@ Subscribe the entities the app reconciles: Customer, Item, Estimate, Invoice, Ve
 ```sh
 curl http://macstudio.local:8787/health
 curl -H "Authorization: Bearer replace-with-a-long-random-token" http://macstudio.local:8787/api/users
-# Requires Backend/requirements.txt, including cryptography.
-python3 -m unittest Backend.test_deployment_entrypoint Backend.test_qbo_token_storage Backend.test_backend_readiness Backend.test_backup_backend Backend.test_qbo_webhooks -v
+# Requires Backend/requirements.txt, including cryptography and google-auth.
+python3 -m unittest discover -s Backend -p 'test_*.py' -v
 ```
 
 `/health` includes a non-secret `serviceVersion` marker. After every production

@@ -14,6 +14,7 @@ import re
 import secrets
 import sqlite3
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,9 +26,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.27.7"
+SERVICE_VERSION = "2026.08.27.8"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -36,6 +41,13 @@ AUTH_MODE = os.environ.get("GUNNAIRE_BACKEND_AUTH_MODE", "api-token").strip().lo
 PRIMARY_ADMIN_EMAIL = os.environ.get("GUNNAIRE_PRIMARY_ADMIN_EMAIL", "eric.gunn@gunnaire.com").strip().lower()
 GOOGLE_CLIENT_ID = os.environ.get("GUNNAIRE_GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_ALLOWED_DOMAIN = os.environ.get("GUNNAIRE_GOOGLE_ALLOWED_DOMAIN", "gunnaire.com").strip().lower()
+APPLE_CLIENT_ID = os.environ.get("GUNNAIRE_APPLE_CLIENT_ID", "com.gunnaire.businesssuite").strip()
+APPLE_ISSUER = "https://appleid.apple.com"
+APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
+APPLE_JWKS_CACHE_SECONDS = min(max(int(os.environ.get("GUNNAIRE_APPLE_JWKS_CACHE_SECONDS", "21600")), 300), 86400)
+APP_SESSION_DAYS = min(max(int(os.environ.get("GUNNAIRE_APP_SESSION_DAYS", "30")), 1), 30)
+APPLE_JWKS_CACHE: dict[str, object] = {"expires_at": 0.0, "keys": {}}
+APPLE_JWKS_LOCK = threading.Lock()
 DATA_ROOT_RAW = os.environ.get("GUNNAIRE_BACKEND_DATA_DIR", "").strip()
 DATA_ROOT = Path(DATA_ROOT_RAW).expanduser() if DATA_ROOT_RAW else None
 DB_PATH = Path(
@@ -144,6 +156,174 @@ def is_valid_email(value: str) -> bool:
         and re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", label) is not None
         for label in labels
     )
+
+
+def base64url_decode(value: str, *, maximum_bytes: int) -> bytes:
+    if not value or len(value) > maximum_bytes * 2:
+        raise ValueError("Invalid encoded value")
+    padded = value + "=" * ((4 - len(value) % 4) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
+    except (ValueError, UnicodeEncodeError) as error:
+        raise ValueError("Invalid encoded value") from error
+    if len(decoded) > maximum_bytes:
+        raise ValueError("Encoded value is too large")
+    return decoded
+
+
+def decode_jwt_json_segment(value: str, *, maximum_bytes: int) -> dict[str, object]:
+    decoded = base64url_decode(value, maximum_bytes=maximum_bytes)
+    try:
+        payload = json.loads(decoded.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Invalid token JSON") from error
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid token JSON")
+    return payload
+
+
+def apple_public_key(kid: str, *, force_refresh: bool = False) -> rsa.RSAPublicKey:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", kid):
+        raise ValueError("Invalid Apple key identifier")
+    now = time.monotonic()
+    with APPLE_JWKS_LOCK:
+        cached_keys = APPLE_JWKS_CACHE.get("keys")
+        expires_at = APPLE_JWKS_CACHE.get("expires_at")
+        if (
+            not force_refresh
+            and isinstance(cached_keys, dict)
+            and isinstance(expires_at, (int, float))
+            and expires_at > now
+            and kid in cached_keys
+            and isinstance(cached_keys[kid], rsa.RSAPublicKey)
+        ):
+            return cached_keys[kid]
+
+        request = urllib.request.Request(
+            APPLE_JWKS_URL,
+            headers={"Accept": "application/json", "User-Agent": "GunnAireOpsBackend/1.0"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                raw = response.read(64 * 1024 + 1)
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            raise ValueError("Apple signing keys are unavailable") from error
+        if len(raw) > 64 * 1024:
+            raise ValueError("Apple signing-key response is too large")
+        try:
+            jwks = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("Invalid Apple signing-key response") from error
+        records = jwks.get("keys") if isinstance(jwks, dict) else None
+        if not isinstance(records, list):
+            raise ValueError("Invalid Apple signing-key response")
+
+        parsed_keys: dict[str, rsa.RSAPublicKey] = {}
+        for record in records:
+            if not isinstance(record, dict) or record.get("kty") != "RSA" or record.get("alg") != "RS256":
+                continue
+            record_kid = record.get("kid")
+            modulus = record.get("n")
+            exponent = record.get("e")
+            if not isinstance(record_kid, str) or not isinstance(modulus, str) or not isinstance(exponent, str):
+                continue
+            try:
+                modulus_number = int.from_bytes(base64url_decode(modulus, maximum_bytes=1024), "big")
+                exponent_number = int.from_bytes(base64url_decode(exponent, maximum_bytes=16), "big")
+                parsed_keys[record_kid] = rsa.RSAPublicNumbers(exponent_number, modulus_number).public_key()
+            except (ValueError, TypeError):
+                continue
+        if not parsed_keys:
+            raise ValueError("Apple signing keys are unavailable")
+        APPLE_JWKS_CACHE["keys"] = parsed_keys
+        APPLE_JWKS_CACHE["expires_at"] = now + APPLE_JWKS_CACHE_SECONDS
+        key = parsed_keys.get(kid)
+        if key is None:
+            raise ValueError("Apple signing key not found")
+        return key
+
+
+def verify_apple_identity_token(identity_token: str, nonce: str) -> dict[str, object]:
+    if not 100 <= len(identity_token) <= 16 * 1024 or not 16 <= len(nonce) <= 200:
+        raise ValueError("Invalid Apple credential")
+    segments = identity_token.split(".")
+    if len(segments) != 3:
+        raise ValueError("Invalid Apple credential")
+    header = decode_jwt_json_segment(segments[0], maximum_bytes=4096)
+    claims = decode_jwt_json_segment(segments[1], maximum_bytes=12 * 1024)
+    if header.get("alg") != "RS256" or not isinstance(header.get("kid"), str):
+        raise ValueError("Invalid Apple credential")
+    signing_key = apple_public_key(str(header["kid"]))
+    signature = base64url_decode(segments[2], maximum_bytes=1024)
+    try:
+        signing_key.verify(
+            signature,
+            f"{segments[0]}.{segments[1]}".encode("ascii"),
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+    except (InvalidSignature, ValueError, UnicodeEncodeError) as error:
+        raise ValueError("Invalid Apple credential") from error
+
+    now = datetime.now(timezone.utc).timestamp()
+    issuer = claims.get("iss")
+    audience = claims.get("aud")
+    expiration = claims.get("exp")
+    issued_at = claims.get("iat")
+    token_nonce = claims.get("nonce")
+    subject = claims.get("sub")
+    email = normalize_email(claims.get("email") if isinstance(claims.get("email"), str) else None)
+    verified_claim = claims.get("email_verified")
+    email_verified = verified_claim is True or (
+        isinstance(verified_claim, str) and verified_claim.casefold() == "true"
+    )
+    audience_matches = audience == APPLE_CLIENT_ID or (
+        isinstance(audience, list) and APPLE_CLIENT_ID in audience
+    )
+    if (
+        issuer != APPLE_ISSUER
+        or not audience_matches
+        or not isinstance(expiration, (int, float))
+        or expiration <= now
+        or not isinstance(issued_at, (int, float))
+        or issued_at > now + 300
+        or not isinstance(token_nonce, str)
+        or not hmac.compare_digest(token_nonce, nonce)
+        or not isinstance(subject, str)
+        or not 1 <= len(subject) <= 255
+        or not email_verified
+        or not is_valid_email(email)
+    ):
+        raise ValueError("Invalid Apple credential")
+    return claims
+
+
+def app_session_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_app_session(email: str, provider: str, provider_subject: str) -> tuple[str, str]:
+    token = secrets.token_urlsafe(48)
+    created_at = datetime.now(timezone.utc)
+    expires_at = created_at + timedelta(days=APP_SESSION_DAYS)
+    with db() as connection:
+        connection.execute(
+            "DELETE FROM auth_sessions WHERE expires_at <= ? OR revoked_at IS NOT NULL",
+            (created_at.isoformat(),),
+        )
+        connection.execute(
+            """
+            INSERT INTO auth_sessions(
+                id, token_hash, email, provider, provider_subject,
+                created_at, expires_at, last_used_at, revoked_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+            """,
+            (
+                str(uuid.uuid4()), app_session_token_hash(token), email, provider,
+                provider_subject, created_at.isoformat(), expires_at.isoformat(), created_at.isoformat(),
+            ),
+        )
+    return token, expires_at.isoformat()
 
 
 def normalize_text_recipient(value: str | None) -> str:
@@ -425,7 +605,9 @@ def persistent_data_readiness_component() -> dict[str, str]:
 
 def authentication_readiness_component() -> dict[str, str]:
     if AUTH_MODE == "google-id-token":
-        return readiness_component("authentication", "Authentication", "ready", "Google business identity mode is active.")
+        if not APPLE_CLIENT_ID:
+            return readiness_component("authentication", "Authentication", "error", "Configure the Sign in with Apple client identifier.")
+        return readiness_component("authentication", "Authentication", "ready", "Google identity and verified Apple application sessions are active.")
     return readiness_component("authentication", "Authentication", "attention", "Shared API-token mode is for a physically controlled development server only.")
 
 
@@ -578,6 +760,25 @@ def initialize_database() -> None:
                 updated_at TEXT NOT NULL
             )
             """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                id TEXT PRIMARY KEY,
+                token_hash TEXT NOT NULL UNIQUE,
+                email TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                provider_subject TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                last_used_at TEXT NOT NULL,
+                revoked_at TEXT,
+                FOREIGN KEY(email) REFERENCES users(email)
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS auth_sessions_active_token ON auth_sessions(token_hash, expires_at, revoked_at)"
         )
         connection.execute(
             """
@@ -1188,8 +1389,14 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/public/service-requests":
             self.store_public_service_request()
             return
+        if parsed.path == "/api/auth/apple":
+            self.exchange_apple_identity()
+            return
         if self.principal() is None:
             self.write_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
+            return
+        if parsed.path == "/api/auth/logout":
+            self.revoke_application_session()
             return
         if parsed.path == "/api/users":
             if not self.require_admin():
@@ -1325,6 +1532,14 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             }
             return self._principal
 
+        authorization = self.headers.get("Authorization", "").strip()
+        if authorization.startswith("Bearer "):
+            session_token = authorization.removeprefix("Bearer ").strip()
+            session_principal = self.application_session_principal(session_token)
+            if session_principal is not None:
+                self._principal = session_principal
+                return self._principal
+
         token = self.headers.get("X-GunnAire-Google-ID-Token", "").strip()
         if not token:
             return None
@@ -1342,6 +1557,91 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return None
         self._principal = user_record(row)
         return self._principal
+
+    def application_session_principal(self, token: str) -> dict[str, object] | None:
+        if not 32 <= len(token) <= 512:
+            return None
+        now = datetime.now(timezone.utc)
+        with db() as connection:
+            session = connection.execute(
+                "SELECT * FROM auth_sessions WHERE token_hash = ? AND revoked_at IS NULL",
+                (app_session_token_hash(token),),
+            ).fetchone()
+            if session is None:
+                return None
+            try:
+                expiration = datetime.fromisoformat(str(session["expires_at"]).replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if expiration.tzinfo is None or expiration.astimezone(timezone.utc) <= now:
+                connection.execute(
+                    "UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                    (now.isoformat(), session["id"]),
+                )
+                return None
+            user = connection.execute(
+                "SELECT * FROM users WHERE email = ?",
+                (normalize_email(session["email"]),),
+            ).fetchone()
+            if user is None or not bool(user["is_active"]):
+                return None
+            connection.execute(
+                "UPDATE auth_sessions SET last_used_at = ? WHERE id = ?",
+                (now.isoformat(), session["id"]),
+            )
+        self._application_session_id = str(session["id"])
+        return user_record(user)
+
+    def exchange_apple_identity(self) -> None:
+        try:
+            raw = self.read_limited_body(20 * 1024)
+            payload = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            self.write_json({"error": "Invalid Apple authentication request"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        identity_token = payload.get("identityToken") if isinstance(payload, dict) else None
+        nonce = payload.get("nonce") if isinstance(payload, dict) else None
+        if not isinstance(identity_token, str) or not isinstance(nonce, str):
+            self.write_json({"error": "Invalid Apple authentication request"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        try:
+            claims = verify_apple_identity_token(identity_token, nonce)
+        except ValueError:
+            self.write_json({"error": "Apple authentication failed"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
+            return
+        email = normalize_email(claims.get("email") if isinstance(claims.get("email"), str) else None)
+        provider_subject = claims.get("sub") if isinstance(claims.get("sub"), str) else ""
+        with db() as connection:
+            user = connection.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        if user is None or not bool(user["is_active"]):
+            self.write_json({"error": "Business account access is not approved"}, status=HTTPStatus.FORBIDDEN, require_auth=False)
+            return
+        session_token, expires_at = create_app_session(email, "apple", provider_subject)
+        record_audit_event(email, "sign-in", "apple-application-session")
+        self.write_json(
+            {
+                "sessionToken": session_token,
+                "expiresAt": expires_at,
+                "providerSubject": provider_subject,
+                "user": user_record(user),
+            },
+            require_auth=False,
+        )
+
+    def revoke_application_session(self) -> None:
+        session_id = getattr(self, "_application_session_id", None)
+        principal = self.principal() or {}
+        if not isinstance(session_id, str) or not session_id:
+            self.write_json({"error": "Application session required"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        with db() as connection:
+            connection.execute(
+                "UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                (utc_now(), session_id),
+            )
+        actor = principal.get("email") if isinstance(principal.get("email"), str) else None
+        record_audit_event(actor, "sign-out", "application-session", session_id)
+        self.write_json({"revoked": True}, require_auth=False)
 
     def require_admin(self) -> bool:
         principal = self.principal()
