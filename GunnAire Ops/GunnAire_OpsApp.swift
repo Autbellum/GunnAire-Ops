@@ -275,6 +275,8 @@ private enum GunnAireUITestFixtures {
         let estimate = Estimate(
             id: estimateID,
             serviceCallID: isAcceptedStandaloneEstimateFixture ? nil : serviceCallID,
+            serviceLocationID: serviceLocationID,
+            siteAddress: customer.address,
             customer: customer,
             lineItemSummary: "Replace failed dual run capacitor and verify operation",
             amount: 425,
@@ -289,6 +291,8 @@ private enum GunnAireUITestFixtures {
         let invoice = Invoice(
             id: invoiceID,
             serviceCallID: serviceCallID,
+            serviceLocationID: serviceLocationID,
+            siteAddress: customer.address,
             customer: customer,
             workType: .service,
             lineItemSummary: isInventoryFixture

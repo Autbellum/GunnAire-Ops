@@ -419,6 +419,16 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Customer: UI Test Collectible Customer"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Technician: Unassigned"].waitForExistence(timeout: 3))
+        let workspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Overview"].tap()
+        let propertyName = app.staticTexts["Primary Service Location"]
+        for _ in 0..<4 {
+            if propertyName.exists { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(propertyName.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["100 Test Air Way"].waitForExistence(timeout: 3))
     }
 
     @MainActor

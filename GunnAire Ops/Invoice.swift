@@ -26,6 +26,8 @@ enum InvoiceWorkType: String, Codable, CaseIterable, Identifiable {
 final class Invoice {
     var id: UUID = UUID()
     var serviceCallID: UUID?
+    var serviceLocationID: UUID?
+    var siteAddress: String?
     /// Stored as an optional CloudKit relationship; all normal invoice creation
     /// paths still provide a customer.
     var customer: Customer!
@@ -51,6 +53,8 @@ final class Invoice {
     init(
         id: UUID = UUID(),
         serviceCallID: UUID? = nil,
+        serviceLocationID: UUID? = nil,
+        siteAddress: String? = nil,
         customer: Customer,
         quickBooksID: String? = nil,
         quickBooksBalanceDue: Double? = nil,
@@ -72,6 +76,8 @@ final class Invoice {
     ) {
         self.id = id
         self.serviceCallID = serviceCallID
+        self.serviceLocationID = serviceLocationID
+        self.siteAddress = siteAddress
         self.customer = customer
         self.quickBooksID = quickBooksID
         self.quickBooksBalanceDue = quickBooksBalanceDue
@@ -114,6 +120,19 @@ final class Invoice {
 
     var catalogLineSnapshots: [CatalogLineItemSnapshot] {
         CatalogLineItemSnapshot.decoded(from: catalogSnapshotJSON)
+    }
+
+    static func draft(from estimate: Estimate) -> Invoice {
+        Invoice(
+            serviceCallID: estimate.serviceCallID,
+            serviceLocationID: estimate.serviceLocationID,
+            siteAddress: estimate.siteAddress,
+            customer: estimate.customer,
+            lineItemSummary: estimate.lineItemSummary,
+            catalogSnapshotJSON: estimate.catalogSnapshotJSON,
+            amount: estimate.amount,
+            notes: estimate.notes
+        )
     }
 
     var hasQuickBooksBalance: Bool {

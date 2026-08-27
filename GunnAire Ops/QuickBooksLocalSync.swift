@@ -153,6 +153,9 @@ enum QuickBooksLocalSync {
             estimate.notes = quickBooksEstimate.DocNumber
             estimate.status = "pending"
             estimate.createdAt = parseQuickBooksDate(quickBooksEstimate.TxnDate) ?? estimate.createdAt
+            if estimate.siteAddress?.nilIfEmpty == nil {
+                estimate.siteAddress = quickBooksEstimate.ShipAddr?.Line1
+            }
             if estimate.serviceCallID == nil,
                let serviceCall = matchingServiceCall(
                    for: quickBooksEstimate,
@@ -162,6 +165,8 @@ enum QuickBooksLocalSync {
                    estimates: existingEstimates
                ) {
                 estimate.serviceCallID = serviceCall.id
+                estimate.serviceLocationID = serviceCall.serviceLocationID
+                estimate.siteAddress = serviceCall.siteAddress ?? estimate.siteAddress
                 if serviceCall.linkedEstimateID == nil {
                     serviceCall.linkedEstimateID = estimate.id
                 }
@@ -190,6 +195,9 @@ enum QuickBooksLocalSync {
             invoice.lineItemSummary = quickBooksInvoice.DocNumber ?? "QuickBooks Invoice"
             invoice.notes = quickBooksInvoice.PrivateNote
             invoice.createdAt = parseQuickBooksDate(quickBooksInvoice.TxnDate) ?? invoice.createdAt
+            if invoice.siteAddress?.nilIfEmpty == nil {
+                invoice.siteAddress = quickBooksInvoice.ShipAddr?.Line1
+            }
             let balance = quickBooksInvoice.Balance
                 ?? max(quickBooksInvoice.TotalAmt - (importedPaymentTotalsByInvoiceID[quickBooksInvoice.Id] ?? 0), 0)
             invoice.quickBooksBalanceDue = balance
@@ -210,6 +218,8 @@ enum QuickBooksLocalSync {
                    invoices: existingInvoices
                ) {
                 invoice.serviceCallID = serviceCall.id
+                invoice.serviceLocationID = serviceCall.serviceLocationID
+                invoice.siteAddress = serviceCall.siteAddress ?? invoice.siteAddress
                 if serviceCall.linkedInvoiceID == nil {
                     serviceCall.linkedInvoiceID = invoice.id
                 }
@@ -464,6 +474,12 @@ enum QuickBooksLocalSync {
         if estimate.serviceCallID == nil {
             estimate.serviceCallID = duplicate.serviceCallID
         }
+        if estimate.serviceLocationID == nil {
+            estimate.serviceLocationID = duplicate.serviceLocationID
+        }
+        if estimate.siteAddress?.nilIfEmpty == nil {
+            estimate.siteAddress = duplicate.siteAddress
+        }
         if estimate.notes?.nilIfEmpty == nil {
             estimate.notes = duplicate.notes
         }
@@ -486,6 +502,12 @@ enum QuickBooksLocalSync {
     ) {
         if invoice.serviceCallID == nil {
             invoice.serviceCallID = duplicate.serviceCallID
+        }
+        if invoice.serviceLocationID == nil {
+            invoice.serviceLocationID = duplicate.serviceLocationID
+        }
+        if invoice.siteAddress?.nilIfEmpty == nil {
+            invoice.siteAddress = duplicate.siteAddress
         }
         if invoice.notes?.nilIfEmpty == nil {
             invoice.notes = duplicate.notes

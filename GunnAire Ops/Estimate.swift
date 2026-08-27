@@ -63,6 +63,10 @@ enum EstimateApprovalMethod: String, CaseIterable, Identifiable, Codable {
 final class Estimate {
     var id: UUID = UUID()
     var serviceCallID: UUID?
+    /// Stable property identity plus the address snapshot shown to the customer.
+    /// Standalone estimates need this before any work order exists.
+    var serviceLocationID: UUID?
+    var siteAddress: String?
     /// The approved proposal's operational work order. This is separate from
     /// `serviceCallID`, which may point to the diagnostic/estimate visit that
     /// produced the proposal.
@@ -94,6 +98,8 @@ final class Estimate {
     init(
         id: UUID = UUID(),
         serviceCallID: UUID? = nil,
+        serviceLocationID: UUID? = nil,
+        siteAddress: String? = nil,
         scheduledServiceCallID: UUID? = nil,
         parentEstimateID: UUID? = nil,
         changeOrderReason: String? = nil,
@@ -117,6 +123,8 @@ final class Estimate {
     ) {
         self.id = id
         self.serviceCallID = serviceCallID
+        self.serviceLocationID = serviceLocationID
+        self.siteAddress = siteAddress
         self.scheduledServiceCallID = scheduledServiceCallID
         self.parentEstimateID = parentEstimateID
         self.changeOrderReason = changeOrderReason

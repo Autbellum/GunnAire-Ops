@@ -122,7 +122,7 @@ enum GunnAireCloudKitSchemaBootstrap {
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
-    private static let completionKey = "GunnAireCloudKitSchemaBootstrapV7"
+    private static let completionKey = "GunnAireCloudKitSchemaBootstrapV8"
 
     static func runIfRequested(in modelContext: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -219,9 +219,16 @@ enum GunnAireCloudKitSchemaBootstrap {
             correctiveWorkReason: .unresolvedConcern
         )
         serviceCall.scheduledFollowUpServiceCallID = correctiveFollowUp.id
-        let invoice = Invoice(customer: customer, notes: marker)
+        let invoice = Invoice(
+            serviceLocationID: serviceLocation.id,
+            siteAddress: serviceLocation.address,
+            customer: customer,
+            notes: marker
+        )
         let estimate = Estimate(
             serviceCallID: serviceCall.id,
+            serviceLocationID: serviceLocation.id,
+            siteAddress: serviceLocation.address,
             scheduledServiceCallID: correctiveFollowUp.id,
             customer: customer,
             status: "accepted",

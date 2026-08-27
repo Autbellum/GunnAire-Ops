@@ -1886,6 +1886,7 @@ struct QuickBooksEstimate: Codable, Identifiable {
     let TxnDate: String?
     let BillEmail: QuickBooksEmailAddress?
     let EmailStatus: String?
+    let ShipAddr: QuickBooksAddress?
 
     var id: String { Id }
 }
@@ -1895,17 +1896,20 @@ struct QuickBooksEstimateCreate: Codable {
     let Line: [QuickBooksLineItem]
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
+    let ShipAddr: QuickBooksAddress?
 
     init(
         CustomerRef: QuickBooksReference,
         Line: [QuickBooksLineItem],
         PrivateNote: String?,
-        BillEmail: QuickBooksEmailAddress? = nil
+        BillEmail: QuickBooksEmailAddress? = nil,
+        ShipAddr: QuickBooksAddress? = nil
     ) {
         self.CustomerRef = CustomerRef
         self.Line = Line
         self.PrivateNote = PrivateNote
         self.BillEmail = BillEmail
+        self.ShipAddr = ShipAddr
     }
 }
 
@@ -1932,11 +1936,12 @@ struct QuickBooksInvoice: Codable, Identifiable {
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
     let EmailStatus: String?
+    let ShipAddr: QuickBooksAddress?
 
     var id: String { Id }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, PrivateNote, BillEmail, EmailStatus
+        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, PrivateNote, BillEmail, EmailStatus, ShipAddr
     }
 
     init(from decoder: Decoder) throws {
@@ -1952,6 +1957,7 @@ struct QuickBooksInvoice: Codable, Identifiable {
         PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
         BillEmail = try container.decodeIfPresent(QuickBooksEmailAddress.self, forKey: .BillEmail)
         EmailStatus = try container.decodeIfPresent(String.self, forKey: .EmailStatus)
+        ShipAddr = try container.decodeIfPresent(QuickBooksAddress.self, forKey: .ShipAddr)
     }
 
     private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
@@ -1973,17 +1979,20 @@ struct QuickBooksInvoiceCreate: Codable {
     let Line: [QuickBooksLineItem]
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
+    let ShipAddr: QuickBooksAddress?
 
     init(
         CustomerRef: QuickBooksReference,
         Line: [QuickBooksLineItem],
         PrivateNote: String?,
-        BillEmail: QuickBooksEmailAddress? = nil
+        BillEmail: QuickBooksEmailAddress? = nil,
+        ShipAddr: QuickBooksAddress? = nil
     ) {
         self.CustomerRef = CustomerRef
         self.Line = Line
         self.PrivateNote = PrivateNote
         self.BillEmail = BillEmail
+        self.ShipAddr = ShipAddr
     }
 }
 
@@ -1995,6 +2004,7 @@ struct QuickBooksInvoiceUpdate: Codable {
     let Line: [QuickBooksLineItem]
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
+    let ShipAddr: QuickBooksAddress?
 
     init(
         Id: String,
@@ -2002,7 +2012,8 @@ struct QuickBooksInvoiceUpdate: Codable {
         CustomerRef: QuickBooksReference,
         Line: [QuickBooksLineItem],
         PrivateNote: String?,
-        BillEmail: QuickBooksEmailAddress? = nil
+        BillEmail: QuickBooksEmailAddress? = nil,
+        ShipAddr: QuickBooksAddress? = nil
     ) {
         self.Id = Id
         self.SyncToken = SyncToken
@@ -2011,6 +2022,7 @@ struct QuickBooksInvoiceUpdate: Codable {
         self.Line = Line
         self.PrivateNote = PrivateNote
         self.BillEmail = BillEmail
+        self.ShipAddr = ShipAddr
     }
 }
 

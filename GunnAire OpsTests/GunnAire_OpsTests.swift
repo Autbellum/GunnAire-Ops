@@ -1043,8 +1043,10 @@ struct GunnAire_OpsTests {
         let customer = Customer(name: "Scheduled Proposal Customer", address: "42 Comfort Lane")
         let technician = Technician(name: "Original Estimator", contactInfo: "estimate@gunnaire.com")
         let equipmentID = UUID(uuidString: "A1000000-0000-4000-8000-000000000099")!
+        let locationID = UUID()
         let source = ServiceCall(
             siteAddress: "42 Comfort Lane",
+            serviceLocationID: locationID,
             equipmentName: "Upstairs Heat Pump",
             equipmentManufacturer: "Lennox",
             equipmentModel: "EL18XPV",
@@ -1061,6 +1063,8 @@ struct GunnAire_OpsTests {
         )
         let estimate = Estimate(
             serviceCallID: source.id,
+            serviceLocationID: locationID,
+            siteAddress: "42 Comfort Lane",
             customer: customer,
             lineItemSummary: "High-efficiency heat pump replacement",
             amount: 12_400
@@ -1090,6 +1094,8 @@ struct GunnAire_OpsTests {
         #expect(workOrder.assignedTechnician == nil)
         #expect(workOrder.additionalTechnicianIDs.isEmpty)
         #expect(workOrder.customerEquipmentID == equipmentID)
+        #expect(workOrder.serviceLocationID == locationID)
+        #expect(workOrder.siteAddress == "42 Comfort Lane")
         #expect(workOrder.equipmentSerialNumber == "APPROVED-ESTIMATE-1")
         #expect(workOrder.dispatchUrgency == .priority)
         #expect(workOrder.notes?.contains("High-efficiency heat pump replacement") == true)
@@ -8005,6 +8011,7 @@ struct GunnAire_OpsTests {
     @Test func invoiceDetailRowsUseQuickBooksBalanceWhenAvailable() async throws {
         let customer = Customer(name: "QBO Invoice Customer")
         let invoice = Invoice(
+            siteAddress: "72 Service Avenue",
             customer: customer,
             quickBooksID: "QBO-INV-100",
             quickBooksBalanceDue: 125,
@@ -8016,6 +8023,7 @@ struct GunnAire_OpsTests {
         let rows = CustomerDocumentExporter.invoiceDetailRows(for: invoice, payments: [localPayment])
 
         #expect(rows.contains { $0.label == "Status" && $0.value == "Partial" })
+        #expect(rows.contains { $0.label == "Service Address" && $0.value == "72 Service Avenue" })
         #expect(rows.contains { $0.label == "Invoice Total" && $0.value == "$500.00" })
         #expect(rows.contains { $0.label == "Payments" && $0.value == "$500.00" })
         #expect(rows.contains { $0.label == "Balance Due" && $0.value == "$125.00" })
@@ -8024,6 +8032,7 @@ struct GunnAire_OpsTests {
     @Test func estimateDetailRowsIncludeEachCustomerFacingFieldOnce() async throws {
         let customer = Customer(name: "Estimate Detail Customer")
         let estimate = Estimate(
+            siteAddress: "72 Service Avenue",
             customer: customer,
             quickBooksID: "QBO-EST-100",
             lineItemSummary: "Replace condenser fan motor",
@@ -8037,6 +8046,7 @@ struct GunnAire_OpsTests {
         #expect(rows.filter { $0.label == "Items" }.count == 1)
         #expect(rows.contains { $0.label == "Status" && $0.value == "Accepted" })
         #expect(rows.contains { $0.label == "QuickBooks ID" && $0.value == "QBO-EST-100" })
+        #expect(rows.contains { $0.label == "Service Address" && $0.value == "72 Service Avenue" })
         #expect(rows.contains { $0.label == "Items" && $0.value == "Replace condenser fan motor" })
         #expect(rows.contains { $0.label == "Notes" && $0.value == "Customer approved repair." })
         #expect(rows.contains { $0.label == "Total" && $0.value == "$625.00" })
@@ -9584,7 +9594,10 @@ struct GunnAire_OpsTests {
         let context = ModelContext(container)
         let customer = Customer(quickBooksID: "QB-CUST-1", name: "Linked QBO Customer")
         let scheduled = try #require(Calendar.current.date(from: DateComponents(year: 2026, month: 8, day: 13, hour: 10)))
+        let serviceLocationID = UUID()
         let call = ServiceCall(
+            siteAddress: "515 Imported Service Way",
+            serviceLocationID: serviceLocationID,
             type: .service,
             scheduledDate: scheduled,
             customer: customer
@@ -9616,7 +9629,8 @@ struct GunnAire_OpsTests {
           "CustomerRef": { "value": "QB-CUST-1", "name": "Linked QBO Customer" },
           "TotalAmt": 500,
           "Balance": 0,
-          "TxnDate": "2026-08-13"
+          "TxnDate": "2026-08-13",
+          "ShipAddr": { "Line1": "515 Imported Service Way" }
         }
         """.utf8))
 
@@ -9634,6 +9648,8 @@ struct GunnAire_OpsTests {
         let importedInvoice = try #require(invoices.first { $0.quickBooksID == "QB-INV-1" })
 
         #expect(importedInvoice.serviceCallID == call.id)
+        #expect(importedInvoice.serviceLocationID == serviceLocationID)
+        #expect(importedInvoice.siteAddress == "515 Imported Service Way")
         #expect(call.linkedInvoiceID == importedInvoice.id)
         #expect(call.status == .invoiced)
         #expect(importedInvoice.quickBooksBalanceDue == 0)
@@ -9789,7 +9805,8 @@ struct GunnAire_OpsTests {
           "TotalAmt": 875,
           "TxnDate": "2026-08-14",
           "BillEmail": { "Address": "customer@example.com" },
-          "EmailStatus": "NotSet"
+          "EmailStatus": "NotSet",
+          "ShipAddr": { "Line1": "515 Imported Service Way" }
         }
         """.utf8))
 
@@ -9809,6 +9826,7 @@ struct GunnAire_OpsTests {
         #expect(importedEstimate.serviceCallID == call.id)
         #expect(call.linkedEstimateID == importedEstimate.id)
         #expect(importedEstimate.amount == 875)
+        #expect(importedEstimate.siteAddress == "515 Imported Service Way")
     }
 
     @MainActor
@@ -11814,10 +11832,16 @@ struct GunnAire_OpsTests {
 
         let estimate = try #require(container.mainContext.fetch(FetchDescriptor<Estimate>()).first)
         #expect(estimate.scheduledServiceCallID != nil)
+        #expect(estimate.serviceLocationID == serviceLocation.id)
+        #expect(estimate.siteAddress == serviceLocation.address)
         #expect(estimate.customerApprovalMethodRaw?.isEmpty == false)
         #expect(estimate.customerApprovalReference?.isEmpty == false)
         #expect(estimate.customerApprovalRecordedByEmail?.isEmpty == false)
         #expect(estimate.customerApprovalSignatureImageBase64?.isEmpty == false)
+
+        let invoice = try #require(container.mainContext.fetch(FetchDescriptor<Invoice>()).first)
+        #expect(invoice.serviceLocationID == serviceLocation.id)
+        #expect(invoice.siteAddress == serviceLocation.address)
 
         let technician = try #require(container.mainContext.fetch(FetchDescriptor<Technician>()).first)
         #expect(technician.quickBooksTimeEntityKindRawValue?.isEmpty == false)
@@ -11974,6 +11998,20 @@ struct GunnAire_OpsTests {
         #expect((detail["ItemRef"] as? [String: String])?["value"] == "QBO-ITEM-42")
     }
 
+    @Test func quickBooksEstimatePayloadCarriesTheSelectedServiceAddress() throws {
+        let payload = QuickBooksEstimateCreate(
+            CustomerRef: QuickBooksReference(value: "QBO-CUSTOMER-42", name: "Multi-Site Customer"),
+            Line: [],
+            PrivateNote: nil,
+            ShipAddr: QuickBooksAddress(Line1: "44 Original Service Road")
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any]
+        )
+        let shipAddress = try #require(object["ShipAddr"] as? [String: Any])
+        #expect(shipAddress["Line1"] as? String == "44 Original Service Road")
+    }
+
     @Test func quickBooksInvoiceSparseUpdateCarriesConcurrencyTokenAndCompleteLines() throws {
         let lines = [
             QuickBooksLineItem(
@@ -12002,7 +12040,8 @@ struct GunnAire_OpsTests {
             SyncToken: "7",
             CustomerRef: QuickBooksReference(value: "CUST-1", name: "Customer"),
             Line: lines,
-            PrivateNote: "Field revision"
+            PrivateNote: "Field revision",
+            ShipAddr: QuickBooksAddress(Line1: "27 Rooftop Service Drive")
         )
 
         let payload = try #require(
@@ -12012,6 +12051,7 @@ struct GunnAire_OpsTests {
         #expect(payload["SyncToken"] as? String == "7")
         #expect(payload["sparse"] as? Bool == true)
         #expect((payload["Line"] as? [[String: Any]])?.count == 2)
+        #expect((payload["ShipAddr"] as? [String: Any])?["Line1"] as? String == "27 Rooftop Service Drive")
     }
 
     @Test func invoiceMutationPolicyAllowsDraftEditsAndProtectsSignedOrPaidHistory() {
@@ -12612,6 +12652,8 @@ struct GunnAire_OpsTests {
 
         let estimate = Estimate(
             serviceCallID: source.id,
+            serviceLocationID: locationID,
+            siteAddress: "44 Original Service Road",
             customer: customer,
             lineItemSummary: "Replace rooftop unit",
             amount: 12_500
@@ -12632,6 +12674,39 @@ struct GunnAire_OpsTests {
         )
         #expect(workOrder.serviceLocationID == locationID)
         #expect(workOrder.siteAddress == "44 Original Service Road")
+
+        let standaloneEstimate = Estimate(
+            serviceLocationID: locationID,
+            siteAddress: "44 Original Service Road",
+            customer: customer,
+            lineItemSummary: "Replace rooftop unit",
+            amount: 12_500
+        )
+        #expect(standaloneEstimate.recordCustomerApproval(
+            by: "Alex Customer",
+            method: .phoneVerbal,
+            reference: "Approved at 2:15 PM"
+        ))
+        let standaloneWorkOrder = try ApprovedEstimateScheduling.makeWorkOrder(
+            for: standaloneEstimate,
+            sourceCall: nil,
+            scheduledDate: Date(timeIntervalSinceReferenceDate: 90_000),
+            duration: 7_200,
+            workType: .install,
+            now: Date(timeIntervalSinceReferenceDate: 70_000)
+        )
+        #expect(standaloneWorkOrder.serviceLocationID == locationID)
+        #expect(standaloneWorkOrder.siteAddress == "44 Original Service Road")
+
+        let standaloneInvoice = Invoice.draft(from: standaloneEstimate)
+        #expect(standaloneInvoice.serviceLocationID == locationID)
+        #expect(standaloneInvoice.siteAddress == "44 Original Service Road")
+
+        let updatedBillingCustomer = Customer(name: "Updated Billing Contact", address: "99 Billing Plaza")
+        BillingCustomerHandoff.apply(customer: updatedBillingCustomer, to: source)
+        #expect(source.customer.id == updatedBillingCustomer.id)
+        #expect(source.serviceLocationID == locationID)
+        #expect(source.siteAddress == "44 Original Service Road")
     }
 
     @MainActor
@@ -12665,20 +12740,40 @@ struct GunnAire_OpsTests {
             scheduledDate: Date(),
             customer: customer
         )
+        let estimate = Estimate(
+            serviceLocationID: location.id,
+            siteAddress: location.address,
+            customer: customer,
+            lineItemSummary: "Replace North RTU"
+        )
+        let invoice = Invoice(
+            serviceLocationID: location.id,
+            siteAddress: location.address,
+            customer: customer,
+            lineItemSummary: "Repair North RTU"
+        )
         context.insert(customer)
         context.insert(location)
         context.insert(equipment)
         context.insert(call)
+        context.insert(estimate)
+        context.insert(invoice)
         try context.save()
 
         let restoredLocation = try #require(context.fetch(FetchDescriptor<CustomerServiceLocation>()).first)
         let restoredEquipment = try #require(context.fetch(FetchDescriptor<CustomerEquipment>()).first)
         let restoredCall = try #require(context.fetch(FetchDescriptor<ServiceCall>()).first)
+        let restoredEstimate = try #require(context.fetch(FetchDescriptor<Estimate>()).first)
+        let restoredInvoice = try #require(context.fetch(FetchDescriptor<Invoice>()).first)
         #expect(restoredLocation.customer?.id == customer.id)
         #expect(restoredLocation.accessNotes == "Use loading dock entrance")
         #expect(restoredEquipment.serviceLocationID == location.id)
         #expect(restoredCall.serviceLocationID == location.id)
         #expect(restoredCall.siteAddress == "400 North Plant Road")
+        #expect(restoredEstimate.serviceLocationID == location.id)
+        #expect(restoredEstimate.siteAddress == "400 North Plant Road")
+        #expect(restoredInvoice.serviceLocationID == location.id)
+        #expect(restoredInvoice.siteAddress == "400 North Plant Road")
     }
 
     @MainActor

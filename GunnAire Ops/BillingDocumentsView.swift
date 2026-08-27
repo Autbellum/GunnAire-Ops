@@ -17,6 +17,7 @@ struct BillingDocumentsView: View {
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
+    @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \InventoryMovement.createdAt, order: .reverse) private var inventoryMovements: [InventoryMovement]
@@ -38,6 +39,9 @@ struct BillingDocumentsView: View {
     @State private var selectedDocumentKind: BillingDocumentKind
     @State private var selectedJobStage: JobDocumentationStage = .work
     @State private var selectedCustomerID: UUID?
+    @State private var selectedServiceLocationID: UUID?
+    @State private var loadedSiteAddressSnapshot: String?
+    @State private var loadedSiteAddressCustomerID: UUID?
     @State private var selectedItems: Set<UUID> = []
     @State private var notes = ""
     @State private var changeOrderParentEstimateID: UUID?
@@ -153,6 +157,51 @@ struct BillingDocumentsView: View {
     private var selectedCustomer: Customer? {
         guard let selectedCustomerID else { return nil }
         return customers.first { $0.id == selectedCustomerID }
+    }
+
+    private var activeServiceLocations: [CustomerServiceLocation] {
+        guard let customer = selectedCustomer ?? activeServiceCall?.customer else { return [] }
+        return CustomerServiceLocationPolicy.locations(for: customer.id, in: serviceLocations)
+    }
+
+    private var selectedServiceLocation: CustomerServiceLocation? {
+        guard let customer = selectedCustomer ?? activeServiceCall?.customer else { return nil }
+        return CustomerServiceLocationPolicy.location(
+            id: selectedServiceLocationID,
+            customerID: customer.id,
+            in: serviceLocations,
+            includeInactive: true
+        )
+    }
+
+    private var selectableServiceLocations: [CustomerServiceLocation] {
+        guard let selectedServiceLocation,
+              !selectedServiceLocation.isActive,
+              !activeServiceLocations.contains(where: { $0.id == selectedServiceLocation.id }) else {
+            return activeServiceLocations
+        }
+        return activeServiceLocations + [selectedServiceLocation]
+    }
+
+    private var serviceLocationSelection: Binding<UUID?> {
+        Binding(
+            get: { selectedServiceLocationID },
+            set: { newValue in
+                selectedServiceLocationID = newValue
+                loadedSiteAddressSnapshot = nil
+                loadedSiteAddressCustomerID = nil
+            }
+        )
+    }
+
+    private var selectedSiteAddressSnapshot: String? {
+        let candidate = activeServiceCall?.siteAddress
+            ?? selectedServiceLocation?.address
+            ?? (loadedSiteAddressCustomerID == selectedCustomer?.id ? loadedSiteAddressSnapshot : nil)
+            ?? selectedCustomer?.address
+            ?? customerAddress
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private var generatedCustomerDocumentRecipient: Customer? {
@@ -2063,6 +2112,29 @@ GunnAire
                         showsClearButton: true
                     )
 
+                    if let selectedCustomer {
+                        if let call = activeServiceCall {
+                            LabeledContent("Service Property") {
+                                Text(call.siteAddress ?? selectedCustomer.address ?? "Not set")
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                        } else if !selectableServiceLocations.isEmpty {
+                            Picker("Service Property", selection: serviceLocationSelection) {
+                                Text("Billing / default address").tag(nil as UUID?)
+                                ForEach(selectableServiceLocations) { location in
+                                    Text(location.isActive ? location.displayName : "\(location.displayName) (inactive)")
+                                        .tag(location.id as UUID?)
+                                }
+                            }
+                            if let address = selectedSiteAddressSnapshot {
+                                Text("\(selectedDocumentKind.rawValue) service address: \(address)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
                     if let call = activeServiceCall {
                         Button(selectedCustomerID == call.customer.id ? "Using Job Customer" : "Use Job Customer") {
                             selectedCustomerID = call.customer.id
@@ -2684,8 +2756,12 @@ GunnAire
             }
             .onAppear(perform: loadInitialContextIfNeeded)
             .onChange(of: selectedCustomerID) { _, newValue in
-                guard let newValue, let customer = customers.first(where: { $0.id == newValue }) else { return }
+                guard let newValue, let customer = customers.first(where: { $0.id == newValue }) else {
+                    selectedServiceLocationID = nil
+                    return
+                }
                 populateCustomerFields(from: customer)
+                synchronizeServiceLocation(for: customer)
             }
         }
         }
@@ -2699,6 +2775,7 @@ GunnAire
         if let call = activeServiceCall {
             selectedCustomerID = call.customer.id
             populateCustomerFields(from: call.customer)
+            selectedServiceLocationID = call.serviceLocationID
             if notes.isEmpty, let callNotes = call.notes {
                 notes = callNotes
             }
@@ -2794,14 +2871,26 @@ GunnAire
         customerAddress = customer.address ?? ""
     }
 
+    private func synchronizeServiceLocation(for customer: Customer) {
+        if let activeServiceCall, activeServiceCall.customer.id == customer.id {
+            selectedServiceLocationID = activeServiceCall.serviceLocationID
+            return
+        }
+        if CustomerServiceLocationPolicy.location(
+            id: selectedServiceLocationID,
+            customerID: customer.id,
+            in: serviceLocations
+        ) != nil {
+            return
+        }
+        selectedServiceLocationID = CustomerServiceLocationPolicy
+            .preferredLocation(for: customer.id, in: serviceLocations)?.id
+    }
+
     private func saveCustomerProfile() {
         let customer = resolveCustomerForDocument()
         selectedCustomerID = customer.id
-        activeServiceCall?.customer = customer
-        if let trimmedAddress = customer.address?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !trimmedAddress.isEmpty {
-            activeServiceCall?.siteAddress = trimmedAddress
-        }
+        BillingCustomerHandoff.apply(customer: customer, to: activeServiceCall)
         if isQuickBooksConnected, customer.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
             syncCustomerToQuickBooks(customer)
         } else {
@@ -5038,6 +5127,7 @@ GunnAire
         proposalGroupID = estimate.proposalGroupID
         proposalOption = estimate.proposalOptionKind ?? .standalone
         proposalIsRecommended = estimate.proposalIsRecommended
+        selectedServiceLocationID = estimate.serviceLocationID
         applyDocumentContext(
             customer: estimate.customer,
             notes: estimate.notes,
@@ -5046,6 +5136,8 @@ GunnAire
             preferredKind: .estimate,
             announce: announce
         )
+        loadedSiteAddressSnapshot = estimate.siteAddress
+        loadedSiteAddressCustomerID = estimate.customer.id
     }
 
     private func beginChangeOrder(from estimate: Estimate) {
@@ -5054,6 +5146,7 @@ GunnAire
         proposalGroupID = nil
         proposalOption = .standalone
         proposalIsRecommended = false
+        selectedServiceLocationID = estimate.serviceLocationID
         applyDocumentContext(
             customer: estimate.customer,
             notes: estimate.notes,
@@ -5062,6 +5155,8 @@ GunnAire
             preferredKind: .estimate,
             announce: false
         )
+        loadedSiteAddressSnapshot = estimate.siteAddress
+        loadedSiteAddressCustomerID = estimate.customer.id
         actionMessage = "Change order started. Update the line items, explain the scope change, then send this revised proposal for a new approval."
     }
 
@@ -5114,6 +5209,7 @@ GunnAire
     }
 
     private func prepareInvoiceFromEstimate(_ estimate: Estimate) {
+        selectedServiceLocationID = estimate.serviceLocationID
         applyDocumentContext(
             customer: estimate.customer,
             notes: estimate.notes,
@@ -5122,6 +5218,8 @@ GunnAire
             preferredKind: .invoice,
             announce: false
         )
+        loadedSiteAddressSnapshot = estimate.siteAddress
+        loadedSiteAddressCustomerID = estimate.customer.id
         actionMessage = "Estimate loaded into the invoice builder for this job."
     }
 
@@ -5165,6 +5263,7 @@ GunnAire
     }
 
     private func loadInvoiceIntoBuilder(_ invoice: Invoice, announce: Bool = true) {
+        selectedServiceLocationID = invoice.serviceLocationID
         applyDocumentContext(
             customer: invoice.customer,
             notes: invoice.notes,
@@ -5173,6 +5272,8 @@ GunnAire
             preferredKind: .invoice,
             announce: announce
         )
+        loadedSiteAddressSnapshot = invoice.siteAddress
+        loadedSiteAddressCustomerID = invoice.customer.id
     }
 
     private func applyDocumentContext(
@@ -5855,12 +5956,8 @@ GunnAire
         let customer = resolveCustomerForDocument()
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         selectedCustomerID = customer.id
-        activeServiceCall?.customer = customer
+        BillingCustomerHandoff.apply(customer: customer, to: activeServiceCall)
         activeServiceCall?.notes = trimmedNotes.isEmpty ? activeServiceCall?.notes : trimmedNotes
-        if let trimmedAddress = customer.address?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !trimmedAddress.isEmpty {
-            activeServiceCall?.siteAddress = trimmedAddress
-        }
 
         switch selectedDocumentKind {
         case .estimate:
@@ -5876,6 +5973,8 @@ GunnAire
             }
             let estimate = Estimate(
                 serviceCallID: activeServiceCall?.id,
+                serviceLocationID: activeServiceCall?.serviceLocationID ?? selectedServiceLocationID,
+                siteAddress: selectedSiteAddressSnapshot,
                 parentEstimateID: changeOrderParentEstimateID,
                 changeOrderReason: changeOrderParentEstimateID == nil ? nil : normalizedChangeOrderReason,
                 proposalGroupID: resolvedProposalGroupID,
@@ -5936,6 +6035,8 @@ GunnAire
                 invoice = currentJobInvoice
                 isUpdatingExistingInvoice = true
                 invoice.customer = customer
+                invoice.serviceLocationID = activeServiceCall?.serviceLocationID ?? selectedServiceLocationID
+                invoice.siteAddress = selectedSiteAddressSnapshot
                 invoice.workType = InvoiceWorkType.inferred(from: activeServiceCall)
                 invoice.lineItemSummary = selectedSummary
                 invoice.catalogSnapshotJSON = selectedCatalogSnapshotJSON
@@ -5951,6 +6052,8 @@ GunnAire
             } else {
                 invoice = Invoice(
                     serviceCallID: activeServiceCall?.id,
+                    serviceLocationID: activeServiceCall?.serviceLocationID ?? selectedServiceLocationID,
+                    siteAddress: selectedSiteAddressSnapshot,
                     customer: customer,
                     workType: InvoiceWorkType.inferred(from: activeServiceCall),
                     lineItemSummary: selectedSummary,
@@ -6013,7 +6116,8 @@ GunnAire
                 let payload = QuickBooksEstimateCreate(
                     CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
                     Line: quickBooksLineItems(for: syncedItems, snapshotJSON: estimate.catalogSnapshotJSON),
-                    PrivateNote: quickBooksPrivateNote(for: estimate)
+                    PrivateNote: quickBooksPrivateNote(for: estimate),
+                    ShipAddr: estimate.siteAddress.flatMap(nilIfBlank).map { QuickBooksAddress(Line1: $0) }
                 )
                 liveAPI.createEstimate(payload) { apiResult in
                     DispatchQueue.main.async {
@@ -6086,7 +6190,8 @@ GunnAire
             CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
             Line: lines,
             PrivateNote: invoice.notes,
-            BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) }
+            BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
+            ShipAddr: invoice.siteAddress.flatMap(nilIfBlank).map { QuickBooksAddress(Line1: $0) }
         )
         liveAPI.createInvoice(payload) { apiResult in
             DispatchQueue.main.async {
@@ -6129,7 +6234,8 @@ GunnAire
                         CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
                         Line: lines,
                         PrivateNote: invoice.notes,
-                        BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) }
+                        BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
+                        ShipAddr: invoice.siteAddress.flatMap(nilIfBlank).map { QuickBooksAddress(Line1: $0) }
                     )
                     liveAPI.updateInvoice(payload) { updateResult in
                         DispatchQueue.main.async {
@@ -6360,14 +6466,7 @@ GunnAire
 
     @discardableResult
     private func convertEstimate(_ estimate: Estimate) -> (invoice: Invoice, reportErrorMessage: String?) {
-        let invoice = Invoice(
-            serviceCallID: estimate.serviceCallID,
-            customer: estimate.customer,
-            lineItemSummary: estimate.lineItemSummary,
-            catalogSnapshotJSON: estimate.catalogSnapshotJSON,
-            amount: estimate.amount,
-            notes: estimate.notes
-        )
+        let invoice = Invoice.draft(from: estimate)
         estimate.status = "invoiced"
         modelContext.insert(invoice)
         var linkedServiceCall: ServiceCall?
@@ -6521,6 +6620,14 @@ GunnAire
     }
 }
 
+enum BillingCustomerHandoff {
+    /// Customer.address is the billing/default address. A job's service address is
+    /// a historical operational snapshot and must not be rewritten by billing edits.
+    static func apply(customer: Customer, to serviceCall: ServiceCall?) {
+        serviceCall?.customer = customer
+    }
+}
+
 @ViewBuilder
 private func workspaceMetricView(title: String, value: String) -> some View {
     VStack(alignment: .leading, spacing: 4) {
@@ -6611,8 +6718,8 @@ enum ApprovedEstimateScheduling {
         let workOrder = ServiceCall(
             googleEventManagedByApp: true,
             eventTitle: "\(workType.displayName) — \(estimate.customer.name)",
-            siteAddress: sourceCall?.siteAddress ?? estimate.customer.address,
-            serviceLocationID: sourceCall?.serviceLocationID,
+            siteAddress: sourceCall?.siteAddress ?? estimate.siteAddress ?? estimate.customer.address,
+            serviceLocationID: sourceCall?.serviceLocationID ?? estimate.serviceLocationID,
             equipmentName: sourceCall?.equipmentName,
             equipmentManufacturer: sourceCall?.equipmentManufacturer,
             equipmentModel: sourceCall?.equipmentModel,

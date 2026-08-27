@@ -48,6 +48,14 @@ and schema status as of 2026-08-27:
    and the refreshed matching schema exports are still pending authenticated
    Apple approval. The version-seven bootstrap and cleanup paths are covered by
    focused persistence and deletion tests.
+   The signed version-eight bootstrap then completed on 2026-08-27 and seeded
+   `CD_Estimate.serviceLocationID`, `CD_Estimate.siteAddress`,
+   `CD_Invoice.serviceLocationID`, and `CD_Invoice.siteAddress`. These fields
+   preserve the selected service property through standalone proposals,
+   approved-work scheduling, estimate-to-invoice conversion, customer PDFs,
+   and QuickBooks `ShipAddr` synchronization. Exact Development Console review,
+   the combined five-record-type Production deployment, and refreshed exports
+   are pending a fresh Apple two-factor session.
 4. Sign the company iPad and Mac into the same approved business iCloud account
    and sign every staff member into GunnAire Ops with their own business login.
 5. Verify offline edits made on each physical device merge after reconnection before

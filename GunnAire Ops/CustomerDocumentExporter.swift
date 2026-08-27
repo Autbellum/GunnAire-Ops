@@ -884,6 +884,7 @@ enum CustomerDocumentExporter {
         var rows = [
             ("Created", formattedDateTime(estimate.createdAt)),
             ("Status", estimate.status.capitalized),
+            ("Service Address", estimate.siteAddress ?? ""),
             ("QuickBooks ID", estimate.quickBooksID ?? ""),
             ("Items", estimate.lineItemSummary),
             ("Notes", estimate.notes ?? ""),
@@ -989,6 +990,9 @@ enum CustomerDocumentExporter {
             ("Payments", currency(paidTotal)),
             ("Balance Due", currency(balance))
         ]
+        if let siteAddress = normalizedValue(invoice.siteAddress) {
+            rows.insert(("Service Address", siteAddress), at: 2)
+        }
         if let documentationStatus {
             rows.append(("Documentation Status", documentationStatus.statusLabel))
             rows.append(("Documentation Summary", documentationStatus.summary))
