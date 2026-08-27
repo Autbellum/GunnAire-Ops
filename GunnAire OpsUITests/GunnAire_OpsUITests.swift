@@ -107,6 +107,44 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdministratorCanMapTechnicianToAnExplicitQuickBooksTimeWorker() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        app.staticTexts["Sync & Integrations"].tap()
+        XCTAssertTrue(app.navigationBars["Sync & Integrations"].waitForExistence(timeout: 3))
+
+        let form = app.collectionViews["SyncIntegrationsForm"]
+        XCTAssertTrue(form.waitForExistence(timeout: 3))
+        let editButton = app.buttons["EditTechnician-A1000000-0000-4000-8000-000000000006"]
+        for _ in 0..<12 where !editButton.exists {
+            form.swipeUp()
+        }
+        XCTAssertTrue(editButton.waitForExistence(timeout: 3))
+        editButton.tap()
+
+        let editor = app.navigationBars["Edit Technician"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 3))
+        let quickBooksWorkerID = app.textFields["TechnicianQBOTimeEntityRef"]
+        XCTAssertTrue(quickBooksWorkerID.waitForExistence(timeout: 3))
+        quickBooksWorkerID.tap()
+        quickBooksWorkerID.typeText("QBO-EMP-42")
+        editor.buttons["Save"].tap()
+
+        XCTAssertTrue(app.navigationBars["Sync & Integrations"].waitForExistence(timeout: 3))
+        XCTAssertTrue(editButton.waitForExistence(timeout: 3))
+        editButton.tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.textFields["TechnicianQBOTimeEntityRef"].value as? String, "QBO-EMP-42")
+    }
+
+    @MainActor
     func testBusinessReportsUsesFocusedManagementWorkspaces() throws {
         let app = XCUIApplication()
         app.launchArguments = [

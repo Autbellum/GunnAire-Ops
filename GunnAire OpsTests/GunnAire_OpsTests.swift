@@ -615,6 +615,119 @@ struct GunnAire_OpsTests {
         #expect(entry.durationMinutes == 95)
     }
 
+    @Test func quickBooksTimeMappingIsTechnicianSpecificAndFailsClosedOnConflict() async throws {
+        let mapped = Technician(
+            name: "Mapped Technician",
+            contactInfo: "mapped@gunnaire.com",
+            quickBooksTimeEntityKind: .employee,
+            quickBooksTimeEntityRef: "  123  "
+        )
+        let unrelated = Technician(
+            name: "Other Technician",
+            contactInfo: "other@gunnaire.com",
+            quickBooksTimeEntityKind: .vendor,
+            quickBooksTimeEntityRef: "456"
+        )
+
+        let mapping = try #require(QuickBooksTimeActivitySync.mapping(
+            for: "MAPPED@GUNNAIRE.COM",
+            technicians: [mapped, unrelated]
+        ))
+        #expect(mapping.kind == .employee)
+        #expect(mapping.referenceID == "123")
+        #expect(mapping.technicianName == "Mapped Technician")
+        #expect(QuickBooksTimeActivitySync.mapping(
+            for: "missing@gunnaire.com",
+            technicians: [mapped, unrelated]
+        ) == nil)
+
+        let conflictingDuplicate = Technician(
+            name: "Conflicting Cloud Copy",
+            contactInfo: "mapped@gunnaire.com",
+            quickBooksTimeEntityKind: .vendor,
+            quickBooksTimeEntityRef: "999"
+        )
+        #expect(QuickBooksTimeActivitySync.mapping(
+            for: mapped.contactInfo ?? "",
+            technicians: [mapped, conflictingDuplicate]
+        ) == nil)
+    }
+
+    @MainActor
+    @Test func technicianQuickBooksTimeMappingPersistsInTheSharedModelSchema() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let technicianID = UUID(uuidString: "A1000000-0000-4000-8000-000000000098")!
+        context.insert(Technician(
+            id: technicianID,
+            name: "Persistent Time Technician",
+            contactInfo: "persistent-time@gunnaire.com",
+            quickBooksTimeEntityKind: .vendor,
+            quickBooksTimeEntityRef: "QBO-VENDOR-98"
+        ))
+        try context.save()
+
+        let descriptor = FetchDescriptor<Technician>(
+            predicate: #Predicate { $0.id == technicianID }
+        )
+        let restored = try #require(context.fetch(descriptor).first)
+        #expect(restored.quickBooksTimeEntityKind == .vendor)
+        #expect(restored.quickBooksTimeEntityRef == "QBO-VENDOR-98")
+        #expect(restored.quickBooksTimeMapping?.referenceID == "QBO-VENDOR-98")
+    }
+
+    @Test func quickBooksTimePayloadUsesMappedWorkerAndStableReconciliationMarker() async throws {
+        let customer = Customer(quickBooksID: "QBO-CUSTOMER", name: "Time Customer")
+        let call = ServiceCall(type: .service, scheduledDate: Date(), customer: customer)
+        let entryID = UUID(uuidString: "A1000000-0000-4000-8000-000000000099")!
+        let clockIn = Date(timeIntervalSinceReferenceDate: 100_000)
+        let entry = TimeEntry(
+            id: entryID,
+            userEmail: "vendor-tech@gunnaire.com",
+            clockIn: clockIn,
+            clockOut: clockIn.addingTimeInterval(95 * 60),
+            serviceCall: call,
+            notes: "Replaced failed capacitor"
+        )
+        let mapping = TechnicianQuickBooksTimeMapping(
+            kind: .vendor,
+            referenceID: "QBO-VENDOR-17",
+            technicianName: "Vendor Technician"
+        )
+
+        let payload = try #require(QuickBooksTimeActivitySync.makePayload(for: entry, mapping: mapping))
+        #expect(payload.NameOf == "Vendor")
+        #expect(payload.EmployeeRef == nil)
+        #expect(payload.VendorRef?.value == "QBO-VENDOR-17")
+        #expect(payload.VendorRef?.name == "Vendor Technician")
+        #expect(payload.CustomerRef?.value == "QBO-CUSTOMER")
+        #expect(payload.Hours == 1)
+        #expect(payload.Minutes == 35)
+        #expect(payload.Description?.contains(QuickBooksTimeActivitySync.operationMarker(for: entryID)) == true)
+
+        let existing = QuickBooksTimeActivity(
+            Id: "QBO-TIME-88",
+            SyncToken: "2",
+            TxnDate: payload.TxnDate,
+            NameOf: payload.NameOf,
+            EmployeeRef: nil,
+            VendorRef: payload.VendorRef,
+            CustomerRef: payload.CustomerRef,
+            ProjectRef: payload.ProjectRef,
+            ItemRef: payload.ItemRef,
+            PayrollItemRef: payload.PayrollItemRef,
+            Hours: payload.Hours,
+            Minutes: payload.Minutes,
+            Description: payload.Description
+        )
+        #expect(QuickBooksTimeActivitySync.matchingActivity(for: entryID, in: [existing])?.Id == "QBO-TIME-88")
+        #expect(QuickBooksTimeActivitySync.matchingActivity(for: UUID(), in: [existing]) == nil)
+    }
+
     @Test func promisedArrivalWindowStaysSeparateFromTechnicianScheduleAndRejectsInvalidRanges() async throws {
         let customer = Customer(name: "Arrival Window Customer")
         let scheduled = Date(timeIntervalSinceReferenceDate: 70_000)

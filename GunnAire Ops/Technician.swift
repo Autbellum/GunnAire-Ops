@@ -46,6 +46,28 @@ enum TechnicianServiceAreaMatch: Int, Comparable {
     }
 }
 
+enum TechnicianQuickBooksTimeEntityKind: String, CaseIterable, Identifiable {
+    case employee
+    case vendor
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .employee: "Employee"
+        case .vendor: "Vendor"
+        }
+    }
+
+    var quickBooksNameOf: String { displayName }
+}
+
+struct TechnicianQuickBooksTimeMapping: Equatable {
+    let kind: TechnicianQuickBooksTimeEntityKind
+    let referenceID: String
+    let technicianName: String
+}
+
 @Model
 final class Technician {
     var id: UUID = UUID()
@@ -58,6 +80,10 @@ final class Technician {
     var serviceAreasJSON: String?
     /// Internal loaded labor cost used for job-cost reporting. It is never shown on customer documents.
     var laborCostPerHour: Double?
+    /// Explicit QBO worker mapping used for TimeActivity creation. A global
+    /// Employee/Vendor reference is unsafe once more than one technician clocks time.
+    var quickBooksTimeEntityKindRawValue: String?
+    var quickBooksTimeEntityRef: String?
     @Relationship(originalName: "assignedServiceCalls", inverse: \ServiceCall.assignedTechnician) private var storedAssignedServiceCalls: [ServiceCall]?
 
     var assignedServiceCalls: [ServiceCall] {
@@ -76,7 +102,9 @@ final class Technician {
         supportedEquipmentTypes: Set<HVACEquipmentType> = [],
         qualificationNotes: String? = nil,
         serviceAreas: [String] = [],
-        laborCostPerHour: Double? = nil
+        laborCostPerHour: Double? = nil,
+        quickBooksTimeEntityKind: TechnicianQuickBooksTimeEntityKind? = nil,
+        quickBooksTimeEntityRef: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -85,6 +113,8 @@ final class Technician {
         self.qualificationNotes = qualificationNotes
         self.serviceAreasJSON = Self.encodedServiceAreas(serviceAreas)
         self.laborCostPerHour = laborCostPerHour
+        self.quickBooksTimeEntityKindRawValue = quickBooksTimeEntityKind?.rawValue
+        self.quickBooksTimeEntityRef = Self.normalizedOptionalValue(quickBooksTimeEntityRef)
     }
 
     var supportedEquipmentTypes: Set<HVACEquipmentType> {
@@ -99,6 +129,23 @@ final class Technician {
         set {
             supportedEquipmentTypesJSON = Self.encodedEquipmentTypes(newValue)
         }
+    }
+
+    var quickBooksTimeEntityKind: TechnicianQuickBooksTimeEntityKind? {
+        get {
+            quickBooksTimeEntityKindRawValue.flatMap(TechnicianQuickBooksTimeEntityKind.init(rawValue:))
+        }
+        set { quickBooksTimeEntityKindRawValue = newValue?.rawValue }
+    }
+
+    var quickBooksTimeMapping: TechnicianQuickBooksTimeMapping? {
+        guard let kind = quickBooksTimeEntityKind,
+              let referenceID = Self.normalizedOptionalValue(quickBooksTimeEntityRef) else { return nil }
+        return TechnicianQuickBooksTimeMapping(
+            kind: kind,
+            referenceID: referenceID,
+            technicianName: name
+        )
     }
 
     func qualification(for equipmentType: HVACEquipmentType?) -> TechnicianEquipmentQualification {
@@ -161,5 +208,11 @@ final class Technician {
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
+    }
+
+    private static func normalizedOptionalValue(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 }

@@ -79,6 +79,14 @@ struct SettingsView: View {
         AppAccess.isAdmin(email: currentUserEmail, users: users)
     }
 
+    private var quickBooksTimeMappedTechnicianCount: Int {
+        technicians.filter { $0.quickBooksTimeMapping != nil }.count
+    }
+
+    private var quickBooksTimeMappingsReady: Bool {
+        !technicians.isEmpty && quickBooksTimeMappedTechnicianCount == technicians.count
+    }
+
     private var splashLaunchBehaviorDescription: String {
         guard enableSplashVideo else { return "Disabled. The app will open straight to the main UI." }
         guard SplashVideoLocator.resolveURL() != nil else { return "No MP4 found. The app will show the logo briefly." }
@@ -257,15 +265,15 @@ struct SettingsView: View {
                             settingsToggle("Require Technician Clock In", systemImage: "clock", isOn: $requireTechnicianClockIn)
                             if Config.QuickBooksTime.enabled {
                                 Label(
-                                    Config.QuickBooksTime.isConfiguredForSync
-                                        ? "QBO TimeActivity sync is enabled after clock-out."
-                                        : "QBO TimeActivity sync is enabled but missing QB_TIME_ACTIVITY_ENTITY_REF.",
-                                    systemImage: Config.QuickBooksTime.isConfiguredForSync ? "checkmark.circle" : "exclamationmark.triangle"
+                                    quickBooksTimeMappingsReady
+                                        ? "QBO TimeActivity sync is mapped for all \(technicians.count) technicians."
+                                        : "QBO TimeActivity mapping is complete for \(quickBooksTimeMappedTechnicianCount) of \(technicians.count) technicians.",
+                                    systemImage: quickBooksTimeMappingsReady ? "checkmark.circle" : "exclamationmark.triangle"
                                 )
                                 .font(.caption)
-                                .foregroundColor(Config.QuickBooksTime.isConfiguredForSync ? .secondary : .orange)
+                                .foregroundColor(quickBooksTimeMappingsReady ? .secondary : .orange)
 
-                                Text("QBO supports completed TimeActivity records with EmployeeRef or VendorRef, duration hours/minutes, and optional CustomerRef, ItemRef, ProjectRef, and PayrollItemRef. It does not provide a live clock-in session API through QBO Accounting.")
+                                Text("Edit each technician in Sync & Integrations and enter the exact QuickBooks Employee or Vendor ID. Completed entries reconcile their stable GunnAire marker before create and can be retried without silently switching workers.")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }

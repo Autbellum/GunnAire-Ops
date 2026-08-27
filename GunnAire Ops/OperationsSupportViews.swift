@@ -942,6 +942,7 @@ struct SyncIntegrationsView: View {
                                     }
                                     .buttonStyle(.bordered)
                                     .controlSize(.small)
+                                    .accessibilityIdentifier("EditTechnician-\(technician.id.uuidString)")
                                 }
 
                                 LabeledContent("Status") {
@@ -1039,6 +1040,7 @@ struct SyncIntegrationsView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
             }
+            .accessibilityIdentifier("SyncIntegrationsForm")
             .navigationTitle("Sync & Integrations")
             .onAppear {
                 if googleAuth.isAuthenticated && availableCalendars.isEmpty {
@@ -3717,6 +3719,8 @@ private struct TechnicianEditorView: View {
     @State private var qualificationNotes: String
     @State private var serviceAreas: String
     @State private var laborCostPerHour: String
+    @State private var quickBooksTimeEntityKind: TechnicianQuickBooksTimeEntityKind
+    @State private var quickBooksTimeEntityRef: String
 
     init(technician: Technician) {
         self.technician = technician
@@ -3726,6 +3730,8 @@ private struct TechnicianEditorView: View {
         _qualificationNotes = State(initialValue: technician.qualificationNotes ?? "")
         _serviceAreas = State(initialValue: technician.serviceAreas.joined(separator: ", "))
         _laborCostPerHour = State(initialValue: technician.laborCostPerHour.map { String(format: "%.2f", $0) } ?? "")
+        _quickBooksTimeEntityKind = State(initialValue: technician.quickBooksTimeEntityKind ?? .employee)
+        _quickBooksTimeEntityRef = State(initialValue: technician.quickBooksTimeEntityRef ?? "")
     }
 
     var body: some View {
@@ -3739,6 +3745,19 @@ private struct TechnicianEditorView: View {
                     TextField("Loaded labor cost per hour", text: $laborCostPerHour)
                         .keyboardType(.decimalPad)
                     Text("Used only in internal job-cost reporting after completed time is recorded. It is never shown on customer estimates or invoices.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Section("QuickBooks Time") {
+                    Picker("Worker type", selection: $quickBooksTimeEntityKind) {
+                        ForEach(TechnicianQuickBooksTimeEntityKind.allCases) { kind in
+                            Text(kind.displayName).tag(kind)
+                        }
+                    }
+                    TextField("QuickBooks employee or vendor ID", text: $quickBooksTimeEntityRef)
+                        .textInputAutocapitalization(.never)
+                        .accessibilityIdentifier("TechnicianQBOTimeEntityRef")
+                    Text("Copy the exact Employee or Vendor ID from the connected QuickBooks company. Completed time stays local until this technician has an explicit mapping; GunnAire never reuses another worker's ID.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -3782,6 +3801,9 @@ private struct TechnicianEditorView: View {
                         technician.qualificationNotes = qualificationNotes.nilIfBlank
                         technician.serviceAreas = Technician.serviceAreas(from: serviceAreas)
                         technician.laborCostPerHour = Double(laborCostPerHour.trimmingCharacters(in: .whitespacesAndNewlines))
+                        let timeEntityRef = quickBooksTimeEntityRef.trimmingCharacters(in: .whitespacesAndNewlines)
+                        technician.quickBooksTimeEntityKind = timeEntityRef.isEmpty ? nil : quickBooksTimeEntityKind
+                        technician.quickBooksTimeEntityRef = timeEntityRef.isEmpty ? nil : timeEntityRef
                         dismiss()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
