@@ -916,8 +916,21 @@ struct ReceiptsAndBillsView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
+            if order.status == .requested {
+                Text("Field restock request • review the supplier, quantity, and cost before creating an order.")
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+            }
             HStack {
-                if order.status == .draft {
+                if order.status == .requested {
+                    Button("Prepare Draft") { preparePurchaseOrderRequest(order) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.brandGold)
+                        .foregroundStyle(Color.primaryBlack)
+                        .accessibilityIdentifier("PrepareRestockRequest-\(order.id.uuidString)")
+                    Button("Cancel", role: .destructive) { updatePurchaseOrder(order, to: .cancelled) }
+                        .buttonStyle(.bordered)
+                } else if order.status == .draft {
                     Button("Mark Ordered") { updatePurchaseOrder(order, to: .ordered) }
                         .buttonStyle(.bordered)
                     Button("Cancel", role: .destructive) { updatePurchaseOrder(order, to: .cancelled) }
@@ -928,18 +941,20 @@ struct ReceiptsAndBillsView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(.green)
                 }
-                Button("Copy Order") {
-                    UIPasteboard.general.string = order.supplierOrderSummary
-                    purchaseOrderMessage = "Copied \(order.number). Paste it into the approved supplier portal or an email, then mark it ordered only after the supplier accepts it."
-                }
-                .buttonStyle(.bordered)
-                Button("Accounting") {
-                    GunnAireAppIntentRouter.store(.quickBooks)
-                }
-                .buttonStyle(.bordered)
-                if let urlText = selectedPurchaseURL(for: order), let url = URL(string: urlText) {
-                    Link("Open Supplier", destination: url)
-                        .buttonStyle(.bordered)
+                if order.status != .requested {
+                    Button("Copy Order") {
+                        UIPasteboard.general.string = order.supplierOrderSummary
+                        purchaseOrderMessage = "Copied \(order.number). Paste it into the approved supplier portal or an email, then mark it ordered only after the supplier accepts it."
+                    }
+                    .buttonStyle(.bordered)
+                    Button("Accounting") {
+                        GunnAireAppIntentRouter.store(.quickBooks)
+                    }
+                    .buttonStyle(.bordered)
+                    if let urlText = selectedPurchaseURL(for: order), let url = URL(string: urlText) {
+                        Link("Open Supplier", destination: url)
+                            .buttonStyle(.bordered)
+                    }
                 }
             }
         }
@@ -948,6 +963,7 @@ struct ReceiptsAndBillsView: View {
 
     private func purchaseOrderStatusTint(_ status: PurchaseOrderStatus) -> Color {
         switch status {
+        case .requested: .orange
         case .draft: .secondary
         case .ordered: .orange
         case .received: .green
@@ -1831,11 +1847,36 @@ private extension ReceiptsAndBillsView {
                 purchaseOrderMessage = "\(order.number) is marked ordered. Attach the supplier confirmation or bill to preserve the accounting trail."
             case .received:
                 purchaseOrderMessage = "Use Receive to record this order's stock destination."
-            case .draft, .cancelled:
+            case .requested, .draft, .cancelled:
                 purchaseOrderMessage = "Updated \(order.number)."
             }
         } catch {
             purchaseOrderMessage = "Could not update \(order.number): \(error.localizedDescription)"
+        }
+    }
+
+    func preparePurchaseOrderRequest(_ order: PurchaseOrder) {
+        guard requireAdministrator(for: "Preparing restock requests") else { return }
+        let priorVendorName = order.vendorName
+        let priorVendorQuickBooksID = order.vendorQuickBooksID
+        let priorItemSKU = order.itemSKU
+        let priorVendorPartNumber = order.vendorPartNumber
+        let priorUnitCost = order.unitCost
+        guard InventoryReplenishment.prepareDraft(order, catalogItems: catalogItems) else {
+            purchaseOrderMessage = "Add a preferred supplier to \(order.itemName) in the pricebook before preparing \(order.number). The field request remains open."
+            return
+        }
+        do {
+            try modelContext.save()
+            purchaseOrderMessage = "Prepared \(order.number) as a draft for \(order.vendorName). Review quantity and cost before marking it ordered."
+        } catch {
+            order.vendorName = priorVendorName
+            order.vendorQuickBooksID = priorVendorQuickBooksID
+            order.itemSKU = priorItemSKU
+            order.vendorPartNumber = priorVendorPartNumber
+            order.unitCost = priorUnitCost
+            order.status = .requested
+            purchaseOrderMessage = "Could not prepare \(order.number): \(error.localizedDescription)"
         }
     }
 

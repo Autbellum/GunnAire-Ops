@@ -20,6 +20,7 @@ struct BillingDocumentsView: View {
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \InventoryMovement.createdAt, order: .reverse) private var inventoryMovements: [InventoryMovement]
+    @Query(sort: \PurchaseOrder.updatedAt, order: .reverse) private var purchaseOrders: [PurchaseOrder]
 
     private let initialServiceCall: ServiceCall?
     private let openCloseoutOnAppear: Bool
@@ -588,6 +589,10 @@ struct BillingDocumentsView: View {
 
     private var canRecordJobMaterials: Bool {
         AppAccess.canRecordJobMaterials(email: currentUserEmail, users: users)
+    }
+
+    private var canRequestJobMaterialReplenishment: Bool {
+        AppAccess.canRequestJobMaterialReplenishment(email: currentUserEmail, users: users)
     }
 
     private var mapsURL: URL? {
@@ -2797,6 +2802,20 @@ GunnAire
                         at: source,
                         movements: inventoryMovements
                     ) + sourceStatus.openReservedQuantity
+                    let sourceOnHand = InventoryLedger.onHandQuantity(
+                        for: requirement.item.id,
+                        at: source,
+                        movements: inventoryMovements
+                    )
+                    let restockQuantity = InventoryReplenishment.suggestedQuantity(
+                        for: requirement.item,
+                        onHand: sourceOnHand
+                    )
+                    let existingRestockOrder = InventoryReplenishment.openOrder(
+                        for: requirement.item,
+                        serviceCallID: call.id,
+                        purchaseOrders: purchaseOrders
+                    )
 
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(alignment: .firstTextBaseline) {
@@ -2846,6 +2865,35 @@ GunnAire
                             Text("Recorded use exceeds the invoiced quantity by \(status.overRecordedQuantity.formatted(.number.precision(.fractionLength(0...2)))). Review the invoice or record a return before closeout.")
                                 .font(.caption2)
                                 .foregroundStyle(.orange)
+                        }
+
+                        if restockQuantity > 0.0001 {
+                            HStack {
+                                Label(
+                                    "\(source) needs \(restockQuantity.formatted(.number.precision(.fractionLength(0...2)))) to reach its reorder point",
+                                    systemImage: "exclamationmark.triangle.fill"
+                                )
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                                Spacer()
+                                if let existingRestockOrder {
+                                    Text("\(existingRestockOrder.status.displayName) • \(existingRestockOrder.number)")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                        .accessibilityIdentifier("RestockRequestStatus-\(requirement.item.id.uuidString)")
+                                } else if canRequestJobMaterialReplenishment {
+                                    Button("Request Restock") {
+                                        requestMaterialRestock(
+                                            requirement,
+                                            call: call,
+                                            source: source,
+                                            onHand: sourceOnHand
+                                        )
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .accessibilityIdentifier("RequestRestock-\(requirement.item.id.uuidString)")
+                                }
+                            }
                         }
                     }
                 }
@@ -2987,6 +3035,59 @@ GunnAire
             modelContext.delete(activity)
             modelContext.delete(movement)
             jobMaterialMessage = "Could not save material use: \(error.localizedDescription)"
+        }
+    }
+
+    private func requestMaterialRestock(
+        _ requirement: JobMaterialRequirement,
+        call: ServiceCall,
+        source: String,
+        onHand: Double
+    ) {
+        guard canRequestJobMaterialReplenishment,
+              AppAccess.canAccessServiceCall(
+                call,
+                email: currentUserEmail,
+                users: users,
+                serviceCalls: serviceCalls,
+                technicians: technicians
+              ) else {
+            jobMaterialMessage = "A Field Technician or Admin account assigned to this job is required to request restock."
+            return
+        }
+        if let existing = InventoryReplenishment.openOrder(
+            for: requirement.item,
+            serviceCallID: call.id,
+            purchaseOrders: purchaseOrders
+        ) {
+            jobMaterialMessage = "Restock is already tracked on \(existing.number)."
+            return
+        }
+        guard let request = InventoryReplenishment.request(
+            for: requirement.item,
+            serviceCallID: call.id,
+            sourceLocation: source,
+            onHand: onHand,
+            actorEmail: currentUserEmail
+        ) else {
+            jobMaterialMessage = "\(source) is already at or above the reorder point."
+            return
+        }
+        let activity = ServiceCallActivity(
+            serviceCallID: call.id,
+            action: "Restock requested",
+            detail: "\(request.quantity.formatted(.number.precision(.fractionLength(0...2)))) × \(requirement.item.name) for \(source) on \(request.number).",
+            actorEmail: currentUserEmail
+        )
+        modelContext.insert(request)
+        modelContext.insert(activity)
+        do {
+            try modelContext.save()
+            jobMaterialMessage = "Restock requested on \(request.number). An administrator must review the supplier and place the order."
+        } catch {
+            modelContext.delete(activity)
+            modelContext.delete(request)
+            jobMaterialMessage = "Could not save the restock request: \(error.localizedDescription)"
         }
     }
 

@@ -539,6 +539,48 @@ struct GunnAire_OpsTests {
         #expect(summary.contains("Call before substitution."))
     }
 
+    @Test func fieldRestockRequestPreservesShortageContextAndRequiresOfficePreparation() throws {
+        let jobID = UUID()
+        let item = Item(
+            name: "45/5 Dual Run Capacitor",
+            itemType: .nonInventory,
+            unitPrice: 85,
+            purchaseCost: 18.5,
+            sku: "CAP-45-5",
+            preferredVendorName: nil,
+            vendorPartNumber: "27W84",
+            tracksInventory: true,
+            reorderPoint: 2,
+            defaultInventoryLocation: "Truck 1"
+        )
+
+        #expect(InventoryReplenishment.suggestedQuantity(for: item, onHand: -1) == 3)
+        let request = try #require(InventoryReplenishment.request(
+            for: item,
+            serviceCallID: jobID,
+            sourceLocation: "Truck 1",
+            onHand: -1,
+            actorEmail: "tech@gunnaire.com"
+        ))
+        #expect(request.status == .requested)
+        #expect(request.vendorName == InventoryReplenishment.vendorReviewName)
+        #expect(request.quantity == 3)
+        #expect(request.serviceCallID == jobID)
+        #expect(request.createdByEmail == "tech@gunnaire.com")
+        #expect(request.notes?.contains("Truck 1") == true)
+        #expect(InventoryReplenishment.openOrder(for: item, serviceCallID: jobID, purchaseOrders: [request]) === request)
+        #expect(PurchaseOrderReceiving.receive(request, catalogItems: [item], actorEmail: "admin@gunnaire.com") == nil)
+        #expect(InventoryReplenishment.prepareDraft(request, catalogItems: [item]) == false)
+
+        item.preferredVendorName = "Johnstone Supply"
+        item.preferredVendorQuickBooksID = "QBO-JOHNSTONE"
+        #expect(InventoryReplenishment.prepareDraft(request, catalogItems: [item]) == true)
+        #expect(request.status == .draft)
+        #expect(request.vendorName == "Johnstone Supply")
+        #expect(request.vendorQuickBooksID == "QBO-JOHNSTONE")
+        #expect(request.unitCost == 18.5)
+    }
+
     @Test func technicianEquipmentQualificationsRemainOverridableButExposeMismatch() async throws {
         let technician = Technician(
             name: "Riley Tech",
@@ -968,7 +1010,7 @@ struct GunnAire_OpsTests {
 
     @Test func receivingTrackedPurchaseOrderCreatesOneTraceableStockReceipt() async throws {
         let item = Item(name: "Capacitor", unitPrice: 75, sku: "CAP-45", tracksInventory: true, defaultInventoryLocation: "Truck 4")
-        let order = PurchaseOrder(vendorName: "Supply House", itemName: "Capacitor", itemSKU: "CAP-45", quantity: 2, unitCost: 18)
+        let order = PurchaseOrder(vendorName: "Supply House", itemName: "Capacitor", itemSKU: "CAP-45", quantity: 2, unitCost: 18, status: .ordered)
 
         let receipt = PurchaseOrderReceiving.receive(order, catalogItems: [item], actorEmail: "dispatch@gunnaire.com")
 
@@ -1024,6 +1066,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canViewBillingFinancialDetails(email: standard.email, users: users) == false)
         #expect(AppAccess.canCollectFieldPayments(email: standard.email, users: users) == false)
         #expect(AppAccess.canRecordJobMaterials(email: standard.email, users: users) == false)
+        #expect(AppAccess.canRequestJobMaterialReplenishment(email: standard.email, users: users) == false)
         #expect(AppAccess.canManageDispatch(email: standard.email, users: users) == false)
         #expect(AppAccess.canManageCustomerRecords(email: standard.email, users: users) == false)
         #expect(AppAccess.canDeleteCustomerRecords(email: standard.email, users: users) == false)
@@ -1041,6 +1084,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canViewBillingFinancialDetails(email: technician.email, users: users) == false)
         #expect(AppAccess.canCollectFieldPayments(email: technician.email, users: users) == true)
         #expect(AppAccess.canRecordJobMaterials(email: technician.email, users: users) == true)
+        #expect(AppAccess.canRequestJobMaterialReplenishment(email: technician.email, users: users) == true)
         #expect(AppAccess.canManageDispatch(email: technician.email, users: users) == false)
         #expect(AppAccess.canManageCustomerRecords(email: technician.email, users: users) == false)
         #expect(AppAccess.canDeleteCustomerRecords(email: technician.email, users: users) == false)
@@ -1048,6 +1092,7 @@ struct GunnAire_OpsTests {
 
         #expect(AppAccess.canManageDispatch(email: dispatcher.email, users: users) == true)
         #expect(AppAccess.canRecordJobMaterials(email: dispatcher.email, users: users) == false)
+        #expect(AppAccess.canRequestJobMaterialReplenishment(email: dispatcher.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.customers, email: dispatcher.email, users: users) == true)
         #expect(AppAccess.canManageCustomerRecords(email: dispatcher.email, users: users) == true)
         #expect(AppAccess.canDeleteCustomerRecords(email: dispatcher.email, users: users) == false)
@@ -1061,6 +1106,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canViewBillingFinancialDetails(email: accounting.email, users: users) == true)
         #expect(AppAccess.canCollectFieldPayments(email: accounting.email, users: users) == false)
         #expect(AppAccess.canRecordJobMaterials(email: accounting.email, users: users) == false)
+        #expect(AppAccess.canRequestJobMaterialReplenishment(email: accounting.email, users: users) == false)
         #expect(AppAccess.canManageDispatch(email: accounting.email, users: users) == false)
         #expect(AppAccess.canManageCustomerRecords(email: accounting.email, users: users) == false)
         #expect(AppAccess.canDeleteCustomerRecords(email: accounting.email, users: users) == false)
@@ -1073,6 +1119,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canViewFinancialManagement(email: admin.email, users: users) == true)
         #expect(AppAccess.canViewBillingFinancialDetails(email: admin.email, users: users) == true)
         #expect(AppAccess.canRecordJobMaterials(email: admin.email, users: users) == true)
+        #expect(AppAccess.canRequestJobMaterialReplenishment(email: admin.email, users: users) == true)
         #expect(AppAccess.canManageDispatch(email: admin.email, users: users) == true)
         #expect(AppAccess.canManageCustomerRecords(email: admin.email, users: users) == true)
         #expect(AppAccess.canDeleteCustomerRecords(email: admin.email, users: users) == true)

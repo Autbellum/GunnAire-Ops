@@ -83,7 +83,8 @@ private enum GunnAireUITestFixtures {
         let arguments = ProcessInfo.processInfo.arguments
         guard arguments.contains("-disableCloudKitForTesting") else { return }
         let isScreenshotFixture = arguments.contains("-appStoreScreenshotFixtures")
-        let isInventoryFixture = arguments.contains("-uiTestSeedInventoryJob")
+        let isInventoryShortageFixture = arguments.contains("-uiTestSeedInventoryShortage")
+        let isInventoryFixture = arguments.contains("-uiTestSeedInventoryJob") || isInventoryShortageFixture
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
         for user in appUsers where
@@ -136,6 +137,10 @@ private enum GunnAireUITestFixtures {
         for movement in inventoryMovements where movement.itemID == inventoryItemID || movement.id == inventoryReceiptID || movement.id == inventoryReservationID {
             context.delete(movement)
         }
+        let purchaseOrders = try context.fetch(FetchDescriptor<PurchaseOrder>())
+        for order in purchaseOrders where order.serviceCallID == serviceCallID && (order.itemSKU == "CAP-45-5" || order.itemName == "45/5 Dual Run Capacitor") {
+            context.delete(order)
+        }
         let catalogItems = try context.fetch(FetchDescriptor<Item>())
         for item in catalogItems where item.id == catalogItemID || item.id == inventoryItemID || item.name == "UI Test Added Repair" {
             context.delete(item)
@@ -184,6 +189,9 @@ private enum GunnAireUITestFixtures {
             purchaseCost: 18.50,
             itemDescription: "Field replacement capacitor",
             sku: "CAP-45-5",
+            preferredVendorName: "Johnstone Supply",
+            preferredVendorQuickBooksID: "QBO-UI-JOHNSTONE",
+            vendorPartNumber: "27W84",
             tracksInventory: true,
             reorderPoint: 1,
             defaultInventoryLocation: "Truck – UI Test Technician"
@@ -283,7 +291,7 @@ private enum GunnAireUITestFixtures {
                 id: inventoryReceiptID,
                 item: inventoryItem,
                 type: .receive,
-                quantity: 3,
+                quantity: isInventoryShortageFixture ? 0.5 : 3,
                 destinationLocation: "Truck – UI Test Technician",
                 notes: "UI test truck stock.",
                 createdByEmail: GunnAireUITestIdentity.technicianEmail

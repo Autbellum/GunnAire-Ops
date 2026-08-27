@@ -383,6 +383,86 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testJobMaterialShortageBecomesAnAdministratorReviewedRestockDraft() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedInventoryShortage"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
+        for _ in 0..<6 {
+            if documentation.exists && documentation.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(documentation.waitForExistence(timeout: 3))
+        documentation.tap()
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+
+        let recordUse = app.buttons["RecordJobMaterialUse-A1000000-0000-4000-8000-000000000013"]
+        for _ in 0..<8 {
+            if recordUse.exists && recordUse.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(recordUse.waitForExistence(timeout: 3))
+        recordUse.tap()
+        XCTAssertTrue(app.staticTexts["Stock use recorded"].waitForExistence(timeout: 3))
+
+        let requestRestock = app.buttons["RequestRestock-A1000000-0000-4000-8000-000000000013"]
+        for _ in 0..<4 {
+            if requestRestock.exists && requestRestock.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(requestRestock.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Truck – UI Test Technician needs 1.5 to reach its reorder point"].exists)
+        requestRestock.tap()
+
+        let requestStatus = app.staticTexts["RestockRequestStatus-A1000000-0000-4000-8000-000000000013"]
+        XCTAssertTrue(requestStatus.waitForExistence(timeout: 3))
+        XCTAssertTrue(requestStatus.label.hasPrefix("Requested • PO-"))
+
+        let jobBackButton = app.navigationBars["Job Documentation"].buttons.firstMatch
+        XCTAssertTrue(jobBackButton.exists)
+        jobBackButton.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let receiptsBills = app.staticTexts["Receipts & Bills"]
+        XCTAssertTrue(receiptsBills.waitForExistence(timeout: 3))
+        receiptsBills.tap()
+        XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 3))
+        let workspacePicker = app.segmentedControls["ReceiptsBillsWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Purchasing"].tap()
+
+        let prepareDraft = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH 'PrepareRestockRequest-'")
+        ).firstMatch
+        for _ in 0..<10 {
+            if prepareDraft.exists && prepareDraft.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(prepareDraft.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Field restock request • review the supplier, quantity, and cost before creating an order."].exists)
+        prepareDraft.tap()
+
+        let preparedMessage = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH 'Prepared PO-'")
+        ).firstMatch
+        XCTAssertTrue(preparedMessage.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Draft"].exists)
+        XCTAssertFalse(prepareDraft.exists)
+    }
+
+    @MainActor
     func testServiceCallDetailUsesStateAwareOperationalWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

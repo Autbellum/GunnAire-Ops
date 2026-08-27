@@ -128,6 +128,13 @@ enum AppAccess {
         return role == .fieldTechnician || role == .admin
     }
 
+    /// A field user may report a shortage from an assigned job, but only an
+    /// administrator can approve, place, or receive the resulting supplier order.
+    static func canRequestJobMaterialReplenishment(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .fieldTechnician || role == .admin
+    }
+
     /// Creating a job from an incoming customer request changes the committed
     /// dispatch board, so it is limited to dispatch and administrative staff.
     static func canManageDispatch(email: String?, users: [AppUser]) -> Bool {

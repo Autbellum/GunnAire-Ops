@@ -2,6 +2,7 @@ import Foundation
 import SwiftData
 
 enum PurchaseOrderStatus: String, Codable, CaseIterable, Identifiable {
+    case requested
     case draft
     case ordered
     case received
@@ -84,7 +85,7 @@ final class PurchaseOrder {
                 orderedAt = orderedAt ?? updatedAt
             case .received:
                 receivedAt = receivedAt ?? updatedAt
-            case .draft, .cancelled:
+            case .requested, .draft, .cancelled:
                 break
             }
         }
@@ -123,6 +124,96 @@ final class PurchaseOrder {
     }
 }
 
+/// Converts a field-observed stock shortage into office-reviewable procurement
+/// work without pretending that a supplier order was transmitted. Requests use
+/// the existing CloudKit-backed purchase-order record so the job, part, actor,
+/// quantity, and eventual receiving trail stay connected without another schema.
+enum InventoryReplenishment {
+    static let vendorReviewName = "Supplier review required"
+
+    static func suggestedQuantity(for item: Item, onHand: Double) -> Double {
+        let target = max(item.reorderPoint ?? 0, 0)
+        return max(target - onHand, 0)
+    }
+
+    static func openOrder(
+        for item: Item,
+        serviceCallID: UUID,
+        purchaseOrders: [PurchaseOrder]
+    ) -> PurchaseOrder? {
+        purchaseOrders.first { order in
+            order.serviceCallID == serviceCallID &&
+                order.status != .received &&
+                order.status != .cancelled &&
+                matches(order, item: item)
+        }
+    }
+
+    static func request(
+        for item: Item,
+        serviceCallID: UUID,
+        sourceLocation: String,
+        onHand: Double,
+        actorEmail: String?
+    ) -> PurchaseOrder? {
+        let quantity = suggestedQuantity(for: item, onHand: onHand)
+        guard quantity > 0.0001 else { return nil }
+        let preferredVendor = item.preferredVendorName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let vendorName = preferredVendor.flatMap { $0.isEmpty ? nil : $0 } ?? vendorReviewName
+        let target = max(item.reorderPoint ?? 0, 0)
+        return PurchaseOrder(
+            vendorName: vendorName,
+            vendorQuickBooksID: item.preferredVendorQuickBooksID,
+            serviceCallID: serviceCallID,
+            itemName: item.name,
+            itemSKU: item.sku,
+            vendorPartNumber: item.vendorPartNumber,
+            quantity: quantity,
+            unitCost: max(item.purchaseCost ?? 0, 0),
+            status: .requested,
+            notes: "Restock \(sourceLocation) from \(onHand.formatted()) on hand to the \(target.formatted()) reorder point. Requested from job material use.",
+            createdByEmail: actorEmail
+        )
+    }
+
+    /// Promotes a field request to an office-owned draft only after the pricebook
+    /// identifies a supplier. It still does not transmit or mark the order placed.
+    @discardableResult
+    static func prepareDraft(_ order: PurchaseOrder, catalogItems: [Item]) -> Bool {
+        guard order.status == .requested,
+              let item = catalogItems.first(where: { matches(order, item: $0) }),
+              let preferredVendor = item.preferredVendorName?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !preferredVendor.isEmpty else {
+            return false
+        }
+        order.vendorName = preferredVendor
+        order.vendorQuickBooksID = item.preferredVendorQuickBooksID
+        order.itemSKU = item.sku
+        order.vendorPartNumber = item.vendorPartNumber
+        order.unitCost = max(item.purchaseCost ?? order.unitCost, 0)
+        order.status = .draft
+        return true
+    }
+
+    private static func matches(_ order: PurchaseOrder, item: Item) -> Bool {
+        let orderSKU = normalized(order.itemSKU)
+        let itemSKU = normalized(item.sku)
+        if !orderSKU.isEmpty, !itemSKU.isEmpty {
+            return orderSKU == itemSKU
+        }
+        guard normalized(order.itemName) == normalized(item.name) else { return false }
+        let orderPart = normalized(order.vendorPartNumber)
+        let itemPart = normalized(item.vendorPartNumber)
+        return orderPart.isEmpty || itemPart.isEmpty || orderPart == itemPart
+    }
+
+    private static func normalized(_ value: String?) -> String {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    }
+}
+
 enum PurchaseOrderReceiving {
     /// Marks an order received and creates exactly one stock receipt only when
     /// the PO matches an inventory-tracked pricebook item. Direct-ship and
@@ -133,7 +224,7 @@ enum PurchaseOrderReceiving {
         catalogItems: [Item],
         actorEmail: String?
     ) -> InventoryMovement? {
-        guard order.status != .received else { return nil }
+        guard order.status == .ordered else { return nil }
         order.status = .received
         guard let item = matchedItem(for: order, catalogItems: catalogItems), item.tracksInventory else {
             return nil
