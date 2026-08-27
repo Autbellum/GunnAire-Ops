@@ -135,6 +135,13 @@ enum AppAccess {
         return role == .fieldTechnician || role == .admin
     }
 
+    /// Field staff may create a job-specific line when the pricebook is
+    /// incomplete. Only an administrator can promote that draft into the
+    /// reusable company catalog and publish it to QuickBooks.
+    static func canApprovePricebookItems(email: String?, users: [AppUser]) -> Bool {
+        activeRole(email: email, users: users) == .admin
+    }
+
     /// Creating a job from an incoming customer request changes the committed
     /// dispatch board, so it is limited to dispatch and administrative staff.
     static func canManageDispatch(email: String?, users: [AppUser]) -> Bool {

@@ -133,6 +133,40 @@ enum QuickBooksInvoicePublicationRecovery {
     }
 }
 
+enum PricebookReviewPublicationError: LocalizedError, Equatable {
+    case ambiguousRemoteMatch(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .ambiguousRemoteMatch(let name):
+            return "More than one QuickBooks catalog item matches \(name). Link the correct item manually before publishing."
+        }
+    }
+}
+
+enum PricebookReviewPublication {
+    static func matchingRemoteItem(
+        for localItem: Item,
+        in remoteItems: [QuickBooksItem]
+    ) throws -> QuickBooksItem? {
+        let normalizedName = normalize(localItem.name)
+        let normalizedSKU = normalize(localItem.sku ?? "")
+        let candidates = remoteItems.filter { remote in
+            guard normalize(remote.Name) == normalizedName else { return false }
+            let remoteSKU = normalize(remote.Sku ?? "")
+            return normalizedSKU.isEmpty || remoteSKU.isEmpty || normalizedSKU == remoteSKU
+        }
+        guard candidates.count <= 1 else {
+            throw PricebookReviewPublicationError.ambiguousRemoteMatch(localItem.name)
+        }
+        return candidates.first
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
 struct QuickBooksManagementView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var quickBooksDataAPI = QuickBooksDataAPI.shared
@@ -180,6 +214,7 @@ struct QuickBooksManagementView: View {
     @State private var activeEmailEstimateID: String?
     @State private var activeEmailInvoiceID: String?
     @State private var activeLocalInvoicePublicationID: UUID?
+    @State private var activePricebookReviewID: UUID?
     @State private var paymentToRefund: Payment?
     @State private var quickBooksReconnectRequired = false
     @State private var showCustomersList = false
@@ -306,6 +341,12 @@ struct QuickBooksManagementView: View {
 
     private var localInvoicePublicationQueue: [Invoice] {
         QuickBooksInvoicePublicationRecovery.queuedInvoices(from: localInvoices)
+    }
+
+    private var pendingPricebookReviewItems: [Item] {
+        localCatalogItems
+            .filter(\.requiresPricebookReview)
+            .sorted { $0.createdAt < $1.createdAt }
     }
 
     private var filteredCustomers: [QuickBooksCustomer] {
@@ -623,6 +664,57 @@ struct QuickBooksManagementView: View {
                         }
                     }
                     .accessibilityIdentifier("QuickBooksLocalInvoicePublicationQueue")
+
+                    Section(header: Text("Pricebook Review").foregroundColor(Color.brandGold)) {
+                        if pendingPricebookReviewItems.isEmpty {
+                            Label("No field-created catalog items need review.", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Text("Field-created items can remain on their originating job, but only an administrator can promote them to the reusable company catalog and QuickBooks.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            ForEach(pendingPricebookReviewItems) { item in
+                                VStack(alignment: .leading, spacing: 7) {
+                                    HStack(alignment: .firstTextBaseline) {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(item.name)
+                                                .font(.headline)
+                                            if let description = item.itemDescription, !description.isEmpty {
+                                                Text(description)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                        }
+                                        Spacer()
+                                        Text(item.unitPrice, format: .currency(code: "USD"))
+                                            .font(.subheadline.weight(.semibold))
+                                    }
+
+                                    let reviewDetails = [
+                                        item.sku.map { "SKU \($0)" },
+                                        item.purchaseCost.map { "Cost \($0.formatted(.currency(code: "USD")))" },
+                                        item.isTaxable ? "Taxable" : "Non-taxable",
+                                        item.pricebookCreatedByEmail.map { "Created by \($0)" }
+                                    ].compactMap { $0 }
+                                    Text(reviewDetails.joined(separator: " • "))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+
+                                    Button(activePricebookReviewID == item.id ? "Approving..." : "Approve Pricebook Item") {
+                                        approvePricebookItem(item)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(Color.brandGold)
+                                    .foregroundStyle(Color.primaryBlack)
+                                    .disabled(activePricebookReviewID != nil)
+                                    .accessibilityIdentifier("ApprovePricebookItem-\(item.id.uuidString)")
+                                }
+                                .padding(.vertical, 3)
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("QuickBooksPricebookReviewQueue")
 
                     Section(header: Text("Customers").foregroundColor(Color.brandGold)) {
                         DisclosureGroup("Customers (\(customers.count))", isExpanded: $showCustomersList) {
@@ -1555,6 +1647,122 @@ struct QuickBooksManagementView: View {
                 }
             }
         }
+    }
+
+    private func approvePricebookItem(_ item: Item) {
+        let reviewerEmail = GoogleAuthManager.shared.signedInEmail
+            ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        item.approveForPricebook(by: reviewerEmail)
+        activePricebookReviewID = item.id
+        do {
+            try modelContext.save()
+        } catch {
+            activePricebookReviewID = nil
+            actionMessage = "Could not save the pricebook approval: \(error.localizedDescription)"
+            return
+        }
+
+        guard isAuthenticated else {
+            activePricebookReviewID = nil
+            actionMessage = "\(item.name) is approved for the company pricebook. Connect QuickBooks to publish it."
+            return
+        }
+
+        actionMessage = "Approved \(item.name). Checking QuickBooks for an existing match..."
+        liveAPI.fetchItems { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .failure(let error):
+                    markApprovedPricebookPublicationFailure(item, error: error)
+                case .success(let remoteItems):
+                    do {
+                        if let existing = try PricebookReviewPublication.matchingRemoteItem(for: item, in: remoteItems) {
+                            applyApprovedQuickBooksItem(existing, to: item)
+                            finishApprovedPricebookPublication(item, message: "Approved and linked \(item.name) to its existing QuickBooks catalog item.")
+                            return
+                        }
+                    } catch {
+                        markApprovedPricebookPublicationFailure(item, error: error)
+                        return
+                    }
+                    createApprovedPricebookItem(item, remoteItems: remoteItems)
+                }
+            }
+        }
+    }
+
+    private func createApprovedPricebookItem(_ item: Item, remoteItems: [QuickBooksItem]) {
+        guard let incomeAccountRef = QuickBooksItemAccountResolver.incomeAccountRef(from: remoteItems) else {
+            markApprovedPricebookPublicationFailure(
+                item,
+                error: QuickBooksDataAPI.QBError.missingDefaultIncomeAccountRef
+            )
+            return
+        }
+        let payload = QuickBooksItemCreate(
+            Name: item.name,
+            ItemType: item.itemType.rawValue,
+            Description: item.itemDescription,
+            Sku: item.sku,
+            PurchaseDesc: item.purchaseDescription ?? item.itemDescription,
+            UnitPrice: item.unitPrice,
+            PurchaseCost: item.purchaseCost,
+            Taxable: item.isTaxable,
+            IncomeAccountRef: incomeAccountRef,
+            ExpenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(),
+            PrefVendorRef: item.preferredVendorQuickBooksID.flatMap { quickBooksID in
+                quickBooksID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil
+                    : QuickBooksReference(value: quickBooksID, name: item.preferredVendorName)
+            }
+        )
+        liveAPI.createItem(payload) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .failure(let error):
+                    markApprovedPricebookPublicationFailure(item, error: error)
+                case .success(let quickBooksItem):
+                    applyApprovedQuickBooksItem(quickBooksItem, to: item)
+                    finishApprovedPricebookPublication(item, message: "Approved and published \(item.name) to QuickBooks.")
+                    syncAllQuickBooksData()
+                }
+            }
+        }
+    }
+
+    private func applyApprovedQuickBooksItem(_ quickBooksItem: QuickBooksItem, to item: Item) {
+        item.quickBooksID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
+        item.quickBooksSyncStatus = "synced"
+        item.quickBooksSyncDetail = nil
+        item.quickBooksLastSyncedAt = Date()
+        item.name = quickBooksItem.Name
+        item.itemTypeRawValue = quickBooksItem.ItemType ?? item.itemTypeRawValue
+        item.unitPrice = quickBooksItem.UnitPrice ?? item.unitPrice
+        item.purchaseCost = quickBooksItem.PurchaseCost ?? item.purchaseCost
+        item.isTaxable = quickBooksItem.Taxable ?? item.isTaxable
+        item.itemDescription = quickBooksItem.Description ?? item.itemDescription
+        item.sku = quickBooksItem.Sku ?? item.sku
+        item.purchaseDescription = quickBooksItem.PurchaseDesc ?? item.purchaseDescription
+        item.preferredVendorName = quickBooksItem.PrefVendorRef?.name ?? item.preferredVendorName
+        item.preferredVendorQuickBooksID = quickBooksItem.PrefVendorRef?.value ?? item.preferredVendorQuickBooksID
+    }
+
+    private func finishApprovedPricebookPublication(_ item: Item, message: String) {
+        activePricebookReviewID = nil
+        do {
+            try modelContext.save()
+            actionMessage = message
+        } catch {
+            actionMessage = "QuickBooks accepted \(item.name), but the local catalog link could not be saved: \(error.localizedDescription)"
+        }
+    }
+
+    private func markApprovedPricebookPublicationFailure(_ item: Item, error: Error) {
+        activePricebookReviewID = nil
+        item.quickBooksSyncStatus = "needs_attention"
+        item.quickBooksSyncDetail = error.localizedDescription
+        try? modelContext.save()
+        actionMessage = "\(item.name) is approved locally, but QuickBooks publication needs attention: \(error.localizedDescription)"
     }
 
     private func createEstimate(

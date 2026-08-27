@@ -15,6 +15,11 @@ enum CatalogItemType: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum PricebookReviewStatus: String, Codable, CaseIterable {
+    case approved
+    case needsReview = "needs_review"
+}
+
 /// Immutable pricebook context captured when a customer-facing document is created.
 /// The live catalog remains editable; completed estimates and invoices retain the
 /// price, cost, tax treatment, and part identity that were actually approved.
@@ -89,6 +94,13 @@ final class Item {
     var quickBooksSyncStatus: String = "pending"
     var quickBooksSyncDetail: String?
     var quickBooksLastSyncedAt: Date?
+    /// Field-created items remain usable on their originating job, but cannot
+    /// become global QBO products/services until an administrator reviews the
+    /// price, tax treatment, purchasing identity, and description.
+    var pricebookReviewStatusRawValue: String?
+    var pricebookCreatedByEmail: String?
+    var pricebookReviewedByEmail: String?
+    var pricebookReviewedAt: Date?
     var name: String = ""
     var itemTypeRawValue: String = CatalogItemType.service.rawValue
     var unitPrice: Double = 0
@@ -113,6 +125,10 @@ final class Item {
         quickBooksSyncStatus: String? = nil,
         quickBooksSyncDetail: String? = nil,
         quickBooksLastSyncedAt: Date? = nil,
+        pricebookReviewStatus: PricebookReviewStatus = .approved,
+        pricebookCreatedByEmail: String? = nil,
+        pricebookReviewedByEmail: String? = nil,
+        pricebookReviewedAt: Date? = nil,
         name: String,
         itemType: CatalogItemType = .service,
         unitPrice: Double,
@@ -135,6 +151,10 @@ final class Item {
         self.quickBooksSyncStatus = quickBooksSyncStatus ?? (quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? "synced" : "pending")
         self.quickBooksSyncDetail = quickBooksSyncDetail
         self.quickBooksLastSyncedAt = quickBooksLastSyncedAt
+        self.pricebookReviewStatusRawValue = pricebookReviewStatus.rawValue
+        self.pricebookCreatedByEmail = Self.normalizedOptionalValue(pricebookCreatedByEmail)
+        self.pricebookReviewedByEmail = Self.normalizedOptionalValue(pricebookReviewedByEmail)
+        self.pricebookReviewedAt = pricebookReviewedAt
         self.name = name
         self.itemTypeRawValue = itemType.rawValue
         self.unitPrice = unitPrice
@@ -157,6 +177,37 @@ final class Item {
     var itemType: CatalogItemType {
         get { CatalogItemType(rawValue: itemTypeRawValue) ?? .service }
         set { itemTypeRawValue = newValue.rawValue }
+    }
+
+    var pricebookReviewStatus: PricebookReviewStatus {
+        get {
+            guard let pricebookReviewStatusRawValue else { return .approved }
+            return PricebookReviewStatus(rawValue: pricebookReviewStatusRawValue) ?? .needsReview
+        }
+        set { pricebookReviewStatusRawValue = newValue.rawValue }
+    }
+
+    var requiresPricebookReview: Bool {
+        pricebookReviewStatus == .needsReview
+    }
+
+    func markForPricebookReview(createdByEmail: String?) {
+        pricebookReviewStatus = .needsReview
+        pricebookCreatedByEmail = Self.normalizedOptionalValue(createdByEmail)
+        pricebookReviewedByEmail = nil
+        pricebookReviewedAt = nil
+        quickBooksSyncStatus = "needs_review"
+        quickBooksSyncDetail = "Administrator pricebook review is required before QuickBooks publication."
+    }
+
+    func approveForPricebook(by reviewerEmail: String?, at date: Date = Date()) {
+        pricebookReviewStatus = .approved
+        pricebookReviewedByEmail = Self.normalizedOptionalValue(reviewerEmail)
+        pricebookReviewedAt = date
+        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            quickBooksSyncStatus = "pending"
+            quickBooksSyncDetail = "Pricebook review approved; QuickBooks publication is pending."
+        }
     }
 
     var needsQuickBooksAttention: Bool {
@@ -207,5 +258,11 @@ final class Item {
 
     private static func normalizedCatalogValue(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func normalizedOptionalValue(_ value: String?) -> String? {
+        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !normalized.isEmpty else { return nil }
+        return normalized
     }
 }

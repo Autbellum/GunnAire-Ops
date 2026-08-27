@@ -844,7 +844,8 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-enableSplashVideo", "NO",
             "-disableCloudKitForTesting",
             "-uiTestAuthenticatedAdmin",
-            "-uiTestSeedCollectibleJob"
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedPricebookReview"
         ]
         app.launch()
 
@@ -867,6 +868,15 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Retry Publication"].exists)
         XCTAssertFalse(app.buttons["Retry Publication"].isEnabled)
         XCTAssertTrue(app.buttons["Open Job Billing"].exists)
+        XCTAssertTrue(app.staticTexts["Pricebook Review"].exists)
+        XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].exists)
+        let approvePricebookItem = app.buttons["Approve Pricebook Item"]
+        for _ in 0..<3 where !approvePricebookItem.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(approvePricebookItem.waitForExistence(timeout: 3))
+        approvePricebookItem.tap()
+        XCTAssertTrue(app.staticTexts["No field-created catalog items need review."].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Customers"].exists)
         XCTAssertTrue(app.staticTexts["Product Catalog"].exists)
         XCTAssertFalse(app.staticTexts["Sync Health"].exists)

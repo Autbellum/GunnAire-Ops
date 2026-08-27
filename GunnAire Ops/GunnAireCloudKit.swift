@@ -122,7 +122,7 @@ enum GunnAireCloudKitSchemaBootstrap {
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
-    private static let completionKey = "GunnAireCloudKitSchemaBootstrapV3"
+    private static let completionKey = "GunnAireCloudKitSchemaBootstrapV4"
 
     static func runIfRequested(in modelContext: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -144,7 +144,15 @@ enum GunnAireCloudKitSchemaBootstrap {
             quickBooksTimeEntityKind: .employee,
             quickBooksTimeEntityRef: "SCHEMA-BOOTSTRAP"
         )
-        let item = Item(name: marker, unitPrice: 0)
+        let item = Item(
+            quickBooksSyncStatus: "synced",
+            pricebookReviewStatus: .approved,
+            pricebookCreatedByEmail: bootstrapEmail,
+            pricebookReviewedByEmail: bootstrapEmail,
+            pricebookReviewedAt: now,
+            name: marker,
+            unitPrice: 0
+        )
         let serviceCall = ServiceCall(
             eventTitle: marker,
             type: .service,

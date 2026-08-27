@@ -333,7 +333,11 @@ struct BillingDocumentsView: View {
     }
 
     private var unsyncedCatalogItems: [Item] {
-        items.filter(itemNeedsQuickBooksSync)
+        items.filter { itemNeedsQuickBooksSync($0) && !$0.requiresPricebookReview }
+    }
+
+    private var catalogItemsAwaitingReview: [Item] {
+        items.filter(\.requiresPricebookReview)
     }
 
     private var currentJobEstimate: Estimate? {
@@ -586,6 +590,10 @@ struct BillingDocumentsView: View {
 
     private var canCollectFieldPayments: Bool {
         AppAccess.canCollectFieldPayments(email: currentUserEmail, users: users)
+    }
+
+    private var canApprovePricebookItems: Bool {
+        AppAccess.canApprovePricebookItems(email: currentUserEmail, users: users)
     }
 
     private var canRecordJobMaterials: Bool {
@@ -2150,7 +2158,11 @@ GunnAire
                                                     .lineLimit(1)
                                             }
                                             itemMetaText(for: item)
-                                            if isQuickBooksConnected, item.quickBooksCatalogSyncState != "synced" {
+                                            if item.requiresPricebookReview {
+                                                Label("Admin pricebook review", systemImage: "person.badge.clock")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(Color.orange)
+                                            } else if isQuickBooksConnected, item.quickBooksCatalogSyncState != "synced" {
                                                 Label(
                                                     item.needsQuickBooksAttention ? "QBO needs attention" : "QBO pending",
                                                     systemImage: item.needsQuickBooksAttention ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath"
@@ -2201,6 +2213,15 @@ GunnAire
                                     .buttonStyle(.borderless)
                                 }
                             }
+                        }
+
+                        if !catalogItemsAwaitingReview.isEmpty && !canApprovePricebookItems {
+                            Label(
+                                "Field-created items stay on this job and wait for Admin pricebook review before QuickBooks publication.",
+                                systemImage: "checkmark.shield"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
 
                         DisclosureGroup("Create Item") {
@@ -2586,6 +2607,8 @@ GunnAire
                 DocumentationItemCreatorView(
                     initialName: itemCreatorInitialName,
                     vendors: vendors,
+                    requiresPricebookReview: !canApprovePricebookItems,
+                    createdByEmail: currentUserEmail,
                     onCreated: handleCreatedItem
                 )
             }
@@ -4770,6 +4793,10 @@ GunnAire
             vendors: vendors
         )
         let item = Item(
+            quickBooksSyncStatus: canApprovePricebookItems ? nil : "needs_review",
+            quickBooksSyncDetail: canApprovePricebookItems ? nil : "Administrator pricebook review is required before QuickBooks publication.",
+            pricebookReviewStatus: canApprovePricebookItems ? .approved : .needsReview,
+            pricebookCreatedByEmail: currentUserEmail,
             name: newItemName.trimmingCharacters(in: .whitespacesAndNewlines),
             itemType: newItemType,
             unitPrice: price,
@@ -4787,9 +4814,11 @@ GunnAire
         do {
             try modelContext.save()
             selectCreatedItem(item)
-            actionMessage = isQuickBooksConnected
-                ? "Added \(item.name). Publishing it to QuickBooks..."
-                : "Added \(item.name) to this \(selectedDocumentKind.rawValue.lowercased()). It will publish to QuickBooks when a company connection is available."
+            actionMessage = item.requiresPricebookReview
+                ? "Added \(item.name) to this \(selectedDocumentKind.rawValue.lowercased()). Admin must review it before QuickBooks publication."
+                : (isQuickBooksConnected
+                    ? "Added \(item.name). Publishing it to QuickBooks..."
+                    : "Added \(item.name) to this \(selectedDocumentKind.rawValue.lowercased()). It will publish to QuickBooks when a company connection is available.")
             publishCatalogItemIfPossible(item)
         } catch {
             actionMessage = "Could not save \(item.name): \(error.localizedDescription)"
@@ -4823,9 +4852,11 @@ GunnAire
         selectCreatedItem(item)
         itemSearchText = ""
         newItemName = ""
-        actionMessage = isQuickBooksConnected
-            ? "Added \(item.name). Publishing it to QuickBooks..."
-            : "Added \(item.name) to this \(selectedDocumentKind.rawValue.lowercased()). It will publish to QuickBooks when a company connection is available."
+        actionMessage = item.requiresPricebookReview
+            ? "Added \(item.name) to this \(selectedDocumentKind.rawValue.lowercased()). Admin must review it before QuickBooks publication."
+            : (isQuickBooksConnected
+                ? "Added \(item.name). Publishing it to QuickBooks..."
+                : "Added \(item.name) to this \(selectedDocumentKind.rawValue.lowercased()). It will publish to QuickBooks when a company connection is available.")
         publishCatalogItemIfPossible(item)
     }
 
@@ -4891,6 +4922,7 @@ GunnAire
     }
 
     private func publishCatalogItemIfPossible(_ item: Item) {
+        guard !item.requiresPricebookReview else { return }
         guard isQuickBooksConnected, itemNeedsQuickBooksSync(item) else { return }
         prepareQuickBooksItemsForDocument([item]) { result in
             switch result {
@@ -4919,6 +4951,9 @@ GunnAire
     }
 
     private func applyQuickBooksItem(_ quickBooksItem: QuickBooksItem, to item: Item) {
+        if item.requiresPricebookReview {
+            item.approveForPricebook(by: "quickbooks-reconciliation")
+        }
         item.quickBooksID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
         item.quickBooksSyncStatus = "synced"
         item.quickBooksSyncDetail = nil
@@ -6091,6 +6126,10 @@ GunnAire
         _ items: [Item],
         completion: @escaping (Result<[Item], Error>) -> Void
     ) {
+        if let item = items.first(where: \.requiresPricebookReview) {
+            completion(.failure(PricebookPublicationError.reviewRequired(item.name)))
+            return
+        }
         guard items.contains(where: itemNeedsQuickBooksSync) else {
             completion(.success(items))
             return
@@ -7238,6 +7277,17 @@ private enum CatalogItemAmountParser {
     }
 }
 
+enum PricebookPublicationError: LocalizedError, Equatable {
+    case reviewRequired(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .reviewRequired(let itemName):
+            return "\(itemName) needs administrator pricebook review before it can publish to QuickBooks. The document remains saved locally."
+        }
+    }
+}
+
 enum CatalogVendorSelection {
     static func options(for vendors: [Vendor]) -> [SearchableDropdownOption] {
         vendors
@@ -7356,6 +7406,8 @@ private struct DocumentationItemCreatorView: View {
     @Environment(\.modelContext) private var modelContext
 
     let vendors: [Vendor]
+    let requiresPricebookReview: Bool
+    let createdByEmail: String?
     let onCreated: (Item) -> Void
 
     @State private var name: String
@@ -7395,8 +7447,16 @@ private struct DocumentationItemCreatorView: View {
         )
     }
 
-    init(initialName: String = "", vendors: [Vendor] = [], onCreated: @escaping (Item) -> Void) {
+    init(
+        initialName: String = "",
+        vendors: [Vendor] = [],
+        requiresPricebookReview: Bool = false,
+        createdByEmail: String? = nil,
+        onCreated: @escaping (Item) -> Void
+    ) {
         self.vendors = vendors
+        self.requiresPricebookReview = requiresPricebookReview
+        self.createdByEmail = createdByEmail
         self.onCreated = onCreated
         _name = State(initialValue: initialName)
     }
@@ -7419,6 +7479,14 @@ private struct DocumentationItemCreatorView: View {
                     Toggle("Taxable", isOn: $isTaxable)
                     TextField("Sales price (optional)", text: $price)
                         .keyboardType(.decimalPad)
+                    if requiresPricebookReview {
+                        Label(
+                            "This job can use the item now. An administrator must review it before it becomes a reusable QuickBooks catalog item.",
+                            systemImage: "person.badge.clock"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section("Purchasing") {
@@ -7475,6 +7543,10 @@ private struct DocumentationItemCreatorView: View {
             vendors: vendors
         )
         let item = Item(
+            quickBooksSyncStatus: requiresPricebookReview ? "needs_review" : nil,
+            quickBooksSyncDetail: requiresPricebookReview ? "Administrator pricebook review is required before QuickBooks publication." : nil,
+            pricebookReviewStatus: requiresPricebookReview ? .needsReview : .approved,
+            pricebookCreatedByEmail: createdByEmail,
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             itemType: itemType,
             unitPrice: salesPrice,

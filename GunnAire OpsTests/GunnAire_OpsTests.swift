@@ -1322,6 +1322,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canCollectFieldPayments(email: standard.email, users: users) == false)
         #expect(AppAccess.canRecordJobMaterials(email: standard.email, users: users) == false)
         #expect(AppAccess.canRequestJobMaterialReplenishment(email: standard.email, users: users) == false)
+        #expect(AppAccess.canApprovePricebookItems(email: standard.email, users: users) == false)
         #expect(AppAccess.canManageDispatch(email: standard.email, users: users) == false)
         #expect(AppAccess.canManageCustomerRecords(email: standard.email, users: users) == false)
         #expect(AppAccess.canDeleteCustomerRecords(email: standard.email, users: users) == false)
@@ -1340,6 +1341,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canCollectFieldPayments(email: technician.email, users: users) == true)
         #expect(AppAccess.canRecordJobMaterials(email: technician.email, users: users) == true)
         #expect(AppAccess.canRequestJobMaterialReplenishment(email: technician.email, users: users) == true)
+        #expect(AppAccess.canApprovePricebookItems(email: technician.email, users: users) == false)
         #expect(AppAccess.canManageDispatch(email: technician.email, users: users) == false)
         #expect(AppAccess.canManageCustomerRecords(email: technician.email, users: users) == false)
         #expect(AppAccess.canDeleteCustomerRecords(email: technician.email, users: users) == false)
@@ -1348,6 +1350,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canManageDispatch(email: dispatcher.email, users: users) == true)
         #expect(AppAccess.canRecordJobMaterials(email: dispatcher.email, users: users) == false)
         #expect(AppAccess.canRequestJobMaterialReplenishment(email: dispatcher.email, users: users) == false)
+        #expect(AppAccess.canApprovePricebookItems(email: dispatcher.email, users: users) == false)
         #expect(AppAccess.canAccessSidebarItem(.customers, email: dispatcher.email, users: users) == true)
         #expect(AppAccess.canManageCustomerRecords(email: dispatcher.email, users: users) == true)
         #expect(AppAccess.canDeleteCustomerRecords(email: dispatcher.email, users: users) == false)
@@ -1362,6 +1365,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canCollectFieldPayments(email: accounting.email, users: users) == false)
         #expect(AppAccess.canRecordJobMaterials(email: accounting.email, users: users) == false)
         #expect(AppAccess.canRequestJobMaterialReplenishment(email: accounting.email, users: users) == false)
+        #expect(AppAccess.canApprovePricebookItems(email: accounting.email, users: users) == false)
         #expect(AppAccess.canManageDispatch(email: accounting.email, users: users) == false)
         #expect(AppAccess.canManageCustomerRecords(email: accounting.email, users: users) == false)
         #expect(AppAccess.canDeleteCustomerRecords(email: accounting.email, users: users) == false)
@@ -1375,6 +1379,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canViewBillingFinancialDetails(email: admin.email, users: users) == true)
         #expect(AppAccess.canRecordJobMaterials(email: admin.email, users: users) == true)
         #expect(AppAccess.canRequestJobMaterialReplenishment(email: admin.email, users: users) == true)
+        #expect(AppAccess.canApprovePricebookItems(email: admin.email, users: users) == true)
         #expect(AppAccess.canManageDispatch(email: admin.email, users: users) == true)
         #expect(AppAccess.canManageCustomerRecords(email: admin.email, users: users) == true)
         #expect(AppAccess.canDeleteCustomerRecords(email: admin.email, users: users) == true)
@@ -11486,6 +11491,93 @@ struct GunnAire_OpsTests {
         #expect(snapshot.pricebookAttentionCount == 0)
         #expect(snapshot.averageGrossMargin > 0.70)
         #expect(pricebook.score == 100)
+    }
+
+    @Test func fieldCreatedPricebookItemRequiresTraceableAdministratorApproval() throws {
+        let item = Item(
+            quickBooksSyncStatus: "needs_review",
+            pricebookReviewStatus: .needsReview,
+            pricebookCreatedByEmail: " TECH@GUNNAIRE.COM ",
+            name: "After-hours Contactor",
+            itemType: .nonInventory,
+            unitPrice: 425,
+            purchaseCost: 91,
+            isTaxable: true,
+            sku: "CTR-2P-40A"
+        )
+
+        #expect(item.requiresPricebookReview)
+        #expect(item.pricebookCreatedByEmail == "tech@gunnaire.com")
+        #expect(item.quickBooksCatalogSyncState == "needs_review")
+
+        let reviewedAt = Date(timeIntervalSinceReferenceDate: 75_000)
+        item.approveForPricebook(by: " ADMIN@GUNNAIRE.COM ", at: reviewedAt)
+
+        #expect(item.requiresPricebookReview == false)
+        #expect(item.pricebookReviewStatus == .approved)
+        #expect(item.pricebookReviewedByEmail == "admin@gunnaire.com")
+        #expect(item.pricebookReviewedAt == reviewedAt)
+        #expect(item.quickBooksSyncStatus == "pending")
+        #expect(item.quickBooksSyncDetail?.contains("approved") == true)
+    }
+
+    @MainActor
+    @Test func pricebookReviewEvidencePersistsInTheSharedModelSchema() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let itemID = UUID(uuidString: "A1000000-0000-4000-8000-000000000097")!
+        let item = Item(
+            id: itemID,
+            quickBooksSyncStatus: "needs_review",
+            pricebookReviewStatus: .needsReview,
+            pricebookCreatedByEmail: "field@gunnaire.com",
+            name: "Field Diagnostic Add-on",
+            unitPrice: 85
+        )
+        context.insert(item)
+        try context.save()
+
+        let descriptor = FetchDescriptor<Item>(predicate: #Predicate { $0.id == itemID })
+        let restored = try #require(context.fetch(descriptor).first)
+        #expect(restored.requiresPricebookReview)
+        #expect(restored.pricebookCreatedByEmail == "field@gunnaire.com")
+
+        restored.approveForPricebook(by: "owner@gunnaire.com", at: Date(timeIntervalSinceReferenceDate: 80_000))
+        try context.save()
+        #expect(restored.pricebookReviewStatus == .approved)
+        #expect(restored.pricebookReviewedByEmail == "owner@gunnaire.com")
+        #expect(restored.pricebookReviewedAt == Date(timeIntervalSinceReferenceDate: 80_000))
+    }
+
+    @Test func approvedPricebookPublicationReconcilesUniqueQuickBooksMatchesAndRejectsAmbiguity() throws {
+        let local = Item(
+            name: "Dual Run Capacitor",
+            itemType: .nonInventory,
+            unitPrice: 289,
+            sku: "CAP-45-5"
+        )
+        let matchingData = Data(#"{"Id":"QBO-ITEM-1","Name":" dual run capacitor ","Type":"NonInventory","Sku":"cap-45-5","UnitPrice":289}"#.utf8)
+        let otherData = Data(#"{"Id":"QBO-ITEM-2","Name":"Compressor","Type":"NonInventory","Sku":"COMP-1","UnitPrice":1400}"#.utf8)
+        let duplicateData = Data(#"{"Id":"QBO-ITEM-3","Name":"Dual Run Capacitor","Type":"NonInventory","Sku":"CAP-45-5","UnitPrice":299}"#.utf8)
+        let matching = try JSONDecoder().decode(QuickBooksItem.self, from: matchingData)
+        let other = try JSONDecoder().decode(QuickBooksItem.self, from: otherData)
+        let duplicate = try JSONDecoder().decode(QuickBooksItem.self, from: duplicateData)
+
+        #expect(try PricebookReviewPublication.matchingRemoteItem(for: local, in: [other, matching])?.Id == "QBO-ITEM-1")
+        #expect(try PricebookReviewPublication.matchingRemoteItem(for: local, in: [other]) == nil)
+        #expect(throws: PricebookReviewPublicationError.self) {
+            try PricebookReviewPublication.matchingRemoteItem(for: local, in: [matching, duplicate])
+        }
+    }
+
+    @Test func unreviewedPricebookItemExplainsWhyQuickBooksPublicationIsStopped() throws {
+        let error = PricebookPublicationError.reviewRequired("Field Repair")
+        #expect(error.localizedDescription.contains("administrator pricebook review"))
+        #expect(error.localizedDescription.contains("document remains saved locally"))
     }
 
     @Test func catalogVendorSelectionBuildsSearchableOptionsAndPreservesQuickBooksID() async throws {

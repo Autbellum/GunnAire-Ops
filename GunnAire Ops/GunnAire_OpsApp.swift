@@ -87,6 +87,7 @@ private enum GunnAireUITestFixtures {
         let isInventoryShortageFixture = arguments.contains("-uiTestSeedInventoryShortage")
         let isInventoryFixture = arguments.contains("-uiTestSeedInventoryJob") || isInventoryShortageFixture
         let isPendingEstimateFixture = arguments.contains("-uiTestSeedPendingEstimate")
+        let isPricebookReviewFixture = arguments.contains("-uiTestSeedPricebookReview")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
         for user in appUsers where
@@ -181,6 +182,10 @@ private enum GunnAireUITestFixtures {
         )
         let catalogItem = Item(
             id: catalogItemID,
+            quickBooksSyncStatus: isPricebookReviewFixture ? "needs_review" : nil,
+            quickBooksSyncDetail: isPricebookReviewFixture ? "Administrator pricebook review is required before QuickBooks publication." : nil,
+            pricebookReviewStatus: isPricebookReviewFixture ? .needsReview : .approved,
+            pricebookCreatedByEmail: isPricebookReviewFixture ? GunnAireUITestIdentity.technicianEmail : nil,
             name: "HVAC Diagnostic Service",
             itemType: .service,
             unitPrice: 189,
