@@ -26,7 +26,7 @@ from urllib.parse import unquote, urlparse
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.27.1"
+SERVICE_VERSION = "2026.08.27.3"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -68,6 +68,21 @@ QBO_WEBHOOK_VERIFIER_TOKEN = os.environ.get("GUNNAIRE_QBO_WEBHOOK_VERIFIER_TOKEN
 QBO_WEBHOOK_MAX_BYTES = min(max(int(os.environ.get("GUNNAIRE_QBO_WEBHOOK_MAX_BYTES", str(1024 * 1024))), 1024), 5 * 1024 * 1024)
 QBO_TOKEN_ENDPOINT = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 QBO_REVOCATION_ENDPOINT = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
+SUPPORTED_COMMUNICATION_WORKFLOWS = {
+    "general",
+    "estimateFollowUp",
+    "paymentReminder",
+    "appointmentConfirmation",
+    "technicianEnRoute",
+    "technicianArrival",
+    "workInProgress",
+    "serviceFollowUp",
+    "maintenanceVisitReminder",
+    "maintenanceRenewal",
+    "postJobReview",
+    "receipt",
+    "customerDocument",
+}
 PUBLIC_BOOKING_ENABLED = os.environ.get("GUNNAIRE_PUBLIC_BOOKING_ENABLED", "false").strip().lower() == "true"
 PUBLIC_BOOKING_RATE_LIMIT = int(os.environ.get("GUNNAIRE_PUBLIC_BOOKING_RATE_LIMIT", "5"))
 PUBLIC_BOOKING_RATE_WINDOW_SECONDS = int(os.environ.get("GUNNAIRE_PUBLIC_BOOKING_RATE_WINDOW_SECONDS", "3600"))
@@ -560,11 +575,18 @@ def initialize_database() -> None:
                 service_call_id TEXT,
                 invoice_id TEXT,
                 estimate_id TEXT,
+                maintenance_contract_id TEXT,
                 channel TEXT NOT NULL,
                 direction TEXT NOT NULL,
                 recipient TEXT NOT NULL,
                 subject TEXT NOT NULL,
                 delivery_status TEXT NOT NULL,
+                workflow TEXT NOT NULL DEFAULT 'general',
+                template_version TEXT NOT NULL DEFAULT 'general-v1',
+                actor_email TEXT,
+                consent_snapshot_json TEXT,
+                provider_status_detail TEXT,
+                delivered_at TEXT,
                 attachment_file_names_json TEXT,
                 provider_message_id TEXT,
                 occurred_at TEXT NOT NULL,
@@ -572,6 +594,13 @@ def initialize_database() -> None:
             )
             """
         )
+        ensure_column(connection, "customer_communications", "maintenance_contract_id", "TEXT")
+        ensure_column(connection, "customer_communications", "workflow", "TEXT NOT NULL DEFAULT 'general'")
+        ensure_column(connection, "customer_communications", "template_version", "TEXT NOT NULL DEFAULT 'general-v1'")
+        ensure_column(connection, "customer_communications", "actor_email", "TEXT")
+        ensure_column(connection, "customer_communications", "consent_snapshot_json", "TEXT")
+        ensure_column(connection, "customer_communications", "provider_status_detail", "TEXT")
+        ensure_column(connection, "customer_communications", "delivered_at", "TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS audit_events (
@@ -773,6 +802,7 @@ def document_record(row: sqlite3.Row) -> dict[str, object]:
         "serviceCallID": row["service_call_id"],
         "invoiceID": row["invoice_id"],
         "estimateID": row["estimate_id"],
+        "maintenanceContractID": row["maintenance_contract_id"],
         "customerEquipmentID": row["customer_equipment_id"],
         "equipmentName": row["equipment_name"],
         "customerName": row["customer_name"],
@@ -810,6 +840,12 @@ def communication_record(row: sqlite3.Row) -> dict[str, object]:
         "recipient": row["recipient"],
         "subject": row["subject"],
         "deliveryStatus": row["delivery_status"],
+        "workflow": row["workflow"],
+        "templateVersion": row["template_version"],
+        "actorEmail": row["actor_email"],
+        "consentSnapshot": json.loads(row["consent_snapshot_json"]) if row["consent_snapshot_json"] else None,
+        "providerStatusDetail": row["provider_status_detail"],
+        "deliveredAt": row["delivered_at"],
         "attachmentFileNames": json.loads(row["attachment_file_names_json"] or "[]"),
         "providerMessageID": row["provider_message_id"],
         "occurredAt": row["occurred_at"],
@@ -842,7 +878,7 @@ def public_service_request_record(row: sqlite3.Row) -> dict[str, object]:
         "email": row["email"], "address": row["address"],
         "requestedServiceType": row["requested_service_type"], "urgency": row["urgency"],
         "summary": row["summary"], "preferredDate": row["preferred_date"],
-        "createdAt": row["created_at"],
+        "source": "website", "createdAt": row["created_at"],
     }
 
 
@@ -1057,7 +1093,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             self.accept_field_payment_assignment(assignment_id)
             return
         if parsed.path == "/api/communications":
-            if not self.require_admin():
+            if not self.require_communication_sender():
                 return
             self.store_customer_communication()
             return
@@ -1216,6 +1252,15 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if principal is not None and principal.get("role") in {"Admin", "Dispatcher"}:
             return True
         self.write_json({"error": "Dispatcher access required"}, status=HTTPStatus.FORBIDDEN, require_auth=False)
+        return False
+
+    def require_communication_sender(self) -> bool:
+        principal = self.principal()
+        if principal is not None and principal.get("role") in {
+            "Admin", "Accounting", "Dispatcher", "Field Technician", "Standard",
+        }:
+            return True
+        self.write_json({"error": "Active business account required"}, status=HTTPStatus.FORBIDDEN, require_auth=False)
         return False
 
     def require_field_payment_assignment_access(self) -> bool:
@@ -2058,56 +2103,170 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
     def store_customer_communication(self) -> None:
         try:
             payload = self.read_json()
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
             self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
             return
 
         record_id = str(payload.get("id") or "").strip()
         customer_name = str(payload.get("customerName") or "").strip()
+        customer_email = normalize_email(payload.get("customerEmail") if isinstance(payload.get("customerEmail"), str) else None)
         recipient = normalize_email(payload.get("recipient") if isinstance(payload.get("recipient"), str) else None)
         subject = str(payload.get("subject") or "").strip()
         channel = str(payload.get("channel") or "email").strip().lower()
         direction = str(payload.get("direction") or "outbound").strip().lower()
         delivery_status = str(payload.get("deliveryStatus") or "").strip().lower()
+        workflow = str(payload.get("workflow") or "general").strip()
+        template_version = str(payload.get("templateVersion") or f"{workflow}-v1").strip()
+        provider_status_detail = str(payload.get("providerStatusDetail") or "").replace("\r", " ").replace("\n", " ").strip()
+        provider_message_id = str(payload.get("providerMessageID") or "").strip() or None
         attachment_names = payload.get("attachmentFileNames")
-        if not isinstance(attachment_names, list) or not all(isinstance(value, str) for value in attachment_names):
+        if (
+            not isinstance(attachment_names, list)
+            or len(attachment_names) > 50
+            or not all(isinstance(value, str) and 1 <= len(value.strip()) <= 255 for value in attachment_names)
+        ):
             self.write_json({"error": "attachmentFileNames must be a string array"}, status=HTTPStatus.BAD_REQUEST)
             return
-        if not record_id or len(record_id) > 80 or not customer_name or not recipient or not subject:
+        try:
+            uuid.UUID(record_id)
+        except (ValueError, AttributeError):
+            self.write_json({"error": "Invalid communication identifier"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not customer_name or len(customer_name) > 200 or not recipient or not subject or len(subject) > 500:
             self.write_json({"error": "Missing communication identity, customer, recipient, or subject"}, status=HTTPStatus.BAD_REQUEST)
             return
         if channel != "email" or direction != "outbound" or delivery_status not in {"sent", "failed", "suppressed"}:
             self.write_json({"error": "Unsupported communication state"}, status=HTTPStatus.BAD_REQUEST)
             return
+        if workflow not in SUPPORTED_COMMUNICATION_WORKFLOWS:
+            self.write_json({"error": "Unsupported communication workflow"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", template_version):
+            self.write_json({"error": "Invalid communication template version"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if len(provider_status_detail) > 400 or (provider_message_id is not None and len(provider_message_id) > 200):
+            self.write_json({"error": "Communication provider metadata is too long"}, status=HTTPStatus.BAD_REQUEST)
+            return
 
-        occurred_at = str(payload.get("occurredAt") or "").strip() or utc_now()
+        relationship_values: dict[str, str | None] = {}
+        for payload_key, storage_key in (
+            ("serviceCallID", "service_call_id"),
+            ("invoiceID", "invoice_id"),
+            ("estimateID", "estimate_id"),
+            ("maintenanceContractID", "maintenance_contract_id"),
+        ):
+            raw_value = str(payload.get(payload_key) or "").strip()
+            if not raw_value:
+                relationship_values[storage_key] = None
+                continue
+            try:
+                relationship_values[storage_key] = str(uuid.UUID(raw_value))
+            except ValueError:
+                self.write_json({"error": f"Invalid {payload_key}"}, status=HTTPStatus.BAD_REQUEST)
+                return
+
+        consent_snapshot = payload.get("consentSnapshot")
+        if consent_snapshot is not None:
+            if (
+                not isinstance(consent_snapshot, dict)
+                or not isinstance(consent_snapshot.get("allowsTransactionalEmail"), bool)
+                or not isinstance(consent_snapshot.get("allowsServiceText"), bool)
+                or not isinstance(consent_snapshot.get("allowsMarketing"), bool)
+                or consent_snapshot.get("preferredContactMethod") not in {"email", "text", "phone"}
+                or (
+                    consent_snapshot.get("consentUpdatedAt") is not None
+                    and not isinstance(consent_snapshot.get("consentUpdatedAt"), str)
+                )
+            ):
+                self.write_json({"error": "Invalid communication consent snapshot"}, status=HTTPStatus.BAD_REQUEST)
+                return
+        consent_snapshot_json = json.dumps(consent_snapshot, separators=(",", ":"), sort_keys=True) if consent_snapshot else None
+
+        def normalized_timestamp(value: object, *, fallback: str | None = None) -> str | None:
+            raw_value = str(value or "").strip()
+            if not raw_value:
+                return fallback
+            parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                raise ValueError("Timestamp must include a timezone")
+            return parsed.astimezone(timezone.utc).isoformat()
+
+        try:
+            occurred_at = normalized_timestamp(payload.get("occurredAt"), fallback=utc_now())
+            delivered_at = normalized_timestamp(
+                payload.get("deliveredAt"),
+                fallback=occurred_at if delivery_status == "sent" else None,
+            )
+        except ValueError:
+            self.write_json({"error": "Invalid communication timestamp"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if delivery_status != "sent":
+            delivered_at = None
+
+        principal = self.principal() or {}
+        actor_email = normalize_email(principal.get("email") if isinstance(principal.get("email"), str) else None)
         created_at = utc_now()
         with db() as connection:
+            existing = connection.execute(
+                "SELECT * FROM customer_communications WHERE id = ?", (record_id,)
+            ).fetchone()
+            if existing is not None:
+                same_operation = (
+                    existing["customer_name"] == customer_name
+                    and existing["recipient"] == recipient
+                    and existing["subject"] == subject
+                    and existing["delivery_status"] == delivery_status
+                )
+                if not same_operation:
+                    self.write_json(
+                        {"error": "Communication identifier already belongs to a different immutable attempt"},
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
+                connection.execute(
+                    """
+                    UPDATE customer_communications
+                    SET maintenance_contract_id = COALESCE(maintenance_contract_id, ?),
+                        workflow = CASE WHEN workflow = 'general' THEN ? ELSE workflow END,
+                        template_version = CASE WHEN template_version = 'general-v1' THEN ? ELSE template_version END,
+                        actor_email = COALESCE(actor_email, ?),
+                        consent_snapshot_json = COALESCE(consent_snapshot_json, ?),
+                        provider_status_detail = COALESCE(provider_status_detail, ?),
+                        delivered_at = COALESCE(delivered_at, ?),
+                        provider_message_id = COALESCE(provider_message_id, ?)
+                    WHERE id = ?
+                    """,
+                    (
+                        relationship_values["maintenance_contract_id"], workflow, template_version,
+                        actor_email, consent_snapshot_json, provider_status_detail or None,
+                        delivered_at, provider_message_id, record_id,
+                    ),
+                )
+                row = connection.execute("SELECT * FROM customer_communications WHERE id = ?", (record_id,)).fetchone()
+                self.write_json(communication_record(row), status=HTTPStatus.OK)
+                return
             connection.execute(
                 """
                 INSERT INTO customer_communications(
                     id, customer_name, customer_email, service_call_id, invoice_id, estimate_id,
-                    channel, direction, recipient, subject, delivery_status, attachment_file_names_json,
+                    maintenance_contract_id, channel, direction, recipient, subject, delivery_status,
+                    workflow, template_version, actor_email, consent_snapshot_json,
+                    provider_status_detail, delivered_at, attachment_file_names_json,
                     provider_message_id, occurred_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    delivery_status = excluded.delivery_status,
-                    provider_message_id = excluded.provider_message_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    record_id, customer_name,
-                    payload.get("customerEmail") if isinstance(payload.get("customerEmail"), str) else None,
-                    payload.get("serviceCallID") if isinstance(payload.get("serviceCallID"), str) else None,
-                    payload.get("invoiceID") if isinstance(payload.get("invoiceID"), str) else None,
-                    payload.get("estimateID") if isinstance(payload.get("estimateID"), str) else None,
-                    channel, direction, recipient, subject, delivery_status, json.dumps(attachment_names),
-                    payload.get("providerMessageID") if isinstance(payload.get("providerMessageID"), str) else None,
-                    occurred_at, created_at,
+                    record_id, customer_name, customer_email,
+                    relationship_values["service_call_id"], relationship_values["invoice_id"],
+                    relationship_values["estimate_id"], relationship_values["maintenance_contract_id"],
+                    channel, direction, recipient, subject, delivery_status, workflow,
+                    template_version, actor_email, consent_snapshot_json, provider_status_detail or None,
+                    delivered_at, json.dumps([value.strip() for value in attachment_names]),
+                    provider_message_id, occurred_at, created_at,
                 ),
             )
             row = connection.execute("SELECT * FROM customer_communications WHERE id = ?", (record_id,)).fetchone()
-        principal = self.principal() or {}
-        record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "upsert", "customer-communication", record_id)
+        record_audit_event(actor_email, "create", "customer-communication", record_id)
         self.write_json(communication_record(row), status=HTTPStatus.CREATED)
 
     def download_document(self, document_id: str) -> None:
