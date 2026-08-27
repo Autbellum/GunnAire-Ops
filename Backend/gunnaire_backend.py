@@ -26,7 +26,7 @@ from urllib.parse import unquote, urlparse
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.27.4"
+SERVICE_VERSION = "2026.08.27.5"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -832,6 +832,13 @@ def document_contains_financial_data(row: sqlite3.Row) -> bool:
     )
 
 
+def document_is_maintenance_agreement(row: sqlite3.Row) -> bool:
+    return bool(
+        row["maintenance_contract_id"] or
+        str(row["kind"] or "").strip().lower() == "maintenance_agreement"
+    )
+
+
 def communication_record(row: sqlite3.Row) -> dict[str, object]:
     return {
         "id": row["id"],
@@ -1035,7 +1042,13 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     "SELECT * FROM documents ORDER BY created_at DESC LIMIT 500"
                 ).fetchall()
             if not self.has_billing_document_access():
-                rows = [row for row in rows if not document_contains_financial_data(row)]
+                rows = [
+                    row for row in rows
+                    if not document_contains_financial_data(row) or (
+                        document_is_maintenance_agreement(row) and
+                        self.has_maintenance_agreement_document_access()
+                    )
+                ]
             self.write_json({"documents": [document_record(row) for row in rows]})
             return
         if parsed.path == "/api/communications":
@@ -1250,6 +1263,12 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         principal = self.principal()
         return principal is not None and principal.get("role") in {
             "Admin", "Accounting", "Field Technician",
+        }
+
+    def has_maintenance_agreement_document_access(self) -> bool:
+        principal = self.principal()
+        return principal is not None and principal.get("role") in {
+            "Admin", "Accounting", "Dispatcher", "Field Technician",
         }
 
     def require_dispatch_access(self) -> bool:
@@ -1772,10 +1791,20 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             except ValueError:
                 self.write_json({"error": "maintenanceContractID must be a UUID"}, status=HTTPStatus.BAD_REQUEST)
                 return
-        if (invoice_id or estimate_id or maintenance_contract_id or kind in {
+        is_maintenance_agreement = bool(
+            maintenance_contract_id or kind == "maintenance_agreement"
+        )
+        is_other_financial_document = bool(invoice_id or estimate_id or kind in {
             "invoice", "estimate", "payment", "receipt", "bill", "financial",
-            "credit", "statement", "transaction", "maintenance_agreement",
-        }) and not self.has_billing_document_access():
+            "credit", "statement", "transaction",
+        })
+        if is_maintenance_agreement and not self.has_maintenance_agreement_document_access():
+            self.write_json(
+                {"error": "Service agreement document access is required"},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
+        if is_other_financial_document and not self.has_billing_document_access():
             self.write_json(
                 {"error": "Financial access is required to store billing documents"},
                 status=HTTPStatus.FORBIDDEN,

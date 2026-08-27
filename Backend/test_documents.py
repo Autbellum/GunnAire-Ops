@@ -36,6 +36,16 @@ class StandardDocumentHandler(backend.GunnAireBackendHandler):
         }
 
 
+class DispatcherDocumentHandler(backend.GunnAireBackendHandler):
+    def principal(self) -> dict[str, object]:
+        return {
+            "email": "dispatch@gunnaire.com",
+            "role": "Dispatcher",
+            "isActive": True,
+            "createdAt": None,
+        }
+
+
 class DocumentTests(unittest.TestCase):
     def test_initialize_database_migrates_legacy_documents_table(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -179,6 +189,61 @@ class DocumentTests(unittest.TestCase):
                     with self.assertRaises(urllib.error.HTTPError) as rejected:
                         urllib.request.urlopen(request, timeout=5)
                     self.assertEqual(rejected.exception.code, 403)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+
+    def test_dispatcher_can_store_agreement_without_invoice_document_access(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contract_id = str(uuid.uuid4())
+            with mock.patch.multiple(
+                backend,
+                DB_PATH=root / "gunnaire_backend.sqlite3",
+                STORAGE_ROOT=root / "storage",
+            ):
+                backend.initialize_database()
+                server = ThreadingHTTPServer(("127.0.0.1", 0), DispatcherDocumentHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                url = f"http://127.0.0.1:{server.server_port}/api/documents"
+
+                def request(kind: str, **references: str) -> urllib.request.Request:
+                    return urllib.request.Request(
+                        url,
+                        data=json.dumps(
+                            {
+                                "filename": f"{kind}.pdf",
+                                "contentType": "application/pdf",
+                                "kind": kind,
+                                "customerName": "Dispatch Agreement Customer",
+                                "dataBase64": base64.b64encode(kind.encode("utf-8")).decode("ascii"),
+                                **references,
+                            }
+                        ).encode("utf-8"),
+                        method="POST",
+                        headers={"Content-Type": "application/json"},
+                    )
+
+                try:
+                    with urllib.request.urlopen(
+                        request("maintenance_agreement", maintenanceContractID=contract_id),
+                        timeout=5,
+                    ) as response:
+                        self.assertEqual(response.status, 201)
+
+                    with self.assertRaises(urllib.error.HTTPError) as rejected:
+                        urllib.request.urlopen(
+                            request("invoice", invoiceID=str(uuid.uuid4())),
+                            timeout=5,
+                        )
+                    self.assertEqual(rejected.exception.code, 403)
+
+                    with urllib.request.urlopen(url, timeout=5) as response:
+                        listed = json.loads(response.read().decode("utf-8"))
+                    self.assertEqual(len(listed["documents"]), 1)
+                    self.assertEqual(listed["documents"][0]["maintenanceContractID"], contract_id)
                 finally:
                     server.shutdown()
                     server.server_close()
