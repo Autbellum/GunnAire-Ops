@@ -32,7 +32,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.27.8"
+SERVICE_VERSION = "2026.08.27.9"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -295,6 +295,34 @@ def verify_apple_identity_token(identity_token: str, nonce: str) -> dict[str, ob
         or not is_valid_email(email)
     ):
         raise ValueError("Invalid Apple credential")
+    return claims
+
+
+def verify_google_identity_token(identity_token: str) -> dict[str, object]:
+    """Verify one Google OIDC token before exchanging it for an app session."""
+    if AUTH_MODE != "google-id-token" or not 100 <= len(identity_token) <= 16 * 1024:
+        raise ValueError("Invalid Google credential")
+    try:
+        claims = google_id_token.verify_oauth2_token(
+            identity_token,
+            google_requests.Request(),
+            GOOGLE_CLIENT_ID,
+        )
+    except Exception as error:
+        raise ValueError("Invalid Google credential") from error
+    if not isinstance(claims, dict):
+        raise ValueError("Invalid Google credential")
+    email = normalize_email(claims.get("email") if isinstance(claims.get("email"), str) else None)
+    hosted_domain = normalize_email(claims.get("hd") if isinstance(claims.get("hd"), str) else None)
+    subject = claims.get("sub")
+    if (
+        not is_valid_email(email)
+        or not bool(claims.get("email_verified"))
+        or hosted_domain != GOOGLE_ALLOWED_DOMAIN
+        or not isinstance(subject, str)
+        or not 1 <= len(subject) <= 255
+    ):
+        raise ValueError("Invalid Google credential")
     return claims
 
 
@@ -1392,6 +1420,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/auth/apple":
             self.exchange_apple_identity()
             return
+        if parsed.path == "/api/auth/google":
+            self.exchange_google_identity()
+            return
         if self.principal() is None:
             self.write_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
             return
@@ -1540,17 +1571,14 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 self._principal = session_principal
                 return self._principal
 
-        token = self.headers.get("X-GunnAire-Google-ID-Token", "").strip()
-        if not token:
+        identity_token = self.headers.get("X-GunnAire-Google-ID-Token", "").strip()
+        if not identity_token:
             return None
         try:
-            claims = google_id_token.verify_oauth2_token(token, google_requests.Request(), GOOGLE_CLIENT_ID)
-        except Exception:
+            claims = verify_google_identity_token(identity_token)
+        except ValueError:
             return None
         email = normalize_email(claims.get("email") if isinstance(claims.get("email"), str) else None)
-        hosted_domain = normalize_email(claims.get("hd") if isinstance(claims.get("hd"), str) else None)
-        if not email or not bool(claims.get("email_verified")) or hosted_domain != GOOGLE_ALLOWED_DOMAIN:
-            return None
         with db() as connection:
             row = connection.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
         if row is None or not bool(row["is_active"]):
@@ -1618,6 +1646,41 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         session_token, expires_at = create_app_session(email, "apple", provider_subject)
         record_audit_event(email, "sign-in", "apple-application-session")
+        self.write_json(
+            {
+                "sessionToken": session_token,
+                "expiresAt": expires_at,
+                "providerSubject": provider_subject,
+                "user": user_record(user),
+            },
+            require_auth=False,
+        )
+
+    def exchange_google_identity(self) -> None:
+        try:
+            raw = self.read_limited_body(20 * 1024)
+            payload = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            self.write_json({"error": "Invalid Google authentication request"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        identity_token = payload.get("identityToken") if isinstance(payload, dict) else None
+        if not isinstance(identity_token, str):
+            self.write_json({"error": "Invalid Google authentication request"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        try:
+            claims = verify_google_identity_token(identity_token)
+        except ValueError:
+            self.write_json({"error": "Google authentication failed"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
+            return
+        email = normalize_email(claims.get("email") if isinstance(claims.get("email"), str) else None)
+        provider_subject = claims.get("sub") if isinstance(claims.get("sub"), str) else ""
+        with db() as connection:
+            user = connection.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        if user is None or not bool(user["is_active"]):
+            self.write_json({"error": "Business account access is not approved"}, status=HTTPStatus.FORBIDDEN, require_auth=False)
+            return
+        session_token, expires_at = create_app_session(email, "google", provider_subject)
+        record_audit_event(email, "sign-in", "google-application-session")
         self.write_json(
             {
                 "sessionToken": session_token,

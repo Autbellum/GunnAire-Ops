@@ -38,7 +38,7 @@ The token in the backend environment and the app config must match.
 
 `api-token` mode is retained only for a physically controlled LAN/development server. It grants the holder of the shared token administrator-equivalent backend access and must not be exposed outside that environment.
 
-For a deployed multi-user server, terminate TLS before the backend and use Google ID-token verification:
+For a deployed multi-user server, terminate TLS before the backend and use verified business identity plus revocable GunnAire application sessions:
 
 ```sh
 python3 -m pip install -r requirements.txt
@@ -51,9 +51,9 @@ export GUNNAIRE_APP_SESSION_DAYS=30
 python3 gunnaire_backend.py
 ```
 
-Then set `GUNNAIRE_BACKEND_AUTH_MODE = google-id-token` in the app build configuration, use an HTTPS `GUNNAIRE_BACKEND_BASE_URL`, and omit the shared API token. This production mode accepts either a verified Google ID token or a short-lived GunnAire application session created from a verified Sign in with Apple identity. Both providers must resolve to an already-approved active backend user; neither provider creates or promotes a user. Apple private-relay addresses therefore require an explicit administrator-created user record and are never mapped automatically to another email.
+Then set `GUNNAIRE_BACKEND_AUTH_MODE = google-id-token` in the app build configuration, use an HTTPS `GUNNAIRE_BACKEND_BASE_URL`, and omit the shared API token. The historical mode name is retained for deployment compatibility, but fresh Apple and Google sign-ins both exchange their one-time provider identity for the same revocable GunnAire application-session contract. Protected requests use that opaque application session. A legacy Google ID token may still be accepted while an existing client renews, but it is not persisted by the app. Both providers must resolve to an already-approved active backend user; neither provider creates or promotes a user. Apple private-relay addresses therefore require an explicit administrator-created user record and are never mapped automatically to another email.
 
-The Apple identity token is verified against Apple's current RS256 public keys, issuer, app audience, expiry, issue time, nonce, subject, and verified email. It is used once and is not stored. The backend persists only a SHA-256 hash of the random application-session token, rechecks the user's active status on every protected request, and supports immediate revocation at `POST /api/auth/logout`. The app stores only that opaque application session in Keychain and checks Apple's credential state on relaunch.
+Apple identity exchange is available at `POST /api/auth/apple`. The token is verified against Apple's current RS256 public keys, issuer, app audience, expiry, issue time, nonce, subject, and verified email. Google identity exchange is available at `POST /api/auth/google`. The token is verified through Google's supported verifier for the exact configured iOS client audience, hosted business domain, verified email, and subject. Provider identity tokens are used only for exchange and are not stored. The backend persists only a SHA-256 hash of each random application-session token, rechecks the user's active state and current role on every protected request, and supports immediate revocation at `POST /api/auth/logout`. The app stores only the opaque application session in Keychain; Apple additionally checks the credential state on relaunch.
 
 ## Render deployment
 
@@ -92,7 +92,7 @@ Use `api.gunnaire.com` as the custom HTTPS domain after Render provides its DNS 
 
 - Approved GunnAire app users and roles.
 - Active/inactive access state.
-- Revocable Sign in with Apple application sessions. Only a one-way SHA-256 session-token hash, provider subject, approved email, creation/use/expiry times, and revocation state are retained; Apple identity tokens are not stored.
+- Revocable Apple and Google application sessions. Only a one-way SHA-256 session-token hash, provider, provider subject, approved email, creation/use/expiry times, and revocation state are retained; provider identity tokens are not stored.
 - Uploaded receipt/document files under `Backend/storage`, retaining their service call, invoice, estimate, customer-equipment, equipment-name, and customer links for cross-device retrieval.
 - Field payment collection records for admin QuickBooks reconciliation.
 - QuickBooks change-event metadata for the currently authorized company realm. The raw provider payload, realm ID, customer content, and credentials are not retained or returned to the app.
@@ -130,7 +130,7 @@ Before enabling it for customers, deploy the reviewed backend version, host the 
 
 ## QuickBooks OAuth bridge
 
-`POST /api/qbo/exchange`, `/api/qbo/refresh`, and `/api/qbo/revoke` are administrator-only backend operations used by the app after the registered HTTPS callback hands the authorization code back to `gunnaireops://`. The bridge encrypts and retains the rotating Intuit refresh token in its persistent database; the app receives only a short-lived access token. The client realm and sandbox/production environment must match the saved backend connection before it can refresh. Set a valid `GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY` and `GUNNAIRE_QBO_ENVIRONMENT` before authorizing QuickBooks. Store that Fernet key only in the deployment secret manager, keep it stable while the QBO connection exists, and rotate it only through a planned decrypt/re-encrypt migration. Run this backend behind HTTPS and in Google ID-token mode before connecting a production QBO company.
+`POST /api/qbo/exchange`, `/api/qbo/refresh`, and `/api/qbo/revoke` are administrator-only backend operations used by the app after the registered HTTPS callback hands the authorization code back to `gunnaireops://`. The bridge encrypts and retains the rotating Intuit refresh token in its persistent database; the app receives only a short-lived access token. The client realm and sandbox/production environment must match the saved backend connection before it can refresh. Set a valid `GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY` and `GUNNAIRE_QBO_ENVIRONMENT` before authorizing QuickBooks. Store that Fernet key only in the deployment secret manager, keep it stable while a QBO connection exists, and rotate it only through a planned decrypt/re-encrypt migration. Run this backend behind HTTPS in production business-identity mode before connecting a production QBO company; an approved Google or Apple application session receives the same server-enforced role.
 
 ## QuickBooks change webhooks
 
