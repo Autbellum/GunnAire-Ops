@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import threading
@@ -12,6 +13,8 @@ from pathlib import Path
 from unittest import mock
 
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from Backend import gunnaire_backend as backend
 
@@ -21,6 +24,11 @@ class BackendReadinessTests(unittest.TestCase):
         database = root / "gunnaire_backend.sqlite3"
         storage = root / "storage"
         backup_status = root / "backup_status.json"
+        apns_private_key = ec.generate_private_key(ec.SECP256R1()).private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
         return mock.patch.multiple(
             backend,
             DATA_ROOT=root,
@@ -36,6 +44,12 @@ class BackendReadinessTests(unittest.TestCase):
             QBO_ENVIRONMENT="production",
             QBO_TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode("utf-8"),
             QBO_WEBHOOK_VERIFIER_TOKEN="webhook-verifier-token",
+            PUSH_TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode("utf-8"),
+            APNS_TEAM_ID="7C4B3RR7RD",
+            APNS_KEY_ID="A1B2C3D4E5",
+            APNS_PRIVATE_KEY_BASE64=base64.b64encode(apns_private_key).decode("ascii"),
+            APNS_TOPIC="com.gunnaire.businesssuite",
+            apns_provider_dependency_is_available=mock.Mock(return_value=True),
         )
 
     def seed_ready_state(self, root: Path, now: datetime) -> None:
@@ -61,6 +75,27 @@ class BackendReadinessTests(unittest.TestCase):
                 ) VALUES ('event-ready-1', 'realm-123', 'invoice', '42', 'updated', ?, ?)
                 """,
                 (now.isoformat(), now.isoformat()),
+            )
+            connection.execute(
+                """
+                INSERT INTO qbo_accounting_config(
+                    realm_id, environment,
+                    default_sales_item_ref, default_sales_item_name, default_sales_item_type,
+                    default_income_account_ref, default_income_account_name, default_income_account_type,
+                    default_expense_account_ref, default_expense_account_name, default_expense_account_type,
+                    default_bank_account_ref, default_bank_account_name, default_bank_account_type,
+                    default_credit_card_account_ref, default_credit_card_account_name,
+                    default_credit_card_account_type, updated_at, updated_by
+                ) VALUES (
+                    'realm-123', 'production',
+                    '101', 'HVAC Service', 'Service',
+                    '201', 'Service Income', 'Income',
+                    '301', 'Cost of Goods Sold', 'Cost of Goods Sold',
+                    '401', 'Operating Checking', 'Bank',
+                    '501', 'Company Credit Card', 'Credit Card', ?, 'admin@gunnaire.com'
+                )
+                """,
+                (now.isoformat(),),
             )
         backend.BACKUP_STATUS_PATH.write_text(
             json.dumps({"artifactID": "backup-verified-123", "verifiedAt": now.isoformat()}),
@@ -88,7 +123,9 @@ class BackendReadinessTests(unittest.TestCase):
                 "authentication": "ready",
                 "customer-portal": "ready",
                 "quickbooks": "ready",
+                "quickbooks-accounting-config": "ready",
                 "quickbooks-webhooks": "ready",
+                "push-notifications": "ready",
                 "backup": "ready",
             },
         )
@@ -104,6 +141,24 @@ class BackendReadinessTests(unittest.TestCase):
         statuses = {component["id"]: component["status"] for component in snapshot["components"]}
         self.assertEqual(statuses["quickbooks"], "attention")
         self.assertEqual(statuses["backup"], "attention")
+
+    def test_push_readiness_surfaces_missing_http2_provider_dependency_as_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.readiness_configuration(root):
+                backend.initialize_database()
+                with mock.patch.object(
+                    backend,
+                    "apns_provider_dependency_is_available",
+                    return_value=False,
+                ):
+                    component = backend.push_notification_readiness_component()
+
+        self.assertEqual(component["status"], "error")
+        self.assertEqual(
+            component["detail"],
+            "The HTTP/2 APNs provider dependency is unavailable on this server.",
+        )
 
     def test_readiness_endpoint_requires_administrator_authentication(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -135,7 +190,7 @@ class BackendReadinessTests(unittest.TestCase):
                         payload = json.loads(response.read().decode("utf-8"))
                     self.assertEqual(response.status, 200)
                     self.assertEqual(payload["serviceVersion"], backend.SERVICE_VERSION)
-                    self.assertEqual(len(payload["components"]), 8)
+                    self.assertEqual(len(payload["components"]), 10)
                 finally:
                     server.shutdown()
                     server.server_close()

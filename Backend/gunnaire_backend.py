@@ -28,11 +28,12 @@ from urllib.parse import unquote, urlparse
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.27.9"
+SERVICE_VERSION = "2026.08.28.13"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -48,6 +49,27 @@ APPLE_JWKS_CACHE_SECONDS = min(max(int(os.environ.get("GUNNAIRE_APPLE_JWKS_CACHE
 APP_SESSION_DAYS = min(max(int(os.environ.get("GUNNAIRE_APP_SESSION_DAYS", "30")), 1), 30)
 APPLE_JWKS_CACHE: dict[str, object] = {"expires_at": 0.0, "keys": {}}
 APPLE_JWKS_LOCK = threading.Lock()
+APPLE_ACCOUNT_EVENT_TYPES = {
+    "email-disabled",
+    "email-enabled",
+    "consent-revoked",
+    "account-deleted",
+}
+PUSH_TOKEN_ENCRYPTION_KEY = os.environ.get("GUNNAIRE_PUSH_TOKEN_ENCRYPTION_KEY", "").strip()
+APNS_TEAM_ID = os.environ.get("GUNNAIRE_APNS_TEAM_ID", "").strip()
+APNS_KEY_ID = os.environ.get("GUNNAIRE_APNS_KEY_ID", "").strip()
+APNS_PRIVATE_KEY_BASE64 = os.environ.get("GUNNAIRE_APNS_PRIVATE_KEY_BASE64", "").strip()
+APNS_TOPIC = os.environ.get("GUNNAIRE_APNS_TOPIC", "com.gunnaire.businesssuite").strip()
+APNS_DELIVERY_BATCH_SIZE = min(max(int(os.environ.get("GUNNAIRE_APNS_DELIVERY_BATCH_SIZE", "50")), 1), 200)
+APNS_WORKER_INTERVAL_SECONDS = min(max(int(os.environ.get("GUNNAIRE_APNS_WORKER_INTERVAL_SECONDS", "15")), 5), 300)
+APNS_AUTH_TOKEN_CACHE: dict[str, object] = {
+    "configuration_fingerprint": "",
+    "issued_at": 0,
+    "token": "",
+}
+APNS_AUTH_TOKEN_LOCK = threading.Lock()
+PUSH_DELIVERY_LOCK = threading.Lock()
+PUSH_DELIVERY_WAKE_EVENT = threading.Event()
 DATA_ROOT_RAW = os.environ.get("GUNNAIRE_BACKEND_DATA_DIR", "").strip()
 DATA_ROOT = Path(DATA_ROOT_RAW).expanduser() if DATA_ROOT_RAW else None
 DB_PATH = Path(
@@ -81,6 +103,94 @@ QBO_WEBHOOK_VERIFIER_TOKEN = os.environ.get("GUNNAIRE_QBO_WEBHOOK_VERIFIER_TOKEN
 QBO_WEBHOOK_MAX_BYTES = min(max(int(os.environ.get("GUNNAIRE_QBO_WEBHOOK_MAX_BYTES", str(1024 * 1024))), 1024), 5 * 1024 * 1024)
 QBO_TOKEN_ENDPOINT = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 QBO_REVOCATION_ENDPOINT = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
+QBO_ACCOUNTING_REFERENCE_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+QBO_SALES_ITEM_TYPES = {
+    "service": "Service",
+    "inventory": "Inventory",
+    "noninventory": "NonInventory",
+    "bundle": "Bundle",
+    "group": "Group",
+    "othercharge": "OtherCharge",
+}
+QBO_INCOME_ACCOUNT_TYPES = {
+    "income": "Income",
+    "other income": "Other Income",
+}
+QBO_EXPENSE_ACCOUNT_TYPES = {
+    "expense": "Expense",
+    "other expense": "Other Expense",
+    "cost of goods sold": "Cost of Goods Sold",
+}
+SUPPLIER_CONNECTOR_IDEMPOTENCY_PATTERN = re.compile(r"[A-Za-z0-9._:-]{16,128}")
+SUPPLIER_CONNECTOR_CONTRACT_VERSION = 1
+SUPPLIER_CONNECTOR_MAX_REQUEST_BYTES = min(
+    max(int(os.environ.get("GUNNAIRE_SUPPLIER_CONNECTOR_MAX_REQUEST_BYTES", str(64 * 1024))), 1024),
+    256 * 1024,
+)
+SUPPLIER_CONNECTOR_DEFINITIONS: dict[str, dict[str, object]] = {
+    "johnstoneDirectConnect": {
+        "displayName": "Johnstone Supply DirectConnect",
+        "provider": "Johnstone Supply",
+        "statusWhenUnavailable": "onboardingRequired",
+        "detailWhenUnavailable": "Ask the Johnstone account representative to approve DirectConnect, branch mapping, pricing, and test-order specifications.",
+        "capabilities": ["catalog", "priceAvailability", "purchaseOrders"],
+        "onboardingURL": "https://www.johnstonesupply.com/store101/ecommerce-tools",
+    },
+    "johnstonePunchOut": {
+        "displayName": "Johnstone Supply Punch-out",
+        "provider": "Johnstone Supply",
+        "statusWhenUnavailable": "onboardingRequired",
+        "detailWhenUnavailable": "Ask the Johnstone account representative for the customer-specific cXML Punch-out agreement and test credentials.",
+        "capabilities": ["catalog", "priceAvailability", "purchaseOrders"],
+        "onboardingURL": "https://www.johnstonesupply.com/store101/ecommerce-tools",
+    },
+    "lennoxPartner": {
+        "displayName": "Lennox Partner",
+        "provider": "Lennox",
+        "statusWhenUnavailable": "partnerGated",
+        "detailWhenUnavailable": "A public direct GunnAire API is not established. Obtain written Lennox partner approval and exact catalog/procurement specifications before enabling this adapter.",
+        "capabilities": ["catalog", "priceAvailability", "purchaseOrders"],
+        "onboardingURL": "https://www.lennoxpros.com/news/field-service-manangement-hvac",
+    },
+    "genericCatalog": {
+        "displayName": "Generic Supplier Catalog",
+        "provider": "Approved supplier",
+        "statusWhenUnavailable": "adapterRequired",
+        "detailWhenUnavailable": "Install an approved server adapter for the supplier's documented catalog and ordering contract.",
+        "capabilities": ["catalog", "priceAvailability", "purchaseOrders"],
+        "onboardingURL": None,
+    },
+}
+
+
+class SupplierConnectorFailure(Exception):
+    """Structured adapter failure that never exposes supplier response bodies or credentials."""
+
+    def __init__(self, code: str, message: str, *, outcome_unknown: bool = False) -> None:
+        super().__init__(message)
+        self.code = code
+        self.safe_message = message
+        self.outcome_unknown = outcome_unknown
+
+
+class SupplierConnectorAdapter:
+    """Provider adapters are injected server-side after commercial onboarding.
+
+    Implementations must use the supplied idempotency key with the provider, must not
+    return credentials or raw provider payloads, and must recover an uncertain request
+    before GunnAire permits any retry for the same key.
+    """
+
+    kind: str = ""
+
+    def submit_order(self, order: dict[str, object], idempotency_key: str) -> dict[str, object]:
+        raise NotImplementedError
+
+    def recover_order(self, order: dict[str, object], idempotency_key: str) -> dict[str, object] | None:
+        return None
+
+
+SUPPLIER_CONNECTOR_ADAPTERS: dict[str, SupplierConnectorAdapter] = {}
 SUPPORTED_COMMUNICATION_WORKFLOWS = {
     "general",
     "estimateFollowUp",
@@ -171,6 +281,10 @@ def base64url_decode(value: str, *, maximum_bytes: int) -> bytes:
     return decoded
 
 
+def base64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
 def decode_jwt_json_segment(value: str, *, maximum_bytes: int) -> dict[str, object]:
     decoded = base64url_decode(value, maximum_bytes=maximum_bytes)
     try:
@@ -243,16 +357,17 @@ def apple_public_key(kid: str, *, force_refresh: bool = False) -> rsa.RSAPublicK
         return key
 
 
-def verify_apple_identity_token(identity_token: str, nonce: str) -> dict[str, object]:
-    if not 100 <= len(identity_token) <= 16 * 1024 or not 16 <= len(nonce) <= 200:
-        raise ValueError("Invalid Apple credential")
-    segments = identity_token.split(".")
+def verify_apple_signed_jwt(token: str) -> dict[str, object]:
+    """Verify one bounded Apple RS256 JWS and return its untrusted claims only after signature success."""
+    if not 100 <= len(token) <= 16 * 1024:
+        raise ValueError("Invalid Apple signed token")
+    segments = token.split(".")
     if len(segments) != 3:
-        raise ValueError("Invalid Apple credential")
+        raise ValueError("Invalid Apple signed token")
     header = decode_jwt_json_segment(segments[0], maximum_bytes=4096)
     claims = decode_jwt_json_segment(segments[1], maximum_bytes=12 * 1024)
     if header.get("alg") != "RS256" or not isinstance(header.get("kid"), str):
-        raise ValueError("Invalid Apple credential")
+        raise ValueError("Invalid Apple signed token")
     signing_key = apple_public_key(str(header["kid"]))
     signature = base64url_decode(segments[2], maximum_bytes=1024)
     try:
@@ -263,6 +378,22 @@ def verify_apple_identity_token(identity_token: str, nonce: str) -> dict[str, ob
             hashes.SHA256(),
         )
     except (InvalidSignature, ValueError, UnicodeEncodeError) as error:
+        raise ValueError("Invalid Apple signed token") from error
+    return claims
+
+
+def apple_audience_matches(audience: object) -> bool:
+    return audience == APPLE_CLIENT_ID or (
+        isinstance(audience, list) and APPLE_CLIENT_ID in audience
+    )
+
+
+def verify_apple_identity_token(identity_token: str, nonce: str) -> dict[str, object]:
+    if not 16 <= len(nonce) <= 200:
+        raise ValueError("Invalid Apple credential")
+    try:
+        claims = verify_apple_signed_jwt(identity_token)
+    except ValueError as error:
         raise ValueError("Invalid Apple credential") from error
 
     now = datetime.now(timezone.utc).timestamp()
@@ -277,12 +408,9 @@ def verify_apple_identity_token(identity_token: str, nonce: str) -> dict[str, ob
     email_verified = verified_claim is True or (
         isinstance(verified_claim, str) and verified_claim.casefold() == "true"
     )
-    audience_matches = audience == APPLE_CLIENT_ID or (
-        isinstance(audience, list) and APPLE_CLIENT_ID in audience
-    )
     if (
         issuer != APPLE_ISSUER
-        or not audience_matches
+        or not apple_audience_matches(audience)
         or not isinstance(expiration, (int, float))
         or expiration <= now
         or not isinstance(issued_at, (int, float))
@@ -296,6 +424,65 @@ def verify_apple_identity_token(identity_token: str, nonce: str) -> dict[str, ob
     ):
         raise ValueError("Invalid Apple credential")
     return claims
+
+
+def verify_apple_account_notification(
+    signed_payload: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Verify and normalize one Sign in with Apple account-lifecycle event."""
+    try:
+        claims = verify_apple_signed_jwt(signed_payload)
+    except ValueError as error:
+        raise ValueError("Invalid Apple account notification") from error
+    checked_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    issuer = claims.get("iss")
+    audience = claims.get("aud")
+    issued_at = claims.get("iat")
+    event_id = claims.get("jti")
+    events = claims.get("events")
+    if (
+        issuer != APPLE_ISSUER
+        or not apple_audience_matches(audience)
+        or isinstance(issued_at, bool)
+        or not isinstance(issued_at, (int, float))
+        or issued_at < 0
+        or issued_at > checked_at.timestamp() + 300
+        or not isinstance(event_id, str)
+        or not 1 <= len(event_id) <= 255
+        or any(ord(character) < 33 or ord(character) > 126 for character in event_id)
+        or not isinstance(events, dict)
+    ):
+        raise ValueError("Invalid Apple account notification")
+    event_type = events.get("type")
+    provider_subject = events.get("sub")
+    event_time = events.get("event_time")
+    if (
+        event_type not in APPLE_ACCOUNT_EVENT_TYPES
+        or not isinstance(provider_subject, str)
+        or not 1 <= len(provider_subject) <= 255
+        or any(ord(character) < 33 or ord(character) > 126 for character in provider_subject)
+        or isinstance(event_time, bool)
+        or not isinstance(event_time, (int, float))
+        or event_time < 0
+        or event_time > checked_at.timestamp() + 300
+    ):
+        raise ValueError("Invalid Apple account notification")
+    if event_type in {"email-disabled", "email-enabled"}:
+        email = normalize_email(events.get("email") if isinstance(events.get("email"), str) else None)
+        private_email_claim = events.get("is_private_email")
+        is_private_email = private_email_claim is True or (
+            isinstance(private_email_claim, str) and private_email_claim.casefold() == "true"
+        )
+        if not is_valid_email(email) or not is_private_email:
+            raise ValueError("Invalid Apple account notification")
+    return {
+        "id": event_id,
+        "type": event_type,
+        "providerSubject": provider_subject,
+        "eventTime": datetime.fromtimestamp(float(event_time), timezone.utc).isoformat(),
+    }
 
 
 def verify_google_identity_token(identity_token: str) -> dict[str, object]:
@@ -352,6 +539,38 @@ def create_app_session(email: str, provider: str, provider_subject: str) -> tupl
             ),
         )
     return token, expires_at.isoformat()
+
+
+def link_apple_identity(email: str, provider_subject: str) -> bool:
+    """Persist Apple's stable subject only when it remains bound to one approved business user."""
+    normalized_email = normalize_email(email)
+    if (
+        not is_valid_email(normalized_email)
+        or not 1 <= len(provider_subject) <= 255
+        or any(ord(character) < 33 or ord(character) > 126 for character in provider_subject)
+    ):
+        return False
+    now = utc_now()
+    with db() as connection:
+        existing = connection.execute(
+            "SELECT email FROM apple_identities WHERE provider_subject = ?",
+            (provider_subject,),
+        ).fetchone()
+        if existing is not None and normalize_email(str(existing["email"])) != normalized_email:
+            return False
+        connection.execute(
+            """
+            INSERT INTO apple_identities(
+                provider_subject, email, credential_state, relay_enabled,
+                created_at, updated_at, last_event_at
+            ) VALUES (?, ?, 'authorized', NULL, ?, ?, NULL)
+            ON CONFLICT(provider_subject) DO UPDATE SET
+                credential_state = 'authorized',
+                updated_at = excluded.updated_at
+            """,
+            (provider_subject, normalized_email, now, now),
+        )
+    return True
 
 
 def normalize_text_recipient(value: str | None) -> str:
@@ -454,6 +673,171 @@ def decrypt_qbo_refresh_token(ciphertext: str) -> str | None:
         return encryptor.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
     except Exception:
         return None
+
+
+def push_token_store() -> object | None:
+    """Return the dedicated APNs-device-token encryptor without exposing its key."""
+    if not PUSH_TOKEN_ENCRYPTION_KEY:
+        return None
+    try:
+        from cryptography.fernet import Fernet
+        return Fernet(PUSH_TOKEN_ENCRYPTION_KEY.encode("utf-8"))
+    except (ImportError, ValueError):
+        return None
+
+
+def encrypt_push_device_token(token: str) -> str:
+    encryptor = push_token_store()
+    if encryptor is None:
+        raise RuntimeError("Push token encryption is not configured")
+    return encryptor.encrypt(token.encode("ascii")).decode("ascii")
+
+
+def decrypt_push_device_token(ciphertext: str) -> str | None:
+    encryptor = push_token_store()
+    if encryptor is None:
+        return None
+    try:
+        token = encryptor.decrypt(ciphertext.encode("ascii")).decode("ascii")
+    except Exception:
+        return None
+    return token if re.fullmatch(r"[0-9a-f]{32,512}", token) and len(token) % 2 == 0 else None
+
+
+def apns_configuration_is_present() -> bool:
+    return bool(
+        PUSH_TOKEN_ENCRYPTION_KEY
+        and APNS_TEAM_ID
+        and APNS_KEY_ID
+        and APNS_PRIVATE_KEY_BASE64
+        and APNS_TOPIC
+    )
+
+
+def apns_private_key() -> ec.EllipticCurvePrivateKey:
+    if not re.fullmatch(r"[A-Za-z0-9]{10}", APNS_TEAM_ID):
+        raise ValueError("Invalid APNs team identifier")
+    if not re.fullmatch(r"[A-Za-z0-9]{10}", APNS_KEY_ID):
+        raise ValueError("Invalid APNs key identifier")
+    if not re.fullmatch(r"[A-Za-z0-9.-]{3,255}", APNS_TOPIC):
+        raise ValueError("Invalid APNs topic")
+    if APNS_TOPIC != APPLE_CLIENT_ID:
+        raise ValueError("APNs topic does not match the Apple app identifier")
+    try:
+        encoded = APNS_PRIVATE_KEY_BASE64.encode("ascii")
+        if len(encoded) > 32 * 1024:
+            raise ValueError("APNs private key is too large")
+        raw_key = base64.b64decode(encoded, validate=True)
+        private_key = serialization.load_pem_private_key(raw_key, password=None)
+    except (ValueError, TypeError, UnicodeEncodeError) as error:
+        raise ValueError("Invalid APNs private key") from error
+    if (
+        not isinstance(private_key, ec.EllipticCurvePrivateKey)
+        or not isinstance(private_key.curve, ec.SECP256R1)
+    ):
+        raise ValueError("APNs private key must use P-256")
+    return private_key
+
+
+def apns_authentication_token(now: datetime | None = None) -> str:
+    issued_at = int((now or datetime.now(timezone.utc)).timestamp())
+    configuration_fingerprint = hashlib.sha256(
+        f"{APNS_TEAM_ID}:{APNS_KEY_ID}:{APNS_TOPIC}:{APNS_PRIVATE_KEY_BASE64}".encode("utf-8")
+    ).hexdigest()
+    with APNS_AUTH_TOKEN_LOCK:
+        cached_token = APNS_AUTH_TOKEN_CACHE.get("token")
+        cached_issued_at = APNS_AUTH_TOKEN_CACHE.get("issued_at")
+        cached_fingerprint = APNS_AUTH_TOKEN_CACHE.get("configuration_fingerprint")
+        if (
+            isinstance(cached_token, str)
+            and cached_token
+            and isinstance(cached_issued_at, int)
+            and 0 <= issued_at - cached_issued_at < 50 * 60
+            and cached_fingerprint == configuration_fingerprint
+        ):
+            return cached_token
+
+        header = base64url_encode(
+            json.dumps(
+                {"alg": "ES256", "kid": APNS_KEY_ID},
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        )
+        claims = base64url_encode(
+            json.dumps(
+                {"iss": APNS_TEAM_ID, "iat": issued_at},
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        )
+        signing_input = f"{header}.{claims}".encode("ascii")
+        signature_der = apns_private_key().sign(signing_input, ec.ECDSA(hashes.SHA256()))
+        signature_r, signature_s = utils.decode_dss_signature(signature_der)
+        signature = signature_r.to_bytes(32, "big") + signature_s.to_bytes(32, "big")
+        token = f"{header}.{claims}.{base64url_encode(signature)}"
+        APNS_AUTH_TOKEN_CACHE.update(
+            {
+                "configuration_fingerprint": configuration_fingerprint,
+                "issued_at": issued_at,
+                "token": token,
+            }
+        )
+        return token
+
+
+def apns_provider_dependency_is_available() -> bool:
+    try:
+        import httpx  # noqa: F401
+        import h2  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def send_apns_request(
+    *,
+    device_token: str,
+    environment: str,
+    payload: dict[str, object],
+    collapse_id: str,
+) -> tuple[int, str | None, str | None]:
+    """Send one privacy-minimized alert. The token and payload are never logged."""
+    try:
+        import httpx
+    except ImportError:
+        return HTTPStatus.SERVICE_UNAVAILABLE, "ProviderDependencyUnavailable", None
+    host = "api.push.apple.com" if environment == "production" else "api.sandbox.push.apple.com"
+    headers = {
+        "authorization": f"bearer {apns_authentication_token()}",
+        "apns-topic": APNS_TOPIC,
+        "apns-push-type": "alert",
+        "apns-priority": "10",
+        "apns-expiration": str(int(time.time()) + 24 * 60 * 60),
+        "apns-collapse-id": collapse_id,
+    }
+    try:
+        with httpx.Client(http2=True, timeout=10.0) as client:
+            response = client.post(
+                f"https://{host}/3/device/{device_token}",
+                headers=headers,
+                json=payload,
+            )
+    except Exception:
+        return HTTPStatus.SERVICE_UNAVAILABLE, "ProviderConnectionFailed", None
+    reason: str | None = None
+    if response.content:
+        try:
+            response_payload = response.json()
+            candidate = response_payload.get("reason") if isinstance(response_payload, dict) else None
+            if isinstance(candidate, str) and re.fullmatch(r"[A-Za-z0-9]{1,80}", candidate):
+                reason = candidate
+        except (ValueError, TypeError):
+            reason = "MalformedProviderResponse"
+    apns_id = response.headers.get("apns-id")
+    if apns_id is not None and not re.fullmatch(r"[0-9a-fA-F-]{36}", apns_id):
+        apns_id = None
+    return response.status_code, reason, apns_id
 
 
 def qbo_request(form: dict[str, str], endpoint: str) -> tuple[int, dict[str, object]]:
@@ -571,12 +955,281 @@ def parse_qbo_cloudevents(payload: bytes) -> list[dict[str, str]]:
 
 
 def current_qbo_realm_id() -> str | None:
+    context = current_qbo_connection_context()
+    return context[0] if context is not None else None
+
+
+def current_qbo_connection_context() -> tuple[str, str] | None:
     try:
         with db() as connection:
-            row = connection.execute("SELECT realm_id FROM qbo_connections WHERE id = 1").fetchone()
+            row = connection.execute(
+                "SELECT realm_id, environment FROM qbo_connections WHERE id = 1"
+            ).fetchone()
     except sqlite3.Error:
         return None
-    return str(row["realm_id"]) if row is not None else None
+    if row is None:
+        return None
+    return str(row["realm_id"]), str(row["environment"])
+
+
+def qbo_configuration_text(payload: dict[str, object], key: str, *, maximum: int = 256) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str):
+        raise ValueError(f"Missing {key}")
+    normalized = value.strip()
+    if not normalized or len(normalized) > maximum or any(ord(character) < 32 for character in normalized):
+        raise ValueError(f"Invalid {key}")
+    return normalized
+
+
+def qbo_configuration_reference(payload: dict[str, object], key: str) -> str:
+    value = qbo_configuration_text(payload, key, maximum=128)
+    if QBO_ACCOUNTING_REFERENCE_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"Invalid {key}")
+    return value
+
+
+def qbo_configuration_type(
+    payload: dict[str, object],
+    key: str,
+    allowed: dict[str, str],
+) -> str:
+    value = qbo_configuration_text(payload, key, maximum=64)
+    canonical = allowed.get(value.lower())
+    if canonical is None:
+        raise ValueError(f"Invalid {key}")
+    return canonical
+
+
+def validate_qbo_accounting_configuration(payload: dict[str, object]) -> dict[str, str]:
+    """Validate realm-bound accounting defaults without accepting realm selection from a client."""
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid QuickBooks accounting configuration")
+    return {
+        "defaultSalesItemRef": qbo_configuration_reference(payload, "defaultSalesItemRef"),
+        "defaultSalesItemName": qbo_configuration_text(payload, "defaultSalesItemName"),
+        "defaultSalesItemType": qbo_configuration_type(
+            payload, "defaultSalesItemType", QBO_SALES_ITEM_TYPES
+        ),
+        "defaultIncomeAccountRef": qbo_configuration_reference(payload, "defaultIncomeAccountRef"),
+        "defaultIncomeAccountName": qbo_configuration_text(payload, "defaultIncomeAccountName"),
+        "defaultIncomeAccountType": qbo_configuration_type(
+            payload, "defaultIncomeAccountType", QBO_INCOME_ACCOUNT_TYPES
+        ),
+        "defaultExpenseAccountRef": qbo_configuration_reference(payload, "defaultExpenseAccountRef"),
+        "defaultExpenseAccountName": qbo_configuration_text(payload, "defaultExpenseAccountName"),
+        "defaultExpenseAccountType": qbo_configuration_type(
+            payload, "defaultExpenseAccountType", QBO_EXPENSE_ACCOUNT_TYPES
+        ),
+        "defaultBankAccountRef": qbo_configuration_reference(payload, "defaultBankAccountRef"),
+        "defaultBankAccountName": qbo_configuration_text(payload, "defaultBankAccountName"),
+        "defaultBankAccountType": qbo_configuration_type(
+            payload, "defaultBankAccountType", {"bank": "Bank"}
+        ),
+        "defaultCreditCardAccountRef": qbo_configuration_reference(payload, "defaultCreditCardAccountRef"),
+        "defaultCreditCardAccountName": qbo_configuration_text(payload, "defaultCreditCardAccountName"),
+        "defaultCreditCardAccountType": qbo_configuration_type(
+            payload, "defaultCreditCardAccountType", {"credit card": "Credit Card"}
+        ),
+    }
+
+
+def supplier_connector_records() -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for kind, definition in SUPPLIER_CONNECTOR_DEFINITIONS.items():
+        adapter = SUPPLIER_CONNECTOR_ADAPTERS.get(kind)
+        active = adapter is not None and adapter.kind == kind
+        records.append(
+            {
+                "contractVersion": SUPPLIER_CONNECTOR_CONTRACT_VERSION,
+                "kind": kind,
+                "displayName": definition["displayName"],
+                "provider": definition["provider"],
+                "status": "ready" if active else definition["statusWhenUnavailable"],
+                "detail": (
+                    "The approved server adapter is active; credentials remain server-side."
+                    if active
+                    else definition["detailWhenUnavailable"]
+                ),
+                "capabilities": list(definition["capabilities"]),
+                "canSubmitOrders": active,
+                "onboardingURL": definition["onboardingURL"],
+            }
+        )
+    return records
+
+
+def supplier_connector_text(
+    payload: dict[str, object],
+    key: str,
+    *,
+    maximum: int,
+    required: bool = True,
+) -> str | None:
+    value = payload.get(key)
+    if value is None and not required:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"Missing {key}")
+    normalized = " ".join(value.strip().split())
+    if not normalized:
+        if required:
+            raise ValueError(f"Missing {key}")
+        return None
+    if len(normalized) > maximum or any(ord(character) < 32 for character in normalized):
+        raise ValueError(f"Invalid {key}")
+    return normalized
+
+
+def supplier_connector_amount(payload: dict[str, object], key: str, *, positive: bool = False) -> float:
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"Invalid {key}")
+    amount = float(value)
+    minimum = 0.0001 if positive else 0.0
+    if not math.isfinite(amount) or amount < minimum or amount > 1_000_000:
+        raise ValueError(f"Invalid {key}")
+    return amount
+
+
+def supplier_connector_timestamp(value: object, key: str, *, required: bool = True) -> str | None:
+    if value is None and not required:
+        return None
+    if not isinstance(value, str) or not value.strip() or len(value) > 64:
+        raise ValueError(f"Invalid {key}")
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"Invalid {key}") from error
+    if parsed.tzinfo is None:
+        raise ValueError(f"Invalid {key}")
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def validate_supplier_order_request(payload: dict[str, object]) -> dict[str, object]:
+    """Accept only a minimum, non-secret purchase-order snapshot from an Admin client."""
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid supplier order")
+    allowed_keys = {
+        "contractVersion",
+        "connectorKind",
+        "purchaseOrderID",
+        "purchaseOrderNumber",
+        "serviceCallID",
+        "vendorName",
+        "itemName",
+        "internalSKU",
+        "supplierPartNumber",
+        "quantity",
+        "expectedUnitCost",
+        "expectedShippingCost",
+        "currencyCode",
+        "supplierLocation",
+        "priceAvailabilityCheckedAt",
+        "orderNotes",
+    }
+    if set(payload) - allowed_keys:
+        raise ValueError("Supplier order contains unsupported fields")
+    contract_version = payload.get("contractVersion")
+    if isinstance(contract_version, bool) or contract_version != SUPPLIER_CONNECTOR_CONTRACT_VERSION:
+        raise ValueError("Unsupported supplier connector contract version")
+    connector_kind = supplier_connector_text(payload, "connectorKind", maximum=64)
+    if connector_kind not in SUPPLIER_CONNECTOR_DEFINITIONS:
+        raise ValueError("Unsupported supplier connector")
+    purchase_order_id = supplier_connector_text(payload, "purchaseOrderID", maximum=36)
+    try:
+        purchase_order_id = str(uuid.UUID(purchase_order_id))
+    except (ValueError, AttributeError) as error:
+        raise ValueError("Invalid purchaseOrderID") from error
+    service_call_id = supplier_connector_text(payload, "serviceCallID", maximum=36, required=False)
+    if service_call_id is not None:
+        try:
+            service_call_id = str(uuid.UUID(service_call_id))
+        except ValueError as error:
+            raise ValueError("Invalid serviceCallID") from error
+    currency_code = supplier_connector_text(payload, "currencyCode", maximum=3)
+    if currency_code.upper() != "USD":
+        raise ValueError("Only USD supplier orders are supported")
+    normalized: dict[str, object] = {
+        "contractVersion": SUPPLIER_CONNECTOR_CONTRACT_VERSION,
+        "connectorKind": connector_kind,
+        "purchaseOrderID": purchase_order_id,
+        "purchaseOrderNumber": supplier_connector_text(payload, "purchaseOrderNumber", maximum=120),
+        "serviceCallID": service_call_id,
+        "vendorName": supplier_connector_text(payload, "vendorName", maximum=160),
+        "itemName": supplier_connector_text(payload, "itemName", maximum=200),
+        "internalSKU": supplier_connector_text(payload, "internalSKU", maximum=120, required=False),
+        "supplierPartNumber": supplier_connector_text(payload, "supplierPartNumber", maximum=120, required=False),
+        "quantity": supplier_connector_amount(payload, "quantity", positive=True),
+        "expectedUnitCost": supplier_connector_amount(payload, "expectedUnitCost"),
+        "expectedShippingCost": supplier_connector_amount(payload, "expectedShippingCost"),
+        "currencyCode": "USD",
+        "supplierLocation": supplier_connector_text(payload, "supplierLocation", maximum=120, required=False),
+        "priceAvailabilityCheckedAt": supplier_connector_timestamp(
+            payload.get("priceAvailabilityCheckedAt"),
+            "priceAvailabilityCheckedAt",
+            required=False,
+        ),
+        "orderNotes": supplier_connector_text(payload, "orderNotes", maximum=500, required=False),
+    }
+    if normalized["supplierPartNumber"] is None and normalized["internalSKU"] is None:
+        raise ValueError("Supplier order requires a supplier part number or internal SKU")
+    return normalized
+
+
+def validate_supplier_order_acceptance(
+    response: object,
+    request: dict[str, object],
+    *,
+    actor_email: str,
+    idempotency_key: str,
+) -> dict[str, object]:
+    """Normalize an adapter result without forwarding its raw response to a client or log."""
+    if not isinstance(response, dict):
+        raise SupplierConnectorFailure("invalid-adapter-response", "The supplier returned an invalid acknowledgement.", outcome_unknown=True)
+    try:
+        external_order_id = supplier_connector_text(response, "externalOrderID", maximum=200)
+        reference = supplier_connector_text(response, "reference", maximum=120)
+        supplier_location = supplier_connector_text(response, "supplierLocation", maximum=120, required=False)
+        confirmed_unit_cost = supplier_connector_amount(response, "confirmedUnitCost")
+        confirmed_shipping_cost = supplier_connector_amount(response, "confirmedShippingCost")
+        currency_code = supplier_connector_text(response, "currencyCode", maximum=3)
+        if currency_code.upper() != "USD":
+            raise ValueError("Invalid currencyCode")
+        confirmed_at = supplier_connector_timestamp(response.get("confirmedAt"), "confirmedAt")
+        checked_at = supplier_connector_timestamp(
+            response.get("priceAvailabilityCheckedAt"),
+            "priceAvailabilityCheckedAt",
+        )
+        confirmed_date = datetime.fromisoformat(confirmed_at)
+        checked_date = datetime.fromisoformat(checked_at)
+        now = datetime.now(timezone.utc)
+        if confirmed_date > now + timedelta(minutes=5):
+            raise ValueError("Invalid confirmedAt")
+        if checked_date > confirmed_date + timedelta(minutes=5) or confirmed_date - checked_date > timedelta(hours=24):
+            raise ValueError("Invalid priceAvailabilityCheckedAt")
+    except ValueError as error:
+        raise SupplierConnectorFailure(
+            "invalid-adapter-response",
+            "The supplier acknowledgement is incomplete or cannot be reconciled safely.",
+            outcome_unknown=True,
+        ) from error
+    return {
+        "contractVersion": request["contractVersion"],
+        "purchaseOrderID": request["purchaseOrderID"],
+        "purchaseOrderNumber": request["purchaseOrderNumber"],
+        "connectorKind": request["connectorKind"],
+        "externalOrderID": external_order_id,
+        "reference": reference,
+        "supplierLocation": supplier_location,
+        "confirmedUnitCost": confirmed_unit_cost,
+        "confirmedShippingCost": confirmed_shipping_cost,
+        "currencyCode": "USD",
+        "confirmedByEmail": normalize_email(actor_email),
+        "confirmedAt": confirmed_at,
+        "priceAvailabilityCheckedAt": checked_at,
+        "idempotencyKey": idempotency_key,
+    }
 
 
 def db() -> sqlite3.Connection:
@@ -684,6 +1337,44 @@ def quickbooks_readiness_component() -> dict[str, str]:
     return readiness_component("quickbooks", "QuickBooks Bridge", "ready", f"Encrypted authorization is available for the {QBO_ENVIRONMENT} company realm.")
 
 
+def quickbooks_accounting_configuration_readiness_component() -> dict[str, str]:
+    context = current_qbo_connection_context()
+    if context is None:
+        return readiness_component(
+            "quickbooks-accounting-config",
+            "QuickBooks Accounting Mappings",
+            "attention",
+            "Authorize the approved QuickBooks company before choosing accounting mappings.",
+        )
+    realm_id, environment = context
+    try:
+        with db() as connection:
+            row = connection.execute(
+                "SELECT * FROM qbo_accounting_config WHERE realm_id = ? AND environment = ?",
+                (realm_id, environment),
+            ).fetchone()
+    except sqlite3.Error:
+        return readiness_component(
+            "quickbooks-accounting-config",
+            "QuickBooks Accounting Mappings",
+            "error",
+            "Realm-specific accounting mapping storage is unavailable.",
+        )
+    if row is None:
+        return readiness_component(
+            "quickbooks-accounting-config",
+            "QuickBooks Accounting Mappings",
+            "attention",
+            "Choose the default sales item, income, expense, bank, and credit-card accounts in GunnAire Ops.",
+        )
+    return readiness_component(
+        "quickbooks-accounting-config",
+        "QuickBooks Accounting Mappings",
+        "ready",
+        f"Accounting defaults are bound to the authorized {environment} company realm.",
+    )
+
+
 def quickbooks_webhook_readiness_component() -> dict[str, str]:
     if not QBO_WEBHOOK_VERIFIER_TOKEN:
         return readiness_component(
@@ -728,6 +1419,122 @@ def quickbooks_webhook_readiness_component() -> dict[str, str]:
     )
 
 
+def push_notification_readiness_component(now: datetime | None = None) -> dict[str, str]:
+    checked_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if not apns_configuration_is_present():
+        return readiness_component(
+            "push-notifications",
+            "Staff Push Notifications",
+            "attention",
+            "Configure encrypted device-token storage and the APNs team, key, private key, and topic.",
+        )
+    if push_token_store() is None:
+        return readiness_component(
+            "push-notifications",
+            "Staff Push Notifications",
+            "error",
+            "The configured push-device encryption key is invalid.",
+        )
+    try:
+        apns_private_key()
+    except ValueError:
+        return readiness_component(
+            "push-notifications",
+            "Staff Push Notifications",
+            "error",
+            "The APNs signing configuration is invalid; replace it through the deployment secret manager.",
+        )
+    if not apns_provider_dependency_is_available():
+        return readiness_component(
+            "push-notifications",
+            "Staff Push Notifications",
+            "error",
+            "The HTTP/2 APNs provider dependency is unavailable on this server.",
+        )
+    try:
+        with db() as connection:
+            active_devices = connection.execute(
+                "SELECT token_ciphertext FROM push_devices WHERE deactivated_at IS NULL"
+            ).fetchall()
+            pending = connection.execute(
+                """
+                SELECT COUNT(*) AS total, MIN(created_at) AS oldest,
+                       MAX(CASE WHEN last_error_code IN (
+                           'ExpiredProviderToken', 'InvalidProviderToken', 'MissingProviderToken',
+                           'Forbidden', 'BadEnvironmentKeyIdInToken', 'UnrelatedKeyIdInToken'
+                       ) THEN 1 ELSE 0 END) AS credential_error
+                FROM push_deliveries WHERE status = 'pending'
+                """
+            ).fetchone()
+            recent_failures = connection.execute(
+                """
+                SELECT COUNT(*) AS total FROM push_deliveries
+                WHERE status = 'failed' AND updated_at >= ?
+                """,
+                ((checked_at - timedelta(hours=24)).isoformat(),),
+            ).fetchone()
+    except sqlite3.Error:
+        return readiness_component(
+            "push-notifications",
+            "Staff Push Notifications",
+            "error",
+            "Push registration or delivery storage is unavailable.",
+        )
+    if any(decrypt_push_device_token(str(row["token_ciphertext"])) is None for row in active_devices):
+        return readiness_component(
+            "push-notifications",
+            "Staff Push Notifications",
+            "error",
+            "One or more active APNs device registrations cannot be decrypted.",
+        )
+    if pending is not None and bool(pending["credential_error"]):
+        return readiness_component(
+            "push-notifications",
+            "Staff Push Notifications",
+            "error",
+            "APNs rejected the provider credentials; queued staff alerts were retained for recovery.",
+        )
+    pending_total = int(pending["total"] or 0) if pending is not None else 0
+    if pending_total and isinstance(pending["oldest"], str):
+        try:
+            oldest = datetime.fromisoformat(str(pending["oldest"]).replace("Z", "+00:00"))
+            if oldest.tzinfo is not None and checked_at - oldest.astimezone(timezone.utc) > timedelta(minutes=30):
+                return readiness_component(
+                    "push-notifications",
+                    "Staff Push Notifications",
+                    "attention",
+                    f"{pending_total} staff alert{'s are' if pending_total != 1 else ' is'} waiting more than 30 minutes for delivery.",
+                )
+        except ValueError:
+            return readiness_component(
+                "push-notifications",
+                "Staff Push Notifications",
+                "error",
+                "A queued staff alert has invalid delivery timing metadata.",
+            )
+    failed_total = int(recent_failures["total"] or 0) if recent_failures is not None else 0
+    if failed_total:
+        return readiness_component(
+            "push-notifications",
+            "Staff Push Notifications",
+            "attention",
+            f"{failed_total} staff alert{'s need' if failed_total != 1 else ' needs'} review after a permanent APNs failure in the last 24 hours.",
+        )
+    active_total = len(active_devices)
+    if pending_total:
+        detail = f"APNs is configured for {active_total} active device{'s' if active_total != 1 else ''}; {pending_total} recent alert{'s are' if pending_total != 1 else ' is'} queued."
+    elif active_total:
+        detail = f"APNs is configured and {active_total} active device{'s are' if active_total != 1 else ' is'} registered."
+    else:
+        detail = "APNs is configured; staff can opt in from GunnAire Ops Settings."
+    return readiness_component(
+        "push-notifications",
+        "Staff Push Notifications",
+        "ready",
+        detail,
+    )
+
+
 def backup_readiness_component(now: datetime | None = None) -> dict[str, str]:
     checked_at = now or datetime.now(timezone.utc)
     try:
@@ -757,7 +1564,9 @@ def backend_readiness_snapshot(now: datetime | None = None) -> dict[str, object]
         authentication_readiness_component(),
         customer_portal_readiness_component(),
         quickbooks_readiness_component(),
+        quickbooks_accounting_configuration_readiness_component(),
         quickbooks_webhook_readiness_component(),
+        push_notification_readiness_component(now=now),
         backup_readiness_component(now=now),
     ]
     overall = "ready" if all(component["status"] == "ready" for component in components) else "attention"
@@ -807,6 +1616,95 @@ def initialize_database() -> None:
         )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS auth_sessions_active_token ON auth_sessions(token_hash, expires_at, revoked_at)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS apple_identities (
+                provider_subject TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                credential_state TEXT NOT NULL,
+                relay_enabled INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_event_at TEXT,
+                FOREIGN KEY(email) REFERENCES users(email)
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS apple_identities_email ON apple_identities(email)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS apple_account_events (
+                jti TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                subject_hash TEXT NOT NULL,
+                event_time TEXT NOT NULL,
+                received_at TEXT NOT NULL,
+                matched_email TEXT,
+                sessions_revoked INTEGER NOT NULL DEFAULT 0,
+                devices_deactivated INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS apple_account_events_received ON apple_account_events(received_at)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS push_devices (
+                id TEXT PRIMARY KEY,
+                installation_id TEXT NOT NULL UNIQUE,
+                token_ciphertext TEXT NOT NULL,
+                token_fingerprint TEXT NOT NULL UNIQUE,
+                email TEXT NOT NULL,
+                auth_session_id TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                environment TEXT NOT NULL,
+                bundle_id TEXT NOT NULL,
+                app_version TEXT,
+                app_build TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deactivated_at TEXT,
+                FOREIGN KEY(email) REFERENCES users(email),
+                FOREIGN KEY(auth_session_id) REFERENCES auth_sessions(id)
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS push_devices_recipient_active ON push_devices(email, deactivated_at)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS push_devices_session_active ON push_devices(auth_session_id, deactivated_at)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS push_deliveries (
+                id TEXT PRIMARY KEY,
+                event_key TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                recipient_email TEXT NOT NULL,
+                category TEXT NOT NULL,
+                route TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT NOT NULL,
+                last_attempt_at TEXT,
+                last_error_code TEXT,
+                apns_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                sent_at TEXT,
+                UNIQUE(event_key, device_id),
+                FOREIGN KEY(device_id) REFERENCES push_devices(id)
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS push_deliveries_pending ON push_deliveries(status, next_attempt_at, created_at)"
         )
         connection.execute(
             """
@@ -983,6 +1881,32 @@ def initialize_database() -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS qbo_accounting_config (
+                realm_id TEXT NOT NULL,
+                environment TEXT NOT NULL,
+                default_sales_item_ref TEXT NOT NULL,
+                default_sales_item_name TEXT NOT NULL,
+                default_sales_item_type TEXT NOT NULL,
+                default_income_account_ref TEXT NOT NULL,
+                default_income_account_name TEXT NOT NULL,
+                default_income_account_type TEXT NOT NULL,
+                default_expense_account_ref TEXT NOT NULL,
+                default_expense_account_name TEXT NOT NULL,
+                default_expense_account_type TEXT NOT NULL,
+                default_bank_account_ref TEXT NOT NULL,
+                default_bank_account_name TEXT NOT NULL,
+                default_bank_account_type TEXT NOT NULL,
+                default_credit_card_account_ref TEXT NOT NULL,
+                default_credit_card_account_name TEXT NOT NULL,
+                default_credit_card_account_type TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT NOT NULL,
+                PRIMARY KEY(realm_id, environment)
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS qbo_webhook_events (
                 event_id TEXT PRIMARY KEY,
                 realm_id TEXT NOT NULL,
@@ -998,6 +1922,33 @@ def initialize_database() -> None:
         )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS qbo_webhook_events_realm_pending ON qbo_webhook_events(realm_id, acknowledged_at, received_at)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS supplier_order_attempts (
+                idempotency_key TEXT PRIMARY KEY,
+                request_hash TEXT NOT NULL,
+                purchase_order_id TEXT NOT NULL,
+                purchase_order_number TEXT NOT NULL,
+                connector_kind TEXT NOT NULL,
+                actor_email TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                acceptance_json TEXT,
+                error_code TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS supplier_order_attempts_order ON supplier_order_attempts(purchase_order_id, created_at)"
+        )
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS supplier_order_attempts_one_acceptance ON supplier_order_attempts(purchase_order_id) WHERE status = 'accepted'"
+        )
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS supplier_order_attempts_one_active ON supplier_order_attempts(purchase_order_id) WHERE status IN ('submitting', 'unknown', 'accepted')"
         )
         now = utc_now()
         connection.execute(
@@ -1056,6 +2007,457 @@ def field_payment_assignment_record(row: sqlite3.Row) -> dict[str, object]:
         "completedBy": row["completed_by"],
         "completionPaymentID": row["completion_payment_id"],
     }
+
+
+def push_device_record(row: sqlite3.Row) -> dict[str, object]:
+    """Return operational metadata only; tokens and fingerprints stay server-side."""
+    return {
+        "installationID": row["installation_id"],
+        "platform": row["platform"],
+        "environment": row["environment"],
+        "bundleID": row["bundle_id"],
+        "appVersion": row["app_version"],
+        "appBuild": row["app_build"],
+        "registeredAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+        "isActive": row["deactivated_at"] is None,
+    }
+
+
+def deactivate_push_devices(
+    connection: sqlite3.Connection,
+    *,
+    device_id: str | None = None,
+    session_id: str | None = None,
+    email: str | None = None,
+    installation_id: str | None = None,
+) -> int:
+    clauses = ["deactivated_at IS NULL"]
+    parameters: list[object] = []
+    if device_id is not None:
+        clauses.append("id = ?")
+        parameters.append(device_id)
+    if session_id is not None:
+        clauses.append("auth_session_id = ?")
+        parameters.append(session_id)
+    if email is not None:
+        clauses.append("email = ?")
+        parameters.append(normalize_email(email))
+    if installation_id is not None:
+        clauses.append("installation_id = ?")
+        parameters.append(installation_id)
+    if len(clauses) == 1:
+        raise ValueError("Push-device deactivation requires a bounded owner")
+    where_clause = " AND ".join(clauses)
+    rows = connection.execute(
+        f"SELECT id FROM push_devices WHERE {where_clause}",
+        tuple(parameters),
+    ).fetchall()
+    if not rows:
+        return 0
+    now = utc_now()
+    device_ids = [str(row["id"]) for row in rows]
+    placeholders = ",".join("?" for _ in device_ids)
+    connection.execute(
+        f"UPDATE push_devices SET deactivated_at = ?, updated_at = ? WHERE id IN ({placeholders})",
+        (now, now, *device_ids),
+    )
+    connection.execute(
+        f"""
+        UPDATE push_deliveries
+        SET status = 'suppressed', updated_at = ?, last_error_code = 'DeviceDeactivated'
+        WHERE device_id IN ({placeholders}) AND status = 'pending'
+        """,
+        (now, *device_ids),
+    )
+    return len(device_ids)
+
+
+def process_apple_account_notification(event: dict[str, object]) -> dict[str, object]:
+    """Apply one verified Apple event idempotently without retaining its JWS or relay address."""
+    event_id = str(event["id"])
+    event_type = str(event["type"])
+    provider_subject = str(event["providerSubject"])
+    event_time = str(event["eventTime"])
+    subject_hash = hashlib.sha256(provider_subject.encode("utf-8")).hexdigest()
+    received_at = utc_now()
+    sessions_revoked = 0
+    devices_deactivated = 0
+    matched_email: str | None = None
+    with db() as connection:
+        inserted = connection.execute(
+            """
+            INSERT OR IGNORE INTO apple_account_events(
+                jti, event_type, subject_hash, event_time, received_at,
+                matched_email, sessions_revoked, devices_deactivated
+            ) VALUES (?, ?, ?, ?, ?, NULL, 0, 0)
+            """,
+            (event_id, event_type, subject_hash, event_time, received_at),
+        ).rowcount
+        if inserted == 0:
+            return {"accepted": True, "idempotentReplay": True}
+
+        identity = connection.execute(
+            "SELECT * FROM apple_identities WHERE provider_subject = ?",
+            (provider_subject,),
+        ).fetchone()
+        identity_was_created_from_session = False
+        session_rows = connection.execute(
+            """
+            SELECT id, email, revoked_at FROM auth_sessions
+            WHERE provider = 'apple' AND provider_subject = ?
+            """,
+            (provider_subject,),
+        ).fetchall()
+        session_emails = {
+            normalize_email(str(row["email"]))
+            for row in session_rows
+            if is_valid_email(normalize_email(str(row["email"])))
+        }
+        if identity is not None:
+            matched_email = normalize_email(str(identity["email"]))
+        elif len(session_emails) == 1:
+            matched_email = next(iter(session_emails))
+            connection.execute(
+                """
+                INSERT INTO apple_identities(
+                    provider_subject, email, credential_state, relay_enabled,
+                    created_at, updated_at, last_event_at
+                ) VALUES (?, ?, 'authorized', NULL, ?, ?, NULL)
+                """,
+                (provider_subject, matched_email, received_at, received_at),
+            )
+            identity = connection.execute(
+                "SELECT * FROM apple_identities WHERE provider_subject = ?",
+                (provider_subject,),
+            ).fetchone()
+            identity_was_created_from_session = True
+
+        apply_identity_event = identity is not None
+        if identity is not None and not identity_was_created_from_session:
+            latest_identity_change: datetime | None = None
+            for raw_value in (identity["updated_at"], identity["last_event_at"]):
+                if not isinstance(raw_value, str) or not raw_value:
+                    continue
+                try:
+                    parsed_value = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if parsed_value.tzinfo is None:
+                    continue
+                parsed_value = parsed_value.astimezone(timezone.utc)
+                if latest_identity_change is None or parsed_value > latest_identity_change:
+                    latest_identity_change = parsed_value
+            try:
+                parsed_event_time = datetime.fromisoformat(event_time.replace("Z", "+00:00"))
+            except ValueError:
+                parsed_event_time = None
+            if (
+                parsed_event_time is None
+                or parsed_event_time.tzinfo is None
+                or (
+                    latest_identity_change is not None
+                    and parsed_event_time.astimezone(timezone.utc)
+                    < latest_identity_change.replace(microsecond=0)
+                )
+            ):
+                apply_identity_event = False
+
+        if apply_identity_event:
+            if event_type in {"consent-revoked", "account-deleted"}:
+                connection.execute(
+                    """
+                    UPDATE apple_identities
+                    SET credential_state = ?, updated_at = ?, last_event_at = ?
+                    WHERE provider_subject = ?
+                    """,
+                    (event_type, received_at, event_time, provider_subject),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE apple_identities
+                    SET relay_enabled = ?, updated_at = ?, last_event_at = ?
+                    WHERE provider_subject = ?
+                    """,
+                    (1 if event_type == "email-enabled" else 0, received_at, event_time, provider_subject),
+                )
+
+        if (
+            event_type in {"consent-revoked", "account-deleted"}
+            and (identity is None or apply_identity_event)
+        ):
+            active_session_ids = [
+                str(row["id"])
+                for row in session_rows
+                if row["revoked_at"] is None
+            ]
+            if active_session_ids:
+                placeholders = ",".join("?" for _ in active_session_ids)
+                sessions_revoked = connection.execute(
+                    f"""
+                    UPDATE auth_sessions SET revoked_at = ?
+                    WHERE id IN ({placeholders}) AND revoked_at IS NULL
+                    """,
+                    (received_at, *active_session_ids),
+                ).rowcount
+                for session_id in active_session_ids:
+                    devices_deactivated += deactivate_push_devices(
+                        connection,
+                        session_id=session_id,
+                    )
+
+        connection.execute(
+            """
+            UPDATE apple_account_events
+            SET matched_email = ?, sessions_revoked = ?, devices_deactivated = ?
+            WHERE jti = ?
+            """,
+            (matched_email, sessions_revoked, devices_deactivated, event_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO audit_events(
+                id, occurred_at, actor_email, action, subject_type, subject_id
+            ) VALUES (?, ?, 'apple-notification@appleid.apple.com', ?, 'apple-identity', ?)
+            """,
+            (str(uuid.uuid4()), received_at, event_type, subject_hash[:24]),
+        )
+    return {"accepted": True, "idempotentReplay": False}
+
+
+def queue_staff_push_event(
+    *,
+    event_key: str,
+    recipient_email: str,
+    category: str,
+    route: str,
+    record_id: str,
+) -> int:
+    """Create one durable delivery per active device without customer/payment content."""
+    email = normalize_email(recipient_email)
+    try:
+        normalized_record_id = str(uuid.UUID(record_id))
+    except ValueError as error:
+        raise ValueError("Invalid staff notification event") from error
+    if (
+        not re.fullmatch(r"[A-Za-z0-9:_-]{1,160}", event_key)
+        or not is_valid_email(email)
+        or category not in {"field-payment-assignment"}
+        or route not in {"paymentCollection"}
+    ):
+        raise ValueError("Invalid staff notification event")
+    now = utc_now()
+    queued = 0
+    with db() as connection:
+        devices = connection.execute(
+            """
+            SELECT push_devices.id
+            FROM push_devices
+            INNER JOIN users ON users.email = push_devices.email
+            INNER JOIN auth_sessions ON auth_sessions.id = push_devices.auth_session_id
+            WHERE push_devices.email = ?
+              AND push_devices.deactivated_at IS NULL
+              AND users.is_active = 1
+              AND auth_sessions.revoked_at IS NULL
+              AND auth_sessions.expires_at > ?
+            """,
+            (email, now),
+        ).fetchall()
+        for device in devices:
+            queued += connection.execute(
+                """
+                INSERT INTO push_deliveries(
+                    id, event_key, device_id, recipient_email, category, route,
+                    record_id, status, attempts, next_attempt_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+                ON CONFLICT(event_key, device_id) DO NOTHING
+                """,
+                (
+                    str(uuid.uuid4()), event_key, device["id"], email, category,
+                    route, normalized_record_id, now, now, now,
+                ),
+            ).rowcount
+    if queued:
+        PUSH_DELIVERY_WAKE_EVENT.set()
+    return queued
+
+
+def staff_push_payload(row: sqlite3.Row) -> dict[str, object]:
+    """Build a generic preview; customer names, addresses, and balances are excluded."""
+    return {
+        "aps": {
+            "alert": {
+                "title": "New collection task",
+                "body": "Open GunnAire Ops to review an assigned invoice.",
+            },
+            "sound": "default",
+        },
+        "gunnaire": {
+            "version": 1,
+            "eventID": row["event_key"],
+            "route": row["route"],
+            "recordID": row["record_id"],
+        },
+    }
+
+
+PERMANENT_APNS_ERROR_REASONS = {
+    "BadDeviceToken",
+    "DeviceTokenNotForTopic",
+    "ExpiredToken",
+    "Unregistered",
+}
+NONRETRYABLE_APNS_ERROR_REASONS = {
+    "BadCollapseId",
+    "BadExpirationDate",
+    "BadMessageId",
+    "BadPath",
+    "MethodNotAllowed",
+    "PayloadTooLarge",
+}
+
+
+def deliver_pending_pushes(
+    *,
+    sender=send_apns_request,
+    now: datetime | None = None,
+    limit: int | None = None,
+) -> int:
+    """Attempt due deliveries once; retries remain durable and assignment creation never waits."""
+    if not apns_configuration_is_present() or push_token_store() is None:
+        return 0
+    checked_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    attempted = 0
+    if not PUSH_DELIVERY_LOCK.acquire(blocking=False):
+        return 0
+    try:
+        with db() as connection:
+            rows = connection.execute(
+                """
+                SELECT push_deliveries.*, push_devices.token_ciphertext,
+                       push_devices.environment, push_devices.deactivated_at
+                FROM push_deliveries
+                INNER JOIN push_devices ON push_devices.id = push_deliveries.device_id
+                WHERE push_deliveries.status = 'pending'
+                  AND push_deliveries.next_attempt_at <= ?
+                  AND push_devices.deactivated_at IS NULL
+                ORDER BY push_deliveries.created_at ASC
+                LIMIT ?
+                """,
+                (checked_at.isoformat(), limit or APNS_DELIVERY_BATCH_SIZE),
+            ).fetchall()
+
+        for row in rows:
+            token = decrypt_push_device_token(str(row["token_ciphertext"]))
+            if token is None:
+                with db() as connection:
+                    connection.execute(
+                        """
+                        UPDATE push_deliveries
+                        SET status = 'failed', attempts = attempts + 1,
+                            last_attempt_at = ?, last_error_code = 'TokenDecryptFailed', updated_at = ?
+                        WHERE id = ? AND status = 'pending'
+                        """,
+                        (checked_at.isoformat(), checked_at.isoformat(), row["id"]),
+                    )
+                    deactivate_push_devices(connection, device_id=str(row["device_id"]))
+                continue
+            collapse_id = hashlib.sha256(str(row["event_key"]).encode("utf-8")).hexdigest()[:32]
+            try:
+                status_code, reason, apns_id = sender(
+                    device_token=token,
+                    environment=str(row["environment"]),
+                    payload=staff_push_payload(row),
+                    collapse_id=collapse_id,
+                )
+            except Exception:
+                status_code, reason, apns_id = HTTPStatus.SERVICE_UNAVAILABLE, "ProviderConnectionFailed", None
+            attempted += 1
+            attempt_count = int(row["attempts"]) + 1
+            attempted_at = checked_at.isoformat()
+            with db() as connection:
+                if 200 <= int(status_code) < 300:
+                    connection.execute(
+                        """
+                        UPDATE push_deliveries
+                        SET status = 'sent', attempts = ?, last_attempt_at = ?,
+                            last_error_code = NULL, apns_id = ?, sent_at = ?, updated_at = ?
+                        WHERE id = ? AND status = 'pending'
+                        """,
+                        (attempt_count, attempted_at, apns_id, attempted_at, attempted_at, row["id"]),
+                    )
+                    continue
+
+                error_code = reason or f"HTTP{int(status_code)}"
+                if reason in PERMANENT_APNS_ERROR_REASONS or int(status_code) == HTTPStatus.GONE:
+                    connection.execute(
+                        """
+                        UPDATE push_deliveries
+                        SET status = 'failed', attempts = ?, last_attempt_at = ?,
+                            last_error_code = ?, updated_at = ?
+                        WHERE id = ? AND status = 'pending'
+                        """,
+                        (attempt_count, attempted_at, error_code, attempted_at, row["id"]),
+                    )
+                    deactivate_push_devices(connection, device_id=str(row["device_id"]))
+                    continue
+
+                nonretryable = reason in NONRETRYABLE_APNS_ERROR_REASONS or int(status_code) in {
+                    HTTPStatus.BAD_REQUEST,
+                    HTTPStatus.NOT_FOUND,
+                    HTTPStatus.METHOD_NOT_ALLOWED,
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                }
+                if nonretryable or attempt_count >= 12:
+                    connection.execute(
+                        """
+                        UPDATE push_deliveries
+                        SET status = 'failed', attempts = ?, last_attempt_at = ?,
+                            last_error_code = ?, updated_at = ?
+                        WHERE id = ? AND status = 'pending'
+                        """,
+                        (attempt_count, attempted_at, error_code, attempted_at, row["id"]),
+                    )
+                    continue
+
+                if int(status_code) == HTTPStatus.TOO_MANY_REQUESTS:
+                    delay_seconds = min(60 * (2 ** min(attempt_count - 1, 4)), 15 * 60)
+                else:
+                    # Apple recommends delaying 5xx retries; credential/configuration
+                    # corrections use the same bounded queue rather than dropping work.
+                    delay_seconds = 15 * 60
+                retry_at = (checked_at + timedelta(seconds=delay_seconds)).isoformat()
+                connection.execute(
+                    """
+                    UPDATE push_deliveries
+                    SET attempts = ?, last_attempt_at = ?, last_error_code = ?,
+                        next_attempt_at = ?, updated_at = ?
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    (attempt_count, attempted_at, error_code, retry_at, attempted_at, row["id"]),
+                )
+    finally:
+        PUSH_DELIVERY_LOCK.release()
+    return attempted
+
+
+def push_delivery_worker() -> None:
+    while True:
+        PUSH_DELIVERY_WAKE_EVENT.wait(timeout=APNS_WORKER_INTERVAL_SECONDS)
+        PUSH_DELIVERY_WAKE_EVENT.clear()
+        try:
+            deliver_pending_pushes()
+        except Exception:
+            # Readiness reports the durable backlog. The worker never terminates
+            # because a provider or local database attempt failed transiently.
+            continue
+
+
+def start_push_delivery_worker() -> threading.Thread:
+    worker = threading.Thread(target=push_delivery_worker, name="gunnaire-apns-worker", daemon=True)
+    worker.start()
+    return worker
 
 
 def reconcile_field_payment_assignments(
@@ -1251,6 +2653,58 @@ def qbo_webhook_event_record(row: sqlite3.Row) -> dict[str, object]:
     }
 
 
+def qbo_accounting_configuration_record(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "realmID": row["realm_id"],
+        "environment": row["environment"],
+        "defaultSalesItemRef": row["default_sales_item_ref"],
+        "defaultSalesItemName": row["default_sales_item_name"],
+        "defaultSalesItemType": row["default_sales_item_type"],
+        "defaultIncomeAccountRef": row["default_income_account_ref"],
+        "defaultIncomeAccountName": row["default_income_account_name"],
+        "defaultIncomeAccountType": row["default_income_account_type"],
+        "defaultExpenseAccountRef": row["default_expense_account_ref"],
+        "defaultExpenseAccountName": row["default_expense_account_name"],
+        "defaultExpenseAccountType": row["default_expense_account_type"],
+        "defaultBankAccountRef": row["default_bank_account_ref"],
+        "defaultBankAccountName": row["default_bank_account_name"],
+        "defaultBankAccountType": row["default_bank_account_type"],
+        "defaultCreditCardAccountRef": row["default_credit_card_account_ref"],
+        "defaultCreditCardAccountName": row["default_credit_card_account_name"],
+        "defaultCreditCardAccountType": row["default_credit_card_account_type"],
+        "updatedAt": row["updated_at"],
+        "updatedBy": row["updated_by"],
+    }
+
+
+def supplier_order_acceptance_record(row: sqlite3.Row, *, replayed: bool) -> dict[str, object]:
+    raw = row["acceptance_json"]
+    if not isinstance(raw, str) or not raw:
+        raise ValueError("Supplier acceptance is unavailable")
+    decoded = json.loads(raw)
+    if not isinstance(decoded, dict):
+        raise ValueError("Supplier acceptance is invalid")
+    allowed_keys = {
+        "contractVersion",
+        "purchaseOrderID",
+        "purchaseOrderNumber",
+        "connectorKind",
+        "externalOrderID",
+        "reference",
+        "supplierLocation",
+        "confirmedUnitCost",
+        "confirmedShippingCost",
+        "currencyCode",
+        "confirmedByEmail",
+        "confirmedAt",
+        "priceAvailabilityCheckedAt",
+        "idempotencyKey",
+    }
+    safe = {key: value for key, value in decoded.items() if key in allowed_keys}
+    safe["replayed"] = replayed
+    return safe
+
+
 def record_audit_event(actor_email: str | None, action: str, subject_type: str, subject_id: str | None = None) -> None:
     """Record high-impact actions without storing tokens, payment details, or customer content."""
     actor = normalize_email(actor_email)
@@ -1296,6 +2750,37 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if not self.require_admin():
                 return
             self.write_json(backend_readiness_snapshot())
+            return
+        if parsed.path == "/api/supplier-connectors":
+            if not self.require_admin():
+                return
+            self.write_json({"connectors": supplier_connector_records()})
+            return
+        if parsed.path == "/api/push-devices/current":
+            if not self.require_application_session():
+                return
+            installation_ids = urllib.parse.parse_qs(parsed.query).get("installationID", [])
+            installation_id = installation_ids[0] if len(installation_ids) == 1 else ""
+            self.current_push_device(installation_id)
+            return
+        if parsed.path == "/api/qbo/accounting-config":
+            context = current_qbo_connection_context()
+            if context is None:
+                self.write_json({"error": "QuickBooks is not connected"}, status=HTTPStatus.CONFLICT)
+                return
+            realm_id, environment = context
+            with db() as connection:
+                row = connection.execute(
+                    "SELECT * FROM qbo_accounting_config WHERE realm_id = ? AND environment = ?",
+                    (realm_id, environment),
+                ).fetchone()
+            self.write_json(
+                {
+                    "realmID": realm_id,
+                    "environment": environment,
+                    "configuration": qbo_accounting_configuration_record(row) if row is not None else None,
+                }
+            )
             return
         if parsed.path == "/api/qbo/webhook-events":
             if not self.require_admin():
@@ -1414,6 +2899,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/qbo/webhooks":
             self.receive_qbo_webhook()
             return
+        if parsed.path == "/api/auth/apple/notifications":
+            self.receive_apple_account_notification()
+            return
         if parsed.path == "/api/public/service-requests":
             self.store_public_service_request()
             return
@@ -1428,6 +2916,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/auth/logout":
             self.revoke_application_session()
+            return
+        if parsed.path == "/api/push-devices":
+            if not self.require_application_session():
+                return
+            self.register_push_device()
             return
         if parsed.path == "/api/users":
             if not self.require_admin():
@@ -1474,6 +2967,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 return
             self.exchange_qbo_authorization_code()
             return
+        if parsed.path == "/api/qbo/accounting-config":
+            if not self.require_admin():
+                return
+            self.store_qbo_accounting_configuration()
+            return
         if parsed.path == "/api/qbo/refresh":
             if not self.require_admin():
                 return
@@ -1489,12 +2987,23 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 return
             self.acknowledge_qbo_webhook_events()
             return
+        if parsed.path == "/api/supplier-connectors/orders":
+            if not self.require_admin():
+                return
+            self.submit_supplier_connector_order()
+            return
         self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         if self.principal() is None:
             self.write_json({"error": "Unauthorized"}, status=HTTPStatus.UNAUTHORIZED, require_auth=False)
+            return
+        if parsed.path.startswith("/api/push-devices/"):
+            if not self.require_application_session():
+                return
+            installation_id = unquote(parsed.path.removeprefix("/api/push-devices/")).strip()
+            self.unregister_push_device(installation_id)
             return
         if parsed.path.startswith("/api/users/"):
             if not self.require_admin():
@@ -1512,6 +3021,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     "UPDATE users SET is_active = 0, updated_at = ? WHERE email = ?",
                     (now, email),
                 )
+                deactivate_push_devices(connection, email=email)
             principal = self.principal() or {}
             record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "deactivate", "user", email)
             self.write_json({"email": email, "isActive": False})
@@ -1606,12 +3116,14 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     "UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
                     (now.isoformat(), session["id"]),
                 )
+                deactivate_push_devices(connection, session_id=str(session["id"]))
                 return None
             user = connection.execute(
                 "SELECT * FROM users WHERE email = ?",
                 (normalize_email(session["email"]),),
             ).fetchone()
             if user is None or not bool(user["is_active"]):
+                deactivate_push_devices(connection, session_id=str(session["id"]))
                 return None
             connection.execute(
                 "UPDATE auth_sessions SET last_used_at = ? WHERE id = ?",
@@ -1644,6 +3156,13 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if user is None or not bool(user["is_active"]):
             self.write_json({"error": "Business account access is not approved"}, status=HTTPStatus.FORBIDDEN, require_auth=False)
             return
+        if not link_apple_identity(email, provider_subject):
+            self.write_json(
+                {"error": "Apple identity is already linked to another business account"},
+                status=HTTPStatus.FORBIDDEN,
+                require_auth=False,
+            )
+            return
         session_token, expires_at = create_app_session(email, "apple", provider_subject)
         record_audit_event(email, "sign-in", "apple-application-session")
         self.write_json(
@@ -1655,6 +3174,58 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             },
             require_auth=False,
         )
+
+    def receive_apple_account_notification(self) -> None:
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self.write_json(
+                {"error": "Invalid Apple account notification"},
+                status=HTTPStatus.BAD_REQUEST,
+                require_auth=False,
+            )
+            return
+        try:
+            raw = self.read_limited_body(20 * 1024)
+            body = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            self.write_json(
+                {"error": "Invalid Apple account notification"},
+                status=HTTPStatus.BAD_REQUEST,
+                require_auth=False,
+            )
+            return
+        signed_payload = body.get("payload") if isinstance(body, dict) else None
+        if (
+            not isinstance(body, dict)
+            or set(body) != {"payload"}
+            or not isinstance(signed_payload, str)
+            or not signed_payload
+        ):
+            self.write_json(
+                {"error": "Invalid Apple account notification"},
+                status=HTTPStatus.BAD_REQUEST,
+                require_auth=False,
+            )
+            return
+        try:
+            event = verify_apple_account_notification(signed_payload)
+        except ValueError:
+            self.write_json(
+                {"error": "Apple account notification verification failed"},
+                status=HTTPStatus.UNAUTHORIZED,
+                require_auth=False,
+            )
+            return
+        try:
+            result = process_apple_account_notification(event)
+        except sqlite3.Error:
+            self.write_json(
+                {"error": "Apple account notification processing is unavailable"},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                require_auth=False,
+            )
+            return
+        self.write_json(result, require_auth=False)
 
     def exchange_google_identity(self) -> None:
         try:
@@ -1691,6 +3262,179 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             require_auth=False,
         )
 
+    def require_application_session(self) -> bool:
+        principal = self.principal()
+        session_id = getattr(self, "_application_session_id", None)
+        if principal is not None and isinstance(session_id, str) and session_id:
+            return True
+        self.write_json(
+            {"error": "A current GunnAire application session is required"},
+            status=HTTPStatus.FORBIDDEN,
+            require_auth=False,
+        )
+        return False
+
+    def register_push_device(self) -> None:
+        try:
+            raw = self.read_limited_body(16 * 1024)
+            payload = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            self.write_json({"error": "Invalid push registration"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not isinstance(payload, dict):
+            self.write_json({"error": "Invalid push registration"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            installation_id = str(uuid.UUID(str(payload.get("installationID") or "")))
+        except ValueError:
+            self.write_json({"error": "Invalid installation identifier"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        raw_token = str(payload.get("deviceToken") or "").strip().lower()
+        platform = str(payload.get("platform") or "").strip()
+        environment = str(payload.get("environment") or "").strip().lower()
+        bundle_id = str(payload.get("bundleID") or "").strip()
+        app_version = str(payload.get("appVersion") or "").strip()
+        app_build = str(payload.get("appBuild") or "").strip()
+        if not re.fullmatch(r"[0-9a-f]{32,512}", raw_token) or len(raw_token) % 2 != 0:
+            self.write_json({"error": "Invalid APNs device token"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if platform not in {"iOS", "macCatalyst"}:
+            self.write_json({"error": "Invalid Apple client platform"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if environment not in {"development", "production"}:
+            self.write_json({"error": "Invalid APNs environment"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if bundle_id != APNS_TOPIC or bundle_id != APPLE_CLIENT_ID:
+            self.write_json({"error": "Push registration does not match this app"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if (
+            len(app_version) > 32
+            or len(app_build) > 32
+            or (app_version and re.fullmatch(r"[A-Za-z0-9._-]+", app_version) is None)
+            or (app_build and re.fullmatch(r"[A-Za-z0-9._-]+", app_build) is None)
+        ):
+            self.write_json({"error": "Invalid app version metadata"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        session_id = getattr(self, "_application_session_id", None)
+        principal = self.principal() or {}
+        email = normalize_email(principal.get("email") if isinstance(principal.get("email"), str) else None)
+        if not isinstance(session_id, str) or not session_id or not is_valid_email(email):
+            self.write_json({"error": "Application session required"}, status=HTTPStatus.FORBIDDEN)
+            return
+        try:
+            ciphertext = encrypt_push_device_token(raw_token)
+        except RuntimeError:
+            self.write_json(
+                {"error": "Staff notifications are not configured on the server"},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        fingerprint = hashlib.sha256(raw_token.encode("ascii")).hexdigest()
+        now = utc_now()
+        with db() as connection:
+            existing = connection.execute(
+                "SELECT * FROM push_devices WHERE installation_id = ?",
+                (installation_id,),
+            ).fetchone()
+            duplicate_token = connection.execute(
+                "SELECT * FROM push_devices WHERE token_fingerprint = ?",
+                (fingerprint,),
+            ).fetchone()
+            if duplicate_token is not None and (existing is None or duplicate_token["id"] != existing["id"]):
+                deactivate_push_devices(connection, device_id=str(duplicate_token["id"]))
+                connection.execute(
+                    """
+                    UPDATE push_devices
+                    SET token_ciphertext = '', token_fingerprint = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (f"replaced:{duplicate_token['id']}:{fingerprint}", now, duplicate_token["id"]),
+                )
+            if existing is None:
+                device_id = str(uuid.uuid4())
+                connection.execute(
+                    """
+                    INSERT INTO push_devices(
+                        id, installation_id, token_ciphertext, token_fingerprint,
+                        email, auth_session_id, platform, environment, bundle_id,
+                        app_version, app_build, created_at, updated_at, deactivated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    """,
+                    (
+                        device_id, installation_id, ciphertext, fingerprint, email,
+                        session_id, platform, environment, bundle_id,
+                        app_version or None, app_build or None, now, now,
+                    ),
+                )
+                response_status = HTTPStatus.CREATED
+            else:
+                device_id = str(existing["id"])
+                if existing["email"] != email or existing["auth_session_id"] != session_id:
+                    deactivate_push_devices(connection, device_id=device_id)
+                connection.execute(
+                    """
+                    UPDATE push_devices
+                    SET token_ciphertext = ?, token_fingerprint = ?, email = ?,
+                        auth_session_id = ?, platform = ?, environment = ?, bundle_id = ?,
+                        app_version = ?, app_build = ?, updated_at = ?, deactivated_at = NULL
+                    WHERE id = ?
+                    """,
+                    (
+                        ciphertext, fingerprint, email, session_id, platform,
+                        environment, bundle_id, app_version or None, app_build or None,
+                        now, device_id,
+                    ),
+                )
+                response_status = HTTPStatus.OK
+            row = connection.execute("SELECT * FROM push_devices WHERE id = ?", (device_id,)).fetchone()
+        record_audit_event(email, "register", "staff-push-device", installation_id)
+        self.write_json(
+            {"registered": True, "device": push_device_record(row)},
+            status=response_status,
+        )
+
+    def current_push_device(self, installation_id: str) -> None:
+        try:
+            normalized_id = str(uuid.UUID(installation_id))
+        except ValueError:
+            self.write_json({"error": "Invalid installation identifier"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        session_id = getattr(self, "_application_session_id", None)
+        principal = self.principal() or {}
+        email = normalize_email(principal.get("email") if isinstance(principal.get("email"), str) else None)
+        with db() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM push_devices
+                WHERE installation_id = ? AND email = ? AND auth_session_id = ?
+                  AND deactivated_at IS NULL
+                """,
+                (normalized_id, email, session_id),
+            ).fetchone()
+        self.write_json(
+            {"registered": row is not None, "device": push_device_record(row) if row is not None else None}
+        )
+
+    def unregister_push_device(self, installation_id: str) -> None:
+        try:
+            normalized_id = str(uuid.UUID(installation_id))
+        except ValueError:
+            self.write_json({"error": "Invalid installation identifier"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        session_id = getattr(self, "_application_session_id", None)
+        principal = self.principal() or {}
+        email = normalize_email(principal.get("email") if isinstance(principal.get("email"), str) else None)
+        with db() as connection:
+            deactivated = deactivate_push_devices(
+                connection,
+                session_id=str(session_id),
+                email=email,
+                installation_id=normalized_id,
+            )
+        if deactivated:
+            record_audit_event(email, "deactivate", "staff-push-device", normalized_id)
+        self.write_json({"installationID": normalized_id, "deactivated": bool(deactivated)})
+
     def revoke_application_session(self) -> None:
         session_id = getattr(self, "_application_session_id", None)
         principal = self.principal() or {}
@@ -1702,6 +3446,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 "UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
                 (utc_now(), session_id),
             )
+            deactivate_push_devices(connection, session_id=session_id)
         actor = principal.get("email") if isinstance(principal.get("email"), str) else None
         record_audit_event(actor, "sign-out", "application-session", session_id)
         self.write_json({"revoked": True}, require_auth=False)
@@ -2141,6 +3886,317 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "upsert", "user", email)
         self.write_json(user_record(row), status=HTTPStatus.CREATED)
 
+    def store_qbo_accounting_configuration(self) -> None:
+        context = current_qbo_connection_context()
+        if context is None:
+            self.write_json({"error": "QuickBooks is not connected"}, status=HTTPStatus.CONFLICT)
+            return
+        try:
+            payload = self.read_json()
+            validated = validate_qbo_accounting_configuration(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            self.write_json(
+                {"error": "Choose valid QuickBooks sales, income, expense, bank, and credit-card mappings"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        realm_id, environment = context
+        principal = self.principal() or {}
+        actor = principal.get("email") if isinstance(principal.get("email"), str) else ""
+        updated_at = utc_now()
+        with db() as connection:
+            connection.execute(
+                """
+                INSERT INTO qbo_accounting_config(
+                    realm_id, environment,
+                    default_sales_item_ref, default_sales_item_name, default_sales_item_type,
+                    default_income_account_ref, default_income_account_name, default_income_account_type,
+                    default_expense_account_ref, default_expense_account_name, default_expense_account_type,
+                    default_bank_account_ref, default_bank_account_name, default_bank_account_type,
+                    default_credit_card_account_ref, default_credit_card_account_name, default_credit_card_account_type,
+                    updated_at, updated_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(realm_id, environment) DO UPDATE SET
+                    default_sales_item_ref = excluded.default_sales_item_ref,
+                    default_sales_item_name = excluded.default_sales_item_name,
+                    default_sales_item_type = excluded.default_sales_item_type,
+                    default_income_account_ref = excluded.default_income_account_ref,
+                    default_income_account_name = excluded.default_income_account_name,
+                    default_income_account_type = excluded.default_income_account_type,
+                    default_expense_account_ref = excluded.default_expense_account_ref,
+                    default_expense_account_name = excluded.default_expense_account_name,
+                    default_expense_account_type = excluded.default_expense_account_type,
+                    default_bank_account_ref = excluded.default_bank_account_ref,
+                    default_bank_account_name = excluded.default_bank_account_name,
+                    default_bank_account_type = excluded.default_bank_account_type,
+                    default_credit_card_account_ref = excluded.default_credit_card_account_ref,
+                    default_credit_card_account_name = excluded.default_credit_card_account_name,
+                    default_credit_card_account_type = excluded.default_credit_card_account_type,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by
+                """,
+                (
+                    realm_id,
+                    environment,
+                    validated["defaultSalesItemRef"],
+                    validated["defaultSalesItemName"],
+                    validated["defaultSalesItemType"],
+                    validated["defaultIncomeAccountRef"],
+                    validated["defaultIncomeAccountName"],
+                    validated["defaultIncomeAccountType"],
+                    validated["defaultExpenseAccountRef"],
+                    validated["defaultExpenseAccountName"],
+                    validated["defaultExpenseAccountType"],
+                    validated["defaultBankAccountRef"],
+                    validated["defaultBankAccountName"],
+                    validated["defaultBankAccountType"],
+                    validated["defaultCreditCardAccountRef"],
+                    validated["defaultCreditCardAccountName"],
+                    validated["defaultCreditCardAccountType"],
+                    updated_at,
+                    normalize_email(actor),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM qbo_accounting_config WHERE realm_id = ? AND environment = ?",
+                (realm_id, environment),
+            ).fetchone()
+        record_audit_event(actor, "update", "qbo-accounting-config", realm_id)
+        self.write_json(
+            {
+                "realmID": realm_id,
+                "environment": environment,
+                "configuration": qbo_accounting_configuration_record(row),
+            }
+        )
+
+    def submit_supplier_connector_order(self) -> None:
+        idempotency_key = self.headers.get("Idempotency-Key", "").strip()
+        if SUPPLIER_CONNECTOR_IDEMPOTENCY_PATTERN.fullmatch(idempotency_key) is None:
+            self.write_json(
+                {"error": "A stable 16-128 character Idempotency-Key is required"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        try:
+            raw_payload = self.read_limited_body(SUPPLIER_CONNECTOR_MAX_REQUEST_BYTES)
+            decoded = json.loads(raw_payload.decode("utf-8"))
+            request = validate_supplier_order_request(decoded)
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+            self.write_json(
+                {"error": "Choose a valid supplier connector, purchase order, part, quantity, and USD cost"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        connector_kind = str(request["connectorKind"])
+        adapter = SUPPLIER_CONNECTOR_ADAPTERS.get(connector_kind)
+        if adapter is None or adapter.kind != connector_kind:
+            connector = next(
+                record for record in supplier_connector_records() if record["kind"] == connector_kind
+            )
+            self.write_json(
+                {
+                    "error": "This supplier connector is not active. Complete provider onboarding and install the approved server adapter before submitting an order.",
+                    "connector": connector,
+                },
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+
+        principal = self.principal() or {}
+        actor = normalize_email(
+            principal.get("email") if isinstance(principal.get("email"), str) else None
+        )
+        request_json = json.dumps(request, separators=(",", ":"), sort_keys=True)
+        request_hash = hashlib.sha256(request_json.encode("utf-8")).hexdigest()
+        now = utc_now()
+        existing: sqlite3.Row | None = None
+        try:
+            with db() as connection:
+                existing = connection.execute(
+                    "SELECT * FROM supplier_order_attempts WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                ).fetchone()
+                if existing is not None and existing["request_hash"] != request_hash:
+                    self.write_json(
+                        {"error": "The Idempotency-Key is already bound to a different purchase order snapshot"},
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
+                accepted_for_order = connection.execute(
+                    """
+                    SELECT * FROM supplier_order_attempts
+                    WHERE purchase_order_id = ? AND status = 'accepted'
+                    """,
+                    (request["purchaseOrderID"],),
+                ).fetchone()
+                if accepted_for_order is not None and accepted_for_order["idempotency_key"] != idempotency_key:
+                    self.write_json(
+                        {"error": "This purchase order already has an accepted connector order"},
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
+                if existing is None:
+                    connection.execute(
+                        """
+                        INSERT INTO supplier_order_attempts(
+                            idempotency_key, request_hash, purchase_order_id,
+                            purchase_order_number, connector_kind, actor_email,
+                            request_json, status, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'submitting', ?, ?)
+                        """,
+                        (
+                            idempotency_key,
+                            request_hash,
+                            request["purchaseOrderID"],
+                            request["purchaseOrderNumber"],
+                            connector_kind,
+                            actor,
+                            request_json,
+                            now,
+                            now,
+                        ),
+                    )
+        except sqlite3.IntegrityError:
+            self.write_json(
+                {"error": "This purchase order already has an active or accepted connector submission"},
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+
+        if existing is not None and existing["status"] == "accepted":
+            try:
+                acceptance = supplier_order_acceptance_record(existing, replayed=True)
+            except (ValueError, json.JSONDecodeError):
+                self.write_json(
+                    {"error": "The retained supplier acceptance cannot be reconciled safely"},
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            self.write_json({"acceptance": acceptance})
+            return
+        if existing is not None and existing["status"] == "rejected":
+            self.write_json(
+                {"error": "The supplier definitively rejected this idempotent request; correct the purchase order before creating a new request"},
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+
+        should_recover = existing is not None and existing["status"] == "unknown"
+        if existing is not None and existing["status"] == "submitting":
+            try:
+                last_update = datetime.fromisoformat(str(existing["updated_at"]).replace("Z", "+00:00"))
+            except ValueError:
+                last_update = datetime.now(timezone.utc)
+            if datetime.now(timezone.utc) - last_update.astimezone(timezone.utc) < timedelta(minutes=5):
+                self.write_json(
+                    {"error": "This supplier order is already being submitted"},
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            should_recover = True
+            with db() as connection:
+                connection.execute(
+                    "UPDATE supplier_order_attempts SET status = 'unknown', updated_at = ? WHERE idempotency_key = ?",
+                    (utc_now(), idempotency_key),
+                )
+
+        try:
+            if should_recover:
+                adapter_response = adapter.recover_order(request, idempotency_key)
+                if adapter_response is None:
+                    record_audit_event(actor, "recovery-pending", "supplier-order", str(request["purchaseOrderID"]))
+                    self.write_json(
+                        {
+                            "error": "The supplier outcome is still unknown. Check the supplier account or contact the branch before trying another order.",
+                            "outcomeUnknown": True,
+                        },
+                        status=HTTPStatus.CONFLICT,
+                    )
+                    return
+            else:
+                adapter_response = adapter.submit_order(request, idempotency_key)
+            acceptance = validate_supplier_order_acceptance(
+                adapter_response,
+                request,
+                actor_email=actor if existing is None else str(existing["actor_email"]),
+                idempotency_key=idempotency_key,
+            )
+        except SupplierConnectorFailure as error:
+            result_status = "unknown" if error.outcome_unknown else "rejected"
+            with db() as connection:
+                connection.execute(
+                    """
+                    UPDATE supplier_order_attempts
+                    SET status = ?, error_code = ?, updated_at = ?
+                    WHERE idempotency_key = ?
+                    """,
+                    (result_status, error.code[:80], utc_now(), idempotency_key),
+                )
+            record_audit_event(
+                actor,
+                "outcome-unknown" if error.outcome_unknown else "rejected",
+                "supplier-order",
+                str(request["purchaseOrderID"]),
+            )
+            self.write_json(
+                {
+                    "error": error.safe_message,
+                    "errorCode": error.code,
+                    "outcomeUnknown": error.outcome_unknown,
+                },
+                status=HTTPStatus.BAD_GATEWAY if error.outcome_unknown else HTTPStatus.UNPROCESSABLE_ENTITY,
+            )
+            return
+        except Exception:
+            with db() as connection:
+                connection.execute(
+                    """
+                    UPDATE supplier_order_attempts
+                    SET status = 'unknown', error_code = 'adapter-exception', updated_at = ?
+                    WHERE idempotency_key = ?
+                    """,
+                    (utc_now(), idempotency_key),
+                )
+            record_audit_event(actor, "outcome-unknown", "supplier-order", str(request["purchaseOrderID"]))
+            self.write_json(
+                {
+                    "error": "The supplier response was interrupted. Check the supplier account before trying another order.",
+                    "errorCode": "adapter-exception",
+                    "outcomeUnknown": True,
+                },
+                status=HTTPStatus.BAD_GATEWAY,
+            )
+            return
+
+        acceptance_json = json.dumps(acceptance, separators=(",", ":"), sort_keys=True)
+        try:
+            with db() as connection:
+                connection.execute(
+                    """
+                    UPDATE supplier_order_attempts
+                    SET status = 'accepted', acceptance_json = ?, error_code = NULL, updated_at = ?
+                    WHERE idempotency_key = ?
+                    """,
+                    (acceptance_json, utc_now(), idempotency_key),
+                )
+        except sqlite3.IntegrityError:
+            record_audit_event(actor, "duplicate-attention", "supplier-order", str(request["purchaseOrderID"]))
+            self.write_json(
+                {"error": "The supplier accepted an order that conflicts with another retained acceptance; stop and reconcile with the supplier"},
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        record_audit_event(actor, "submit", "supplier-order", str(request["purchaseOrderID"]))
+        response_acceptance = dict(acceptance)
+        response_acceptance["replayed"] = should_recover
+        self.write_json(
+            {"acceptance": response_acceptance},
+            status=HTTPStatus.OK if should_recover else HTTPStatus.CREATED,
+        )
+
     def exchange_qbo_authorization_code(self) -> None:
         try:
             payload = self.read_json()
@@ -2474,6 +4530,19 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 "SELECT * FROM field_payment_assignments WHERE id = ?", (assignment_id,)
             ).fetchone()
         record_audit_event(assigned_by, "assign", "field-payment", assignment_id)
+        try:
+            queue_staff_push_event(
+                event_key=f"field-payment-assignment:{assignment_id}",
+                recipient_email=assigned_to,
+                category="field-payment-assignment",
+                route="paymentCollection",
+                record_id=invoice_id,
+            )
+        except (ValueError, sqlite3.Error):
+            # Assignment creation is authoritative and must remain available when
+            # the optional alert path is unavailable. Readiness surfaces backlog
+            # and storage failures without disclosing job/payment details.
+            pass
         self.write_json({"assignment": field_payment_assignment_record(row)}, status=HTTPStatus.CREATED)
 
     def accept_field_payment_assignment(self, assignment_id: str) -> None:
@@ -2923,7 +4992,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if origin and origin in ALLOWED_CORS_ORIGINS:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
-        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-GunnAire-Google-ID-Token")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-GunnAire-Google-ID-Token")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 
     def log_message(self, format: str, *args: object) -> None:
@@ -2937,6 +5006,7 @@ def main() -> None:
         raise SystemExit("Set GUNNAIRE_BACKEND_API_TOKEN before starting api-token mode.")
     initialize_database()
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
+    start_push_delivery_worker()
     server = ThreadingHTTPServer((HOST, PORT), GunnAireBackendHandler)
     print(f"GunnAire backend listening on http://{HOST}:{PORT}")
     print(f"Service version: {SERVICE_VERSION}")

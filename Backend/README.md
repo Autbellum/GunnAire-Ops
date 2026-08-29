@@ -53,7 +53,9 @@ python3 gunnaire_backend.py
 
 Then set `GUNNAIRE_BACKEND_AUTH_MODE = google-id-token` in the app build configuration, use an HTTPS `GUNNAIRE_BACKEND_BASE_URL`, and omit the shared API token. The historical mode name is retained for deployment compatibility, but fresh Apple and Google sign-ins both exchange their one-time provider identity for the same revocable GunnAire application-session contract. Protected requests use that opaque application session. A legacy Google ID token may still be accepted while an existing client renews, but it is not persisted by the app. Both providers must resolve to an already-approved active backend user; neither provider creates or promotes a user. Apple private-relay addresses therefore require an explicit administrator-created user record and are never mapped automatically to another email.
 
-Apple identity exchange is available at `POST /api/auth/apple`. The token is verified against Apple's current RS256 public keys, issuer, app audience, expiry, issue time, nonce, subject, and verified email. Google identity exchange is available at `POST /api/auth/google`. The token is verified through Google's supported verifier for the exact configured iOS client audience, hosted business domain, verified email, and subject. Provider identity tokens are used only for exchange and are not stored. The backend persists only a SHA-256 hash of each random application-session token, rechecks the user's active state and current role on every protected request, and supports immediate revocation at `POST /api/auth/logout`. The app stores only the opaque application session in Keychain; Apple additionally checks the credential state on relaunch.
+Apple identity exchange is available at `POST /api/auth/apple`. The token is verified against Apple's current RS256 public keys, issuer, app audience, expiry, issue time, nonce, subject, and verified email. Google identity exchange is available at `POST /api/auth/google`. The token is verified through Google's supported verifier for the exact configured iOS client audience, hosted business domain, verified email, and subject. Provider identity tokens are used only for exchange and are not stored. The backend persists only a SHA-256 hash of each random application-session token, rechecks the user's active state and current role on every protected request, and supports immediate revocation at `POST /api/auth/logout`. The app stores only the opaque application session in Keychain; Apple additionally checks the credential state on relaunch and responds immediately to Apple's native credential-revocation notification.
+
+After source `2026.08.28.13` is deployed, configure the primary App ID's Sign in with Apple server-to-server notification URL as `https://gunnaire-api.onrender.com/api/auth/apple/notifications`. The public endpoint accepts only Apple's exact JSON envelope, verifies the signed JWS against Apple's RS256 keys plus issuer, app audience, issue/event times, event ID, type, and subject, and idempotently processes `email-enabled`, `email-disabled`, `consent-revoked`, and `account-deleted`. Consent and deletion events revoke only Apple application sessions and their push registrations; delayed events older than a fresh Apple reauthorization cannot revoke that newer session. The raw JWS and private-relay address are not retained in the event ledger. Do not enter the URL in Apple Developer before the reviewed backend version is live and the endpoint is reachable over TLS 1.2 or later.
 
 ## Render deployment
 
@@ -83,6 +85,13 @@ GUNNAIRE_QBO_REDIRECT_URI=https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback
 GUNNAIRE_QBO_ENVIRONMENT=production
 GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY=your-fernet-encryption-key
 GUNNAIRE_QBO_WEBHOOK_VERIFIER_TOKEN=your-intuit-webhook-verifier-token
+# Use a separate Fernet key for APNs device tokens; never reuse the QBO key.
+GUNNAIRE_PUSH_TOKEN_ENCRYPTION_KEY=your-separate-fernet-encryption-key
+GUNNAIRE_APNS_TEAM_ID=7C4B3RR7RD
+GUNNAIRE_APNS_KEY_ID=your-10-character-apple-key-id
+# Base64 of the complete Apple .p8 file, stored only in Render's secret manager.
+GUNNAIRE_APNS_PRIVATE_KEY_BASE64=your-base64-p8-private-key
+GUNNAIRE_APNS_TOPIC=com.gunnaire.businesssuite
 GUNNAIRE_BACKEND_DATA_DIR=/var/data
 ```
 
@@ -93,6 +102,8 @@ Use `api.gunnaire.com` as the custom HTTPS domain after Render provides its DNS 
 - Approved GunnAire app users and roles.
 - Active/inactive access state.
 - Revocable Apple and Google application sessions. Only a one-way SHA-256 session-token hash, provider, provider subject, approved email, creation/use/expiry times, and revocation state are retained; provider identity tokens are not stored.
+- The stable Apple subject-to-approved-user link plus a minimal idempotent account-event ledger. The event ledger stores a subject hash, event type/time, processing time, matched business account, and revocation counts; it does not store Apple's signed payload or a private-relay address.
+- Opt-in staff-notification registrations. The APNs device token is encrypted with a dedicated Fernet key and linked to the exact approved email, application session, app installation, bundle, environment, and platform. API responses and audit events never return the token or its fingerprint. Durable delivery rows retain only generic routing metadata and provider status; customer names, addresses, balances, card data, and payment amounts are excluded from notification payloads.
 - Uploaded receipt/document files under `Backend/storage`, retaining their service call, invoice, estimate, customer-equipment, equipment-name, and customer links for cross-device retrieval.
 - Field payment collection records for admin QuickBooks reconciliation.
 - QuickBooks change-event metadata for the currently authorized company realm. The raw provider payload, realm ID, customer content, and credentials are not retained or returned to the app.
@@ -100,11 +111,22 @@ Use `api.gunnaire.com` as the custom HTTPS domain after Render provides its DNS 
 - Administrator-only server activity events for role changes, shared-document uploads, payment metadata, customer-communication records, booking claims, and QuickBooks authorization lifecycle actions. Tokens, card data, and customer-content fields are intentionally not recorded.
 - An optional public online-booking request inbox. It never creates a job directly: dispatch imports, qualifies, and schedules each request.
 - Optional customer-portal link metadata. Only a SHA-256 token hash is stored; management responses contain no URL or token. Open count and last-opened time are operational hints only and may include mail or security previews.
+- Administrator supplier-order attempts. The server retains the idempotency key, exact safe request hash/snapshot, purchase-order identity, connector kind, original actor, state, safe error code, and sanitized accepted acknowledgement. Supplier credentials, account secrets, and raw provider responses are never stored in these rows or returned to the app.
 - Backend metadata in `gunnaire_backend.sqlite3`.
 
 The primary admin `eric.gunn@gunnaire.com` is seeded automatically and cannot be deactivated.
 
 Shared-document uploads validate all metadata before a file is written and reject files above `GUNNAIRE_MAX_DOCUMENT_BYTES` (12 MiB by default). Browser CORS is deny-by-default; configure only the specific HTTPS origins that need it with `GUNNAIRE_ALLOWED_CORS_ORIGINS`. Native GunnAire Ops clients are unaffected.
+
+## Staff push notifications
+
+Staff alerts are optional and account-bound. GunnAire Ops asks for Apple notification permission only after a signed-in user chooses **Settings → Staff Notifications → Enable Staff Alerts**. The app registers with APNs on every opted-in launch/foreground, forwards the current token directly to the backend, and never caches that token locally. Registration, lookup, and removal use `POST /api/push-devices`, `GET /api/push-devices/current`, and `DELETE /api/push-devices/{installationID}`; all three require a current revocable GunnAire application session. The shared development API token and legacy one-time provider token cannot create a registration.
+
+The backend queues one idempotent alert per active installation when a new field-payment collection task is assigned. Assignment creation never waits for APNs. A background worker sends through Apple's HTTP/2 provider API, retains transient failures with bounded retry, and deactivates invalid or unregistered device tokens. Logout, session expiry, and user deactivation immediately suppress pending deliveries for that registration. The visible alert is deliberately generic—**New collection task**—and its private route contains only a version, event identifier, route type, and invoice UUID. The app re-applies current business-account, role, assignment, invoice-visibility, and outstanding-balance checks after a tap.
+
+Create the APNs signing key only in the authorized Apple Developer account. Put its Team ID, Key ID, base64-encoded `.p8` contents, bundle topic, and the separate token-encryption key into the deployment secret manager. Never commit or upload the `.p8` file to this repository. The service accepts only topic `com.gunnaire.businesssuite`; Debug registrations use Apple's sandbox and Release/TestFlight registrations use production APNs. `GET /api/readiness` reports missing/invalid provider configuration, undecryptable registrations, credential rejection, stale backlog, and recent permanent failures without exposing a token or notification payload.
+
+Source `2026.08.28.13` includes this path, but it is not production-active until that reviewed source is deployed, the APNs secrets are configured, the App Store privacy answers include the linked device identifier used for app functionality, and an opted-in signed physical device passes sandbox and production delivery tests.
 
 ## Online booking handoff
 
@@ -127,6 +149,14 @@ An administrator can then create an expiring, revocable link from a job in GunnA
 Tokens are random, only their SHA-256 hashes are retained, capability URLs are redacted from access logs, and create/revoke actions enter the audit log. Public responses are non-cacheable and use CSP, frame, referrer, MIME, permissions, and cross-origin isolation headers. Successful opens increment non-sensitive management metadata; this is deliberately labeled **Opened**, not **Viewed** or **Read**, because email and security scanners may follow a link. Staff must still explicitly share the link; no email is sent automatically.
 
 Before enabling it for customers, deploy the reviewed backend version, host the route on the exact configured HTTPS origin, publish a customer-facing privacy notice, add edge abuse/rate controls, and verify create/open/expiry/revocation from approved production accounts. Backend readiness reports the portal as needing attention while disabled, error for an unsafe origin, and ready only for a valid enabled HTTPS origin.
+
+## Supplier connector boundary
+
+`GET /api/supplier-connectors` and `POST /api/supplier-connectors/orders` require an active Admin application session. Discovery returns safe readiness records only. Submission requires a 16–128 character `Idempotency-Key`, validates a small USD purchase-order payload, rejects unsupported fields, and stores no supplier credential or raw provider response.
+
+The built-in registry intentionally contains no live adapter. A deployment module may register a reviewed `SupplierConnectorAdapter` only after the supplier authorizes the business account and provides the exact integration contract, test account, branch/pricing rules, and order authority. The adapter must implement `submit_order` and `recover_order`. A timeout or unknown provider result moves the attempt to `unknown`; every retry calls only `recover_order` with the original request and key. The backend never resubmits an uncertain order. One active or accepted attempt is permitted per local purchase order, and an accepted response is replayed only when the request hash and idempotency key match.
+
+The app exposes a compact **Approved Connector** lane in the existing supplier-confirmation sheet and otherwise retains manual confirmation. Johnstone DirectConnect/Punch-out and Lennox Partner remain unavailable until their separate provider onboarding is complete. See `VENDOR_CONNECTORS.md`.
 
 ## QuickBooks OAuth bridge
 

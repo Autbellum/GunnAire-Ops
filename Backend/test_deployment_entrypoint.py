@@ -31,6 +31,7 @@ class DeploymentEntrypointTests(unittest.TestCase):
 
         self.assertEqual(root_requirements, ["-r Backend/requirements.txt"])
         self.assertIn("cryptography", canonical_requirements)
+        self.assertIn("httpx[http2]", canonical_requirements)
 
     def test_deployed_qbo_client_contract_never_returns_a_refresh_token(self) -> None:
         payload = {
