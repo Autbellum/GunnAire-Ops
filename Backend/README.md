@@ -79,6 +79,12 @@ GUNNAIRE_GOOGLE_CLIENT_ID=your-iOS-google-client-id.apps.googleusercontent.com
 GUNNAIRE_GOOGLE_ALLOWED_DOMAIN=gunnaire.com
 GUNNAIRE_APPLE_CLIENT_ID=com.gunnaire.businesssuite
 GUNNAIRE_APP_SESSION_DAYS=30
+# Keep disabled until a provider approves the business and production link.
+GUNNAIRE_CUSTOMER_FINANCING_ENABLED=false
+GUNNAIRE_CUSTOMER_FINANCING_PROVIDER_NAME=your-approved-provider
+GUNNAIRE_CUSTOMER_FINANCING_APPLICATION_URL=https://provider.example.com/your-production-application
+GUNNAIRE_CUSTOMER_FINANCING_MIN_AMOUNT=500
+GUNNAIRE_CUSTOMER_FINANCING_MAX_AMOUNT=50000
 GUNNAIRE_QBO_CLIENT_ID=your-intuit-client-id
 GUNNAIRE_QBO_CLIENT_SECRET=your-intuit-client-secret
 GUNNAIRE_QBO_REDIRECT_URI=https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback
@@ -95,7 +101,7 @@ GUNNAIRE_APNS_TOPIC=com.gunnaire.businesssuite
 GUNNAIRE_BACKEND_DATA_DIR=/var/data
 ```
 
-Use `api.gunnaire.com` as the custom HTTPS domain after Render provides its DNS target. Do not enable the public booking or customer portal flags until their customer-facing web routes, privacy notices, and rate-limit testing are ready. Establish an off-host backup of the mounted data before production use.
+Use `api.gunnaire.com` as the custom HTTPS domain after Render provides its DNS target. Do not enable public booking, customer portal, or customer financing until the corresponding customer-facing route, privacy notice, provider approval, and production acceptance tests are complete. Establish an off-host backup of the mounted data before production use.
 
 ## What It Stores
 
@@ -111,6 +117,7 @@ Use `api.gunnaire.com` as the custom HTTPS domain after Render provides its DNS 
 - Administrator-only server activity events for role changes, shared-document uploads, payment metadata, customer-communication records, booking claims, and QuickBooks authorization lifecycle actions. Tokens, card data, and customer-content fields are intentionally not recorded.
 - An optional public online-booking request inbox. It never creates a job directly: dispatch imports, qualifies, and schedules each request.
 - Optional customer-portal link metadata. Only a SHA-256 token hash is stored; management responses contain no URL or token. Open count and last-opened time are operational hints only and may include mail or security previews.
+- No customer-financing application data. The backend returns only a static approved provider name, HTTPS handoff URL, and optional estimate amount limits; applicant, credit, underwriting, rate, term, and decision data remain with the provider.
 - Administrator supplier-order attempts. The server retains the idempotency key, exact safe request hash/snapshot, purchase-order identity, connector kind, original actor, state, safe error code, and sanitized accepted acknowledgement. Supplier credentials, account secrets, and raw provider responses are never stored in these rows or returned to the app.
 - Backend metadata in `gunnaire_backend.sqlite3`.
 
@@ -150,6 +157,22 @@ Tokens are random, only their SHA-256 hashes are retained, capability URLs are r
 
 Before enabling it for customers, deploy the reviewed backend version, host the route on the exact configured HTTPS origin, publish a customer-facing privacy notice, add edge abuse/rate controls, and verify create/open/expiry/revocation from approved production accounts. Backend readiness reports the portal as needing attention while disabled, error for an unsafe origin, and ready only for a valid enabled HTTPS origin.
 
+## Customer financing handoff
+
+Customer financing is disabled by default. After an approved provider supplies a production, provider-hosted application URL, configure:
+
+```sh
+export GUNNAIRE_CUSTOMER_FINANCING_ENABLED=true
+export GUNNAIRE_CUSTOMER_FINANCING_PROVIDER_NAME="Approved HVAC Finance"
+export GUNNAIRE_CUSTOMER_FINANCING_APPLICATION_URL="https://provider.example.com/gunnaire/apply"
+export GUNNAIRE_CUSTOMER_FINANCING_MIN_AMOUNT=500
+export GUNNAIRE_CUSTOMER_FINANCING_MAX_AMOUNT=50000
+```
+
+`GET /api/customer-financing` requires an active staff session and returns contract version 1. It contains only the static provider name, validated HTTPS application URL, optional amount limits, and explicit `providerHostedApplication: true` / `canSubmitApplication: false` controls. The endpoint rejects credential-bearing, non-HTTPS, fragmented, or malformed URLs and invalid amount ranges without returning the unsafe URL.
+
+Eligible open or accepted estimates expose the referral inside **More Estimate Actions**. GunnAire Ops opens the provider's site without appending customer, estimate, or amount data to the URL and records only a CloudKit-backed job activity that the referral link opened. The app and backend never collect an application, Social Security number, credit response, underwriting result, rate, term, or approval status. Complete provider onboarding, legal/privacy review, staff training, and production-device acceptance before enabling this flag.
+
 ## Supplier connector boundary
 
 `GET /api/supplier-connectors` and `POST /api/supplier-connectors/orders` require an active Admin application session. Discovery returns safe readiness records only. Submission requires a 16–128 character `Idempotency-Key`, validates a small USD purchase-order payload, rejects unsupported fields, and stores no supplier credential or raw provider response.
@@ -179,6 +202,7 @@ Subscribe the entities the app reconciles: Customer, Item, Estimate, Invoice, Ve
 ```sh
 curl http://macstudio.local:8787/health
 curl -H "Authorization: Bearer replace-with-a-long-random-token" http://macstudio.local:8787/api/users
+curl -H "Authorization: Bearer replace-with-a-long-random-token" http://macstudio.local:8787/api/customer-financing
 # Requires Backend/requirements.txt, including cryptography and google-auth.
 python3 -m unittest discover -s Backend -p 'test_*.py' -v
 ```
@@ -194,7 +218,7 @@ Administrators can review recent shared-server activity from **Settings → Sync
 Administrators can request `GET /api/readiness` or use **Settings → Sync →
 Shared Server Readiness** to verify persistent data placement, SQLite integrity
 and write access, document-storage write access, business authentication mode,
-encrypted QBO authorization, and recent backup evidence. Details never include
+customer-financing handoff readiness, encrypted QBO authorization, and recent backup evidence. Details never include
 paths, tokens, secrets, or customer content.
 
 Use `Backend/backup_backend.py` for manifest-backed backup creation,

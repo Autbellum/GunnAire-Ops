@@ -38,6 +38,11 @@ class BackendReadinessTests(unittest.TestCase):
             AUTH_MODE="google-id-token",
             CUSTOMER_PORTAL_ENABLED=True,
             CUSTOMER_PORTAL_BASE_URL="https://portal.gunnaire.com",
+            CUSTOMER_FINANCING_ENABLED=True,
+            CUSTOMER_FINANCING_PROVIDER_NAME="Approved HVAC Finance",
+            CUSTOMER_FINANCING_APPLICATION_URL="https://finance.example.com/gunnaire/apply",
+            CUSTOMER_FINANCING_MIN_AMOUNT="500",
+            CUSTOMER_FINANCING_MAX_AMOUNT="50000",
             QBO_CLIENT_ID="production-client",
             QBO_CLIENT_SECRET="server-secret",
             QBO_REDIRECT_URI="https://gunnaire.com/qbo/callback",
@@ -122,6 +127,7 @@ class BackendReadinessTests(unittest.TestCase):
                 "storage": "ready",
                 "authentication": "ready",
                 "customer-portal": "ready",
+                "customer-financing": "ready",
                 "quickbooks": "ready",
                 "quickbooks-accounting-config": "ready",
                 "quickbooks-webhooks": "ready",
@@ -190,7 +196,7 @@ class BackendReadinessTests(unittest.TestCase):
                         payload = json.loads(response.read().decode("utf-8"))
                     self.assertEqual(response.status, 200)
                     self.assertEqual(payload["serviceVersion"], backend.SERVICE_VERSION)
-                    self.assertEqual(len(payload["components"]), 10)
+                    self.assertEqual(len(payload["components"]), 11)
                 finally:
                     server.shutdown()
                     server.server_close()

@@ -33,7 +33,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.28.13"
+SERVICE_VERSION = "2026.08.29.14"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -214,6 +214,12 @@ PUBLIC_BOOKING_LOCK = threading.Lock()
 CUSTOMER_PORTAL_ENABLED = os.environ.get("GUNNAIRE_CUSTOMER_PORTAL_ENABLED", "false").strip().lower() == "true"
 CUSTOMER_PORTAL_BASE_URL = os.environ.get("GUNNAIRE_CUSTOMER_PORTAL_BASE_URL", "").strip().rstrip("/")
 CUSTOMER_PORTAL_MAX_DAYS = min(max(int(os.environ.get("GUNNAIRE_CUSTOMER_PORTAL_MAX_DAYS", "30")), 1), 90)
+CUSTOMER_FINANCING_CONTRACT_VERSION = 1
+CUSTOMER_FINANCING_ENABLED = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_ENABLED", "false").strip().lower() == "true"
+CUSTOMER_FINANCING_PROVIDER_NAME = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_PROVIDER_NAME", "").strip()
+CUSTOMER_FINANCING_APPLICATION_URL = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_APPLICATION_URL", "").strip()
+CUSTOMER_FINANCING_MIN_AMOUNT = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_MIN_AMOUNT", "").strip()
+CUSTOMER_FINANCING_MAX_AMOUNT = os.environ.get("GUNNAIRE_CUSTOMER_FINANCING_MAX_AMOUNT", "").strip()
 MAX_DOCUMENT_BYTES = min(max(int(os.environ.get("GUNNAIRE_MAX_DOCUMENT_BYTES", str(12 * 1024 * 1024))), 1024), 25 * 1024 * 1024)
 ALLOWED_CORS_ORIGINS = {
     origin.strip().rstrip("/")
@@ -1317,6 +1323,116 @@ def customer_portal_readiness_component() -> dict[str, str]:
     )
 
 
+def customer_financing_readiness() -> dict[str, object]:
+    """Return a non-sensitive, provider-hosted referral contract.
+
+    GunnAire Ops never accepts applicant, credit, underwriting, or decision data
+    through this boundary. The provider URL is static deployment configuration;
+    the app does not append customer or estimate data to it.
+    """
+    result: dict[str, object] = {
+        "contractVersion": CUSTOMER_FINANCING_CONTRACT_VERSION,
+        "status": "disabled",
+        "detail": "Customer financing is disabled until an approved provider and production application link are configured.",
+        "providerName": None,
+        "applicationURL": None,
+        "minimumAmount": None,
+        "maximumAmount": None,
+        "providerHostedApplication": True,
+        "canSubmitApplication": False,
+    }
+    if not CUSTOMER_FINANCING_ENABLED:
+        return result
+
+    provider_name = CUSTOMER_FINANCING_PROVIDER_NAME.strip()
+    if (
+        not provider_name
+        or len(provider_name) > 80
+        or any(ord(character) < 32 for character in provider_name)
+    ):
+        result.update(
+            status="attention",
+            detail="Configure an approved financing provider name of 80 characters or fewer.",
+        )
+        return result
+
+    application_url = CUSTOMER_FINANCING_APPLICATION_URL.strip()
+    try:
+        parsed_url = urlparse(application_url)
+        hostname = parsed_url.hostname
+        has_credentials = parsed_url.username is not None or parsed_url.password is not None
+    except ValueError:
+        parsed_url = urlparse("")
+        hostname = None
+        has_credentials = True
+    if (
+        parsed_url.scheme.lower() != "https"
+        or not hostname
+        or has_credentials
+        or bool(parsed_url.fragment)
+        or any(character.isspace() for character in application_url)
+    ):
+        result.update(
+            status="attention",
+            detail="Configure one provider-hosted HTTPS application URL with no credentials or fragment.",
+        )
+        return result
+
+    def configured_amount(raw_value: str) -> float | None:
+        if not raw_value:
+            return None
+        try:
+            value = float(raw_value)
+        except ValueError as error:
+            raise ValueError("Financing amount limits must be numeric") from error
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("Financing amount limits must be finite and non-negative")
+        return round(value, 2)
+
+    try:
+        minimum_amount = configured_amount(CUSTOMER_FINANCING_MIN_AMOUNT)
+        maximum_amount = configured_amount(CUSTOMER_FINANCING_MAX_AMOUNT)
+    except ValueError:
+        result.update(
+            status="attention",
+            detail="Configure financing amount limits as finite, non-negative dollar values.",
+        )
+        return result
+    if maximum_amount is not None and maximum_amount <= 0:
+        result.update(
+            status="attention",
+            detail="The financing maximum amount must be greater than zero when configured.",
+        )
+        return result
+    if minimum_amount is not None and maximum_amount is not None and minimum_amount > maximum_amount:
+        result.update(
+            status="attention",
+            detail="The financing minimum amount cannot exceed the maximum amount.",
+        )
+        return result
+
+    result.update(
+        status="ready",
+        detail=f"Provider-hosted applications are ready on {hostname}; GunnAire does not collect applicant or credit data.",
+        providerName=provider_name,
+        applicationURL=application_url,
+        minimumAmount=minimum_amount,
+        maximumAmount=maximum_amount,
+    )
+    return result
+
+
+def customer_financing_readiness_component() -> dict[str, str]:
+    readiness = customer_financing_readiness()
+    status = "ready" if readiness["status"] == "ready" else "attention"
+    return readiness_component(
+        "customer-financing",
+        "Customer Financing",
+        status,
+        str(readiness["detail"]),
+    )
+
+
 def quickbooks_readiness_component() -> dict[str, str]:
     if not qbo_is_configured() or not qbo_token_storage_is_configured():
         return readiness_component("quickbooks", "QuickBooks Bridge", "attention", "Configure Intuit credentials, redirect URI, and encrypted refresh-token storage.")
@@ -1563,6 +1679,7 @@ def backend_readiness_snapshot(now: datetime | None = None) -> dict[str, object]
         storage_readiness_component(),
         authentication_readiness_component(),
         customer_portal_readiness_component(),
+        customer_financing_readiness_component(),
         quickbooks_readiness_component(),
         quickbooks_accounting_configuration_readiness_component(),
         quickbooks_webhook_readiness_component(),
@@ -2745,6 +2862,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/session":
             self.write_json({"user": self.principal()})
+            return
+        if parsed.path == "/api/customer-financing":
+            self.write_json(customer_financing_readiness())
             return
         if parsed.path == "/api/readiness":
             if not self.require_admin():
