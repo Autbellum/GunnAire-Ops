@@ -2,19 +2,9 @@ name: Backend regression
 
 on:
   pull_request:
-    paths:
-      - Backend/**
-      - gunnaire_backend.py
-      - requirements.txt
-      - .github/workflows/backend-regression.yml
   push:
     branches:
       - main
-    paths:
-      - Backend/**
-      - gunnaire_backend.py
-      - requirements.txt
-      - .github/workflows/backend-regression.yml
   workflow_dispatch:
 
 permissions:
