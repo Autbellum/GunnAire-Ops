@@ -13,6 +13,7 @@ final class GunnAire_OpsUITests: XCTestCase {
     private let screenshotServiceCallID = "A1000000-0000-4000-8000-000000000002"
     private let screenshotInvoiceID = "A1000000-0000-4000-8000-000000000003"
     private let screenshotEquipmentID = "A1000000-0000-4000-8000-000000000010"
+    private let maintenanceServiceCallID = "A1000000-0000-4000-8000-000000000012"
     private let serviceRequestID = "A1000000-0000-4000-8000-000000000019"
     private let projectDepositMilestoneID = "A1000000-0000-4000-8000-000000000023"
     private let catalogItemID = "A1000000-0000-4000-8000-000000000007"
@@ -805,6 +806,77 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testEnRouteHandoffKeepsETACommunicationAndDirectionsInOneCompactFlow() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedScheduleAuthorization"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        if !schedule.waitForExistence(timeout: 2) {
+            let sidebarButton = app.buttons["GunnAire Ops"]
+            XCTAssertTrue(sidebarButton.waitForExistence(timeout: 3))
+            sidebarButton.tap()
+        }
+        XCTAssertTrue(schedule.waitForExistence(timeout: 3))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let maintenanceJob = app.buttons["OpenServiceCall-\(maintenanceServiceCallID)"]
+        for _ in 0..<10 where !maintenanceJob.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(maintenanceJob.waitForExistence(timeout: 3))
+        maintenanceJob.tap()
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+
+        let enRoute = app.buttons["En Route"]
+        for _ in 0..<6 where !enRoute.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(enRoute.waitForExistence(timeout: 3))
+        enRoute.tap()
+
+        XCTAssertTrue(app.navigationBars["Start Travel"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["EnRouteOpenDirections"].exists)
+        XCTAssertTrue(app.otherElements["EnRouteArrivalEstimatePicker"].exists || app.buttons["EnRouteArrivalEstimatePicker"].exists)
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] 'does not use live traffic'")
+        ).firstMatch.exists)
+        let handoffScreenshot = XCTAttachment(screenshot: app.screenshot())
+        handoffScreenshot.name = "En Route Handoff – iPad Landscape"
+        handoffScreenshot.lifetime = .keepAlways
+        add(handoffScreenshot)
+
+        let reviewedDraftsNote = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] 'staff-reviewed drafts'")
+        ).firstMatch
+        let handoffForm = app.collectionViews.firstMatch
+        XCTAssertTrue(handoffForm.exists)
+        for _ in 0..<6 where !reviewedDraftsNote.exists {
+            handoffForm.swipeUp()
+        }
+        XCTAssertTrue(reviewedDraftsNote.waitForExistence(timeout: 3))
+
+        let noDraft = app.buttons["No customer draft"]
+        XCTAssertTrue(noDraft.waitForExistence(timeout: 3))
+        noDraft.tap()
+        app.buttons["ConfirmEnRouteHandoff"].tap()
+
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Arrived"].waitForExistence(timeout: 3))
+        let status = app.staticTexts["JobActionStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 3))
+        XCTAssertTrue(status.label.contains("approximate 30-minute"))
+    }
+
+    @MainActor
     func testStandardScheduleIsCompanyWideReadOnly() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -844,6 +916,16 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["DeleteSchedule-\(unassignedScheduleServiceCallID)"].exists)
         XCTAssertFalse(app.buttons["Assign To Me"].exists)
         XCTAssertFalse(app.buttons["Assign Technician"].exists)
+
+        unassignedJob.tap()
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+        for _ in 0..<8 {
+            app.swipeUp()
+        }
+        XCTAssertFalse(app.buttons["En Route"].exists)
+        XCTAssertFalse(app.buttons["Arrived"].exists)
+        XCTAssertFalse(app.buttons["Start Work"].exists)
+        XCTAssertFalse(app.buttons["Complete Job"].exists)
     }
 
     @MainActor

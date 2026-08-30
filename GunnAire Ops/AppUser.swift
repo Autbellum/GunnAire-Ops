@@ -174,6 +174,14 @@ enum AppAccess {
         return role == .dispatcher || role == .admin
     }
 
+    /// Progress updates are operational job custody, distinct from changing the
+    /// dispatch board. Assigned field technicians may advance their work, while
+    /// Dispatch/Admin may coordinate it; Standard and Accounting remain read-only.
+    static func canUpdateJobProgress(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .fieldTechnician || role == .dispatcher || role == .admin
+    }
+
     /// Enumerates every Schedule mutation so a new control cannot silently
     /// inherit broader read access. Standard and field accounts may review the
     /// jobs already visible to them, but only Dispatch/Admin may commit company

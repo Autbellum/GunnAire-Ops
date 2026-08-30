@@ -741,8 +741,10 @@ struct ServiceCallDetailView: View {
     @State private var selectedMaintenanceAgreementForApproval: RecurringMaintenanceContract?
     @State private var maintenanceAgreementMessage: String?
     @State private var warrantyClaimsEquipment: CustomerEquipment?
+    @State private var showingEnRouteHandoff = false
     @State private var activeServiceTextDraft: CustomerServiceTextDraft?
     @State private var customerTextStatus: String?
+    @State private var jobActionStatus: String?
     @State private var selectedWorkspace: ServiceCallDetailWorkspace = .overview
     @State private var hasSelectedInitialWorkspace = false
     private var resolvedAddress: String? {
@@ -975,21 +977,45 @@ GunnAire
     }
 
     private var appointmentUpdateDraft: (to: String, subject: String, body: String)? {
+        makeAppointmentUpdateDraft()
+    }
+
+    private func makeAppointmentUpdateDraft(
+        approximateArrivalMinutes: Int? = nil
+    ) -> (to: String, subject: String, body: String)? {
         guard (call.status == .scheduled || call.status == .inProgress),
               call.customer.allowsTransactionalEmail,
               let email = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else { return nil }
+
+        let arrivalEstimate: EnRouteArrivalEstimate?
+        if let approximateArrivalMinutes {
+            guard let validEstimate = EnRouteArrivalEstimate(rawValue: approximateArrivalMinutes) else {
+                return nil
+            }
+            arrivalEstimate = validEstimate
+        } else {
+            arrivalEstimate = nil
+        }
+
         let appointment = call.customerAppointmentSummary
         let location = resolvedAddress.map { " at \($0)" } ?? ""
         let update: String
         switch call.technicianJobPresence {
         case .scheduled:
+            guard arrivalEstimate == nil else { return nil }
             update = "This is a confirmation of your scheduled service appointment."
         case .enRoute:
-            update = "Your GunnAire technician is on the way for the scheduled service visit."
+            if let arrivalEstimate {
+                update = "Your GunnAire technician is on the way and expects to arrive in approximately \(arrivalEstimate.rawValue) minutes."
+            } else {
+                update = "Your GunnAire technician is on the way for the scheduled service visit."
+            }
         case .onSite:
+            guard arrivalEstimate == nil else { return nil }
             update = "Your GunnAire technician has arrived for the scheduled service visit."
         case .working:
+            guard arrivalEstimate == nil else { return nil }
             update = "Your GunnAire technician is working on the scheduled service visit."
         case .completed, .cancelled:
             return nil
@@ -1015,18 +1041,6 @@ GunnAire
 
     private var serviceTextDraft: CustomerServiceTextDraft? {
         CustomerServiceTextPolicy.draft(for: call)
-    }
-
-    private var appointmentUpdateEmailURL: URL? {
-        guard let draft = appointmentUpdateDraft else { return nil }
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = draft.to
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: draft.subject),
-            URLQueryItem(name: "body", value: draft.body)
-        ]
-        return components.url
     }
 
     private var appointmentUpdateActionTitle: String {
@@ -1113,6 +1127,13 @@ GunnAire
 
     private func openAppointmentUpdate() {
         guard let draft = appointmentUpdateDraft else { return }
+        openAppointmentUpdate(draft, workflow: appointmentUpdateWorkflow)
+    }
+
+    private func openAppointmentUpdate(
+        _ draft: (to: String, subject: String, body: String),
+        workflow: GunnAireMailWorkflow
+    ) {
         if googleAuth.isAuthenticated {
             GunnAireAppIntentRouter.storeMailDraftRoute(
                 to: draft.to,
@@ -1120,11 +1141,24 @@ GunnAire
                 body: draft.body,
                 customerID: call.customer.id,
                 serviceCallID: call.id,
-                workflow: appointmentUpdateWorkflow
+                workflow: workflow
             )
-        } else if let appointmentUpdateEmailURL {
-            openURL(appointmentUpdateEmailURL)
+        } else if let emailURL = mailtoURL(for: draft) {
+            openURL(emailURL)
         }
+    }
+
+    private func mailtoURL(
+        for draft: (to: String, subject: String, body: String)
+    ) -> URL? {
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = draft.to
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: draft.subject),
+            URLQueryItem(name: "body", value: draft.body)
+        ]
+        return components.url
     }
 
     private func openServiceText() {
@@ -1139,6 +1173,69 @@ GunnAire
         }
         customerTextStatus = nil
         activeServiceTextDraft = draft
+    }
+
+    private func commitEnRouteHandoff(_ submission: EnRouteHandoffSubmission) {
+        showingEnRouteHandoff = false
+        guard canUpdateCurrentJob,
+              EnRouteHandoffPolicy.canMarkEnRoute(call) else {
+            jobActionStatus = "This job changed or your access no longer permits an En Route update. Refresh the job and try again."
+            return
+        }
+
+        let markedAt = Date()
+        call.markTechnicianEnRoute(at: markedAt)
+        ServiceCallActivity.record(
+            for: call,
+            action: "Technician en route",
+            detail: EnRouteHandoffPolicy.activityDetail(
+                estimate: submission.arrivalEstimate,
+                markedAt: markedAt
+            ),
+            actorEmail: currentActivityActor,
+            occurredAt: markedAt,
+            in: modelContext
+        )
+
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            jobActionStatus = "The En Route update could not be saved. No customer draft was opened."
+            return
+        }
+
+        jobActionStatus = "En Route recorded with an approximate \(submission.arrivalEstimate.rawValue)-minute arrival estimate."
+
+        guard submission.customerUpdateChannel != .none else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            switch submission.customerUpdateChannel {
+            case .none:
+                break
+            case .text:
+                guard canDraftEnRouteText,
+                      let draft = CustomerServiceTextPolicy.draft(
+                        for: call,
+                        approximateArrivalMinutes: submission.arrivalEstimate.rawValue
+                      ),
+                      CustomerServiceTextPolicy.contextIsValid(draft, for: call) else {
+                    customerTextStatus = "En Route was saved, but the text draft is unavailable. Check Messages, the phone number, and text consent."
+                    return
+                }
+                customerTextStatus = nil
+                activeServiceTextDraft = draft
+            case .email:
+                guard canDraftEnRouteEmail,
+                      let draft = makeAppointmentUpdateDraft(
+                        approximateArrivalMinutes: submission.arrivalEstimate.rawValue
+                      ) else {
+                    jobActionStatus = "En Route was saved, but the email draft is unavailable. Check the customer email and transactional consent."
+                    return
+                }
+                openAppointmentUpdate(draft, workflow: .technicianEnRoute)
+            }
+        }
     }
 
     private func handleServiceTextResult(_ outcome: CustomerServiceTextOutcome, draft: CustomerServiceTextDraft) {
@@ -1293,6 +1390,34 @@ GunnAire
         AppAccess.canManageDispatch(email: currentActivityActor, users: users)
     }
 
+    private var canUpdateCurrentJob: Bool {
+        AppAccess.canUpdateJobProgress(email: currentActivityActor, users: users) &&
+        AppAccess.canAccessServiceCall(
+            call,
+            email: currentActivityActor,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+    }
+
+    private var canDraftEnRouteText: Bool {
+        call.customer.allowsServiceText &&
+        CustomerServiceTextPolicy.normalizedRecipient(call.customer.phone) != nil &&
+        CustomerServiceTextCapability.canSendText
+    }
+
+    private var canDraftEnRouteEmail: Bool {
+        call.customer.allowsTransactionalEmail &&
+        !(call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    private var defaultEnRouteUpdateChannel: EnRouteCustomerUpdateChannel {
+        if canDraftEnRouteText { return .text }
+        if canDraftEnRouteEmail { return .email }
+        return .none
+    }
+
     private func canOpenRelatedCall(_ relatedCall: ServiceCall) -> Bool {
         let email = AppIdentity.currentEmail
         return AppAccess.canAccessServiceCall(
@@ -1319,10 +1444,12 @@ GunnAire
     }
 
     private var hasJobStatusAction: Bool {
-        call.status == .scheduled ||
-        call.status == .inProgress ||
-        call.status == .completed ||
-        (call.technicianEnRouteAt != nil && call.technicianArrivedAt == nil && !call.arrivalConfirmed)
+        canUpdateCurrentJob && (
+            call.status == .scheduled ||
+            call.status == .inProgress ||
+            call.status == .completed ||
+            (call.technicianEnRouteAt != nil && call.technicianArrivedAt == nil && !call.arrivalConfirmed)
+        )
     }
 
     private func normalizedEquipmentKey(for call: ServiceCall) -> String? {
@@ -2708,6 +2835,23 @@ GunnAire
             )
             .tint(Color.brandGold)
         }
+        .sheet(isPresented: $showingEnRouteHandoff) {
+            EnRouteHandoffSheet(
+                customerName: call.customer.name,
+                appointmentSummary: call.customerAppointmentSummary,
+                destinationAddress: resolvedAddress,
+                canDraftText: canDraftEnRouteText,
+                canDraftEmail: canDraftEnRouteEmail,
+                canOpenDirections: mapsURL != nil,
+                defaultCustomerUpdateChannel: defaultEnRouteUpdateChannel,
+                onOpenDirections: {
+                    guard let mapsURL else { return }
+                    openURL(mapsURL)
+                },
+                onCommit: commitEnRouteHandoff
+            )
+            .tint(Color.brandGold)
+        }
         .sheet(item: $activeServiceTextDraft) { draft in
             #if canImport(MessageUI) && !targetEnvironment(macCatalyst)
             CustomerMessageComposer(draft: draft) { outcome in
@@ -2787,8 +2931,8 @@ GunnAire
             HStack {
                 if call.status == .scheduled && call.technicianEnRouteAt == nil {
                     Button {
-                        call.markTechnicianEnRoute()
-                        ServiceCallActivity.record(for: call, action: "Technician en route", detail: "Technician marked en route; job moved to in progress.", actorEmail: currentActivityActor, in: modelContext)
+                        jobActionStatus = nil
+                        showingEnRouteHandoff = true
                     } label: {
                         Label("En Route", systemImage: "car.fill")
                             .frame(maxWidth: .infinity)
@@ -2841,6 +2985,13 @@ GunnAire
             }
             .tint(Color.brandGold)
             .foregroundStyle(Color.primaryBlack)
+
+            if let jobActionStatus {
+                Text(jobActionStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("JobActionStatus")
+            }
         }
     }
 
