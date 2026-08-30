@@ -10,6 +10,7 @@ struct TimeClockView: View {
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \FieldExpenseClaim.expenseDate, order: .reverse) private var expenseClaims: [FieldExpenseClaim]
     @State private var syncMessage: String?
     @State private var selectedActivity: TimeEntryActivity = .general
     @State private var selectedServiceCallID: UUID?
@@ -45,6 +46,21 @@ struct TimeClockView: View {
 
     private var canRecordOwnTime: Bool {
         hasAuthenticatedUser && !isOwnerAccount && activeRole != .accounting
+    }
+
+    private var canUseFieldExpenses: Bool {
+        AppAccess.canSubmitFieldExpenses(email: signedInEmail, users: users) ||
+            AppAccess.canReviewFieldExpenses(email: signedInEmail, users: users)
+    }
+
+    private var fieldExpenseAttentionCount: Int {
+        if AppAccess.canReviewFieldExpenses(email: signedInEmail, users: users) {
+            return expenseClaims.filter { $0.needsOfficeReview || $0.needsReimbursement }.count
+        }
+        return expenseClaims.filter {
+            AppAccess.normalizedEmail($0.claimantEmail) == signedInEmail &&
+                ($0.status == .correctionRequested || $0.status == .submitted)
+        }.count
     }
 
     private var availableWorkspaces: [TimeClockWorkspace] {
@@ -159,6 +175,32 @@ struct TimeClockView: View {
                             Text(selectedWorkspace.guidance)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                        }
+                    }
+
+                    if canUseFieldExpenses {
+                        Section("Expenses & Mileage") {
+                            NavigationLink {
+                                FieldExpenseWorkspaceView()
+                            } label: {
+                                HStack {
+                                    Label("Open Expense Claims", systemImage: "receipt")
+                                    Spacer()
+                                    if fieldExpenseAttentionCount > 0 {
+                                        Text("\(fieldExpenseAttentionCount)")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.orange)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(.orange.opacity(0.12), in: Capsule())
+                                            .accessibilityLabel("\(fieldExpenseAttentionCount) expense claims need attention")
+                                    }
+                                }
+                            }
+                            .accessibilityIdentifier("OpenFieldExpenses")
+                            Text("Capture a receipt-backed field cost or mileage claim, then keep review and reimbursement evidence separate from time approval.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
 

@@ -66,8 +66,8 @@ struct TechnicianReportRow: Identifiable, Equatable {
 
 /// One conservative profitability review for every job that has an invoice in
 /// the selected reporting period. Revenue and material cost come from the
-/// immutable invoice snapshots; labor includes every completed time entry on
-/// that job, even when the work occurred before the invoice was issued.
+/// immutable invoice snapshots; labor and approved field expenses include the
+/// complete linked-job history even when they predate the invoice.
 struct JobProfitabilityRow: Identifiable, Equatable {
     let id: UUID
     let customerName: String
@@ -77,6 +77,7 @@ struct JobProfitabilityRow: Identifiable, Equatable {
     let invoicedRevenue: Double
     let materialCost: Double
     let laborCost: Double
+    let approvedExpenseCost: Double
     let missingMaterialCostLineCount: Int
     let hasCompletedLaborTime: Bool
     let uncostedLaborMinutes: Int
@@ -101,7 +102,7 @@ struct JobProfitabilityRow: Identifiable, Equatable {
         } else if uncostedLaborMinutes > 0 {
             issues.append("\(uncostedLaborMinutes) uncosted min")
         }
-        return issues.isEmpty ? "Material and labor coverage complete" : issues.joined(separator: " • ")
+        return issues.isEmpty ? "Material and labor coverage complete; approved field expenses included" : issues.joined(separator: " • ")
     }
 }
 
@@ -165,6 +166,9 @@ struct BusinessReportSnapshot {
     let correctiveVisitRate: Double?
     let materialCost: Double
     let laborCost: Double
+    let approvedExpenseCost: Double
+    let pendingExpenseClaimCount: Int
+    let pendingExpenseReimbursementAmount: Double
     let missingMaterialCostLineCount: Int
     let missingLaborTrackingJobCount: Int
     let uncostedLaborMinutes: Int
@@ -181,7 +185,8 @@ struct BusinessReportSnapshot {
     var hasFinancialActivity: Bool {
         invoiceCount > 0 || estimateCount > 0 || projectCount > 0 ||
             activeMaintenanceAgreementCount > 0 || newMaintenanceAgreementCount > 0 ||
-            collectedRevenue != 0
+            collectedRevenue != 0 || approvedExpenseCost != 0 ||
+            pendingExpenseClaimCount > 0 || pendingExpenseReimbursementAmount != 0
     }
 
     var hasOperationalActivity: Bool {
@@ -219,6 +224,7 @@ enum BusinessReporting {
         serviceRequests: [ServiceRequest] = [],
         projectMilestones: [ProjectMilestone] = [],
         maintenanceContracts: [RecurringMaintenanceContract] = [],
+        expenseClaims: [FieldExpenseClaim] = [],
         calendar: Calendar = .current
     ) -> BusinessReportSnapshot {
         let interval = period.interval(containing: now, calendar: calendar)
@@ -308,6 +314,16 @@ enum BusinessReporting {
         }
 
         let invoiceJobIDs = Set(periodInvoices.compactMap(\.serviceCallID))
+        let approvedJobExpenseClaims = expenseClaims.filter { claim in
+            claim.isApprovedJobCost &&
+                claim.serviceCallID.map(invoiceJobIDs.contains) == true
+        }
+        let approvedExpenseCost = approvedJobExpenseClaims.reduce(0) { $0 + $1.amount }
+        let periodExpenseClaims = expenseClaims.filter { interval.contains($0.expenseDate) }
+        let pendingExpenseClaimCount = periodExpenseClaims.filter(\.needsOfficeReview).count
+        let pendingExpenseReimbursementAmount = periodExpenseClaims
+            .filter(\.needsReimbursement)
+            .reduce(0) { $0 + $1.amount }
         // Job profitability follows invoiced work, not every time entry that
         // happens to fall in the report period. Include the full completed
         // labor history for those jobs so a month-end invoice is not shown
@@ -328,7 +344,9 @@ enum BusinessReporting {
         let costCoverageComplete = missingMaterialCostLineCount == 0 &&
             missingLaborTrackingJobCount == 0 &&
             laborSummary.uncostedMinutes == 0
-        let knownGrossProfit = costCoverageComplete ? invoicedRevenue - materialCost - laborCost : nil
+        let knownGrossProfit = costCoverageComplete
+            ? invoicedRevenue - materialCost - laborCost - approvedExpenseCost
+            : nil
         let knownGrossMargin = knownGrossProfit.flatMap { profit in
             invoicedRevenue > 0 ? profit / invoicedRevenue : nil
         }
@@ -337,7 +355,8 @@ enum BusinessReporting {
             invoices: periodInvoices,
             serviceCallsByID: serviceCallsByID,
             timeEntries: timeEntries,
-            technicians: technicians
+            technicians: technicians,
+            expenseClaims: expenseClaims
         )
         let linkedProfitabilityInvoiceIDs = Set(
             periodInvoices.compactMap { invoice -> UUID? in
@@ -477,6 +496,9 @@ enum BusinessReporting {
             correctiveVisitRate: completedCalls.isEmpty ? nil : Double(correctiveVisits.count) / Double(completedCalls.count),
             materialCost: materialCost,
             laborCost: laborCost,
+            approvedExpenseCost: approvedExpenseCost,
+            pendingExpenseClaimCount: pendingExpenseClaimCount,
+            pendingExpenseReimbursementAmount: pendingExpenseReimbursementAmount,
             missingMaterialCostLineCount: missingMaterialCostLineCount,
             missingLaborTrackingJobCount: missingLaborTrackingJobCount,
             uncostedLaborMinutes: laborSummary.uncostedMinutes,
@@ -580,7 +602,8 @@ enum BusinessReporting {
         invoices: [Invoice],
         serviceCallsByID: [UUID: ServiceCall],
         timeEntries: [TimeEntry],
-        technicians: [Technician]
+        technicians: [Technician],
+        expenseClaims: [FieldExpenseClaim]
     ) -> [JobProfitabilityRow] {
         let invoicesByJobID = Dictionary(
             grouping: invoices.compactMap { invoice -> (UUID, Invoice)? in
@@ -621,8 +644,11 @@ enum BusinessReporting {
                 hasCompletedLaborTime &&
                 labor.uncostedMinutes == 0
             let laborCost = labor.totalCost ?? 0
+            let approvedExpenseCost = expenseClaims
+                .filter { $0.serviceCallID == jobID && $0.isApprovedJobCost }
+                .reduce(0) { $0 + $1.amount }
             let knownGrossProfit = coverageComplete
-                ? revenue - materialCost - laborCost
+                ? revenue - materialCost - laborCost - approvedExpenseCost
                 : nil
             let knownGrossMargin = knownGrossProfit.flatMap { profit in
                 revenue > 0 ? profit / revenue : nil
@@ -639,6 +665,7 @@ enum BusinessReporting {
                 invoicedRevenue: revenue,
                 materialCost: materialCost,
                 laborCost: laborCost,
+                approvedExpenseCost: approvedExpenseCost,
                 missingMaterialCostLineCount: missingMaterialCostLineCount,
                 hasCompletedLaborTime: hasCompletedLaborTime,
                 uncostedLaborMinutes: labor.uncostedMinutes,
@@ -706,7 +733,7 @@ enum BusinessReportCSV {
             ["Period End", snapshot.interval.end.formatted(.iso8601)],
             ["Generated At", snapshot.generatedAt.formatted(.iso8601)],
             ["Data Source", "Current GunnAire operational records"],
-            ["Inclusion Rules", "Invoices and estimates by created date; jobs by scheduled date; collections by payment date less refunds; open balance includes all payments linked to selected-period invoices; profitability uses immutable invoice material costs and all completed labor linked to each selected-period invoiced job; lead sources use requests created in the period and linked outcomes as of generation time; conflicting job-source lineage is excluded from source revenue; technician time mix uses completed entries by activity, excludes unpaid breaks, and is not sold-hour efficiency or payroll"],
+            ["Inclusion Rules", "Invoices and estimates by created date; jobs by scheduled date; collections by payment date less refunds; open balance includes all payments linked to selected-period invoices; profitability uses immutable invoice material costs, all completed labor, and approved field expense claims linked to each selected-period invoiced job; pending claim and reimbursement totals use expense date in the selected period; lead sources use requests created in the period and linked outcomes as of generation time; conflicting job-source lineage is excluded from source revenue; technician time mix uses completed entries by activity, excludes unpaid breaks, and is not sold-hour efficiency or payroll"],
             [],
             ["Metric", "Value"],
             ["Invoiced Revenue", decimal(snapshot.invoicedRevenue)],
@@ -738,6 +765,9 @@ enum BusinessReportCSV {
             ["Corrective Visit Rate", snapshot.correctiveVisitRate.map(percent) ?? "Not available"],
             ["Known Material Cost", decimal(snapshot.materialCost)],
             ["Known Labor Cost", decimal(snapshot.laborCost)],
+            ["Approved Field Expense Cost", decimal(snapshot.approvedExpenseCost)],
+            ["Pending Expense Claims", String(snapshot.pendingExpenseClaimCount)],
+            ["Approved Reimbursements Pending Payment", decimal(snapshot.pendingExpenseReimbursementAmount)],
             ["Missing Material Cost Lines", String(snapshot.missingMaterialCostLineCount)],
             ["Invoiced Jobs Missing Labor Time", String(snapshot.missingLaborTrackingJobCount)],
             ["Uncosted Labor Minutes", String(snapshot.uncostedLaborMinutes)],
@@ -770,7 +800,7 @@ enum BusinessReportCSV {
             [],
             [
                 "Job Profitability", "Scheduled", "Work Type", "Invoices", "Invoiced Revenue",
-                "Known Material Cost", "Known Labor Cost", "Material Cost Gaps", "Completed Labor",
+                "Known Material Cost", "Known Labor Cost", "Approved Field Expense Cost", "Material Cost Gaps", "Completed Labor",
                 "Uncosted Minutes", "Known Gross Profit", "Known Gross Margin", "Cost Coverage"
             ]
         ]
@@ -783,6 +813,7 @@ enum BusinessReportCSV {
                 decimal(row.invoicedRevenue),
                 decimal(row.materialCost),
                 decimal(row.laborCost),
+                decimal(row.approvedExpenseCost),
                 String(row.missingMaterialCostLineCount),
                 row.hasCompletedLaborTime ? "Yes" : "No",
                 String(row.uncostedLaborMinutes),

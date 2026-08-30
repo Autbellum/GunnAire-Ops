@@ -112,6 +112,30 @@ enum AppAccess {
         return role == .accounting || role == .admin
     }
 
+    /// Field expenses are employee-originated operational evidence. Field and
+    /// dispatch staff may submit their own claims; administrators may capture a
+    /// missing record. Accounting reviews but cannot originate a claimant's
+    /// expense, which keeps review authority separate from field capture.
+    static func canSubmitFieldExpenses(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .fieldTechnician || role == .dispatcher || role == .admin
+    }
+
+    static func canReviewFieldExpenses(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .accounting || role == .admin
+    }
+
+    static func canAccessFieldExpenseClaim(
+        _ claim: FieldExpenseClaim,
+        email: String?,
+        users: [AppUser]
+    ) -> Bool {
+        if canReviewFieldExpenses(email: email, users: users) { return true }
+        guard canSubmitFieldExpenses(email: email, users: users) else { return false }
+        return normalizedEmail(email) == normalizedEmail(claim.claimantEmail)
+    }
+
     /// Field scorecards expose only the signed-in technician's own operational
     /// results. Office-wide financial reporting remains Accounting/Admin-only.
     static func ownPerformanceTechnicianID(

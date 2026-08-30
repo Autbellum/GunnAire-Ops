@@ -684,8 +684,8 @@ struct GunnAire_OpsTests {
         #expect(configuration.cloudKitContainerIdentifier == GunnAireCloudKit.containerIdentifier)
         #expect(configuration.isStoredInMemoryOnly == false)
         #expect(configuration.url.lastPathComponent == GunnAireCloudKitSchemaBootstrap.storeFileName)
-        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 17)
-        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V17"))
+        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 18)
+        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V18"))
     }
     #endif
 
@@ -23161,6 +23161,301 @@ struct GunnAire_OpsTests {
         #expect(!attachment.canLinkToQuickBooksInvoiceAttachment)
         #expect(!attachment.canLinkToQuickBooksInvoiceDocument)
         #expect(!attachment.canLinkToQuickBooksEstimateDocument)
+    }
+
+    @Test func fieldExpenseMileageCalculatesExactlyAndRetainsApprovalReimbursementAudit() throws {
+        let submittedAt = Date(timeIntervalSince1970: 1_788_080_000)
+        let claim = try FieldExpenseClaimPolicy.makeClaim(
+            serviceCall: nil,
+            claimantEmail: " TECH@GUNNAIRE.COM ",
+            claimantName: "Taylor Technician",
+            claimType: .mileage,
+            category: .other,
+            expenseDate: submittedAt,
+            merchant: "ignored",
+            businessPurpose: "Distributor pickup",
+            amount: nil,
+            mileageMiles: 12.4,
+            mileageRatePerMile: 0.67,
+            mileageOrigin: "GunnAire shop",
+            mileageDestination: "Johnstone Supply",
+            reimbursable: true,
+            now: submittedAt
+        )
+
+        #expect(claim.claimantEmail == "tech@gunnaire.com")
+        #expect(claim.category == .mileage)
+        #expect(claim.amount == 8.31)
+        #expect(claim.mileageMiles == 12.4)
+        #expect(!claim.requiresReceiptForApproval)
+        #expect(claim.auditEvents.map(\.action) == [.submitted])
+
+        try claim.approve(
+            reviewerEmail: "accounting@gunnaire.com",
+            reviewerRole: .accounting,
+            hasReceipt: false,
+            now: submittedAt.addingTimeInterval(60)
+        )
+        #expect(claim.status == .approved)
+        #expect(claim.needsReimbursement)
+
+        try claim.markReimbursed(
+            reference: "Payroll 2026-08-30",
+            actorEmail: "accounting@gunnaire.com",
+            actorRole: .accounting,
+            now: submittedAt.addingTimeInterval(120)
+        )
+        #expect(claim.status == .reimbursed)
+        #expect(claim.reimbursementReference == "Payroll 2026-08-30")
+        #expect(claim.auditEvents.map(\.action) == [.submitted, .approved, .reimbursed])
+    }
+
+    @Test func fieldExpenseApprovalFailsClosedUntilReceiptOrCorrectionEvidenceIsReady() throws {
+        let claim = try FieldExpenseClaimPolicy.makeClaim(
+            serviceCall: nil,
+            claimantEmail: "tech@gunnaire.com",
+            claimantName: "Taylor Technician",
+            claimType: .expense,
+            category: .permitFee,
+            expenseDate: Date(),
+            merchant: "County Permit Office",
+            businessPurpose: "Replacement permit",
+            amount: 85,
+            mileageMiles: nil,
+            mileageRatePerMile: nil,
+            mileageOrigin: nil,
+            mileageDestination: nil,
+            reimbursable: true
+        )
+
+        #expect(throws: FieldExpenseClaimError.receiptRequired) {
+            try claim.approve(
+                reviewerEmail: "accounting@gunnaire.com",
+                reviewerRole: .accounting,
+                hasReceipt: false
+            )
+        }
+        try claim.requestCorrection(
+            note: "Attach the permit receipt.",
+            reviewerEmail: "accounting@gunnaire.com",
+            reviewerRole: .accounting
+        )
+        #expect(claim.status == .correctionRequested)
+
+        let receiptID = UUID()
+        try claim.resubmit(
+            claimType: .expense,
+            category: .permitFee,
+            expenseDate: claim.expenseDate,
+            merchant: claim.merchant,
+            businessPurpose: claim.businessPurpose,
+            amount: claim.amount,
+            mileageMiles: nil,
+            mileageRatePerMile: nil,
+            mileageOrigin: nil,
+            mileageDestination: nil,
+            reimbursable: true,
+            receiptAttachmentID: receiptID,
+            actorEmail: "tech@gunnaire.com"
+        )
+        try claim.approve(
+            reviewerEmail: "accounting@gunnaire.com",
+            reviewerRole: .accounting,
+            hasReceipt: true
+        )
+        #expect(claim.status == .approved)
+        #expect(claim.receiptAttachmentID == receiptID)
+        #expect(claim.auditEvents.map(\.action) == [.submitted, .correctionRequested, .resubmitted, .approved])
+        #expect(throws: FieldExpenseClaimError.invalidStatus) {
+            try claim.reject(
+                note: "Too late",
+                reviewerEmail: "accounting@gunnaire.com",
+                reviewerRole: .accounting
+            )
+        }
+    }
+
+    @Test func fieldExpenseRolesSeparateClaimantCaptureFromOfficeReview() throws {
+        let claimant = AppUser(email: "claimant@gunnaire.com", role: .fieldTechnician)
+        let otherField = AppUser(email: "other@gunnaire.com", role: .fieldTechnician)
+        let dispatcher = AppUser(email: "dispatch@gunnaire.com", role: .dispatcher)
+        let accounting = AppUser(email: "accounting@gunnaire.com", role: .accounting)
+        let admin = AppUser(email: "admin@gunnaire.com", role: .admin)
+        let standard = AppUser(email: "standard@gunnaire.com", role: .standard)
+        let users = [claimant, otherField, dispatcher, accounting, admin, standard]
+        let claim = try FieldExpenseClaimPolicy.makeClaim(
+            serviceCall: nil,
+            claimantEmail: claimant.email,
+            claimantName: "Claimant",
+            claimType: .expense,
+            category: .parkingToll,
+            expenseDate: Date(),
+            merchant: "Parking Garage",
+            businessPurpose: "Commercial service access",
+            amount: 12,
+            mileageMiles: nil,
+            mileageRatePerMile: nil,
+            mileageOrigin: nil,
+            mileageDestination: nil,
+            reimbursable: true
+        )
+
+        #expect(AppAccess.canSubmitFieldExpenses(email: claimant.email, users: users))
+        #expect(AppAccess.canSubmitFieldExpenses(email: dispatcher.email, users: users))
+        #expect(AppAccess.canSubmitFieldExpenses(email: admin.email, users: users))
+        #expect(!AppAccess.canSubmitFieldExpenses(email: accounting.email, users: users))
+        #expect(!AppAccess.canSubmitFieldExpenses(email: standard.email, users: users))
+        #expect(AppAccess.canReviewFieldExpenses(email: accounting.email, users: users))
+        #expect(AppAccess.canReviewFieldExpenses(email: admin.email, users: users))
+        #expect(AppAccess.canAccessFieldExpenseClaim(claim, email: claimant.email, users: users))
+        #expect(!AppAccess.canAccessFieldExpenseClaim(claim, email: otherField.email, users: users))
+        #expect(!AppAccess.canAccessFieldExpenseClaim(claim, email: dispatcher.email, users: users))
+        #expect(AppAccess.canAccessFieldExpenseClaim(claim, email: accounting.email, users: users))
+        #expect(AppAccess.canAccessFieldExpenseClaim(claim, email: admin.email, users: users))
+        #expect(!AppAccess.canAccessFieldExpenseClaim(claim, email: standard.email, users: users))
+    }
+
+    @MainActor
+    @Test func fieldExpenseAndPrivateReceiptLineagePersistInTheSharedModelSchema() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let claimID = UUID()
+        let receiptID = UUID()
+        let claim = FieldExpenseClaim(
+            id: claimID,
+            claimantEmail: "tech@gunnaire.com",
+            claimantName: "Taylor Technician",
+            claimType: .expense,
+            category: .smallTool,
+            expenseDate: Date(),
+            merchant: "Supply Counter",
+            businessPurpose: "One-time job tool",
+            amount: 18,
+            reimbursable: false,
+            receiptAttachmentID: receiptID
+        )
+        let attachment = ServiceDocumentAttachment(
+            id: receiptID,
+            customer: nil,
+            serviceCallID: nil,
+            expenseClaimID: claimID,
+            kind: .expenseReceipt,
+            displayName: "expense-receipt.pdf",
+            localFilePath: "/tmp/expense-receipt.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 12
+        )
+        context.insert(claim)
+        context.insert(attachment)
+        try context.save()
+
+        let fetchedClaim = try #require(try context.fetch(FetchDescriptor<FieldExpenseClaim>()).first)
+        let fetchedAttachment = try #require(
+            try context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).first { $0.id == receiptID }
+        )
+        #expect(fetchedClaim.id == claimID)
+        #expect(fetchedClaim.receiptAttachmentID == receiptID)
+        #expect(fetchedAttachment.expenseClaimID == claimID)
+        #expect(fetchedAttachment.kind == .expenseReceipt)
+        #expect(!fetchedAttachment.canLinkToQuickBooksInvoiceAttachment)
+        #expect(!fetchedAttachment.canLinkToQuickBooksInvoiceDocument)
+        #expect(!fetchedAttachment.canLinkToQuickBooksEstimateDocument)
+        #expect(!fetchedAttachment.kind.isFinancialCustomerProfileAttachment)
+    }
+
+    @MainActor
+    @Test func businessReportingIncludesOnlyApprovedJobExpensesInProfitability() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 30, hour: 12)))
+        let workDate = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 20, hour: 9)))
+        let customer = Customer(name: "Expense Cost Customer")
+        let technician = Technician(name: "Cost Technician", contactInfo: "cost-tech@gunnaire.com", laborCostPerHour: 50)
+        let call = ServiceCall(
+            type: .service,
+            scheduledDate: workDate,
+            assignedTechnician: technician,
+            customer: customer,
+            status: .completed
+        )
+        let item = Item(name: "Repair", unitPrice: 500, purchaseCost: 100, createdAt: workDate)
+        let invoice = Invoice(serviceCallID: call.id, customer: customer, amount: 500, createdAt: workDate)
+        invoice.catalogSnapshotJSON = CatalogLineItemSnapshot.encoded(from: [item])
+        let time = TimeEntry(
+            userEmail: "cost-tech@gunnaire.com",
+            clockIn: workDate,
+            clockOut: workDate.addingTimeInterval(3_600),
+            serviceCall: call
+        )
+        let approved = try FieldExpenseClaimPolicy.makeClaim(
+            serviceCall: call,
+            claimantEmail: "cost-tech@gunnaire.com",
+            claimantName: technician.name,
+            claimType: .expense,
+            category: .permitFee,
+            expenseDate: workDate,
+            merchant: "Permit Office",
+            businessPurpose: "Service permit",
+            amount: 40,
+            mileageMiles: nil,
+            mileageRatePerMile: nil,
+            mileageOrigin: nil,
+            mileageDestination: nil,
+            reimbursable: true,
+            receiptAttachmentID: UUID()
+        )
+        try approved.approve(
+            reviewerEmail: "accounting@gunnaire.com",
+            reviewerRole: .accounting,
+            hasReceipt: true
+        )
+        let submitted = try FieldExpenseClaimPolicy.makeClaim(
+            serviceCall: call,
+            claimantEmail: "cost-tech@gunnaire.com",
+            claimantName: technician.name,
+            claimType: .expense,
+            category: .parkingToll,
+            expenseDate: workDate,
+            merchant: "Parking",
+            businessPurpose: "Customer-site parking",
+            amount: 20,
+            mileageMiles: nil,
+            mileageRatePerMile: nil,
+            mileageOrigin: nil,
+            mileageDestination: nil,
+            reimbursable: true
+        )
+
+        let snapshot = BusinessReporting.snapshot(
+            period: .currentMonth,
+            now: now,
+            serviceCalls: [call],
+            estimates: [],
+            invoices: [invoice],
+            payments: [],
+            timeEntries: [time],
+            technicians: [technician],
+            expenseClaims: [approved, submitted],
+            calendar: calendar
+        )
+
+        #expect(snapshot.materialCost == 100)
+        #expect(snapshot.laborCost == 50)
+        #expect(snapshot.approvedExpenseCost == 40)
+        #expect(snapshot.pendingExpenseClaimCount == 1)
+        #expect(snapshot.pendingExpenseReimbursementAmount == 40)
+        #expect(snapshot.knownGrossProfit == 310)
+        let row = try #require(snapshot.jobProfitabilityRows.first)
+        #expect(row.approvedExpenseCost == 40)
+        #expect(row.knownGrossProfit == 310)
+        let csv = BusinessReportCSV.render(snapshot)
+        #expect(csv.contains("Approved Field Expense Cost,40.00"))
+        #expect(csv.contains("Pending Expense Claims,1"))
+        #expect(csv.contains("Expense Cost Customer"))
     }
 
 }

@@ -20,6 +20,7 @@ final class GunnAire_OpsUITests: XCTestCase {
     private let unassignedScheduleServiceCallID = "A1000000-0000-4000-8000-000000000029"
     private let servicePackageItemID = "A1000000-0000-4000-8000-000000000032"
     private let warrantyClaimID = "A1000000-0000-4000-8000-000000000037"
+    private let fieldExpenseClaimID = "A1000000-0000-4000-8000-000000000041"
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
@@ -246,6 +247,148 @@ final class GunnAire_OpsUITests: XCTestCase {
         afterInspection.name = "Fleet ready without account email"
         afterInspection.lifetime = .keepAlways
         add(afterInspection)
+    }
+
+    @MainActor
+    func testFieldTechnicianSubmitsJobLinkedMileageFromTimeClock() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob",
+            "-GunnAirePendingAppRoute", "timeClock"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Time Clock"].waitForExistence(timeout: 8))
+        let expenses = app.buttons["OpenFieldExpenses"]
+        XCTAssertTrue(expenses.waitForExistence(timeout: 3))
+        expenses.tap()
+
+        XCTAssertTrue(app.navigationBars["Expenses & Mileage"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["No Expense Claims"].waitForExistence(timeout: 3))
+        let addClaim = app.buttons["AddFieldExpense"]
+        XCTAssertTrue(addClaim.waitForExistence(timeout: 3))
+        addClaim.tap()
+
+        XCTAssertTrue(app.navigationBars["New Expense Claim"].waitForExistence(timeout: 3))
+        let type = app.segmentedControls["FieldExpenseType"]
+        XCTAssertTrue(type.waitForExistence(timeout: 3))
+        type.buttons["Mileage"].tap()
+
+        let job = app.buttons["FieldExpenseJob"]
+        XCTAssertTrue(job.waitForExistence(timeout: 3))
+        job.tap()
+        let jobChoice = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] 'UI Test Collectible Customer'")
+        ).firstMatch
+        XCTAssertTrue(jobChoice.waitForExistence(timeout: 3))
+        jobChoice.tap()
+
+        let origin = app.textFields["FieldMileageOrigin"]
+        XCTAssertTrue(origin.waitForExistence(timeout: 3))
+        origin.tap()
+        origin.typeText("GunnAire shop")
+        let destination = app.textFields["FieldMileageDestination"]
+        destination.tap()
+        destination.typeText("Johnstone Supply")
+        let miles = app.textFields["FieldMileageMiles"]
+        miles.tap()
+        miles.typeText("20")
+        let rate = app.textFields["FieldMileageRate"]
+        rate.tap()
+        rate.typeText("0.655")
+        let purpose = app.textFields["FieldExpensePurpose"]
+        for _ in 0..<3 where !purpose.exists || !purpose.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(purpose.waitForExistence(timeout: 3))
+        XCTAssertTrue(purpose.isHittable)
+        purpose.tap()
+        purpose.typeText("Supply house run")
+
+        let submit = app.buttons["SubmitFieldExpense"]
+        XCTAssertTrue(submit.waitForExistence(timeout: 3))
+        submit.tap()
+
+        XCTAssertTrue(app.navigationBars["Expenses & Mileage"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Supply house run"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["UI Test Collectible Customer"].exists)
+        XCTAssertTrue(app.staticTexts["$13.10"].exists)
+        XCTAssertTrue(app.staticTexts["Submitted"].exists)
+    }
+
+    @MainActor
+    func testAdministratorApprovesAndReimbursesAFieldExpenseWithoutPostingAccounting() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedFieldExpenseReview",
+            "-appStoreScreenshotFixtures",
+            "-GunnAirePendingAppRoute", "timeClock"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Time Clock"].waitForExistence(timeout: 8))
+        let expenses = app.buttons["OpenFieldExpenses"]
+        XCTAssertTrue(expenses.waitForExistence(timeout: 3))
+        expenses.tap()
+
+        XCTAssertTrue(app.navigationBars["Expenses & Mileage"].waitForExistence(timeout: 3))
+        let lane = app.segmentedControls["FieldExpenseLanePicker"]
+        XCTAssertTrue(lane.waitForExistence(timeout: 3))
+        lane.buttons["Review"].tap()
+        XCTAssertTrue(app.staticTexts["1"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Downtown Parking Garage"].exists)
+
+        let claim = app.buttons["FieldExpenseClaim-\(fieldExpenseClaimID)"]
+        XCTAssertTrue(claim.waitForExistence(timeout: 3))
+        claim.tap()
+
+        XCTAssertTrue(app.navigationBars["Expense Claim"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["$18.50"].exists)
+        let review = app.buttons["ReviewFieldExpense"]
+        XCTAssertTrue(review.waitForExistence(timeout: 3))
+        review.tap()
+
+        XCTAssertTrue(app.navigationBars["Review Claim"].waitForExistence(timeout: 3))
+        let saveReview = app.buttons["SaveFieldExpenseReview"]
+        XCTAssertTrue(saveReview.isEnabled)
+        saveReview.tap()
+
+        XCTAssertTrue(app.navigationBars["Expense Claim"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Approved"].waitForExistence(timeout: 3))
+        let reimburse = app.buttons["ReimburseFieldExpense"]
+        for _ in 0..<4 where !reimburse.exists || !reimburse.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(reimburse.waitForExistence(timeout: 3))
+        XCTAssertTrue(reimburse.isHittable)
+        reimburse.tap()
+
+        XCTAssertTrue(app.navigationBars["Record Reimbursement"].waitForExistence(timeout: 3))
+        let reference = app.textFields["FieldExpenseReimbursementReference"]
+        XCTAssertTrue(reference.waitForExistence(timeout: 3))
+        reference.tap()
+        reference.typeText("CHECK-UI-1042")
+        let saveReimbursement = app.buttons["SaveFieldExpenseReimbursement"]
+        XCTAssertTrue(saveReimbursement.isEnabled)
+        saveReimbursement.tap()
+
+        XCTAssertTrue(app.navigationBars["Expense Claim"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Reimbursed"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["CHECK-UI-1042"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["SidebarAccountIdentity"].exists)
+        XCTAssertFalse(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
+        ).firstMatch.exists)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Expense reimbursement evidence without account email"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     @MainActor
