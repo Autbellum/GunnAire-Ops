@@ -2296,6 +2296,315 @@ struct GunnAire_OpsTests {
         ) == nil)
     }
 
+    @Test func dispatchCapacitySeparatesRegularOnCallUnavailableOverlapAndDemand() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let monday = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 31)))
+        let technician = Technician(name: "Capacity Tech")
+        let customer = Customer(name: "Capacity Customer")
+        let regular = try TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: technician.id,
+            technicianName: technician.name,
+            weekdays: Set([.monday]),
+            startMinute: 8 * 60,
+            durationMinutes: 9 * 60,
+            kind: .regular,
+            effectiveFrom: monday,
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: []
+        )
+        let onCall = try TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: technician.id,
+            technicianName: technician.name,
+            weekdays: Set([.monday]),
+            startMinute: 6 * 60,
+            durationMinutes: 3 * 60,
+            kind: .onCall,
+            effectiveFrom: monday,
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: regular
+        )
+        let noon = try #require(calendar.date(bySettingHour: 12, minute: 0, second: 0, of: monday))
+        let firstBlock = TechnicianAvailabilityBlock(
+            technicianID: technician.id,
+            startsAt: noon,
+            endsAt: noon.addingTimeInterval(60 * 60),
+            kind: .breakPeriod,
+            reason: "Lunch"
+        )
+        let secondBlock = TechnicianAvailabilityBlock(
+            technicianID: technician.id,
+            startsAt: noon.addingTimeInterval(30 * 60),
+            endsAt: noon.addingTimeInterval(90 * 60),
+            kind: .training,
+            reason: "Training"
+        )
+        let nineAM = try #require(calendar.date(bySettingHour: 9, minute: 0, second: 0, of: monday))
+        let tenAM = try #require(calendar.date(bySettingHour: 10, minute: 0, second: 0, of: monday))
+        let sixThirtyAM = try #require(calendar.date(bySettingHour: 6, minute: 30, second: 0, of: monday))
+        let threePM = try #require(calendar.date(bySettingHour: 15, minute: 0, second: 0, of: monday))
+        let calls = [
+            ServiceCall(
+                type: .service,
+                scheduledDate: nineAM,
+                duration: 2 * 60 * 60,
+                assignedTechnician: technician,
+                customer: customer
+            ),
+            ServiceCall(
+                type: .repair,
+                scheduledDate: tenAM,
+                duration: 2 * 60 * 60,
+                assignedTechnician: technician,
+                customer: customer
+            ),
+            ServiceCall(
+                type: .service,
+                dispatchUrgency: .emergency,
+                scheduledDate: sixThirtyAM,
+                duration: 60 * 60,
+                assignedTechnician: technician,
+                customer: customer
+            ),
+            ServiceCall(
+                type: .estimate,
+                scheduledDate: threePM,
+                duration: 90 * 60,
+                customer: customer
+            )
+        ]
+
+        let snapshot = DispatchCapacityPolicy.snapshot(
+            for: monday,
+            technicians: [technician],
+            serviceCalls: calls,
+            availabilityBlocks: [firstBlock, secondBlock],
+            workShifts: regular + onCall,
+            calendar: calendar
+        )
+
+        #expect(snapshot.configuredTechnicianCount == 1)
+        #expect(snapshot.unconfiguredTechnicianCount == 0)
+        #expect(snapshot.staffedRegularMinutes == 450)
+        #expect(snapshot.bookedConfiguredMinutes == 300)
+        #expect(snapshot.openRegularMinutes == 270)
+        #expect(snapshot.overbookedMinutes == 60)
+        #expect(snapshot.onCallCapacityMinutes == 120)
+        #expect(snapshot.openOnCallMinutes == 60)
+        #expect(snapshot.unassignedJobCount == 1)
+        #expect(snapshot.unassignedMinutes == 90)
+        #expect(snapshot.status == .overbooked)
+    }
+
+    @Test func dispatchCapacityKeepsUnconfiguredAssignmentsAndUnassignedDemandVisible() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let monday = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 31)))
+        let configured = Technician(name: "Configured Tech")
+        let unconfigured = Technician(name: "Unconfigured Tech")
+        let customer = Customer(name: "Coverage Customer")
+        let shifts = try TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: configured.id,
+            technicianName: configured.name,
+            weekdays: Set([.monday]),
+            startMinute: 8 * 60,
+            durationMinutes: 2 * 60,
+            kind: .regular,
+            effectiveFrom: monday,
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: []
+        )
+        let eightAM = try #require(calendar.date(bySettingHour: 8, minute: 0, second: 0, of: monday))
+        let nineAM = try #require(calendar.date(bySettingHour: 9, minute: 0, second: 0, of: monday))
+        let assignedWithoutHours = ServiceCall(
+            type: .service,
+            scheduledDate: eightAM,
+            duration: 2 * 60 * 60,
+            assignedTechnician: unconfigured,
+            customer: customer
+        )
+        let cancelled = ServiceCall(
+            type: .repair,
+            scheduledDate: nineAM,
+            duration: 60 * 60,
+            assignedTechnician: unconfigured,
+            customer: customer,
+            status: .cancelled
+        )
+        let unassigned = ServiceCall(
+            type: .estimate,
+            scheduledDate: nineAM,
+            duration: 60 * 60,
+            customer: customer
+        )
+        let completedUnassigned = ServiceCall(
+            type: .service,
+            scheduledDate: nineAM,
+            duration: 60 * 60,
+            customer: customer,
+            status: .completed
+        )
+
+        let snapshot = DispatchCapacityPolicy.snapshot(
+            for: monday,
+            technicians: [configured, unconfigured],
+            serviceCalls: [assignedWithoutHours, cancelled, unassigned, completedUnassigned],
+            availabilityBlocks: [],
+            workShifts: shifts,
+            calendar: calendar
+        )
+
+        #expect(snapshot.configuredTechnicianCount == 1)
+        #expect(snapshot.unconfiguredTechnicianCount == 1)
+        #expect(snapshot.staffedRegularMinutes == 120)
+        #expect(snapshot.openRegularMinutes == 120)
+        #expect(snapshot.bookedConfiguredMinutes == 0)
+        #expect(snapshot.bookedUnconfiguredMinutes == 120)
+        #expect(snapshot.unassignedJobCount == 1)
+        #expect(snapshot.unassignedMinutes == 60)
+        #expect(snapshot.status == .tight)
+    }
+
+    @Test func dispatchCapacityCountsEveryCrewMemberAndFlagsWorkOutsideRegularHours() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let monday = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 31)))
+        let lead = Technician(name: "Lead Capacity Tech")
+        let helper = Technician(name: "Helper Capacity Tech")
+        let customer = Customer(name: "Crew Capacity Customer")
+        let leadShifts = try TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: lead.id,
+            technicianName: lead.name,
+            weekdays: Set([.monday]),
+            startMinute: 8 * 60,
+            durationMinutes: 2 * 60,
+            kind: .regular,
+            effectiveFrom: monday,
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: []
+        )
+        let helperShifts = try TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: helper.id,
+            technicianName: helper.name,
+            weekdays: Set([.monday]),
+            startMinute: 8 * 60,
+            durationMinutes: 2 * 60,
+            kind: .regular,
+            effectiveFrom: monday,
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: []
+        )
+        let eightAM = try #require(calendar.date(bySettingHour: 8, minute: 0, second: 0, of: monday))
+        let fourPM = try #require(calendar.date(bySettingHour: 16, minute: 0, second: 0, of: monday))
+        let crewJob = ServiceCall(
+            type: .replacement,
+            scheduledDate: eightAM,
+            duration: 60 * 60,
+            assignedTechnician: lead,
+            additionalTechnicianIDs: [helper.id],
+            customer: customer
+        )
+        let outsidePlan = ServiceCall(
+            type: .repair,
+            scheduledDate: fourPM,
+            duration: 60 * 60,
+            assignedTechnician: lead,
+            customer: customer
+        )
+
+        let snapshot = DispatchCapacityPolicy.snapshot(
+            for: monday,
+            technicians: [lead, helper],
+            serviceCalls: [crewJob, outsidePlan],
+            availabilityBlocks: [],
+            workShifts: leadShifts + helperShifts,
+            calendar: calendar
+        )
+
+        #expect(snapshot.staffedRegularMinutes == 240)
+        #expect(snapshot.bookedConfiguredMinutes == 180)
+        #expect(snapshot.openRegularMinutes == 120)
+        #expect(snapshot.overbookedMinutes == 60)
+        #expect(snapshot.status == .overbooked)
+    }
+
+    @Test func dispatchCapacityNormalOnCallBookingUsesReserveButRemainsOutsidePlan() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let monday = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 31)))
+        let technician = Technician(name: "On-Call Capacity Tech")
+        let customer = Customer(name: "On-Call Capacity Customer")
+        let regular = try TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: technician.id,
+            technicianName: technician.name,
+            weekdays: Set([.monday]),
+            startMinute: 8 * 60,
+            durationMinutes: 2 * 60,
+            kind: .regular,
+            effectiveFrom: monday,
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: []
+        )
+        let onCall = try TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: technician.id,
+            technicianName: technician.name,
+            weekdays: Set([.monday]),
+            startMinute: 18 * 60,
+            durationMinutes: 2 * 60,
+            kind: .onCall,
+            effectiveFrom: monday,
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: regular
+        )
+        let sixThirtyPM = try #require(calendar.date(bySettingHour: 18, minute: 30, second: 0, of: monday))
+        let normalCall = ServiceCall(
+            type: .service,
+            dispatchUrgency: .normal,
+            scheduledDate: sixThirtyPM,
+            duration: 60 * 60,
+            assignedTechnician: technician,
+            customer: customer
+        )
+
+        let snapshot = DispatchCapacityPolicy.snapshot(
+            for: monday,
+            technicians: [technician],
+            serviceCalls: [normalCall],
+            availabilityBlocks: [],
+            workShifts: regular + onCall,
+            calendar: calendar
+        )
+
+        #expect(snapshot.staffedRegularMinutes == 120)
+        #expect(snapshot.openRegularMinutes == 120)
+        #expect(snapshot.onCallCapacityMinutes == 120)
+        #expect(snapshot.openOnCallMinutes == 60)
+        #expect(snapshot.bookedConfiguredMinutes == 60)
+        #expect(snapshot.overbookedMinutes == 60)
+        #expect(snapshot.status == .overbooked)
+    }
+
     @Test func dispatchRecommendationsRespectRegularOnCallOvernightAndUnavailableTime() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))

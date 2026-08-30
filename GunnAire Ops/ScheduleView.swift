@@ -488,6 +488,9 @@ struct ScheduleView: View {
                         DispatchWeekBoardView(
                             initialDate: selectedDate,
                             calls: callsForSignedInUser,
+                            technicians: assignableTechnicians,
+                            availabilityBlocks: technicianAvailabilityBlocks,
+                            workShifts: technicianWorkShifts,
                             operationalAlerts: operationalAlerts,
                             onMove: { callID, targetDay, overrideReason in
                                 moveCallFromDispatchBoard(
@@ -2696,6 +2699,9 @@ private struct DispatchWeekBoardView: View {
     @Environment(\.dismiss) private var dismiss
 
     let calls: [ServiceCall]
+    let technicians: [Technician]
+    let availabilityBlocks: [TechnicianAvailabilityBlock]
+    let workShifts: [TechnicianWorkShift]
     let operationalAlerts: [CustomerOperationalAlert]
     let onMove: (UUID, Date, String?) -> DispatchBoardMoveResult
 
@@ -2708,10 +2714,16 @@ private struct DispatchWeekBoardView: View {
     init(
         initialDate: Date,
         calls: [ServiceCall],
+        technicians: [Technician],
+        availabilityBlocks: [TechnicianAvailabilityBlock],
+        workShifts: [TechnicianWorkShift],
         operationalAlerts: [CustomerOperationalAlert],
         onMove: @escaping (UUID, Date, String?) -> DispatchBoardMoveResult
     ) {
         self.calls = calls
+        self.technicians = technicians
+        self.availabilityBlocks = availabilityBlocks
+        self.workShifts = workShifts
         self.operationalAlerts = operationalAlerts
         self.onMove = onMove
         _weekAnchor = State(initialValue: DispatchBoardScheduling.startOfWeek(containing: initialDate))
@@ -2738,9 +2750,15 @@ private struct DispatchWeekBoardView: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
-                    Label("Drag a job to another day. Its time stays the same.", systemImage: "hand.draw")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label("Drag a job to another day. Its time stays the same.", systemImage: "hand.draw")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text("Capacity uses recurring regular hours, unavailable time, and scheduled duration. On-call is separate; travel time is not estimated.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                     Spacer()
                     Text("\(visibleCalls.count) job\(visibleCalls.count == 1 ? "" : "s")")
                         .font(.caption.weight(.semibold))
@@ -2806,6 +2824,13 @@ private struct DispatchWeekBoardView: View {
 
     private func dayColumn(_ day: Date) -> some View {
         let dayCalls = calls(on: day)
+        let capacity = DispatchCapacityPolicy.snapshot(
+            for: day,
+            technicians: technicians,
+            serviceCalls: visibleCalls,
+            availabilityBlocks: availabilityBlocks,
+            workShifts: workShifts
+        )
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -2820,6 +2845,8 @@ private struct DispatchWeekBoardView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
+
+            capacitySummary(capacity, for: day)
 
             if dayCalls.isEmpty {
                 ContentUnavailableView("Open day", systemImage: "calendar.badge.plus")
@@ -2849,6 +2876,167 @@ private struct DispatchWeekBoardView: View {
             return true
         }
         .accessibilityHint("Drop a job here to keep its appointment time and move it to this day.")
+    }
+
+    private func capacitySummary(_ snapshot: DispatchDayCapacitySnapshot, for day: Date) -> some View {
+        let tint = capacityTint(snapshot.status)
+        return VStack(alignment: .leading, spacing: 5) {
+            Label(capacityPrimaryText(snapshot), systemImage: capacitySystemImage(snapshot.status))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(tint)
+                .lineLimit(2)
+
+            if snapshot.staffedRegularMinutes > 0 {
+                ProgressView(value: snapshot.regularUtilization)
+                    .tint(tint)
+                    .accessibilityHidden(true)
+            }
+
+            if snapshot.configuredTechnicianCount > 0 {
+                Text("\(compactDuration(snapshot.staffedRegularMinutes)) staffed • \(compactDuration(snapshot.bookedConfiguredMinutes)) booked")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else {
+                Text("Add recurring technician hours")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            if snapshot.onCallCapacityMinutes > 0 {
+                Text("\(compactDuration(snapshot.openOnCallMinutes)) on-call open")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            if snapshot.unassignedJobCount > 0 {
+                Text("\(snapshot.unassignedJobCount) unassigned • \(compactDuration(snapshot.unassignedMinutes)) demand")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+            }
+
+            if snapshot.bookedUnconfiguredMinutes > 0 {
+                Text("\(compactDuration(snapshot.bookedUnconfiguredMinutes)) outside plan")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+            } else if snapshot.unconfiguredTechnicianCount > 0 {
+                Text("\(snapshot.unconfiguredTechnicianCount) technician\(snapshot.unconfiguredTechnicianCount == 1 ? "" : "s") unconfigured")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.09), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(capacityAccessibilityLabel(snapshot, for: day))
+        .accessibilityIdentifier("DispatchCapacityWeekday-\(Calendar.current.component(.weekday, from: day))")
+    }
+
+    private func capacityPrimaryText(_ snapshot: DispatchDayCapacitySnapshot) -> String {
+        switch snapshot.status {
+        case .unconfigured:
+            "Hours not configured"
+        case .overbooked:
+            "\(compactDuration(snapshot.overbookedMinutes)) over plan"
+        case .full where snapshot.staffedRegularMinutes == 0:
+            "No regular hours"
+        case .full:
+            "Fully booked"
+        case .tight:
+            "\(compactDuration(snapshot.openRegularMinutes)) open • tight"
+        case .available:
+            "\(compactDuration(snapshot.openRegularMinutes)) open"
+        }
+    }
+
+    private func capacityAccessibilityLabel(_ snapshot: DispatchDayCapacitySnapshot, for day: Date) -> String {
+        var parts = [
+            "\(day.formatted(.dateTime.weekday(.wide))) capacity",
+            capacityAccessibilityPrimaryText(snapshot)
+        ]
+        if snapshot.configuredTechnicianCount > 0 {
+            parts.append("\(spokenDuration(snapshot.staffedRegularMinutes)) staffed")
+            parts.append("\(spokenDuration(snapshot.bookedConfiguredMinutes)) booked")
+        } else {
+            parts.append("Add recurring technician hours")
+        }
+        if snapshot.onCallCapacityMinutes > 0 {
+            parts.append("\(spokenDuration(snapshot.openOnCallMinutes)) of \(spokenDuration(snapshot.onCallCapacityMinutes)) on-call reserve open")
+        }
+        if snapshot.unassignedJobCount > 0 {
+            parts.append("\(snapshot.unassignedJobCount) unassigned job\(snapshot.unassignedJobCount == 1 ? "" : "s"), \(spokenDuration(snapshot.unassignedMinutes)) demand")
+        }
+        if snapshot.bookedUnconfiguredMinutes > 0 {
+            parts.append("\(spokenDuration(snapshot.bookedUnconfiguredMinutes)) booked outside configured hours")
+        } else if snapshot.unconfiguredTechnicianCount > 0 {
+            parts.append("\(snapshot.unconfiguredTechnicianCount) technician\(snapshot.unconfiguredTechnicianCount == 1 ? "" : "s") unconfigured")
+        }
+        return parts.joined(separator: ". ")
+    }
+
+    private func capacityAccessibilityPrimaryText(_ snapshot: DispatchDayCapacitySnapshot) -> String {
+        switch snapshot.status {
+        case .unconfigured:
+            "Hours not configured"
+        case .overbooked:
+            "\(spokenDuration(snapshot.overbookedMinutes)) over plan"
+        case .full where snapshot.staffedRegularMinutes == 0:
+            "No regular hours"
+        case .full:
+            "Fully booked"
+        case .tight:
+            "\(spokenDuration(snapshot.openRegularMinutes)) open, tight"
+        case .available:
+            "\(spokenDuration(snapshot.openRegularMinutes)) open"
+        }
+    }
+
+    private func compactDuration(_ minutes: Int) -> String {
+        let safeMinutes = max(minutes, 0)
+        let hours = safeMinutes / 60
+        let remainder = safeMinutes % 60
+        if hours == 0 { return "\(remainder)m" }
+        if remainder == 0 { return "\(hours)h" }
+        return "\(hours)h \(remainder)m"
+    }
+
+    private func spokenDuration(_ minutes: Int) -> String {
+        let safeMinutes = max(minutes, 0)
+        let hours = safeMinutes / 60
+        let remainder = safeMinutes % 60
+        var parts: [String] = []
+        if hours > 0 {
+            parts.append("\(hours) hour\(hours == 1 ? "" : "s")")
+        }
+        if remainder > 0 || parts.isEmpty {
+            parts.append("\(remainder) minute\(remainder == 1 ? "" : "s")")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private func capacityTint(_ status: DispatchDayCapacityStatus) -> Color {
+        switch status {
+        case .unconfigured: .secondary
+        case .available: .green
+        case .tight, .full: .orange
+        case .overbooked: .red
+        }
+    }
+
+    private func capacitySystemImage(_ status: DispatchDayCapacityStatus) -> String {
+        switch status {
+        case .unconfigured: "questionmark.circle"
+        case .available: "checkmark.circle.fill"
+        case .tight: "exclamationmark.circle.fill"
+        case .full: "calendar.badge.exclamationmark"
+        case .overbooked: "exclamationmark.triangle.fill"
+        }
     }
 
     @ViewBuilder

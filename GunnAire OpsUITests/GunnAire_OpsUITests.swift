@@ -1235,6 +1235,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Today"].exists)
         XCTAssertTrue(app.buttons["Done"].exists)
 
+        let todayWeekday = Calendar.current.component(.weekday, from: Date())
+        let capacity = app.descendants(matching: .any)["DispatchCapacityWeekday-\(todayWeekday)"]
+        XCTAssertTrue(capacity.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(capacity.label.localizedCaseInsensitiveContains("capacity"))
+        XCTAssertFalse(capacity.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
         let seededJob = app.descendants(matching: .any)["DispatchJobCard-A1000000-0000-4000-8000-000000000002"]
         XCTAssertTrue(seededJob.waitForExistence(timeout: 3))
         seededJob.tap()
@@ -3286,6 +3292,34 @@ final class GunnAire_OpsUITests: XCTestCase {
         created.name = "Compact recurring technician hours without account email"
         created.lifetime = .keepAlways
         add(created)
+
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+        let weekBoard = app.buttons["Week Board"]
+        XCTAssertTrue(weekBoard.waitForExistence(timeout: 3))
+        weekBoard.tap()
+        XCTAssertTrue(app.navigationBars["Dispatch Week"].waitForExistence(timeout: 3))
+        let nextWeek = app.buttons["Next week"]
+        XCTAssertTrue(nextWeek.exists)
+        nextWeek.tap()
+        let mondayCapacity = app.descendants(matching: .any)["DispatchCapacityWeekday-2"]
+        XCTAssertTrue(mondayCapacity.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(mondayCapacity.label.localizedCaseInsensitiveContains("9 hours open"))
+        XCTAssertTrue(mondayCapacity.label.localizedCaseInsensitiveContains("9 hours staffed"))
+        XCTAssertTrue(mondayCapacity.label.localizedCaseInsensitiveContains("0 minutes booked"))
+        XCTAssertFalse(mondayCapacity.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        let capacityEvidence = XCTAttachment(screenshot: app.screenshot())
+        capacityEvidence.name = "Weekly dispatch capacity from recurring technician hours"
+        capacityEvidence.lifetime = .keepAlways
+        add(capacityEvidence)
+
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+        XCTAssertTrue(availability.waitForExistence(timeout: 3))
+        availability.tap()
+        XCTAssertTrue(app.navigationBars["Technician Availability"].waitForExistence(timeout: 3))
+        XCTAssertEqual(activeShiftCount.label, "5 active")
 
         shiftRows.firstMatch.swipeLeft()
         let retire = app.buttons["Retire"]
