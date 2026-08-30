@@ -3521,6 +3521,86 @@ struct GunnAire_OpsTests {
         #expect(!CustomerServiceTextPolicy.contextIsValid(draft, for: call))
     }
 
+    @Test func enRouteArrivalEstimatesAreExplicitBoundedAndDoNotClaimLiveTracking() {
+        #expect(EnRouteArrivalEstimate.allCases.map(\.rawValue) == [5, 10, 15, 30, 45, 60])
+
+        let departure = Date(timeIntervalSinceReferenceDate: 100_000)
+        let expectedArrival = EnRouteArrivalEstimate.thirty.expectedArrival(from: departure)
+        #expect(expectedArrival == departure.addingTimeInterval(30 * 60))
+
+        let detail = EnRouteHandoffPolicy.activityDetail(
+            estimate: .thirty,
+            markedAt: departure
+        )
+        #expect(detail.contains("staff-selected approximate arrival estimate of 30 minutes"))
+        #expect(detail.contains("does not use live traffic or GPS tracking"))
+    }
+
+    @Test func enRouteTextDraftIncludesStaffETAAndRevalidatesTheExactDraftContext() throws {
+        let customer = Customer(
+            name: "ETA Text Customer",
+            phone: "+1 (863) 555-0175",
+            address: "44 Private Home Lane",
+            allowsServiceText: true,
+            preferredContactMethod: .text,
+            communicationConsentUpdatedAt: Date(timeIntervalSinceReferenceDate: 99_000)
+        )
+        let call = ServiceCall(
+            eventTitle: "No-cool repair",
+            siteAddress: "55 Private Service Address",
+            type: .repair,
+            scheduledDate: Date(timeIntervalSinceReferenceDate: 101_000),
+            customer: customer,
+            technicianEnRouteAt: Date(timeIntervalSinceReferenceDate: 100_000)
+        )
+
+        let draft = try #require(CustomerServiceTextPolicy.draft(
+            for: call,
+            approximateArrivalMinutes: 30
+        ))
+        #expect(draft.workflow == .technicianEnRoute)
+        #expect(draft.approximateArrivalMinutes == 30)
+        #expect(draft.templateVersion == "technicianEnRoute-text-v2")
+        #expect(draft.body.contains("approximately 30 minutes"))
+        #expect(!draft.body.contains("44 Private Home Lane"))
+        #expect(!draft.body.contains("55 Private Service Address"))
+        #expect(CustomerServiceTextPolicy.contextIsValid(draft, for: call))
+        #expect(CustomerServiceTextPolicy.draft(for: call, approximateArrivalMinutes: 25) == nil)
+
+        call.markTechnicianArrived(at: Date(timeIntervalSinceReferenceDate: 101_500))
+        #expect(!CustomerServiceTextPolicy.contextIsValid(draft, for: call))
+    }
+
+    @Test func enRouteETARequiresTheJobToActuallyBeEnRoute() {
+        let customer = Customer(
+            name: "Scheduled Text Customer",
+            phone: "863-555-0188",
+            allowsServiceText: true
+        )
+        let call = ServiceCall(type: .maintenance, scheduledDate: Date(), customer: customer)
+
+        #expect(EnRouteHandoffPolicy.canMarkEnRoute(call))
+        #expect(CustomerServiceTextPolicy.draft(for: call, approximateArrivalMinutes: 15) == nil)
+
+        call.markTechnicianEnRoute(at: Date(timeIntervalSinceReferenceDate: 120_000))
+        #expect(!EnRouteHandoffPolicy.canMarkEnRoute(call))
+        #expect(CustomerServiceTextPolicy.draft(for: call, approximateArrivalMinutes: 15) != nil)
+    }
+
+    @Test func jobProgressAccessExcludesReadOnlyBusinessRoles() {
+        let field = AppUser(email: "field-progress@gunnaire.com", role: .fieldTechnician)
+        let dispatch = AppUser(email: "dispatch-progress@gunnaire.com", role: .dispatcher)
+        let standard = AppUser(email: "standard-progress@gunnaire.com", role: .standard)
+        let accounting = AppUser(email: "accounting-progress@gunnaire.com", role: .accounting)
+        let users = [field, dispatch, standard, accounting]
+
+        #expect(AppAccess.canUpdateJobProgress(email: field.email, users: users))
+        #expect(AppAccess.canUpdateJobProgress(email: dispatch.email, users: users))
+        #expect(AppAccess.canUpdateJobProgress(email: AppAccess.primaryAdminEmail, users: users))
+        #expect(!AppAccess.canUpdateJobProgress(email: standard.email, users: users))
+        #expect(!AppAccess.canUpdateJobProgress(email: accounting.email, users: users))
+    }
+
     @Test func generatedWorkOrderInheritsDurableEquipmentProfileWithoutReusingFieldEvidence() async throws {
         let customer = Customer(name: "Equipment Continuity Customer")
         let equipmentID = UUID()

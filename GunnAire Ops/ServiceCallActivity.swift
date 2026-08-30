@@ -34,6 +34,7 @@ final class ServiceCallActivity {
         action: String,
         detail: String,
         actorEmail: String? = nil,
+        occurredAt: Date = Date(),
         in modelContext: ModelContext
     ) -> ServiceCallActivity {
         let normalizedActor = actorEmail?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -41,7 +42,8 @@ final class ServiceCallActivity {
             serviceCallID: call.id,
             action: action,
             detail: detail,
-            actorEmail: normalizedActor?.isEmpty == false ? normalizedActor : nil
+            actorEmail: normalizedActor?.isEmpty == false ? normalizedActor : nil,
+            occurredAt: occurredAt
         )
         modelContext.insert(activity)
         return activity
