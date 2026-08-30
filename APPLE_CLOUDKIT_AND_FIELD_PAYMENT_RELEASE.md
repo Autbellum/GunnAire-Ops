@@ -13,7 +13,10 @@ and schema status as of 2026-08-30.
   Domains, iCloud/CloudKit, Push Notifications, and Sign in with Apple enabled.
   Sign in with Apple is primary, and the assigned container is
   `iCloud.com.gunnaire.businesssuite`. In-App Purchase is Apple-managed and
-  enabled automatically.
+  shown enabled and non-editable by the portal. The inspection clicked no Save
+  button, changed no capability or container, and submitted no request. Exact
+  retained evidence is
+  `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/apple-app-id-capabilities-2026083015.json`.
 - Handoff does not have an App ID checkbox. The app declares
   `com.gunnaire.businesssuite.field-payment-handoff` in `NSUserActivityTypes`;
   signed physical Mac/iPad-to-iPhone acceptance remains required. Native
@@ -22,22 +25,34 @@ and schema status as of 2026-08-30.
   capabilities. The route estimate uses only staff-entered service addresses,
   requests no device location, and adds no location usage description. Those
   unrelated portal capabilities remain off deliberately.
-- Exact build `1.0 (2026083014)` is retained as a development-signed iOS
+- The selected App ID's Capability Requests list shows no Tap to Pay on
+  iPhone, Proximity Reader, or payment-acceptance request or assignment.
+  GunnAire's current field-payment workflow hands a verified QBO invoice to
+  QuickBooks Mobile/GoPayment and therefore does not add the native payment
+  acceptance entitlement. A future embedded ProximityReader flow remains
+  gated on a participating certified payment service provider, Account Holder
+  entitlement approval, provider integration, and signed physical-iPhone
+  acceptance.
+- Exact build `1.0 (2026083015)` is retained as a development-signed iOS
   Release archive and universal arm64/x86_64 Mac Catalyst Release app under
   `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30`. Strict
   signature verification confirms Apple login, CloudKit, Push Notifications,
-  and Associated Domains in both products; app/dSYM UUIDs match every slice,
-  and read-only online preflight passes **64 checks, 3 expected warnings, and
-  0 failures**. The expected warnings are development signing on iOS and Mac
-  plus the host-only optional Metal search path. An Apple Distribution private
-  key, separate Mac distribution signing, signed representative device
-  acceptance, and App Store upload remain external release gates.
-- Build `2026083014` changes no SwiftData field or CloudKit schema. Its
-  versioned billing snapshot adds an authorized document-discount envelope
-  inside the existing stored document payload; legacy line arrays continue to
-  decode. Complete iPad and Mac logic suites pass **662/662** each, and the
-  consolidated iPad billing regression passes **5/5**. No CloudKit bootstrap,
-  Development mutation, or Production promotion was required or performed.
+  and Associated Domains in both products. The iOS app/dSYM UUID matches at
+  `172985E6-FE7E-31DD-B506-AD5450DFAD7C`; Mac app/dSYM UUIDs match at
+  `69B8C754-F56C-3C44-924B-E6BA0A0C8C15` and
+  `F66650F2-2A27-39A6-B02D-3CA673604353`. Exact retained-artifact and CloudKit
+  preflight passes **61 checks, 4 expected warnings, and 0 failures**. The
+  read-only online probe passes every unchanged production route but reports
+  **54/4/1** because production remains backend `2026.08.30.15` while source is
+  undeployed `2026.08.30.16`. An Apple Distribution private key, separate Mac
+  distribution signing, signed representative-device acceptance, and App
+  Store upload remain external release gates.
+- Build `2026083015` changes no SwiftData field or CloudKit schema. Its
+  supplier connector v2 state remains inside the existing purchase-order notes
+  envelope. Complete iPad and Mac logic suites pass **662/662** each, backend
+  tests pass **70/70**, and the focused multi-line purchase-order to receipt to
+  vendor-bill handoff passes **1/1**. No CloudKit bootstrap, Development
+  mutation, or Production promotion was required or performed.
 - Production remains schema v15 across 24 record types in retained export
   `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
   `f81de36537620a10fe34fde22883a94dc6f5b00deea6fec08004160c0aae7594`.
