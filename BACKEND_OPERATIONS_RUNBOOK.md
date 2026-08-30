@@ -58,11 +58,14 @@ credential rotation, production restores, or customer communications.
    database tables. The `.12` Apple identity tables, `.13` supplier-attempt
    table/indexes, and `.15` Accounts Payable configuration columns are additive;
    rolling code back does not require deleting them or restoring the database.
-5. Do not push release source directly to `main`. The repository runs the
-   secret-free **Backend regression / Python 3.13** and **Backend regression /
-   Python 3.14** checks on every pull request and every push to `main`; merge
-   commit `3df24b5` proves both jobs succeed with the unfiltered triggers. The
-   main branch should also have an active GitHub ruleset requiring a pull
+5. Do not push release source directly to `main`. The repository's secret-free
+   **Backend regression / Python 3.13** and **Backend regression / Python
+   3.14** checks have unfiltered pull-request and push-to-`main` triggers.
+   Ref-scoped concurrency intentionally cancels an older in-progress run when
+   a newer commit supersedes it, so completed checks prove the exact current
+   ref head rather than every superseded commit. Merge commit `3df24b5` proves
+   both jobs succeed on that exact `main` head. The main branch should also have
+   an active GitHub ruleset requiring a pull
    request, resolved review conversations, an up-to-date branch, and both
    successful GitHub Actions checks, with deletion and force pushes blocked and
    no bypass actor. Repository-owner sudo-mode confirmation is still required
