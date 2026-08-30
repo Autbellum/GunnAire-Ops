@@ -1785,6 +1785,7 @@ struct OnsiteDocumentationView: View {
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
     @Query(sort: \FieldFormTemplate.createdAt, order: .forward) private var fieldFormTemplates: [FieldFormTemplate]
     @Query(sort: \FieldFormResponse.completedAt, order: .reverse) private var fieldFormResponses: [FieldFormResponse]
+    @Query(sort: \ServiceCallActivity.occurredAt, order: .reverse) private var serviceCallActivities: [ServiceCallActivity]
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
     @Query(sort: \InventoryMovement.createdAt, order: .reverse) private var inventoryMovements: [InventoryMovement]
@@ -1792,6 +1793,7 @@ struct OnsiteDocumentationView: View {
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
+    @AppStorage("requireWorkPerformedLogForCloseout") private var requireWorkPerformedLogForCloseout = true
     @State private var selectedServiceCallID: UUID?
     @State private var didLoadPendingRoute = false
     @State private var generatedCustomerDocumentURL: URL?
@@ -1911,7 +1913,9 @@ struct OnsiteDocumentationView: View {
                 projectMilestones: projectMilestones,
                 items: items,
                 movements: inventoryMovements
-            )
+            ),
+            serviceCallActivities: serviceCallActivities,
+            requireWorkPerformedLog: requireWorkPerformedLogForCloseout
         )
     }
 
@@ -2207,6 +2211,8 @@ struct OnsiteDocumentationView: View {
                     items: items,
                     movements: inventoryMovements
                 ),
+                serviceCallActivities: serviceCallActivities,
+                requireWorkPerformedLog: requireWorkPerformedLogForCloseout,
                 includeFinancials: canIncludeFinancialsInOnsiteReports
             )
             generatedCustomerDocumentURL = url

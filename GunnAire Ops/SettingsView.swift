@@ -53,6 +53,7 @@ struct SettingsView: View {
     @AppStorage("allowSplashTapToSkip") private var allowSplashTapToSkip = true
     @AppStorage("requireTechnicianClockIn") private var requireTechnicianClockIn = true
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
+    @AppStorage("requireWorkPerformedLogForCloseout") private var requireWorkPerformedLogForCloseout = true
     @AppStorage("requireCustomerSignature") private var requireCustomerSignature = true
     @AppStorage("enableCustomerNotifications") private var enableCustomerNotifications = true
     @AppStorage("enableDispatchBoard") private var enableDispatchBoard = true
@@ -170,7 +171,10 @@ struct SettingsView: View {
                                 isComplete: cloudKitReadiness.isReady && !cloudKitEventMonitor.state.needsAttention
                             )
                             readinessRow(title: "Pricebook enabled", isComplete: enablePricebook)
-                            readinessRow(title: "Technician workflow configured", isComplete: requireTechnicianClockIn && requireJobCompletionChecklist)
+                            readinessRow(
+                                title: "Technician workflow configured",
+                                isComplete: requireTechnicianClockIn && requireJobCompletionChecklist && requireWorkPerformedLogForCloseout
+                            )
                             readinessRow(title: "Payments configured", isComplete: onsitePaymentConfigurationReady)
                         }
 
@@ -313,6 +317,7 @@ struct SettingsView: View {
                                     .foregroundColor(.secondary)
                             }
                             settingsToggle("Require Completion Checklist", systemImage: "checklist", isOn: $requireJobCompletionChecklist)
+                            settingsToggle("Require Work-Performed Log", systemImage: "text.badge.checkmark", isOn: $requireWorkPerformedLogForCloseout)
                             settingsToggle("Require Customer Signature", systemImage: "signature", isOn: $requireCustomerSignature)
                             featureStatus("Customer Appointment Notifications", systemImage: "bell", detail: "Requires a connected messaging provider")
                             featureStatus("Offline Field Mode", systemImage: "wifi.slash", detail: OperationalDataContinuity.offlineRecoveryDetail)

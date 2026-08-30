@@ -91,6 +91,165 @@ struct GunnAire_OpsTests {
         #expect(components.queryItems?.first(where: { $0.name == "daddr" })?.value == "100 Comfort Way, Winston-Salem, NC")
     }
 
+    @Test func workPerformedLogValidationNormalizesFieldTextAndRejectsUnsafeContent() throws {
+        let normalized = try ServiceWorkLogPolicy.validatedContent(
+            "  Replaced failed capacitor.  \r\n Verified cooling operation.  "
+        )
+        #expect(normalized == "Replaced failed capacitor.\nVerified cooling operation.")
+
+        #expect(throws: ServiceWorkLogError.missingContent) {
+            try ServiceWorkLogPolicy.validatedContent(" \n ")
+        }
+        #expect(throws: ServiceWorkLogError.contentTooShort) {
+            try ServiceWorkLogPolicy.validatedContent("Checked")
+        }
+        #expect(throws: ServiceWorkLogError.contentTooLong) {
+            try ServiceWorkLogPolicy.validatedContent(String(repeating: "A", count: 4_001))
+        }
+        #expect(throws: ServiceWorkLogError.unsupportedControlCharacter) {
+            try ServiceWorkLogPolicy.validatedContent("Replaced failed part\u{0000} and tested operation.")
+        }
+    }
+
+    @Test func workPerformedLogsRemainChronologicalAndBuildOneReviewedDraft() throws {
+        let serviceCallID = UUID()
+        let first = ServiceCallActivity(
+            id: UUID(uuidString: "10000000-0000-4000-8000-000000000001")!,
+            serviceCallID: serviceCallID,
+            action: ServiceWorkLogActivityKind.workPerformed.rawValue,
+            detail: "Recovered refrigerant and removed the failed outdoor unit.",
+            actorEmail: "first.tech@gunnaire.com",
+            occurredAt: Date(timeIntervalSince1970: 100)
+        )
+        let duplicate = ServiceCallActivity(
+            id: UUID(uuidString: "10000000-0000-4000-8000-000000000002")!,
+            serviceCallID: serviceCallID,
+            action: ServiceWorkLogActivityKind.workPerformed.rawValue,
+            detail: "recovered refrigerant and removed the failed outdoor unit.",
+            actorEmail: "second.tech@gunnaire.com",
+            occurredAt: Date(timeIntervalSince1970: 200)
+        )
+        let last = ServiceCallActivity(
+            id: UUID(uuidString: "10000000-0000-4000-8000-000000000003")!,
+            serviceCallID: serviceCallID,
+            action: ServiceWorkLogActivityKind.workPerformed.rawValue,
+            detail: "Installed the replacement heat pump and verified startup readings.",
+            actorEmail: "lead.tech@gunnaire.com",
+            occurredAt: Date(timeIntervalSince1970: 300)
+        )
+
+        let entries = ServiceWorkLogPolicy.workPerformedEntries(
+            for: serviceCallID,
+            in: [last, first, duplicate]
+        )
+        #expect(entries.map(\.id) == [last.id, duplicate.id, first.id])
+        #expect(
+            ServiceWorkLogPolicy.suggestedCustomerSummary(from: entries) ==
+            "Recovered refrigerant and removed the failed outdoor unit.\n\nInstalled the replacement heat pump and verified startup readings."
+        )
+    }
+
+    @Test func workPerformedAndCustomerSummarySaveAsAppendOnlyCloudKitBackedActivity() throws {
+        let container = try ModelContainer(
+            for: GunnAireModelSchema.schema,
+            configurations: [ModelConfiguration(schema: GunnAireModelSchema.schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(name: "Work Log Customer")
+        let call = ServiceCall(type: .service, scheduledDate: Date(), customer: customer)
+        context.insert(customer)
+        context.insert(call)
+
+        let workEntry = try ServiceWorkLogPolicy.recordWorkPerformed(
+            "Diagnosed a failed dual run capacitor and confirmed the motor windings were within range.",
+            for: call,
+            actorEmail: "technician@gunnaire.com",
+            occurredAt: Date(timeIntervalSince1970: 100),
+            in: context
+        )
+        let summaryRevision = try ServiceWorkLogPolicy.recordCustomerSummary(
+            "Replaced the failed capacitor and verified normal cooling operation.",
+            for: call,
+            actorEmail: "dispatcher@gunnaire.com",
+            occurredAt: Date(timeIntervalSince1970: 200),
+            in: context
+        )
+        try context.save()
+
+        let activities = try context.fetch(FetchDescriptor<ServiceCallActivity>())
+        #expect(activities.count == 2)
+        #expect(workEntry.action == ServiceWorkLogActivityKind.workPerformed.rawValue)
+        #expect(summaryRevision.action == ServiceWorkLogActivityKind.customerSummaryRevision.rawValue)
+        #expect(call.serviceReportSummary == "Replaced the failed capacitor and verified normal cooling operation.")
+        #expect(ServiceWorkLogPolicy.latestCustomerSummary(for: call, in: activities) == call.serviceReportSummary)
+    }
+
+    @Test func technicalJobCloseoutCanRequireAnAppendOnlyWorkPerformedEntry() {
+        let customer = Customer(name: "Closeout Customer")
+        let service = ServiceCall(type: .service, scheduledDate: Date(), customer: customer)
+        let meeting = ServiceCall(type: .meeting, scheduledDate: Date(), customer: customer)
+
+        #expect(
+            ServiceWorkLogPolicy.closeoutMissingItem(
+                for: service,
+                activities: [],
+                isRequired: true
+            ) == "Work performed log"
+        )
+        #expect(ServiceWorkLogPolicy.closeoutMissingItem(for: service, activities: [], isRequired: false) == nil)
+        #expect(ServiceWorkLogPolicy.closeoutMissingItem(for: meeting, activities: [], isRequired: true) == nil)
+
+        let operationalBlockers = ServiceWorkLogPolicy.operationalCompletionBlockers(
+            for: service,
+            requireCompletionChecklist: true,
+            fieldFormTemplates: [],
+            fieldFormResponses: [],
+            activities: [],
+            requireWorkPerformedLog: true
+        )
+        #expect(operationalBlockers.contains("Completion checklist"))
+        #expect(operationalBlockers.contains("Work performed log"))
+        #expect(operationalBlockers.contains("Technical report"))
+
+        let entry = ServiceCallActivity(
+            serviceCallID: service.id,
+            action: ServiceWorkLogActivityKind.workPerformed.rawValue,
+            detail: "Completed diagnostic and verified operating conditions."
+        )
+        #expect(ServiceWorkLogPolicy.closeoutMissingItem(for: service, activities: [entry], isRequired: true) == nil)
+
+        let blockedReadiness = service.closeoutReadiness(
+            invoice: nil,
+            payments: [],
+            attachments: [],
+            serviceCallActivities: [],
+            requireWorkPerformedLog: true
+        )
+        #expect(blockedReadiness.requiredItems.contains("Work performed log"))
+        #expect(blockedReadiness.missingItems.contains("Work performed log"))
+        let workLogOnlyReadiness = JobCloseoutReadiness(
+            requiredItems: ["Work performed log"],
+            missingItems: ["Work performed log"]
+        )
+        #expect(workLogOnlyReadiness.nextAction?.label == "Add work-performed entry")
+        #expect(workLogOnlyReadiness.nextAction?.destination == .work)
+
+        let loggedReadiness = service.closeoutReadiness(
+            invoice: nil,
+            payments: [],
+            attachments: [],
+            serviceCallActivities: [entry],
+            requireWorkPerformedLog: true
+        )
+        #expect(loggedReadiness.requiredItems.contains("Work performed log"))
+        #expect(!loggedReadiness.missingItems.contains("Work performed log"))
+    }
+
+    @Test func workLogActorDisplayNameNeverExposesTheBusinessEmailAddress() {
+        #expect(ServiceWorkLogPolicy.actorDisplayName("jordan.lee@gunnaire.com") == "Jordan Lee")
+        #expect(ServiceWorkLogPolicy.actorDisplayName(" ") == nil)
+    }
+
     @Test func technicianRouteSelectsTheEarliestOpenNavigableStopToday() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))

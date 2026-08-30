@@ -86,6 +86,8 @@ enum CustomerDocumentExporter {
         fieldFormResponses: [FieldFormResponse] = [],
         timeEntries: [TimeEntry] = [],
         materialReadiness: JobMaterialCloseoutSummary = .notApplicable,
+        serviceCallActivities: [ServiceCallActivity] = [],
+        requireWorkPerformedLog: Bool = false,
         includeFinancials: Bool = true
     ) throws -> URL {
         let scopedAttachments = onsiteReportAttachments(
@@ -112,6 +114,8 @@ enum CustomerDocumentExporter {
             fieldFormResponses: fieldFormResponses,
             timeEntries: timeEntries,
             materialReadiness: materialReadiness,
+            serviceCallActivities: serviceCallActivities,
+            requireWorkPerformedLog: requireWorkPerformedLog,
             includeFinancials: includeFinancials
         )
         return try renderPDF(
@@ -353,6 +357,8 @@ enum CustomerDocumentExporter {
         fieldFormResponses: [FieldFormResponse],
         timeEntries: [TimeEntry],
         materialReadiness: JobMaterialCloseoutSummary,
+        serviceCallActivities: [ServiceCallActivity],
+        requireWorkPerformedLog: Bool,
         includeFinancials: Bool = true
     ) -> [DocumentSection] {
         var sections: [DocumentSection] = [
@@ -370,7 +376,9 @@ enum CustomerDocumentExporter {
                 fieldFormTemplates: fieldFormTemplates,
                 fieldFormResponses: fieldFormResponses,
                 timeEntries: timeEntries,
-                materialReadiness: materialReadiness
+                materialReadiness: materialReadiness,
+                serviceCallActivities: serviceCallActivities,
+                requireWorkPerformedLog: requireWorkPerformedLog
             ),
             DocumentSection(
                 title: "Equipment",
@@ -661,7 +669,9 @@ enum CustomerDocumentExporter {
         fieldFormTemplates: [FieldFormTemplate] = [],
         fieldFormResponses: [FieldFormResponse] = [],
         timeEntries: [TimeEntry] = [],
-        materialReadiness: JobMaterialCloseoutSummary = .notApplicable
+        materialReadiness: JobMaterialCloseoutSummary = .notApplicable,
+        serviceCallActivities: [ServiceCallActivity] = [],
+        requireWorkPerformedLog: Bool = false
     ) -> [(label: String, value: String)] {
         let readiness = serviceCall.closeoutReadiness(
             invoice: invoice,
@@ -670,7 +680,9 @@ enum CustomerDocumentExporter {
             fieldFormTemplates: fieldFormTemplates,
             fieldFormResponses: fieldFormResponses,
             timeEntries: timeEntries,
-            materialReadiness: materialReadiness
+            materialReadiness: materialReadiness,
+            serviceCallActivities: serviceCallActivities,
+            requireWorkPerformedLog: requireWorkPerformedLog
         )
         var rows: [(label: String, value: String)] = [
             ("Status", readiness.statusLabel),
@@ -690,7 +702,9 @@ enum CustomerDocumentExporter {
         fieldFormTemplates: [FieldFormTemplate],
         fieldFormResponses: [FieldFormResponse],
         timeEntries: [TimeEntry],
-        materialReadiness: JobMaterialCloseoutSummary
+        materialReadiness: JobMaterialCloseoutSummary,
+        serviceCallActivities: [ServiceCallActivity],
+        requireWorkPerformedLog: Bool
     ) -> DocumentSection {
         DocumentSection(
             title: "Closeout Readiness",
@@ -702,7 +716,9 @@ enum CustomerDocumentExporter {
                 fieldFormTemplates: fieldFormTemplates,
                 fieldFormResponses: fieldFormResponses,
                 timeEntries: timeEntries,
-                materialReadiness: materialReadiness
+                materialReadiness: materialReadiness,
+                serviceCallActivities: serviceCallActivities,
+                requireWorkPerformedLog: requireWorkPerformedLog
             ).map { row($0.label, $0.value) }
         )
     }

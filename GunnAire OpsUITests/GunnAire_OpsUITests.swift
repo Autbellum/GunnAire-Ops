@@ -2789,6 +2789,105 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdministratorRecordsAppendOnlyWorkAndReviewsTheCustomerSummary() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-appStoreScreenshotFixtures"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let job = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        for _ in 0..<8 where !job.exists || !job.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(job.waitForExistence(timeout: 3))
+        XCTAssertTrue(job.isHittable)
+        job.tap()
+
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+        let workspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Work"].tap()
+
+        let addWorkLog = app.buttons["AddWorkPerformedLog"]
+        for _ in 0..<10 where !addWorkLog.exists || !addWorkLog.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(addWorkLog.waitForExistence(timeout: 3))
+        XCTAssertTrue(addWorkLog.isHittable)
+
+        let firstEntry = "Diagnosed a low-voltage short and isolated the failed contactor circuit."
+        addWorkLog.tap()
+        XCTAssertTrue(app.navigationBars["Add Work Log"].waitForExistence(timeout: 3))
+        let firstEditor = app.textViews["WorkPerformedLogContent"]
+        XCTAssertTrue(firstEditor.waitForExistence(timeout: 3))
+        firstEditor.tap()
+        firstEditor.typeText(firstEntry)
+        let firstSave = app.buttons["SaveWorkPerformedLog"]
+        XCTAssertTrue(firstSave.isEnabled)
+        firstSave.tap()
+
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[firstEntry].waitForExistence(timeout: 3))
+
+        let secondEntry = "Replaced the failed contactor, verified amp draw, and confirmed normal cooling operation."
+        XCTAssertTrue(addWorkLog.isHittable)
+        addWorkLog.tap()
+        XCTAssertTrue(app.navigationBars["Add Work Log"].waitForExistence(timeout: 3))
+        let secondEditor = app.textViews["WorkPerformedLogContent"]
+        XCTAssertTrue(secondEditor.waitForExistence(timeout: 3))
+        secondEditor.tap()
+        secondEditor.typeText(secondEntry)
+        let secondSave = app.buttons["SaveWorkPerformedLog"]
+        XCTAssertTrue(secondSave.isEnabled)
+        secondSave.tap()
+
+        XCTAssertTrue(app.staticTexts[firstEntry].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts[secondEntry].waitForExistence(timeout: 3))
+
+        let reviewSummary = app.buttons["ReviewCustomerWorkSummary"]
+        XCTAssertTrue(reviewSummary.waitForExistence(timeout: 3))
+        XCTAssertTrue(reviewSummary.isEnabled)
+        reviewSummary.tap()
+
+        XCTAssertTrue(app.navigationBars["Create Work Summary"].waitForExistence(timeout: 3))
+        let summaryEditor = app.textViews["CustomerWorkSummaryContent"]
+        XCTAssertTrue(summaryEditor.waitForExistence(timeout: 3))
+        let suggestedSummary = summaryEditor.value as? String ?? ""
+        XCTAssertTrue(suggestedSummary.contains(firstEntry))
+        XCTAssertTrue(suggestedSummary.contains(secondEntry))
+        XCTAssertTrue(app.buttons["UseWorkLogsForSummary"].isEnabled)
+        app.buttons["UseWorkLogsForSummary"].tap()
+
+        let saveSummary = app.buttons["SaveCustomerWorkSummary"]
+        XCTAssertTrue(saveSummary.isEnabled)
+        saveSummary.tap()
+
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["CurrentCustomerWorkSummary"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["1 retained summary revision"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["SidebarAccountIdentity"].exists)
+        XCTAssertFalse(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
+        ).firstMatch.exists)
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Append-only work log and reviewed customer summary without account email"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
     func testCorrectiveVisitLinksOriginalAndFollowUpJobs() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
