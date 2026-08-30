@@ -1235,7 +1235,8 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-enableSplashVideo", "NO",
             "-disableCloudKitForTesting",
             "-uiTestAuthenticatedAdmin",
-            "-uiTestSeedCollectibleJob"
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedTechnicianRoute"
         ]
         app.launch()
 
@@ -1278,12 +1279,41 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(dayJob.label.localizedCaseInsensitiveContains("Collectible HVAC service"), dayJob.label)
         XCTAssertTrue(dayJob.label.localizedCaseInsensitiveContains("outside configured hours"), dayJob.label)
         XCTAssertFalse(dayJob.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        let routeDisclosure = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] 'Travel between appointments'")
+        ).firstMatch
+        XCTAssertTrue(routeDisclosure.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(routeDisclosure.label.localizedCaseInsensitiveContains("travel between appointments"), routeDisclosure.label)
+        XCTAssertTrue(routeDisclosure.label.localizedCaseInsensitiveContains("1 scheduled leg"), routeDisclosure.label)
+        routeDisclosure.tap()
+
+        let routeLegID = "A1000000-0000-4000-8000-000000000002-A1000000-0000-4000-8000-000000000048"
+        let routeTitle = app.staticTexts["Collectible HVAC service → Follow-up airflow repair"]
+        XCTAssertTrue(routeTitle.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["1h scheduled gap"].exists)
+        XCTAssertFalse(routeTitle.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+        XCTAssertTrue(app.buttons["DispatchTechnicianRouteEstimate-\(routeLegID)"].exists)
+        XCTAssertTrue(app.buttons["DispatchTechnicianRouteOpenMaps-\(routeLegID)"].exists)
+        let routeFooter = app.staticTexts.matching(
+            NSPredicate(
+                format: "label == %@",
+                "Optional Apple Maps estimates require a connection and account for expected traffic. They are informational only and never change appointments, capacity, or promised arrival windows."
+            )
+        ).firstMatch
+        XCTAssertTrue(routeFooter.exists)
+
         let dayEvidence = XCTAttachment(screenshot: app.screenshot())
-        dayEvidence.name = "Technician day appointments and private-note-safe availability"
+        dayEvidence.name = "Technician day appointments, compact route awareness, and private-note-safe availability"
         dayEvidence.lifetime = .keepAlways
         add(dayEvidence)
 
-        dayJob.tap()
+        routeDisclosure.tap()
+        technicianDay.swipeDown()
+        let editableDayJob = app.descendants(matching: .any)["DispatchTechnicianDayJob-A1000000-0000-4000-8000-000000000002"]
+        XCTAssertTrue(editableDayJob.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(editableDayJob.isHittable, app.debugDescription)
+        editableDayJob.tap()
         XCTAssertTrue(app.navigationBars["Edit Service Call"].waitForExistence(timeout: 3))
         app.buttons["Cancel"].tap()
         XCTAssertTrue(app.navigationBars["Technician Day"].waitForExistence(timeout: 3))

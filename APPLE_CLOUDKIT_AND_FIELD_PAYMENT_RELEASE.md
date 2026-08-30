@@ -17,9 +17,11 @@ and schema status as of 2026-08-30.
 - Handoff does not have an App ID checkbox. The app declares
   `com.gunnaire.businesssuite.field-payment-handoff` in `NSUserActivityTypes`;
   signed physical Mac/iPad-to-iPhone acceptance remains required. Native
-  MapKit/Apple Maps URLs and the system Mail and Messages composers do not need
-  the portal's Maps or Messages Collaboration capabilities. Those unrelated
-  capabilities remain off deliberately.
+  MapKit geocoding/directions, Apple Maps URLs, and the system Mail and Messages
+  composers do not need the portal's Maps or Messages Collaboration
+  capabilities. The route estimate uses only staff-entered service addresses,
+  requests no device location, and adds no location usage description. Those
+  unrelated portal capabilities remain off deliberately.
 - Production remains schema v15 across 24 record types in retained export
   `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
   `f81de36537620a10fe34fde22883a94dc6f5b00deea6fec08004160c0aae7594`.

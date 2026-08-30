@@ -161,6 +161,7 @@ private enum GunnAireUITestFixtures {
     private static let timeOffRequestID = UUID(uuidString: "A1000000-0000-4000-8000-000000000045")!
     private static let timeOffOperationID = UUID(uuidString: "A1000000-0000-4000-8000-000000000046")!
     private static let timeOffTechnicianID = UUID(uuidString: "A1000000-0000-4000-8000-000000000047")!
+    private static let routeServiceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000048")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -199,6 +200,7 @@ private enum GunnAireUITestFixtures {
         let isOperationalAlertFixture = arguments.contains("-uiTestSeedOperationalAlert")
         let isBusinessTaskFixture = arguments.contains("-uiTestSeedBusinessTask")
         let isTimeOffRequestFixture = arguments.contains("-uiTestSeedTimeOffRequest")
+        let isTechnicianRouteFixture = arguments.contains("-uiTestSeedTechnicianRoute")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
         for user in appUsers where
@@ -251,6 +253,7 @@ private enum GunnAireUITestFixtures {
             call.id == projectServiceCallID ||
             call.id == unassignedScheduleServiceCallID ||
             call.id == equipmentDecisionHistoryCallID ||
+            call.id == routeServiceCallID ||
             call.linkedEstimateID == estimateID ? call.id : nil
         })
         for call in calls where fixtureCallIDs.contains(call.id) {
@@ -436,7 +439,8 @@ private enum GunnAireUITestFixtures {
             isWarrantyClaimFixture ||
             isFieldExpenseFixture ||
             isOperationalAlertFixture ||
-            isTimeOffRequestFixture else { return }
+            isTimeOffRequestFixture ||
+            isTechnicianRouteFixture else { return }
 
         let customer = Customer(
             id: customerID,
@@ -770,6 +774,20 @@ private enum GunnAireUITestFixtures {
         context.insert(equipment)
         context.insert(serviceLocation)
         context.insert(call)
+        if isTechnicianRouteFixture {
+            context.insert(ServiceCall(
+                id: routeServiceCallID,
+                googleEventManagedByApp: true,
+                eventTitle: "Follow-up airflow repair",
+                siteAddress: "200 Route Test Road, Clemmons, NC",
+                type: .repair,
+                scheduledDate: scheduledDate.addingTimeInterval(2 * 60 * 60),
+                duration: 90 * 60,
+                assignedTechnician: technician,
+                customer: customer,
+                status: .scheduled
+            ))
+        }
         if isOperationalAlertFixture {
             context.insert(CustomerOperationalAlert(
                 id: operationalAlertID,

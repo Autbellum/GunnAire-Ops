@@ -3526,6 +3526,13 @@ private struct DispatchTechnicianCapacityDetailView: View {
     }
 }
 
+private enum DispatchRouteEstimateState: Equatable {
+    case idle
+    case loading
+    case estimate(AppleMapsTravelEstimate)
+    case failed
+}
+
 private struct DispatchTechnicianDayScheduleView: View {
     let day: Date
     let capacitySnapshot: DispatchTechnicianCapacitySnapshot
@@ -3533,9 +3540,19 @@ private struct DispatchTechnicianDayScheduleView: View {
     let serviceCalls: [ServiceCall]
 
     @State private var editingCall: ServiceCall?
+    @State private var routeDisclosureExpanded = false
+    @State private var routeEstimateStates: [String: DispatchRouteEstimateState] = [:]
+    @State private var activeRouteLegID: String?
+    @State private var activeRouteEstimator: AppleMapsTravelEstimator?
 
     private var availabilityEntries: [DispatchTechnicianDayScheduleEntry] {
         scheduleSnapshot.entries.filter { $0.kind != .appointment }
+    }
+
+    private var routeLegs: [TechnicianRouteLegSnapshot] {
+        TechnicianRoutePolicy.appointmentTravelLegs(
+            from: scheduleSnapshot.appointments.compactMap(serviceCall(for:))
+        )
     }
 
     var body: some View {
@@ -3565,6 +3582,35 @@ private struct DispatchTechnicianDayScheduleView: View {
                 }
             }
 
+            if !routeLegs.isEmpty {
+                Section {
+                    DisclosureGroup(isExpanded: $routeDisclosureExpanded) {
+                        ForEach(routeLegs) { leg in
+                            routeLegRow(leg)
+                            if leg.id != routeLegs.last?.id {
+                                Divider()
+                            }
+                        }
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Travel between appointments")
+                                    .font(.headline)
+                                Text("\(routeLegs.count) scheduled \(routeLegs.count == 1 ? "leg" : "legs")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "car")
+                                .foregroundStyle(Color.brandGold)
+                        }
+                        .accessibilityHint("Expands optional Apple Maps estimates between adjacent appointments.")
+                    }
+                } footer: {
+                    Text("Optional Apple Maps estimates require a connection and account for expected traffic. They are informational only and never change appointments, capacity, or promised arrival windows.")
+                }
+            }
+
             Section {
                 if availabilityEntries.isEmpty {
                     Label("No hours or unavailable periods", systemImage: "calendar.badge.exclamationmark")
@@ -3577,7 +3623,7 @@ private struct DispatchTechnicianDayScheduleView: View {
             } header: {
                 Text("Hours & availability")
             } footer: {
-                Text("Read-only from synchronized schedule records already on this device. Private availability notes are hidden. Travel time and ETA are not estimated.")
+                Text("Read-only from synchronized schedule records already on this device. Private availability notes are hidden, and the schedule remains available without a route estimate.")
             }
         }
         .listStyle(.insetGrouped)
@@ -3587,7 +3633,211 @@ private struct DispatchTechnicianDayScheduleView: View {
             EditServiceCallView(call: call)
                 .tint(Color.brandGold)
         }
+        .onChange(of: routeDisclosureExpanded) { _, isExpanded in
+            if !isExpanded {
+                cancelActiveRouteEstimate()
+            }
+        }
+        .onDisappear {
+            cancelActiveRouteEstimate()
+        }
         .accessibilityIdentifier("DispatchTechnicianDaySchedule")
+    }
+
+    private func routeLegRow(_ leg: TechnicianRouteLegSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(leg.originTitle) → \(leg.destinationTitle)")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+                Text(scheduledGapDescription(leg.scheduledGapMinutes))
+                    .font(.caption)
+                    .foregroundStyle(leg.scheduledGapMinutes < 0 ? .orange : .secondary)
+            }
+
+            routeEstimateContent(for: leg)
+        }
+        .padding(.vertical, 6)
+    }
+
+    @ViewBuilder
+    private func routeEstimateContent(for leg: TechnicianRouteLegSnapshot) -> some View {
+        switch leg.readiness {
+        case .sameAddress:
+            Label("Same service address", systemImage: "mappin.and.ellipse")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .missingOriginAddress:
+            missingRouteAddressLabel("Add the first appointment's service address to estimate this drive.")
+        case .missingDestinationAddress:
+            missingRouteAddressLabel("Add the next appointment's service address to estimate this drive.")
+        case .missingBothAddresses:
+            missingRouteAddressLabel("Add both service addresses to estimate this drive.")
+        case .ready:
+            switch routeEstimateStates[leg.id] ?? .idle {
+            case .idle:
+                routeActions(for: leg, estimateButtonTitle: "Estimate drive")
+            case .loading:
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Estimating with Apple Maps…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Button("Cancel") {
+                        cancelActiveRouteEstimate()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("DispatchTechnicianRouteCancel-\(leg.id)")
+                }
+            case let .estimate(estimate):
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(
+                        "\(travelDurationDescription(estimate.expectedTravelTime)) • \(distanceDescription(estimate.distanceMeters))",
+                        systemImage: "car.fill"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    Text(routeFitDescription(estimate: estimate, scheduledGapMinutes: leg.scheduledGapMinutes))
+                        .font(.caption)
+                        .foregroundStyle(routeFitTint(estimate: estimate, scheduledGapMinutes: leg.scheduledGapMinutes))
+                    routeActions(for: leg, estimateButtonTitle: "Refresh")
+                }
+            case .failed:
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Estimate unavailable. Schedule remains available offline.", systemImage: "wifi.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    routeActions(for: leg, estimateButtonTitle: "Retry")
+                }
+            }
+        }
+    }
+
+    private func missingRouteAddressLabel(_ message: String) -> some View {
+        Label(message, systemImage: "mappin.slash")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    private func routeActions(
+        for leg: TechnicianRouteLegSnapshot,
+        estimateButtonTitle: String
+    ) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                requestRouteEstimate(for: leg)
+            } label: {
+                Label(estimateButtonTitle, systemImage: "clock.arrow.circlepath")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .tint(Color.brandGold)
+            .accessibilityIdentifier("DispatchTechnicianRouteEstimate-\(leg.id)")
+            .accessibilityHint("Requests one traffic-aware estimate from Apple Maps. This does not change the schedule.")
+
+            if let routeURL = AppleMapsDirections.routeURL(
+                sourceAddress: leg.originAddress,
+                destinationAddress: leg.destinationAddress
+            ) {
+                Link(destination: routeURL) {
+                    Label("Open in Maps", systemImage: "map")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("DispatchTechnicianRouteOpenMaps-\(leg.id)")
+                .accessibilityHint("Opens driving directions between these two service addresses.")
+            }
+        }
+    }
+
+    private func requestRouteEstimate(for leg: TechnicianRouteLegSnapshot) {
+        guard leg.readiness == .ready,
+              let originAddress = leg.originAddress,
+              let destinationAddress = leg.destinationAddress else { return }
+
+        if let activeRouteLegID, activeRouteLegID != leg.id {
+            routeEstimateStates[activeRouteLegID] = .idle
+        }
+        activeRouteEstimator?.cancel()
+
+        let estimator = AppleMapsTravelEstimator()
+        activeRouteEstimator = estimator
+        activeRouteLegID = leg.id
+        routeEstimateStates[leg.id] = .loading
+
+        estimator.estimate(
+            originAddress: originAddress,
+            destinationAddress: destinationAddress,
+            plannedDepartureDate: leg.plannedDepartureDate
+        ) { result in
+            guard activeRouteLegID == leg.id, activeRouteEstimator === estimator else { return }
+            switch result {
+            case let .success(estimate):
+                routeEstimateStates[leg.id] = .estimate(estimate)
+            case .failure:
+                routeEstimateStates[leg.id] = .failed
+            }
+            activeRouteLegID = nil
+            activeRouteEstimator = nil
+        }
+    }
+
+    private func cancelActiveRouteEstimate() {
+        activeRouteEstimator?.cancel()
+        if let activeRouteLegID {
+            routeEstimateStates[activeRouteLegID] = .idle
+        }
+        activeRouteLegID = nil
+        activeRouteEstimator = nil
+    }
+
+    private func scheduledGapDescription(_ minutes: Int) -> String {
+        switch minutes {
+        case let value where value > 0:
+            return "\(compactDuration(value)) scheduled gap"
+        case 0:
+            return "No scheduled gap"
+        default:
+            return "\(compactDuration(abs(minutes))) appointment overlap"
+        }
+    }
+
+    private func travelDurationDescription(_ duration: TimeInterval) -> String {
+        let minutes = max(Int(ceil(duration / 60)), 1)
+        return minutes == 1 ? "1 min" : "\(minutes) min"
+    }
+
+    private func distanceDescription(_ distanceMeters: Double) -> String {
+        let miles = max(distanceMeters, 0) / 1_609.344
+        if miles < 10 {
+            return String(format: "%.1f mi", miles)
+        }
+        return String(format: "%.0f mi", miles)
+    }
+
+    private func routeFitDescription(
+        estimate: AppleMapsTravelEstimate,
+        scheduledGapMinutes: Int
+    ) -> String {
+        let travelMinutes = max(Int(ceil(estimate.expectedTravelTime / 60)), 1)
+        guard scheduledGapMinutes > 0 else {
+            return "No drive time is reserved between these appointments."
+        }
+        let difference = scheduledGapMinutes - travelMinutes
+        if difference < 0 {
+            return "Estimate exceeds the scheduled gap by \(compactDuration(abs(difference)))."
+        }
+        return "\(compactDuration(difference)) remains in the scheduled gap."
+    }
+
+    private func routeFitTint(
+        estimate: AppleMapsTravelEstimate,
+        scheduledGapMinutes: Int
+    ) -> Color {
+        let travelMinutes = max(Int(ceil(estimate.expectedTravelTime / 60)), 1)
+        return scheduledGapMinutes >= travelMinutes ? .secondary : .orange
     }
 
     private var capacitySummary: some View {

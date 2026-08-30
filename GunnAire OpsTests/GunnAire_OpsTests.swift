@@ -91,6 +91,125 @@ struct GunnAire_OpsTests {
         #expect(components.queryItems?.first(where: { $0.name == "daddr" })?.value == "100 Comfort Way, Winston-Salem, NC")
     }
 
+    @Test func appleMapsRouteHandoffUsesTheExactTwoScheduledStops() throws {
+        let url = try #require(
+            AppleMapsDirections.routeURL(
+                sourceAddress: "  100 First Stop Way, Winston-Salem, NC  ",
+                destinationAddress: "200 Next Stop Road, Clemmons, NC"
+            )
+        )
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        let query = Dictionary(
+            uniqueKeysWithValues: (components.queryItems ?? []).compactMap { item in
+                item.value.map { (item.name, $0) }
+            }
+        )
+
+        #expect(components.scheme == "https")
+        #expect(components.host == "maps.apple.com")
+        #expect(query["saddr"] == "100 First Stop Way, Winston-Salem, NC")
+        #expect(query["daddr"] == "200 Next Stop Road, Clemmons, NC")
+        #expect(query["dirflg"] == "d")
+        #expect(AppleMapsDirections.routeURL(sourceAddress: nil, destinationAddress: "200 Next Stop Road") == nil)
+        #expect(AppleMapsDirections.routeURL(sourceAddress: "100 First Stop Way", destinationAddress: " \n ") == nil)
+    }
+
+    @Test func technicianTravelLegsPreserveExactAppointmentAdjacencyAndScheduleGaps() throws {
+        let firstID = UUID(uuidString: "B1000000-0000-4000-8000-000000000001")!
+        let secondID = UUID(uuidString: "B1000000-0000-4000-8000-000000000002")!
+        let thirdID = UUID(uuidString: "B1000000-0000-4000-8000-000000000003")!
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let firstCustomer = Customer(name: "First Customer", address: "Customer address is not the job site")
+        let secondCustomer = Customer(name: "Second Customer", address: "Second legacy address")
+        let thirdCustomer = Customer(name: "Third Customer")
+        let first = ServiceCall(
+            id: firstID,
+            eventTitle: "First diagnostic",
+            siteAddress: " 100 First Stop Way ",
+            type: .service,
+            scheduledDate: start,
+            duration: 60 * 60,
+            customer: firstCustomer
+        )
+        let second = ServiceCall(
+            id: secondID,
+            eventTitle: "Second repair",
+            siteAddress: "200 Next Stop Road",
+            type: .repair,
+            scheduledDate: start.addingTimeInterval(90 * 60),
+            duration: 45 * 60,
+            customer: secondCustomer
+        )
+        let third = ServiceCall(
+            id: thirdID,
+            eventTitle: "Third maintenance",
+            type: .maintenance,
+            scheduledDate: start.addingTimeInterval(120 * 60),
+            customer: thirdCustomer
+        )
+
+        let legs = TechnicianRoutePolicy.appointmentTravelLegs(from: [third, first, second])
+
+        #expect(legs.count == 2)
+        let firstLeg = try #require(legs.first)
+        #expect(firstLeg.originCallID == firstID)
+        #expect(firstLeg.destinationCallID == secondID)
+        #expect(firstLeg.originTitle == "First diagnostic")
+        #expect(firstLeg.destinationTitle == "Second repair")
+        #expect(firstLeg.originAddress == "100 First Stop Way")
+        #expect(firstLeg.destinationAddress == "200 Next Stop Road")
+        #expect(firstLeg.plannedDepartureDate == start.addingTimeInterval(60 * 60))
+        #expect(firstLeg.scheduledGapMinutes == 30)
+        #expect(firstLeg.readiness == .ready)
+
+        let secondLeg = try #require(legs.last)
+        #expect(secondLeg.originCallID == secondID)
+        #expect(secondLeg.destinationCallID == thirdID)
+        #expect(secondLeg.scheduledGapMinutes == -15)
+        #expect(secondLeg.readiness == .missingDestinationAddress)
+    }
+
+    @Test func technicianTravelLegsIdentifySameAndMissingAddressesWithoutInventingRoutes() throws {
+        let start = Date(timeIntervalSince1970: 2_000_000)
+        let customer = Customer(name: "Same Site Customer")
+        let first = ServiceCall(
+            eventTitle: "Upstairs system",
+            siteAddress: " 500 COMFORT   Lane ",
+            type: .service,
+            scheduledDate: start,
+            customer: customer
+        )
+        let second = ServiceCall(
+            eventTitle: "Downstairs system",
+            siteAddress: "500 comfort lane",
+            type: .service,
+            scheduledDate: start.addingTimeInterval(2 * 60 * 60),
+            customer: customer
+        )
+        let sameAddressLeg = try #require(
+            TechnicianRoutePolicy.appointmentTravelLegs(from: [second, first]).first
+        )
+        #expect(sameAddressLeg.readiness == .sameAddress)
+
+        let missingCustomer = Customer(name: "Missing Address Customer")
+        let missingFirst = ServiceCall(
+            type: .service,
+            scheduledDate: start,
+            customer: missingCustomer
+        )
+        let missingSecond = ServiceCall(
+            type: .repair,
+            scheduledDate: start.addingTimeInterval(60 * 60),
+            customer: missingCustomer
+        )
+        let missingLeg = try #require(
+            TechnicianRoutePolicy.appointmentTravelLegs(from: [missingFirst, missingSecond]).first
+        )
+        #expect(missingLeg.readiness == .missingBothAddresses)
+        #expect(missingLeg.originTitle == "Service")
+        #expect(missingLeg.destinationTitle == "Repair")
+    }
+
     @Test func workPerformedLogValidationNormalizesFieldTextAndRejectsUnsafeContent() throws {
         let normalized = try ServiceWorkLogPolicy.validatedContent(
             "  Replaced failed capacitor.  \r\n Verified cooling operation.  "
