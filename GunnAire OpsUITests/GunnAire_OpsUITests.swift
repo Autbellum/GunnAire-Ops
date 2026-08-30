@@ -191,6 +191,64 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdminResolvesFleetInspectionExceptionFromTheCompactWorkspace() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedFleetReadiness",
+            "-appStoreScreenshotFixtures"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 8))
+        let review = app.buttons["ReviewFleetReadiness"]
+        XCTAssertTrue(review.waitForExistence(timeout: 5))
+        review.tap()
+
+        XCTAssertTrue(app.navigationBars["Fleet"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Fleet UI Truck 21"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Inspection Due"].exists)
+        let beforeInspection = XCTAttachment(screenshot: app.screenshot())
+        beforeInspection.name = "Fleet readiness without account email"
+        beforeInspection.lifetime = .keepAlways
+        add(beforeInspection)
+        let inspect = app.buttons["RecordFleetInspection"]
+        XCTAssertTrue(inspect.waitForExistence(timeout: 3))
+        inspect.tap()
+
+        XCTAssertTrue(app.navigationBars["Inspect Fleet UI Truck 21"].waitForExistence(timeout: 3))
+        for item in [
+            "tires_wheels",
+            "brakes_steering",
+            "lights_signals",
+            "fluids_leaks",
+            "windshield_body",
+            "safety_equipment"
+        ] {
+            let picker = app.buttons["FleetInspection_\(item)"]
+            XCTAssertTrue(picker.waitForExistence(timeout: 3), "Missing inspection picker: \(item)")
+            picker.tap()
+            let pass = app.buttons["Pass"]
+            XCTAssertTrue(pass.waitForExistence(timeout: 3), "Missing Pass option for: \(item)")
+            pass.tap()
+        }
+
+        let record = app.buttons["SaveFleetInspection"]
+        XCTAssertTrue(record.waitForExistence(timeout: 3))
+        record.tap()
+        XCTAssertTrue(app.navigationBars["Fleet"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Recorded a passing inspection for Fleet UI Truck 21."].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Ready"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["Inspection Due"].exists)
+        let afterInspection = XCTAttachment(screenshot: app.screenshot())
+        afterInspection.name = "Fleet ready without account email"
+        afterInspection.lifetime = .keepAlways
+        add(afterInspection)
+    }
+
+    @MainActor
     func testAccountingBoundaryRequiresTeamTimeApprovalBeforeQuickBooksPublication() throws {
         let app = XCUIApplication()
         app.launchArguments = [

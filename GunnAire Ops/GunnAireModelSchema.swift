@@ -26,6 +26,8 @@ enum GunnAireModelSchema {
             ProjectMilestone.self,
             FieldFormTemplate.self,
             FieldFormResponse.self,
+            FleetVehicle.self,
+            FleetVehicleEvent.self,
         ])
     }
 }

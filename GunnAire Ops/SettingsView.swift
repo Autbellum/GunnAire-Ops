@@ -285,6 +285,7 @@ struct SettingsView: View {
                             featureStatus("Recurring Maintenance", systemImage: "repeat", detail: "Included in Schedule")
                             featureStatus("Customer Equipment Tracking", systemImage: "wrench.and.screwdriver", detail: "Included in Customer records")
                             featureStatus("Inventory & Parts Tracking", systemImage: "shippingbox", detail: "Included in Receipts & Bills")
+                            featureStatus("Fleet & Truck Readiness", systemImage: "car.2", detail: "Included in the Command Center")
                             featureStatus("Pricebook", systemImage: "list.bullet.rectangle", detail: "Included in estimates and invoices")
                             featureStatus("Good-Better-Best Estimates", systemImage: "square.stack.3d.up", detail: "Included in estimates")
                             Button("Manage Field Form Templates") {
