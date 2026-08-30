@@ -7,6 +7,7 @@ struct ScheduleView: View {
     @Query(sort: [SortDescriptor(\ServiceCall.scheduledDate)]) private var serviceCalls: [ServiceCall]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \TechnicianAvailabilityBlock.startsAt, order: .forward) private var technicianAvailabilityBlocks: [TechnicianAvailabilityBlock]
+    @Query(sort: \TechnicianTimeOffRequest.createdAt, order: .reverse) private var technicianTimeOffRequests: [TechnicianTimeOffRequest]
     @Query private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -249,6 +250,10 @@ struct ScheduleView: View {
         return AppAccess.canCollectFieldPayments(email: email, users: users)
     }
 
+    private var pendingTimeOffRequestCount: Int {
+        technicianTimeOffRequests.filter { $0.status == .pending }.count
+    }
+
     var body: some View {
         ZStack {
             WatermarkBackground()
@@ -337,7 +342,10 @@ struct ScheduleView: View {
                                 Button {
                                     showingAvailabilityBlocks = true
                                 } label: {
-                                    Label("Availability", systemImage: "person.badge.clock")
+                                    Label(
+                                        pendingTimeOffRequestCount == 0 ? "Availability" : "Availability \(pendingTimeOffRequestCount)",
+                                        systemImage: "person.badge.clock"
+                                    )
                                 }
                                 .tint(Color.brandGold)
                                 .accessibilityIdentifier("ManageTechnicianAvailability")

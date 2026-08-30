@@ -23,6 +23,7 @@ final class GunnAire_OpsUITests: XCTestCase {
     private let fieldExpenseClaimID = "A1000000-0000-4000-8000-000000000041"
     private let operationalAlertID = "A1000000-0000-4000-8000-000000000042"
     private let businessTaskID = "A1000000-0000-4000-8000-000000000043"
+    private let timeOffRequestID = "A1000000-0000-4000-8000-000000000045"
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
@@ -3179,6 +3180,47 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Team Tasks"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["No Open Tasks"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.buttons["BusinessTask-\(businessTaskID)"].exists)
+    }
+
+    @MainActor
+    func testAdministratorApprovesTimeOffWithoutMovingAssignedJobsOrExposingPrivateReasonOnDashboard() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedTimeOffRequest"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Command Center"].waitForExistence(timeout: 5))
+        let reviewPriority = app.buttons["ReviewTimeOffRequest"]
+        XCTAssertTrue(reviewPriority.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(reviewPriority.label.localizedCaseInsensitiveContains("capacity review required"))
+        XCTAssertFalse(reviewPriority.label.localizedCaseInsensitiveContains("private appointment"))
+        XCTAssertFalse(reviewPriority.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+        reviewPriority.tap()
+
+        XCTAssertTrue(app.navigationBars["Time-Off Review"].waitForExistence(timeout: 3))
+        let request = app.buttons["TimeOffRequest-\(timeOffRequestID)"]
+        XCTAssertTrue(request.waitForExistence(timeout: 3), app.debugDescription)
+        request.tap()
+
+        XCTAssertTrue(app.navigationBars["Time-Off Request"].waitForExistence(timeout: 3))
+        let privateReason = app.descendants(matching: .any)["TimeOffPrivateReasonValue"]
+        XCTAssertTrue(privateReason.exists)
+        XCTAssertTrue(privateReason.label.localizedCaseInsensitiveContains("Private appointment"))
+        let approve = app.buttons["ApproveTimeOffRequest"]
+        XCTAssertTrue(approve.exists)
+        XCTAssertTrue(approve.isEnabled)
+        approve.tap()
+
+        XCTAssertTrue(app.navigationBars["Time-Off Review"].waitForExistence(timeout: 3))
+        let approvedHistory = app.buttons["TimeOffRequestHistory-\(timeOffRequestID)"]
+        XCTAssertTrue(approvedHistory.waitForExistence(timeout: 3))
+        XCTAssertTrue(approvedHistory.label.localizedCaseInsensitiveContains("Approved"))
+        XCTAssertFalse(app.buttons["TimeOffRequest-\(timeOffRequestID)"].exists)
     }
 
     @MainActor

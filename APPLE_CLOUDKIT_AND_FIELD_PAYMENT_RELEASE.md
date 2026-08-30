@@ -26,23 +26,27 @@ and schema status as of 2026-08-30.
   The signed isolated bootstrap initialized Development schema v16 and exported
   `/Users/gunnaire/Downloads/cloudkit-development-9.ckdb`, SHA-256
   `faf57f850f598380e4786581269d66d6ddaf07ea52fa4136b20133bc59116fd8`.
-- Working source schema v16 adds sixteen optional fields to
-  `CD_ServiceDocumentAttachment`: the previously unstaged customer/equipment,
-  estimate, invoice, backend, shared-company, and QBO linkage/status fields plus
-  the Google Drive file ID, trusted web link, sync state/detail/time, and archive
-  actor. The isolated Debug bootstrap now writes every one of those optional
-  values, and its unit contract asserts the complete seed. The release preflight
-  accepts only the exact additive v16 delta or an exact post-promotion match; it
-  no longer lets a matching v15 Development/Production export masquerade as
-  current readiness.
+- Working source is now schema v21. It retains the exact v16 attachment delta;
+  adds the v17 fleet vehicle/event pair and attachment linkage; the v18 field
+  expense record and receipt linkage; the v19 customer operational-alert record;
+  the v20 business-task/event pair; and the v21 technician-time-off
+  request/event pair plus seven audit/cancellation fields on
+  `CD_TechnicianAvailabilityBlock`. The isolated Debug bootstrap writes every
+  optional value through v21, and unit contracts assert the complete seed. The
+  release preflight accepts only the exact cumulative additive v21 delta or an
+  exact post-promotion match, requires each new record family to be all-or-none,
+  and rejects partial v21 availability-block fields. A matching retained
+  Development-v16/Production-v15 export therefore cannot masquerade as current
+  readiness.
 - Schema v16 initialization and marker cleanup completed in CloudKit
   Development. Local mirroring metadata records successful setup/import/export
   events, no pending upload or delete, and no synthetic marker record after the
-  cleanup passes. The fresh Development export differs from v15 Production by
-  exactly the sixteen approved optional attachment fields with zero removed or
-  changed Production fields. Complete signed two-device file/link merge
-  acceptance, review the pending schema in CloudKit Console, and only then
-  promote the reviewed schema to Production.
+  cleanup passes. The retained Development export differs from v15 Production
+  by exactly the sixteen approved optional attachment fields with zero removed
+  or changed Production fields. Source v17-v21 is not staged in either retained
+  export. Run a signed isolated v21 Development bootstrap, export and review the
+  exact cumulative delta, complete signed two-device role/offline merge
+  acceptance, and only then promote the reviewed schema to Production.
 
 Historical deployment evidence follows:
 

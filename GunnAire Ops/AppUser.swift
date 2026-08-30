@@ -154,6 +154,44 @@ enum AppAccess {
         return matches[0].id
     }
 
+    /// Time-off requests are employee-originated capacity changes. A field
+    /// account may submit only for the one technician profile whose email
+    /// exactly matches that account; ambiguous or missing mappings fail closed.
+    static func timeOffRequestTechnicianID(
+        email: String?,
+        users: [AppUser],
+        technicians: [Technician]
+    ) -> UUID? {
+        ownPerformanceTechnicianID(email: email, users: users, technicians: technicians)
+    }
+
+    static func canSubmitTimeOffRequest(
+        email: String?,
+        users: [AppUser],
+        technicians: [Technician]
+    ) -> Bool {
+        timeOffRequestTechnicianID(email: email, users: users, technicians: technicians) != nil
+    }
+
+    static func canReviewTimeOffRequests(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .dispatcher || role == .admin
+    }
+
+    static func canWithdrawTimeOffRequest(
+        _ request: TechnicianTimeOffRequest,
+        email: String?,
+        users: [AppUser]
+    ) -> Bool {
+        guard activeRole(email: email, users: users) == .fieldTechnician,
+              request.status == .pending else { return false }
+        return normalizedEmail(email) == request.requestedByEmail
+    }
+
+    static func canCancelAvailabilityBlock(email: String?, users: [AppUser]) -> Bool {
+        canReviewTimeOffRequests(email: email, users: users)
+    }
+
     static func canViewBillingFinancialDetails(email: String?, users: [AppUser]) -> Bool {
         canViewFinancialManagement(email: email, users: users)
     }

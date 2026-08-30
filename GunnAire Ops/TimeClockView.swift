@@ -11,6 +11,7 @@ struct TimeClockView: View {
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \FieldExpenseClaim.expenseDate, order: .reverse) private var expenseClaims: [FieldExpenseClaim]
+    @Query(sort: \TechnicianTimeOffRequest.createdAt, order: .reverse) private var timeOffRequests: [TechnicianTimeOffRequest]
     @State private var syncMessage: String?
     @State private var selectedActivity: TimeEntryActivity = .general
     @State private var selectedServiceCallID: UUID?
@@ -51,6 +52,23 @@ struct TimeClockView: View {
     private var canUseFieldExpenses: Bool {
         AppAccess.canSubmitFieldExpenses(email: signedInEmail, users: users) ||
             AppAccess.canReviewFieldExpenses(email: signedInEmail, users: users)
+    }
+
+    private var canUseTimeOff: Bool {
+        AppAccess.canReviewTimeOffRequests(email: signedInEmail, users: users) ||
+            AppAccess.canSubmitTimeOffRequest(email: signedInEmail, users: users, technicians: technicians)
+    }
+
+    private var timeOffAttentionCount: Int {
+        if AppAccess.canReviewTimeOffRequests(email: signedInEmail, users: users) {
+            return timeOffRequests.filter { $0.status == .pending }.count
+        }
+        guard let technicianID = ownPerformanceTechnicianID else { return 0 }
+        return timeOffRequests.filter {
+            $0.technicianID == technicianID &&
+                $0.requestedByEmail == signedInEmail &&
+                $0.status == .pending
+        }.count
     }
 
     private var fieldExpenseAttentionCount: Int {
@@ -199,6 +217,36 @@ struct TimeClockView: View {
                             }
                             .accessibilityIdentifier("OpenFieldExpenses")
                             Text("Capture a receipt-backed field cost or mileage claim, then keep review and reimbursement evidence separate from time approval.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if canUseTimeOff {
+                        Section("Availability") {
+                            NavigationLink {
+                                TechnicianTimeOffWorkspaceView()
+                            } label: {
+                                HStack {
+                                    Label(
+                                        AppAccess.canReviewTimeOffRequests(email: signedInEmail, users: users)
+                                            ? "Review Time-Off Requests"
+                                            : "Request Time Off",
+                                        systemImage: "calendar.badge.clock"
+                                    )
+                                    Spacer()
+                                    if timeOffAttentionCount > 0 {
+                                        Text("\(timeOffAttentionCount)")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.orange)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(.orange.opacity(0.12), in: Capsule())
+                                    }
+                                }
+                            }
+                            .accessibilityIdentifier("OpenTimeOffRequests")
+                            Text("Employees submit privately; Dispatch or Admin reviews capacity before approved time changes the schedule.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

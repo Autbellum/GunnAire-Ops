@@ -843,8 +843,8 @@ struct GunnAire_OpsTests {
         #expect(configuration.cloudKitContainerIdentifier == GunnAireCloudKit.containerIdentifier)
         #expect(configuration.isStoredInMemoryOnly == false)
         #expect(configuration.url.lastPathComponent == GunnAireCloudKitSchemaBootstrap.storeFileName)
-        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 20)
-        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V20"))
+        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 21)
+        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V21"))
     }
     #endif
 
@@ -17693,6 +17693,135 @@ struct GunnAire_OpsTests {
         #expect(businessTaskEvent.taskID == businessTask.id)
         #expect(businessTaskEvent.kind == .updated)
         #expect(businessTaskEvent.detail.isEmpty == false)
+
+        let timeOffRequest = try #require(container.mainContext.fetch(FetchDescriptor<TechnicianTimeOffRequest>()).first)
+        let availabilityBlock = try #require(container.mainContext.fetch(FetchDescriptor<TechnicianAvailabilityBlock>()).first)
+        let availabilityEvent = try #require(container.mainContext.fetch(FetchDescriptor<TechnicianAvailabilityEvent>()).first)
+        #expect(timeOffRequest.technicianID == technician.id)
+        #expect(timeOffRequest.privateReason?.isEmpty == false)
+        #expect(timeOffRequest.reviewOperationID != nil)
+        #expect(timeOffRequest.withdrawalOperationID != nil)
+        #expect(timeOffRequest.cancellationOperationID != nil)
+        #expect(timeOffRequest.approvedAvailabilityBlockID == availabilityBlock.id)
+        #expect(availabilityBlock.createdByEmail == "schema-bootstrap@gunnaire.invalid")
+        #expect(availabilityBlock.sourceTimeOffRequestID == timeOffRequest.id)
+        #expect(availabilityBlock.cancellationOperationID != nil)
+        #expect(availabilityEvent.requestID == timeOffRequest.id)
+        #expect(availabilityEvent.availabilityBlockID == availabilityBlock.id)
+        #expect(availabilityEvent.privateDetail.isEmpty == false)
+    }
+
+    @Test func timeOffRolePolicyFailsClosedOnAmbiguousTechnicianIdentity() {
+        let fieldEmail = "field.timeoff@gunnaire.com"
+        let fieldUser = AppUser(email: fieldEmail, role: .fieldTechnician)
+        let dispatcher = AppUser(email: "dispatch.timeoff@gunnaire.com", role: .dispatcher)
+        let accounting = AppUser(email: "accounting.timeoff@gunnaire.com", role: .accounting)
+        let technician = Technician(name: "Time Off Tech", contactInfo: fieldEmail)
+
+        #expect(AppAccess.canSubmitTimeOffRequest(email: fieldEmail, users: [fieldUser], technicians: [technician]))
+        #expect(!AppAccess.canSubmitTimeOffRequest(email: dispatcher.email, users: [dispatcher], technicians: [technician]))
+        #expect(AppAccess.canReviewTimeOffRequests(email: dispatcher.email, users: [dispatcher]))
+        #expect(!AppAccess.canReviewTimeOffRequests(email: accounting.email, users: [accounting]))
+
+        let duplicate = Technician(name: "Duplicate Time Off Tech", contactInfo: fieldEmail)
+        #expect(!AppAccess.canSubmitTimeOffRequest(email: fieldEmail, users: [fieldUser], technicians: [technician, duplicate]))
+    }
+
+    @Test func timeOffApprovalCreatesGenericCapacityBlockAndCancellationRetainsHistory() throws {
+        let startsAt = Date(timeIntervalSinceReferenceDate: 1_200_000)
+        let created = try TechnicianTimeOffPolicy.makeRequest(
+            technicianID: UUID(),
+            technicianName: "Jordan Service",
+            actorEmail: "jordan@gunnaire.com",
+            startsAt: startsAt,
+            endsAt: startsAt.addingTimeInterval(8 * 3_600),
+            privateReason: "Private family appointment",
+            now: startsAt.addingTimeInterval(-3_600)
+        )
+
+        #expect(created.request.status == .pending)
+        #expect(created.event.operationID == created.request.creationOperationID)
+        let approval = try TechnicianTimeOffPolicy.approve(
+            created.request,
+            actorEmail: "dispatch@gunnaire.com",
+            privateReviewNote: "Coverage confirmed",
+            serviceCalls: [],
+            now: startsAt.addingTimeInterval(-1_800)
+        )
+
+        #expect(created.request.status == .approved)
+        #expect(created.request.approvedAvailabilityBlockID == approval.block.id)
+        #expect(approval.block.sourceTimeOffRequestID == created.request.id)
+        #expect(approval.block.kind == .timeOff)
+        #expect(approval.block.reason == nil)
+        #expect(approval.block.dispatchLabel == "Time off")
+        #expect(approval.block.overlaps(start: startsAt, end: startsAt.addingTimeInterval(60)))
+
+        let cancellationEvent = try TechnicianTimeOffPolicy.cancel(
+            block: approval.block,
+            sourceRequest: created.request,
+            technicianName: "Jordan Service",
+            actorEmail: "admin@gunnaire.com",
+            reason: "Employee returned to availability",
+            now: startsAt
+        )
+        #expect(created.request.status == .cancelled)
+        #expect(!approval.block.isActive)
+        #expect(!approval.block.overlaps(start: startsAt, end: startsAt.addingTimeInterval(60)))
+        #expect(cancellationEvent.kind == .blockCancelled)
+        #expect(cancellationEvent.requestID == created.request.id)
+        #expect(cancellationEvent.availabilityBlockID == approval.block.id)
+    }
+
+    @Test func timeOffApprovalNeverMovesOrOverridesAnAssignedJob() throws {
+        let technician = Technician(name: "Conflict Tech", contactInfo: "conflict@gunnaire.com")
+        let customer = Customer(name: "Scheduled Customer")
+        let startsAt = Date(timeIntervalSinceReferenceDate: 1_300_000)
+        let call = ServiceCall(
+            eventTitle: "Existing Repair",
+            type: .repair,
+            scheduledDate: startsAt.addingTimeInterval(3_600),
+            assignedTechnician: technician,
+            customer: customer
+        )
+        let created = try TechnicianTimeOffPolicy.makeRequest(
+            technicianID: technician.id,
+            technicianName: technician.name,
+            actorEmail: "conflict@gunnaire.com",
+            startsAt: startsAt,
+            endsAt: startsAt.addingTimeInterval(8 * 3_600),
+            privateReason: nil
+        )
+
+        #expect(TechnicianTimeOffPolicy.conflicts(for: created.request, serviceCalls: [call]).map(\.id) == [call.id])
+        #expect(throws: TechnicianTimeOffValidationError.self) {
+            try TechnicianTimeOffPolicy.approve(
+                created.request,
+                actorEmail: "dispatch@gunnaire.com",
+                privateReviewNote: nil,
+                serviceCalls: [call]
+            )
+        }
+        #expect(created.request.status == .pending)
+        #expect(call.scheduledDate == startsAt.addingTimeInterval(3_600))
+    }
+
+    @Test func onlyTheRequesterCanWithdrawAPendingTimeOffRequest() throws {
+        let startsAt = Date(timeIntervalSinceReferenceDate: 1_400_000)
+        let created = try TechnicianTimeOffPolicy.makeRequest(
+            technicianID: UUID(),
+            technicianName: "Withdraw Tech",
+            actorEmail: "withdraw@gunnaire.com",
+            startsAt: startsAt,
+            endsAt: startsAt.addingTimeInterval(3_600),
+            privateReason: nil
+        )
+        #expect(throws: TechnicianTimeOffValidationError.self) {
+            try TechnicianTimeOffPolicy.withdraw(created.request, actorEmail: "someone-else@gunnaire.com")
+        }
+        let event = try TechnicianTimeOffPolicy.withdraw(created.request, actorEmail: "withdraw@gunnaire.com")
+        #expect(created.request.status == .withdrawn)
+        #expect(event.kind == .withdrawn)
     }
 
     @Test func approvedPricebookPublicationReconcilesUniqueQuickBooksMatchesAndRejectsAmbiguity() throws {

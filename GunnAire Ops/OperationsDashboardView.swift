@@ -24,6 +24,7 @@ struct OperationsDashboardView: View {
     @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
     @Query(sort: \FleetVehicle.unitNumber, order: .forward) private var fleetVehicles: [FleetVehicle]
     @Query(sort: \BusinessTask.dueAt, order: .forward) private var businessTasks: [BusinessTask]
+    @Query(sort: \TechnicianTimeOffRequest.createdAt, order: .reverse) private var timeOffRequests: [TechnicianTimeOffRequest]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
@@ -36,6 +37,7 @@ struct OperationsDashboardView: View {
     @State private var isOperationalStatusExpanded = false
     @State private var showingFleetWorkspace = false
     @State private var showingBusinessTasks = false
+    @State private var showingTimeOffRequests = false
 
     private let calendar = Calendar.current
 
@@ -141,6 +143,15 @@ struct OperationsDashboardView: View {
 
     private var openBusinessTasks: [BusinessTask] {
         visibleBusinessTasks.filter(\.isOpen)
+    }
+
+    private var canReviewTimeOffRequests: Bool {
+        AppAccess.canReviewTimeOffRequests(email: currentUserEmail, users: users)
+    }
+
+    private var pendingTimeOffRequests: [TechnicianTimeOffRequest] {
+        guard canReviewTimeOffRequests else { return [] }
+        return TechnicianTimeOffPolicy.ordered(timeOffRequests.filter { $0.status == .pending })
     }
 
     private var todayCalls: [ServiceCall] {
@@ -271,6 +282,7 @@ struct OperationsDashboardView: View {
             quickBooksAttentionPayments.first != nil,
             followUpCalls.first != nil,
             openBusinessTasks.first != nil,
+            pendingTimeOffRequests.first != nil,
             fleetAttentionVehicles.first != nil,
             upcomingCalls.first != nil
         ]
@@ -438,6 +450,10 @@ struct OperationsDashboardView: View {
             }
             .sheet(isPresented: $showingBusinessTasks) {
                 BusinessTaskWorkspaceView()
+                    .tint(Color.brandGold)
+            }
+            .sheet(isPresented: $showingTimeOffRequests) {
+                TechnicianTimeOffWorkspaceSheet()
                     .tint(Color.brandGold)
             }
         }
@@ -725,6 +741,23 @@ struct OperationsDashboardView: View {
                         showingBusinessTasks = true
                     }
                     .accessibilityIdentifier("ReviewBusinessTask")
+                }
+
+                if let request = pendingTimeOffRequests.first {
+                    priorityRow(
+                        title: "Time-off request",
+                        subtitle: "\(request.technicianNameSnapshot) • capacity review required",
+                        value: request.startsAt.formatted(date: .abbreviated, time: .omitted),
+                        systemImage: "calendar.badge.clock",
+                        tint: .orange,
+                        actionTitle: "Review"
+                    ) {
+                        showingTimeOffRequests = true
+                    }
+                    .accessibilityLabel(
+                        "Time-off request, \(request.technicianNameSnapshot), capacity review required, \(request.startsAt.formatted(date: .abbreviated, time: .omitted)), Review"
+                    )
+                    .accessibilityIdentifier("ReviewTimeOffRequest")
                 }
 
                 if let vehicle = fleetAttentionVehicles.first {

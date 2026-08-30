@@ -11,14 +11,14 @@ except ModuleNotFoundError:  # Direct execution from the Tools directory.
     import release_preflight
 
 
-class CloudKitV20PreflightTests(unittest.TestCase):
+class CloudKitV21PreflightTests(unittest.TestCase):
     def setUp(self) -> None:
         self.production = {
             record_name: {}
             for record_name in release_preflight.EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES
         }
         self.development = copy.deepcopy(self.production)
-        for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V20_ADDITIONS.items():
+        for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V21_ADDITIONS.items():
             self.development.setdefault(record_name, {}).update(fields)
 
     def check(self, development: dict, production: dict) -> release_preflight.Results:
@@ -36,20 +36,29 @@ class CloudKitV20PreflightTests(unittest.TestCase):
             )
         return results
 
-    def test_exact_cumulative_v20_schema_is_accepted(self) -> None:
+    def test_exact_cumulative_v21_schema_is_accepted(self) -> None:
         results = self.check(self.development, self.production)
 
         self.assertEqual(results.failures, [])
         self.assertEqual(results.warnings, 0)
 
-    def test_partial_business_task_pair_is_rejected(self) -> None:
+    def test_partial_time_off_record_pair_is_rejected(self) -> None:
         partial_development = copy.deepcopy(self.development)
-        partial_development.pop("CD_BusinessTaskEvent")
+        partial_development.pop("CD_TechnicianAvailabilityEvent")
 
         results = self.check(partial_development, self.production)
 
         self.assertTrue(results.failures)
         self.assertTrue(any("record types" in failure.lower() for failure in results.failures))
+
+    def test_partial_availability_block_audit_fields_are_rejected(self) -> None:
+        partial_development = copy.deepcopy(self.development)
+        partial_development["CD_TechnicianAvailabilityBlock"].pop("CD_cancellationReason")
+
+        results = self.check(partial_development, self.production)
+
+        self.assertTrue(results.failures)
+        self.assertTrue(any("v21" in failure.lower() for failure in results.failures))
 
 
 if __name__ == "__main__":
