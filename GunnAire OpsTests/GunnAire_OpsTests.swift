@@ -2424,6 +2424,40 @@ struct GunnAire_OpsTests {
         #expect(technicianSnapshot.assignedBookingCount == 3)
         #expect(technicianSnapshot.status == .overbooked)
         #expect(technicianSnapshot.regularUtilization == snapshot.regularUtilization)
+
+        let daySchedules = DispatchCapacityPolicy.technicianDaySchedules(
+            for: monday,
+            technicians: [technician],
+            serviceCalls: calls,
+            availabilityBlocks: [firstBlock, secondBlock],
+            workShifts: regular + onCall,
+            calendar: calendar
+        )
+        let daySchedule = try #require(daySchedules.first)
+        #expect(daySchedules.count == 1)
+        #expect(daySchedule.technicianID == technician.id)
+        #expect(daySchedule.technicianName == "Capacity Tech")
+        #expect(daySchedule.dayStart == calendar.startOfDay(for: monday))
+        #expect(daySchedule.isConfigured)
+        #expect(daySchedule.regularHours.count == 1)
+        #expect(daySchedule.onCallHours.count == 1)
+        #expect(daySchedule.unavailablePeriods.count == 2)
+        #expect(daySchedule.appointments.count == 3)
+        let eightAM = try #require(calendar.date(bySettingHour: 8, minute: 0, second: 0, of: monday))
+        let sixAM = try #require(calendar.date(bySettingHour: 6, minute: 0, second: 0, of: monday))
+        #expect(daySchedule.regularHours.first?.startsAt == eightAM)
+        #expect(daySchedule.onCallHours.first?.startsAt == sixAM)
+        #expect(Set(daySchedule.unavailablePeriods.map(\.title)) == Set(["Break", "Training"]))
+        #expect(daySchedule.unavailablePeriods.allSatisfy { $0.detail == nil })
+        #expect(!daySchedule.entries.contains { $0.title.contains("Lunch") || ($0.detail?.contains("Lunch") ?? false) })
+        let emergencyEntry = try #require(daySchedule.appointments.first { $0.serviceCallID == calls[2].id })
+        #expect(!emergencyEntry.isOutsidePlan)
+        #expect(emergencyEntry.detail?.contains("Emergency") == true)
+        let overlappingEntries = daySchedule.appointments.filter {
+            $0.serviceCallID == calls[0].id || $0.serviceCallID == calls[1].id
+        }
+        #expect(overlappingEntries.count == 2)
+        #expect(overlappingEntries.allSatisfy { $0.isOutsidePlan })
     }
 
     @Test func dispatchCapacityKeepsUnconfiguredAssignmentsAndUnassignedDemandVisible() throws {
@@ -2518,6 +2552,28 @@ struct GunnAire_OpsTests {
         #expect(unconfiguredSnapshot.overbookedMinutes == 120)
         #expect(unconfiguredSnapshot.assignedBookingCount == 1)
         #expect(unconfiguredSnapshot.status == .unconfigured)
+
+        let daySchedules = DispatchCapacityPolicy.technicianDaySchedules(
+            for: monday,
+            technicians: [configured, unconfigured],
+            serviceCalls: [assignedWithoutHours, cancelled, unassigned, completedUnassigned],
+            availabilityBlocks: [],
+            workShifts: shifts,
+            calendar: calendar
+        )
+        let configuredSchedule = try #require(daySchedules.first { $0.technicianID == configured.id })
+        let unconfiguredSchedule = try #require(daySchedules.first { $0.technicianID == unconfigured.id })
+        #expect(daySchedules.count == 2)
+        #expect(configuredSchedule.isConfigured)
+        #expect(configuredSchedule.regularHours.count == 1)
+        #expect(configuredSchedule.appointments.isEmpty)
+        #expect(!unconfiguredSchedule.isConfigured)
+        #expect(unconfiguredSchedule.regularHours.isEmpty)
+        #expect(unconfiguredSchedule.onCallHours.isEmpty)
+        #expect(unconfiguredSchedule.appointments.count == 1)
+        #expect(unconfiguredSchedule.appointments.first?.serviceCallID == assignedWithoutHours.id)
+        #expect(unconfiguredSchedule.appointments.first?.isOutsidePlan == true)
+        #expect(!unconfiguredSchedule.entries.contains { $0.serviceCallID == cancelled.id })
     }
 
     @Test func dispatchCapacityCountsEveryCrewMemberAndFlagsWorkOutsideRegularHours() throws {

@@ -1268,6 +1268,29 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("hours not configured"))
         XCTAssertFalse(technicianCapacity.label.localizedCaseInsensitiveContains("@gunnaire.com"))
         XCTAssertTrue(app.staticTexts["Regular hours are reduced by unavailable time. On-call remains separate, and travel time is not estimated."].exists)
+
+        technicianCapacity.tap()
+        XCTAssertTrue(app.navigationBars["Technician Day"].waitForExistence(timeout: 3), app.debugDescription)
+        let technicianDay = app.descendants(matching: .any)["DispatchTechnicianDaySchedule"]
+        XCTAssertTrue(technicianDay.waitForExistence(timeout: 3), app.debugDescription)
+        let dayJob = app.descendants(matching: .any)["DispatchTechnicianDayJob-A1000000-0000-4000-8000-000000000002"]
+        XCTAssertTrue(dayJob.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(dayJob.label.localizedCaseInsensitiveContains("Collectible HVAC service"), dayJob.label)
+        XCTAssertTrue(dayJob.label.localizedCaseInsensitiveContains("outside configured hours"), dayJob.label)
+        XCTAssertFalse(dayJob.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+        let dayEvidence = XCTAttachment(screenshot: app.screenshot())
+        dayEvidence.name = "Technician day appointments and private-note-safe availability"
+        dayEvidence.lifetime = .keepAlways
+        add(dayEvidence)
+
+        dayJob.tap()
+        XCTAssertTrue(app.navigationBars["Edit Service Call"].waitForExistence(timeout: 3))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Technician Day"].waitForExistence(timeout: 3))
+        let teamCapacityBack = app.navigationBars["Technician Day"].buttons["Team Capacity"]
+        XCTAssertTrue(teamCapacityBack.waitForExistence(timeout: 2), app.debugDescription)
+        teamCapacityBack.tap()
+        XCTAssertTrue(app.navigationBars["Team Capacity"].waitForExistence(timeout: 3))
         app.buttons["DispatchCapacityDetailDone"].tap()
         XCTAssertTrue(app.navigationBars["Dispatch Week"].waitForExistence(timeout: 3))
 
@@ -3356,6 +3379,22 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("0 minutes booked"), technicianCapacity.label)
         XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("9 hours open"), technicianCapacity.label)
         XCTAssertFalse(technicianCapacity.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        technicianCapacity.tap()
+        XCTAssertTrue(app.navigationBars["Technician Day"].waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["No assigned appointments"].waitForExistence(timeout: 2), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Regular hours"].waitForExistence(timeout: 2), app.debugDescription)
+        XCTAssertFalse(app.descendants(matching: .any)["DispatchTechnicianDaySchedule"].label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        let scheduleEvidence = XCTAttachment(screenshot: app.screenshot())
+        scheduleEvidence.name = "Configured technician day hours without dashboard overload"
+        scheduleEvidence.lifetime = .keepAlways
+        add(scheduleEvidence)
+
+        let teamCapacityBack = app.navigationBars["Technician Day"].buttons["Team Capacity"]
+        XCTAssertTrue(teamCapacityBack.waitForExistence(timeout: 2), app.debugDescription)
+        teamCapacityBack.tap()
+        XCTAssertTrue(app.navigationBars["Team Capacity"].waitForExistence(timeout: 3))
 
         let detailEvidence = XCTAttachment(screenshot: app.screenshot())
         detailEvidence.name = "Progressive technician capacity detail without account email"

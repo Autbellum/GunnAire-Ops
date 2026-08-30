@@ -54,6 +54,51 @@ struct DispatchTechnicianCapacitySnapshot: Equatable, Identifiable, Sendable {
     }
 }
 
+enum DispatchTechnicianDayScheduleEntryKind: String, Equatable, Sendable {
+    case appointment
+    case regularHours
+    case onCallHours
+    case unavailable
+}
+
+struct DispatchTechnicianDayScheduleEntry: Equatable, Identifiable, Sendable {
+    let id: String
+    let kind: DispatchTechnicianDayScheduleEntryKind
+    let startsAt: Date
+    let endsAt: Date
+    let title: String
+    let detail: String?
+    let serviceCallID: UUID?
+    let isOutsidePlan: Bool
+}
+
+struct DispatchTechnicianDayScheduleSnapshot: Equatable, Identifiable, Sendable {
+    let technicianID: UUID
+    let technicianName: String
+    let dayStart: Date
+    let dayEnd: Date
+    let isConfigured: Bool
+    let entries: [DispatchTechnicianDayScheduleEntry]
+
+    var id: UUID { technicianID }
+
+    var appointments: [DispatchTechnicianDayScheduleEntry] {
+        entries.filter { $0.kind == .appointment }
+    }
+
+    var regularHours: [DispatchTechnicianDayScheduleEntry] {
+        entries.filter { $0.kind == .regularHours }
+    }
+
+    var onCallHours: [DispatchTechnicianDayScheduleEntry] {
+        entries.filter { $0.kind == .onCallHours }
+    }
+
+    var unavailablePeriods: [DispatchTechnicianDayScheduleEntry] {
+        entries.filter { $0.kind == .unavailable }
+    }
+}
+
 /// A read-only capacity forecast derived from records that already synchronize
 /// through SwiftData and CloudKit. It never moves work or invents travel time.
 enum DispatchCapacityPolicy {
@@ -157,6 +202,32 @@ enum DispatchCapacityPolicy {
         )
     }
 
+    static func technicianDaySchedules(
+        for day: Date,
+        technicians: [Technician],
+        serviceCalls: [ServiceCall],
+        availabilityBlocks: [TechnicianAvailabilityBlock],
+        workShifts: [TechnicianWorkShift],
+        calendar: Calendar = .current
+    ) -> [DispatchTechnicianDayScheduleSnapshot] {
+        let context = dayContext(
+            for: day,
+            technicians: technicians,
+            serviceCalls: serviceCalls,
+            workShifts: workShifts,
+            calendar: calendar
+        )
+        return technicians.map { technician in
+            technicianDaySchedule(
+                technician: technician,
+                isConfigured: context.configuredTechnicianIDs.contains(technician.id),
+                availabilityBlocks: availabilityBlocks,
+                workShifts: workShifts,
+                context: context
+            )
+        }
+    }
+
     private struct DayContext {
         let dayStart: Date
         let dayEnd: Date
@@ -168,6 +239,13 @@ enum DispatchCapacityPolicy {
     private struct DayBooking {
         let call: ServiceCall
         let interval: DateInterval
+    }
+
+    private struct TechnicianPlanContext {
+        let regularPlan: [DateInterval]
+        let distinctOnCallPlan: [DateInterval]
+        let regularAvailable: [DateInterval]
+        let onCallAvailable: [DateInterval]
     }
 
     private static func dayContext(
@@ -248,30 +326,12 @@ enum DispatchCapacityPolicy {
             )
         }
 
-        let shiftIntervals = TechnicianWorkShiftPolicy.intervals(
+        let plan = technicianPlan(
             technicianID: technician.id,
-            from: context.dayStart,
-            through: context.dayEnd,
-            shifts: workShifts,
-            includeOnCall: true
+            availabilityBlocks: availabilityBlocks,
+            workShifts: workShifts,
+            context: context
         )
-        let regularPlan = merged(shiftIntervals.compactMap { interval in
-            guard interval.kind == .regular else { return nil }
-            return clipped(DateInterval(start: interval.start, end: interval.end), to: context.dayInterval)
-        })
-        let onCallPlan = merged(shiftIntervals.compactMap { interval in
-            guard interval.kind == .onCall else { return nil }
-            return clipped(DateInterval(start: interval.start, end: interval.end), to: context.dayInterval)
-        })
-        let unavailable = merged(availabilityBlocks.compactMap { block in
-            guard block.technicianID == technician.id, block.isActive else { return nil }
-            return clipped(DateInterval(start: block.startsAt, end: block.endsAt), to: context.dayInterval)
-        })
-
-        let regularAvailable = subtracting(unavailable, from: regularPlan)
-        // On-call that overlaps the regular plan is not additional capacity.
-        let distinctOnCallPlan = subtracting(regularPlan, from: onCallPlan)
-        let onCallAvailable = subtracting(unavailable, from: distinctOnCallPlan)
         let onCallEligibleIntervals = technicianBookings.compactMap { booking in
             switch booking.call.dispatchUrgency {
             case .priority, .emergency:
@@ -280,19 +340,19 @@ enum DispatchCapacityPolicy {
                 nil
             }
         }
-        let regularConsumed = intersections(allBookingIntervals, regularAvailable)
-        let onCallConsumed = intersections(onCallEligibleIntervals, onCallAvailable)
+        let regularConsumed = intersections(allBookingIntervals, plan.regularAvailable)
+        let onCallConsumed = intersections(onCallEligibleIntervals, plan.onCallAvailable)
         // Every booking makes the technician unavailable, even when a
         // normal-priority booking is outside the on-call policy. Keep that
         // work in `overbookedMinutes`, while still reducing the reserve a
         // dispatcher can actually use for another urgent call.
-        let onCallOccupied = intersections(allBookingIntervals, onCallAvailable)
-        let regularCapacity = minutes(in: regularAvailable)
-        let onCallCapacity = minutes(in: onCallAvailable)
+        let onCallOccupied = intersections(allBookingIntervals, plan.onCallAvailable)
+        let regularCapacity = minutes(in: plan.regularAvailable)
+        let onCallCapacity = minutes(in: plan.onCallAvailable)
         let openRegular = max(regularCapacity - minutes(in: regularConsumed), 0)
         let eligibleConsumed = minutes(in: regularConsumed) + minutes(in: onCallConsumed)
         let overbooked = max(totalBooked - eligibleConsumed, 0)
-        let plannedMinutes = minutes(in: regularPlan) + minutes(in: distinctOnCallPlan)
+        let plannedMinutes = minutes(in: plan.regularPlan) + minutes(in: plan.distinctOnCallPlan)
         let unavailableMinutes = max(plannedMinutes - regularCapacity - onCallCapacity, 0)
 
         return DispatchTechnicianCapacitySnapshot(
@@ -313,6 +373,180 @@ enum DispatchCapacityPolicy {
                 overbookedMinutes: overbooked
             )
         )
+    }
+
+    private static func technicianPlan(
+        technicianID: UUID,
+        availabilityBlocks: [TechnicianAvailabilityBlock],
+        workShifts: [TechnicianWorkShift],
+        context: DayContext
+    ) -> TechnicianPlanContext {
+        let shiftIntervals = TechnicianWorkShiftPolicy.intervals(
+            technicianID: technicianID,
+            from: context.dayStart,
+            through: context.dayEnd,
+            shifts: workShifts,
+            includeOnCall: true
+        )
+        let regularPlan = merged(shiftIntervals.compactMap { interval in
+            guard interval.kind == .regular else { return nil }
+            return clipped(DateInterval(start: interval.start, end: interval.end), to: context.dayInterval)
+        })
+        let onCallPlan = merged(shiftIntervals.compactMap { interval in
+            guard interval.kind == .onCall else { return nil }
+            return clipped(DateInterval(start: interval.start, end: interval.end), to: context.dayInterval)
+        })
+        let unavailable = merged(availabilityBlocks.compactMap { block in
+            guard block.technicianID == technicianID, block.isActive else { return nil }
+            return clipped(DateInterval(start: block.startsAt, end: block.endsAt), to: context.dayInterval)
+        })
+        let regularAvailable = subtracting(unavailable, from: regularPlan)
+        // On-call that overlaps the regular plan is not additional capacity.
+        let distinctOnCallPlan = subtracting(regularPlan, from: onCallPlan)
+        let onCallAvailable = subtracting(unavailable, from: distinctOnCallPlan)
+        return TechnicianPlanContext(
+            regularPlan: regularPlan,
+            distinctOnCallPlan: distinctOnCallPlan,
+            regularAvailable: regularAvailable,
+            onCallAvailable: onCallAvailable
+        )
+    }
+
+    private static func technicianDaySchedule(
+        technician: Technician,
+        isConfigured: Bool,
+        availabilityBlocks: [TechnicianAvailabilityBlock],
+        workShifts: [TechnicianWorkShift],
+        context: DayContext
+    ) -> DispatchTechnicianDayScheduleSnapshot {
+        let plan = technicianPlan(
+            technicianID: technician.id,
+            availabilityBlocks: availabilityBlocks,
+            workShifts: workShifts,
+            context: context
+        )
+        let technicianBookings = context.activeDayCalls.filter {
+            $0.call.assignedCrewTechnicianIDs.contains(technician.id)
+        }
+        let shiftEntries = TechnicianWorkShiftPolicy.intervals(
+            technicianID: technician.id,
+            from: context.dayStart,
+            through: context.dayEnd,
+            shifts: workShifts,
+            includeOnCall: true
+        ).compactMap { interval -> DispatchTechnicianDayScheduleEntry? in
+            guard let clippedInterval = clipped(
+                DateInterval(start: interval.start, end: interval.end),
+                to: context.dayInterval
+            ) else { return nil }
+            let kind: DispatchTechnicianDayScheduleEntryKind = interval.kind == .regular
+                ? .regularHours
+                : .onCallHours
+            return DispatchTechnicianDayScheduleEntry(
+                id: "shift-\(interval.ruleID.uuidString)-\(Int(clippedInterval.start.timeIntervalSinceReferenceDate))",
+                kind: kind,
+                startsAt: clippedInterval.start,
+                endsAt: clippedInterval.end,
+                title: interval.kind == .regular ? "Regular hours" : "On-call hours",
+                detail: nil,
+                serviceCallID: nil,
+                isOutsidePlan: false
+            )
+        }
+        let unavailableEntries = availabilityBlocks.compactMap { block -> DispatchTechnicianDayScheduleEntry? in
+            guard block.technicianID == technician.id,
+                  block.isActive,
+                  let clippedInterval = clipped(
+                    DateInterval(start: block.startsAt, end: block.endsAt),
+                    to: context.dayInterval
+                  ) else { return nil }
+            return DispatchTechnicianDayScheduleEntry(
+                id: "unavailable-\(block.id.uuidString)",
+                kind: .unavailable,
+                startsAt: clippedInterval.start,
+                endsAt: clippedInterval.end,
+                title: block.kind.displayName,
+                detail: nil,
+                serviceCallID: nil,
+                isOutsidePlan: false
+            )
+        }
+        let appointmentEntries = technicianBookings.map { booking in
+            let otherBookings = technicianBookings.filter { $0.call.id != booking.call.id }
+            let overlapsAnotherAppointment = otherBookings.contains {
+                clipped(booking.interval, to: $0.interval) != nil
+            }
+            let eligiblePlan: [DateInterval]
+            switch booking.call.dispatchUrgency {
+            case .priority, .emergency:
+                eligiblePlan = plan.regularAvailable + plan.onCallAvailable
+            case .normal:
+                eligiblePlan = plan.regularAvailable
+            }
+            let bookingMinutes = minutes(in: [booking.interval])
+            let coveredMinutes = minutes(in: intersections([booking.interval], eligiblePlan))
+            let customerName = normalizedDisplayText(
+                booking.call.customer?.name,
+                fallback: "Unassigned customer"
+            )
+            let eventTitle = normalizedDisplayText(booking.call.eventTitle, fallback: customerName)
+            var detailParts: [String] = []
+            if eventTitle != customerName {
+                detailParts.append(customerName)
+            }
+            detailParts.append(booking.call.type.displayName)
+            detailParts.append(jobStatusLabel(booking.call.status))
+            if booking.call.dispatchUrgency != .normal {
+                detailParts.append(booking.call.dispatchUrgency.displayName)
+            }
+            return DispatchTechnicianDayScheduleEntry(
+                id: "appointment-\(booking.call.id.uuidString)",
+                kind: .appointment,
+                startsAt: booking.interval.start,
+                endsAt: booking.interval.end,
+                title: eventTitle,
+                detail: detailParts.joined(separator: " • "),
+                serviceCallID: booking.call.id,
+                isOutsidePlan: !isConfigured || coveredMinutes < bookingMinutes || overlapsAnotherAppointment
+            )
+        }
+        let entries = (shiftEntries + unavailableEntries + appointmentEntries).sorted { lhs, rhs in
+            if lhs.startsAt != rhs.startsAt { return lhs.startsAt < rhs.startsAt }
+            if lhs.endsAt != rhs.endsAt { return lhs.endsAt < rhs.endsAt }
+            return scheduleEntrySortRank(lhs.kind) < scheduleEntrySortRank(rhs.kind)
+        }
+        return DispatchTechnicianDayScheduleSnapshot(
+            technicianID: technician.id,
+            technicianName: technician.name,
+            dayStart: context.dayStart,
+            dayEnd: context.dayEnd,
+            isConfigured: isConfigured,
+            entries: entries
+        )
+    }
+
+    private static func normalizedDisplayText(_ value: String?, fallback: String) -> String {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? fallback : trimmed
+    }
+
+    private static func jobStatusLabel(_ status: JobStatus) -> String {
+        switch status {
+        case .scheduled: "Scheduled"
+        case .inProgress: "In progress"
+        case .completed: "Completed"
+        case .invoiced: "Invoiced"
+        case .cancelled: "Cancelled"
+        }
+    }
+
+    private static func scheduleEntrySortRank(_ kind: DispatchTechnicianDayScheduleEntryKind) -> Int {
+        switch kind {
+        case .appointment: 0
+        case .unavailable: 1
+        case .regularHours: 2
+        case .onCallHours: 3
+        }
     }
 
     private static func capacityStatus(
