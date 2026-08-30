@@ -28,6 +28,7 @@ struct BillingDocumentsView: View {
     @Query(sort: \PurchaseOrder.updatedAt, order: .reverse) private var purchaseOrders: [PurchaseOrder]
     @Query(sort: \ProjectMilestone.plannedDate, order: .forward) private var projectMilestones: [ProjectMilestone]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var maintenanceAgreements: [RecurringMaintenanceContract]
+    @Query(sort: \CustomerOperationalAlert.createdAt, order: .reverse) private var operationalAlerts: [CustomerOperationalAlert]
     @AppStorage("defaultInvoicePaymentTerms") private var defaultInvoicePaymentTermsRawValue = InvoicePaymentTerms.dueOnReceipt.rawValue
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
     @AppStorage("requireWorkPerformedLogForCloseout") private var requireWorkPerformedLogForCloseout = true
@@ -7553,6 +7554,14 @@ GunnAire
     }
 
     private func scheduleFollowUpVisit(for sourceCall: ServiceCall) {
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: sourceCall.customer.id,
+            serviceLocationID: sourceCall.serviceLocationID,
+            in: operationalAlerts
+        ) {
+            actionMessage = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+            return
+        }
         let followUpCall = sourceCall.makeFollowUpVisit()
         modelContext.insert(followUpCall)
         ServiceCallActivity.record(
@@ -7594,6 +7603,15 @@ GunnAire
             GunnAireAppIntentRouter.storeScheduleCallRoute(existing.id)
             return
         }
+        let sourceCall = serviceCall(for: estimate)
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: estimate.customer.id,
+            serviceLocationID: estimate.serviceLocationID ?? sourceCall?.serviceLocationID,
+            in: operationalAlerts
+        ) {
+            actionMessage = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+            return
+        }
         selectedEstimateForScheduling = estimate
     }
 
@@ -7619,6 +7637,14 @@ GunnAire
         }
 
         let sourceCall = serviceCall(for: estimate)
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: estimate.customer.id,
+            serviceLocationID: estimate.serviceLocationID ?? sourceCall?.serviceLocationID,
+            in: operationalAlerts
+        ) {
+            actionMessage = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+            return false
+        }
         let priorServiceCallID = estimate.serviceCallID
         let priorScheduledServiceCallID = estimate.scheduledServiceCallID
         let priorFollowUp = sourceCall.map { ($0.followUpRequired, $0.followUpAction, $0.followUpDueDate) }

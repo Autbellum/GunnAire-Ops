@@ -349,6 +349,29 @@ enum AppAccess {
         return role == .dispatcher || role == .admin
     }
 
+    enum CustomerOperationalAlertAction: CaseIterable, Sendable {
+        case create
+        case resolve
+    }
+
+    /// Operational alerts are visible wherever the customer or assigned job is
+    /// visible, but only office roles may change them. A Do Not Service hold can
+    /// stop company work, so creation and resolution remain Admin-only; Dispatch
+    /// may manage the narrower safety, access, pet, priority, and warranty alerts.
+    static func canPerformCustomerOperationalAlertAction(
+        _ action: CustomerOperationalAlertAction,
+        kind: CustomerOperationalAlertKind,
+        email: String?,
+        users: [AppUser]
+    ) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        switch action {
+        case .create, .resolve:
+            if role == .admin { return true }
+            return role == .dispatcher && kind != .doNotService
+        }
+    }
+
     /// Assigned technicians can present or capture a customer-approved service
     /// agreement from the job screen. Dispatch and Admin can do the same from
     /// office workflows; every field mutation still requires job-level access.

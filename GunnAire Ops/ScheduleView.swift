@@ -25,6 +25,7 @@ struct ScheduleView: View {
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
     @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
+    @Query(sort: \CustomerOperationalAlert.createdAt, order: .reverse) private var operationalAlerts: [CustomerOperationalAlert]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
@@ -478,6 +479,7 @@ struct ScheduleView: View {
                         DispatchWeekBoardView(
                             initialDate: selectedDate,
                             calls: callsForSignedInUser,
+                            operationalAlerts: operationalAlerts,
                             onMove: { callID, targetDay, overrideReason in
                                 moveCallFromDispatchBoard(
                                     callID,
@@ -741,8 +743,23 @@ struct ScheduleView: View {
             )
             modelContext.insert(customer)
         }
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: customer.id,
+            in: operationalAlerts
+        ) {
+            requestMessage = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+            return
+        }
         let scheduledDate = request.preferredDate ?? defaultRequestScheduleDate()
         let serviceLocation = serviceLocationForScheduledRequest(request, customer: customer)
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: customer.id,
+            serviceLocationID: serviceLocation?.id,
+            in: operationalAlerts
+        ) {
+            requestMessage = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+            return
+        }
         var intakeContext = [
             "Request intake: \(request.summary)",
             "Lead source: \(request.leadSourceSummary)"
@@ -1485,6 +1502,28 @@ struct ScheduleView: View {
             Text(call.status.rawValue.capitalized)
                 .font(.caption)
                 .foregroundColor(.gray)
+            if let alert = CustomerOperationalAlertPolicy.activeAlerts(
+                customerID: call.customer.id,
+                serviceLocationID: call.serviceLocationID,
+                in: operationalAlerts
+            ).first {
+                let activeCount = CustomerOperationalAlertPolicy.activeAlerts(
+                    customerID: call.customer.id,
+                    serviceLocationID: call.serviceLocationID,
+                    in: operationalAlerts
+                ).count
+                Label(
+                    alert.blocksNewScheduling
+                        ? "Do Not Service"
+                        : "\(alert.title)\(activeCount > 1 ? " +\(activeCount - 1)" : "")",
+                    systemImage: alert.kind.systemImage
+                )
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(alert.blocksNewScheduling ? .red : .orange)
+                .lineLimit(1)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("ScheduleOperationalAlert-\(call.id.uuidString)")
+            }
             if call.dispatchUrgency != .normal {
                 Label(call.dispatchUrgency.displayName, systemImage: call.dispatchUrgency == .emergency ? "exclamationmark.triangle.fill" : "flag.fill")
                     .font(.caption2.weight(.semibold))
@@ -2052,6 +2091,14 @@ GunnAire
             in: serviceLocations
         ) ?? CustomerServiceLocationPolicy.preferredLocation(for: contract.customer.id, in: serviceLocations)
         let serviceAddress = serviceLocation?.address ?? contract.customer.address?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: contract.customer.id,
+            serviceLocationID: serviceLocation?.id,
+            in: operationalAlerts
+        ) {
+            maintenanceMessage = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+            return
+        }
         let call = ServiceCall(
             googleEventManagedByApp: true,
             siteAddress: serviceAddress?.isEmpty == false ? serviceAddress : nil,
@@ -2103,6 +2150,14 @@ GunnAire
             syncMessage = "Dispatcher or administrator access is required to schedule follow-up visits."
             return
         }
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: sourceCall.customer.id,
+            serviceLocationID: sourceCall.serviceLocationID,
+            in: operationalAlerts
+        ) {
+            syncMessage = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+            return
+        }
         let followUpCall = sourceCall.makeFollowUpVisit()
         modelContext.insert(followUpCall)
         let actorEmail = AppIdentity.currentEmail
@@ -2141,6 +2196,14 @@ GunnAire
             approvedWorkMessage = "Record traceable customer approval before scheduling this estimate."
             return
         }
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: estimate.customer.id,
+            serviceLocationID: estimate.serviceLocationID ?? sourceCall(for: estimate)?.serviceLocationID,
+            in: operationalAlerts
+        ) {
+            approvedWorkMessage = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+            return
+        }
         approvedWorkMessage = nil
         selectedEstimateForScheduling = estimate
     }
@@ -2153,6 +2216,14 @@ GunnAire
         workType: ServiceCallType
     ) -> Bool {
         guard canManageDispatch else { return false }
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: estimate.customer.id,
+            serviceLocationID: estimate.serviceLocationID ?? sourceCall(for: estimate)?.serviceLocationID,
+            in: operationalAlerts
+        ) {
+            approvedWorkMessage = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+            return false
+        }
         if let existing = ApprovedEstimateScheduling.existingWorkOrder(for: estimate, in: serviceCalls) {
             selectedDate = Calendar.current.startOfDay(for: existing.scheduledDate)
             navigationPath.append(existing)
@@ -2235,6 +2306,13 @@ GunnAire
                 return .rejected("Google-owned events are read-only. Move this event in Google Calendar, then sync again.")
             }
             return .rejected("Completed and cancelled jobs cannot be moved from the dispatch board.")
+        }
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: call.customer.id,
+            serviceLocationID: call.serviceLocationID,
+            in: operationalAlerts
+        ) {
+            return .rejected(CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker))
         }
 
         let proposedStart = DispatchBoardScheduling.proposedStart(
@@ -2542,6 +2620,7 @@ private struct DispatchWeekBoardView: View {
     @Environment(\.dismiss) private var dismiss
 
     let calls: [ServiceCall]
+    let operationalAlerts: [CustomerOperationalAlert]
     let onMove: (UUID, Date, String?) -> DispatchBoardMoveResult
 
     @State private var weekAnchor: Date
@@ -2553,9 +2632,11 @@ private struct DispatchWeekBoardView: View {
     init(
         initialDate: Date,
         calls: [ServiceCall],
+        operationalAlerts: [CustomerOperationalAlert],
         onMove: @escaping (UUID, Date, String?) -> DispatchBoardMoveResult
     ) {
         self.calls = calls
+        self.operationalAlerts = operationalAlerts
         self.onMove = onMove
         _weekAnchor = State(initialValue: DispatchBoardScheduling.startOfWeek(containing: initialDate))
     }
@@ -2743,6 +2824,19 @@ private struct DispatchWeekBoardView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            if let alert = CustomerOperationalAlertPolicy.activeAlerts(
+                customerID: call.customer.id,
+                serviceLocationID: call.serviceLocationID,
+                in: operationalAlerts
+            ).first {
+                Label(
+                    alert.blocksNewScheduling ? "Do Not Service" : alert.title,
+                    systemImage: alert.kind.systemImage
+                )
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(alert.blocksNewScheduling ? .red : .orange)
+                .lineLimit(1)
+            }
             Label(call.assignedTechnician?.name ?? "Unassigned", systemImage: call.assignedTechnician == nil ? "person.slash" : "person.fill")
                 .font(.caption2)
                 .foregroundStyle(.secondary)

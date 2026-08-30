@@ -725,6 +725,7 @@ struct ServiceCallDetailView: View {
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \FieldExpenseClaim.expenseDate, order: .reverse) private var fieldExpenseClaims: [FieldExpenseClaim]
+    @Query(sort: \CustomerOperationalAlert.createdAt, order: .reverse) private var operationalAlerts: [CustomerOperationalAlert]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
     @AppStorage("requireWorkPerformedLogForCloseout") private var requireWorkPerformedLogForCloseout = true
@@ -767,6 +768,14 @@ struct ServiceCallDetailView: View {
             customerID: call.customer.id,
             in: serviceLocations,
             includeInactive: true
+        )
+    }
+
+    private var activeOperationalAlerts: [CustomerOperationalAlert] {
+        CustomerOperationalAlertPolicy.activeAlerts(
+            customerID: call.customer.id,
+            serviceLocationID: call.serviceLocationID,
+            in: operationalAlerts
         )
     }
 
@@ -1208,7 +1217,8 @@ GunnAire
     private func commitEnRouteHandoff(_ submission: EnRouteHandoffSubmission) {
         showingEnRouteHandoff = false
         guard canUpdateCurrentJob,
-              EnRouteHandoffPolicy.canMarkEnRoute(call) else {
+              EnRouteHandoffPolicy.canMarkEnRoute(call),
+              activeOperationalAlerts.contains(where: \CustomerOperationalAlert.blocksNewScheduling) == false else {
             jobActionStatus = "This job changed or your access no longer permits an En Route update. Refresh the job and try again."
             return
         }
@@ -1516,6 +1526,10 @@ GunnAire
         )
     }
 
+    private var activeServiceRestriction: CustomerOperationalAlert? {
+        activeOperationalAlerts.first(where: \CustomerOperationalAlert.blocksNewScheduling)
+    }
+
     private func normalizedEquipmentKey(for call: ServiceCall) -> String? {
         if let serial = call.equipmentSerialNumber?.trimmingCharacters(in: .whitespacesAndNewlines),
            !serial.isEmpty {
@@ -1604,6 +1618,14 @@ GunnAire
     }
 
     private func scheduleFollowUpVisit() {
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: call.customer.id,
+            serviceLocationID: call.serviceLocationID,
+            in: operationalAlerts
+        ) {
+            jobActionStatus = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+            return
+        }
         let followUpCall = call.makeFollowUpVisit()
         modelContext.insert(followUpCall)
         let sourceID = String(call.id.uuidString.prefix(8)).uppercased()
@@ -1825,6 +1847,14 @@ GunnAire
             selectedEstimateForApproval = estimate
             return
         }
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: estimate.customer.id,
+            serviceLocationID: estimate.serviceLocationID ?? call.serviceLocationID,
+            in: operationalAlerts
+        ) {
+            jobActionStatus = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+            return
+        }
         selectedEstimateForScheduling = estimate
     }
 
@@ -1837,6 +1867,14 @@ GunnAire
     ) -> Bool {
         guard canScheduleApprovedWork else { return false }
         guard EstimateProposalPolicy.selectionIssue(for: estimate, in: estimates) == nil else { return false }
+        if let blocker = CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: estimate.customer.id,
+            serviceLocationID: estimate.serviceLocationID ?? call.serviceLocationID,
+            in: operationalAlerts
+        ) {
+            jobActionStatus = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+            return false
+        }
         if let existing = scheduledApprovedWork(for: estimate) {
             GunnAireAppIntentRouter.storeScheduleCallRoute(existing.id)
             return true
@@ -1986,7 +2024,11 @@ GunnAire
                     }
 
                     if selectedWorkspace == .overview {
-                    Group {
+                        CustomerOperationalAlertInlineSummary(
+                            alerts: activeOperationalAlerts,
+                            accessibilityIdentifier: "ServiceCallOperationalAlerts"
+                        )
+                        Group {
                         if call.status == .cancelled {
                             if let cancelledAt = call.cancelledAt {
                                 Text("Cancelled: \(cancelledAt.formatted(date: .abbreviated, time: .shortened))")
@@ -3256,6 +3298,7 @@ GunnAire
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(activeServiceRestriction != nil)
                 }
                 if call.technicianEnRouteAt != nil && call.technicianArrivedAt == nil && !call.arrivalConfirmed {
                     Button {
@@ -3266,9 +3309,14 @@ GunnAire
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(activeServiceRestriction != nil)
                 }
                 if call.status == .scheduled {
                     Button {
+                        if let blocker = activeServiceRestriction {
+                            jobActionStatus = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+                            return
+                        }
                         call.status = .inProgress
                         call.documentationStartedAt = call.documentationStartedAt ?? Date()
                         ServiceCallActivity.record(for: call, action: "Job started", detail: "Status changed from scheduled to in progress.", actorEmail: currentActivityActor, in: modelContext)
@@ -3277,6 +3325,7 @@ GunnAire
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(activeServiceRestriction != nil)
                 } else if call.status == .inProgress {
                     Button {
                         guard operationalCompletionBlockers.isEmpty else {
@@ -3296,6 +3345,10 @@ GunnAire
                     .disabled(!operationalCompletionBlockers.isEmpty)
                 } else if call.status == .completed {
                     Button {
+                        if let blocker = activeServiceRestriction {
+                            jobActionStatus = CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: blocker)
+                            return
+                        }
                         call.status = .inProgress
                         ServiceCallActivity.record(for: call, action: "Job reopened", detail: "Status changed from completed to in progress.", actorEmail: currentActivityActor, in: modelContext)
                     } label: {
@@ -3303,10 +3356,22 @@ GunnAire
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
+                    .disabled(activeServiceRestriction != nil)
                 }
             }
             .tint(Color.brandGold)
             .foregroundStyle(Color.primaryBlack)
+
+            if let activeServiceRestriction {
+                Label(
+                    CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: activeServiceRestriction),
+                    systemImage: "hand.raised.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.red)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("JobActionServiceRestriction")
+            }
 
             if call.status == .inProgress, let operationalCompletionStatus {
                 Label(operationalCompletionStatus, systemImage: "exclamationmark.triangle.fill")
@@ -3636,6 +3701,7 @@ struct AddServiceCallView: View {
     @Query private var existingServiceCalls: [ServiceCall]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
+    @Query(sort: \CustomerOperationalAlert.createdAt, order: .reverse) private var operationalAlerts: [CustomerOperationalAlert]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("defaultJobDurationMinutes") private var defaultJobDurationMinutes = 90
     
@@ -3727,7 +3793,8 @@ struct AddServiceCallView: View {
         canManageDispatch &&
             (customer != nil || (!requiresCustomer && eventTitle.nilIfBlank != nil)) &&
             (!usesArrivalWindow || arrivalWindowEnd > arrivalWindowStart) &&
-            equipmentLifecycleSnapshot.validationMessage == nil
+            equipmentLifecycleSnapshot.validationMessage == nil &&
+            schedulingBlocker == nil
     }
 
     private var equipmentLifecycleSnapshot: EquipmentLifecycleSnapshot {
@@ -3783,6 +3850,24 @@ struct AddServiceCallView: View {
     private var selectedCustomerServiceLocations: [CustomerServiceLocation] {
         guard let customer else { return [] }
         return CustomerServiceLocationPolicy.locations(for: customer.id, in: serviceLocations)
+    }
+
+    private var selectedOperationalAlerts: [CustomerOperationalAlert] {
+        guard let customer else { return [] }
+        return CustomerOperationalAlertPolicy.activeAlerts(
+            customerID: customer.id,
+            serviceLocationID: selectedServiceLocationID,
+            in: operationalAlerts
+        )
+    }
+
+    private var schedulingBlocker: CustomerOperationalAlert? {
+        guard let customer else { return nil }
+        return CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: customer.id,
+            serviceLocationID: selectedServiceLocationID,
+            in: operationalAlerts
+        )
     }
     
     var body: some View {
@@ -3930,6 +4015,16 @@ struct AddServiceCallView: View {
                         .foregroundStyle(Color.primaryBlack)
                         .disabled(!canSaveNewCustomer)
                     }
+                }
+                CustomerOperationalAlertInlineSummary(
+                    alerts: selectedOperationalAlerts,
+                    accessibilityIdentifier: "NewServiceCallOperationalAlerts"
+                )
+                if let schedulingBlocker {
+                    Text(CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: schedulingBlocker))
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("NewServiceCallBookingRestriction")
                 }
                 if !selectedCustomerServiceLocations.isEmpty {
                     Picker("Service Location", selection: $selectedServiceLocationID) {
@@ -4187,6 +4282,11 @@ struct AddServiceCallView: View {
         }
         guard equipmentLifecycleSnapshot.validationMessage == nil else { return }
         guard let resolvedCustomer = resolvedCustomerForSave() else { return }
+        guard CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: resolvedCustomer.id,
+            serviceLocationID: selectedServiceLocationID,
+            in: operationalAlerts
+        ) == nil else { return }
         let trimmedSiteAddress = siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedSiteAddress = trimmedSiteAddress.isEmpty ? resolvedCustomer.address : trimmedSiteAddress
         let resolvedCalendarID = ServiceCalendarRouting.validSelection(
@@ -4381,6 +4481,7 @@ struct EditServiceCallView: View {
     @Query(sort: \ServiceCallActivity.occurredAt, order: .reverse) private var serviceCallActivities: [ServiceCallActivity]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
+    @Query(sort: \CustomerOperationalAlert.createdAt, order: .reverse) private var operationalAlerts: [CustomerOperationalAlert]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("requireWorkPerformedLogForCloseout") private var requireWorkPerformedLogForCloseout = true
 
@@ -4542,6 +4643,33 @@ struct EditServiceCallView: View {
         return CustomerServiceLocationPolicy.locations(for: customer.id, in: serviceLocations)
     }
 
+    private var selectedOperationalAlerts: [CustomerOperationalAlert] {
+        guard let customer else { return [] }
+        return CustomerOperationalAlertPolicy.activeAlerts(
+            customerID: customer.id,
+            serviceLocationID: selectedServiceLocationID,
+            in: operationalAlerts
+        )
+    }
+
+    private var selectedSchedulingBlocker: CustomerOperationalAlert? {
+        selectedOperationalAlerts.first(where: \CustomerOperationalAlert.blocksNewScheduling)
+    }
+
+    private var changesSchedulingCommitment: Bool {
+        customer?.id != call.customer.id ||
+            selectedServiceLocationID != call.serviceLocationID ||
+            scheduledTime != call.scheduledDate ||
+            duration != call.duration ||
+            technician?.id != call.assignedTechnician?.id ||
+            crewMemberIDs != call.additionalTechnicianIDs ||
+            (status == .inProgress && call.status != .inProgress)
+    }
+
+    private var serviceRestrictionBlocksSave: Bool {
+        status != .cancelled && selectedSchedulingBlocker != nil && changesSchedulingCommitment
+    }
+
     private var equipmentLifecycleSnapshot: EquipmentLifecycleSnapshot {
         EquipmentLifecyclePolicy.snapshot(
             installDate: includeInstallDate ? equipmentInstallDate : nil,
@@ -4597,6 +4725,16 @@ struct EditServiceCallView: View {
                     ForEach(visibleCustomers) { customer in
                         Text(customer.name).tag(Customer?.some(customer))
                     }
+                }
+                CustomerOperationalAlertInlineSummary(
+                    alerts: selectedOperationalAlerts,
+                    accessibilityIdentifier: "EditServiceCallOperationalAlerts"
+                )
+                if serviceRestrictionBlocksSave, let selectedSchedulingBlocker {
+                    Text(CustomerOperationalAlertPolicy.bookingRestrictionMessage(for: selectedSchedulingBlocker))
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("EditServiceCallBookingRestriction")
                 }
                 Picker("Technician", selection: $technician) {
                     Text("Unassigned").tag(Technician?.none)
@@ -4831,7 +4969,8 @@ struct EditServiceCallView: View {
                             (status == .cancelled && cancellationReason.nilIfBlank == nil) ||
                             (usesArrivalWindow && arrivalWindowEnd <= arrivalWindowStart) ||
                             equipmentLifecycleSnapshot.validationMessage != nil ||
-                            workLogBlocksRequestedStatus
+                            workLogBlocksRequestedStatus ||
+                            serviceRestrictionBlocksSave
                     )
                 }
             }
@@ -4959,6 +5098,7 @@ struct EditServiceCallView: View {
         guard equipmentLifecycleSnapshot.validationMessage == nil else { return }
         guard !workLogBlocksRequestedStatus else { return }
         guard let customer else { return }
+        guard !serviceRestrictionBlocksSave else { return }
         let originalStart = call.scheduledDate
         let originalArrivalWindow = call.promisedArrivalWindowSummary
         let originalStatus = call.status

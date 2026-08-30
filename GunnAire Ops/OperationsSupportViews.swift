@@ -20,6 +20,7 @@ enum CustomerDataMaintenance {
         var equipmentProfiles = 0
         var serviceLocations = 0
         var customerCommunications = 0
+        var operationalAlerts = 0
     }
 
     private static let genericCalendarCustomerNames: Set<String> = [
@@ -72,6 +73,7 @@ enum CustomerDataMaintenance {
         let equipmentProfiles = (try? modelContext.fetch(FetchDescriptor<CustomerEquipment>())) ?? []
         let serviceLocations = (try? modelContext.fetch(FetchDescriptor<CustomerServiceLocation>())) ?? []
         let customerCommunications = (try? modelContext.fetch(FetchDescriptor<CustomerCommunication>())) ?? []
+        let operationalAlerts = (try? modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>())) ?? []
 
         var summary = DeletionSummary()
         for customer in genericCustomers {
@@ -87,7 +89,8 @@ enum CustomerDataMaintenance {
                 documentAttachments: documentAttachments,
                 equipmentProfiles: equipmentProfiles,
                 serviceLocations: serviceLocations,
-                customerCommunications: customerCommunications
+                customerCommunications: customerCommunications,
+                operationalAlerts: operationalAlerts
             ))
         }
         try? modelContext.save()
@@ -106,7 +109,8 @@ enum CustomerDataMaintenance {
         documentAttachments: [ServiceDocumentAttachment],
         equipmentProfiles: [CustomerEquipment],
         serviceLocations: [CustomerServiceLocation],
-        customerCommunications: [CustomerCommunication]
+        customerCommunications: [CustomerCommunication],
+        operationalAlerts: [CustomerOperationalAlert]
     ) -> DeletionSummary {
         var summary = DeletionSummary()
         let customerID = customer.id
@@ -157,6 +161,10 @@ enum CustomerDataMaintenance {
             modelContext.delete(communication)
             summary.customerCommunications += 1
         }
+        for alert in operationalAlerts where alert.customerID == customerID {
+            modelContext.delete(alert)
+            summary.operationalAlerts += 1
+        }
         modelContext.delete(customer)
         summary.customers += 1
         return summary
@@ -176,10 +184,11 @@ private extension CustomerDataMaintenance.DeletionSummary {
         equipmentProfiles += other.equipmentProfiles
         serviceLocations += other.serviceLocations
         customerCommunications += other.customerCommunications
+        operationalAlerts += other.operationalAlerts
     }
 
     var deletedAnything: Bool {
-        customers + serviceCalls + estimates + invoices + payments + contracts + timeEntries + documentAttachments + equipmentProfiles + serviceLocations + customerCommunications > 0
+        customers + serviceCalls + estimates + invoices + payments + contracts + timeEntries + documentAttachments + equipmentProfiles + serviceLocations + customerCommunications + operationalAlerts > 0
     }
 
     var customerScreenMessage: String {
@@ -2535,6 +2544,7 @@ private struct CustomerEditorView: View {
     @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
     @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
+    @Query(sort: \CustomerOperationalAlert.createdAt, order: .reverse) private var operationalAlerts: [CustomerOperationalAlert]
 
     let customer: Customer
 
@@ -2599,6 +2609,7 @@ private struct CustomerEditorView: View {
     @State private var newServiceLocationAccessNotes = ""
     @State private var newServiceLocationIsPrimary = false
     @State private var selectedEquipmentServiceLocationID: UUID?
+    @State private var showingOperationalAlerts = false
 
     private var customerServiceCalls: [ServiceCall] {
         serviceCalls.filter { $0.customer.id == customer.id }
@@ -2807,6 +2818,24 @@ private struct CustomerEditorView: View {
         AppAccess.canSyncCustomerRecordsWithAccounting(email: currentEmail, users: users)
     }
 
+    private var activeCustomerOperationalAlerts: [CustomerOperationalAlert] {
+        CustomerOperationalAlertPolicy.allAlerts(
+            customerID: customer.id,
+            in: operationalAlerts
+        ).filter(\.isActive)
+    }
+
+    private var canManageOperationalAlerts: Bool {
+        CustomerOperationalAlertKind.allCases.contains { kind in
+            AppAccess.canPerformCustomerOperationalAlertAction(
+                .create,
+                kind: kind,
+                email: currentEmail,
+                users: users
+            )
+        }
+    }
+
     private var customerFileImporterContentTypes: [UTType] {
         forcedCustomerAttachmentKind == .customerProfilePhoto
             ? [.image]
@@ -2949,6 +2978,36 @@ private struct CustomerEditorView: View {
                     Text(customerActionMessage)
                         .font(.caption)
                         .foregroundColor(.secondary)
+                }
+
+                Section {
+                    if activeCustomerOperationalAlerts.isEmpty {
+                        Label("No active customer or site alerts", systemImage: "checkmark.shield")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(activeCustomerOperationalAlerts.prefix(3)) { alert in
+                            CustomerOperationalAlertCompactRow(alert: alert)
+                        }
+                        if activeCustomerOperationalAlerts.count > 3 {
+                            Text("+ \(activeCustomerOperationalAlerts.count - 3) more active alert\(activeCustomerOperationalAlerts.count - 3 == 1 ? "" : "s")")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if canManageOperationalAlerts {
+                        Button {
+                            showingOperationalAlerts = true
+                        } label: {
+                            Label("Manage Operational Alerts", systemImage: "tag")
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("ManageCustomerOperationalAlerts")
+                    }
+                } header: {
+                    Text("Operational Alerts")
+                        .accessibilityIdentifier("CustomerOperationalAlertSummary")
                 }
 
                 Section("Account Intelligence") {
@@ -3529,6 +3588,9 @@ private struct CustomerEditorView: View {
                 CustomerAttachmentCameraPicker(sourceType: .camera) { image in
                     handleCapturedCustomerImage(image)
                 }
+            }
+            .sheet(isPresented: $showingOperationalAlerts) {
+                CustomerOperationalAlertManagementView(customer: customer)
             }
             .fullScreenCover(isPresented: $showingEquipmentScanner) {
                 EquipmentBarcodeScannerSheet { payload in
@@ -5267,7 +5329,8 @@ private struct CustomerEditorView: View {
             documentAttachments: documentAttachments,
             equipmentProfiles: equipmentProfiles,
             serviceLocations: serviceLocations,
-            customerCommunications: customerCommunications
+            customerCommunications: customerCommunications,
+            operationalAlerts: operationalAlerts
         )
         try? modelContext.save()
         dismiss()
