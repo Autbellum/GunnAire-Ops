@@ -3557,7 +3557,7 @@ struct GunnAire_OpsTests {
         {
           "connectors": [
             {
-              "contractVersion": 1,
+              "contractVersion": 2,
               "kind": "lennoxPartner",
               "displayName": "Lennox Partner",
               "provider": "Lennox",
@@ -3568,7 +3568,7 @@ struct GunnAire_OpsTests {
               "onboardingURL": "https://www.lennoxpros.com/"
             },
             {
-              "contractVersion": 1,
+              "contractVersion": 2,
               "kind": "johnstoneDirectConnect",
               "displayName": "Johnstone Supply DirectConnect",
               "provider": "Johnstone Supply",
@@ -3579,7 +3579,7 @@ struct GunnAire_OpsTests {
               "onboardingURL": "https://www.johnstonesupply.com/"
             },
             {
-              "contractVersion": 1,
+              "contractVersion": 2,
               "kind": "genericCatalog",
               "displayName": "Generic Supplier Catalog",
               "provider": "Approved supplier",
@@ -3611,6 +3611,19 @@ struct GunnAire_OpsTests {
             ) == nil
         )
         #expect(connectors.first?.statusLabel == "Partner approval required")
+        let outdated = SupplierConnectorReadiness(
+            contractVersion: 1,
+            kind: .genericCatalog,
+            displayName: "Legacy adapter",
+            provider: "Approved supplier",
+            status: "ready",
+            detail: "Legacy contract active.",
+            capabilities: ["purchaseOrders"],
+            canSubmitOrders: true,
+            onboardingURL: nil
+        )
+        #expect(!outdated.isReady)
+        #expect(outdated.statusLabel == "Connector upgrade required")
     }
 
     @Test func serverConnectorAcceptanceCreatesImmutableApprovedOrderEvidence() throws {
@@ -3630,15 +3643,23 @@ struct GunnAire_OpsTests {
             notes: "Do not substitute the coil voltage."
         )
         let confirmedAt = Date(timeIntervalSince1970: 1_788_000_000)
+        let orderLineID = order.purchaseOrderLines[0].id
         let acceptance = SupplierConnectorOrderAcceptance(
-            contractVersion: 1,
+            contractVersion: 2,
             purchaseOrderID: order.id,
             purchaseOrderNumber: order.number,
             connectorKind: .johnstoneDirectConnect,
             externalOrderID: "JOHNSTONE-ORDER-48291",
             reference: "JS-48291",
             supplierLocation: "Winston-Salem",
-            confirmedUnitCost: 30.5,
+            confirmedLines: [
+                SupplierConnectorAcceptedLine(
+                    lineID: orderLineID,
+                    supplierPartNumber: "JS-CNT-40A",
+                    confirmedQuantity: 3,
+                    confirmedUnitCost: 30.5
+                )
+            ],
             confirmedShippingCost: 4,
             currencyCode: "USD",
             confirmedByEmail: submittingAdmin.email,
@@ -3665,7 +3686,7 @@ struct GunnAire_OpsTests {
         #expect(evidence.connectorKind == .johnstoneDirectConnect)
         #expect(evidence.externalOrderID == "JOHNSTONE-ORDER-48291")
         #expect(evidence.idempotencyKey == "supplier-order-johnstone-0001")
-        #expect(evidence.connectorContractVersion == 1)
+        #expect(evidence.connectorContractVersion == 2)
         #expect(evidence.confirmedByEmail == submittingAdmin.email)
         #expect(order.supplierOrderSummary.contains("Connector: Johnstone Supply DirectConnect"))
         #expect(order.supplierOrderSummary.contains("External order ID: JOHNSTONE-ORDER-48291"))
@@ -3683,15 +3704,23 @@ struct GunnAire_OpsTests {
             status: .draft
         )
         let now = Date(timeIntervalSince1970: 1_788_000_000)
+        let orderLineID = order.purchaseOrderLines[0].id
         let wrongSupplier = SupplierConnectorOrderAcceptance(
-            contractVersion: 1,
+            contractVersion: 2,
             purchaseOrderID: order.id,
             purchaseOrderNumber: order.number,
             connectorKind: .johnstonePunchOut,
             externalOrderID: "ORDER-1",
             reference: "REF-1",
             supplierLocation: nil,
-            confirmedUnitCost: 200,
+            confirmedLines: [
+                SupplierConnectorAcceptedLine(
+                    lineID: orderLineID,
+                    supplierPartNumber: nil,
+                    confirmedQuantity: 1,
+                    confirmedUnitCost: 200
+                )
+            ],
             confirmedShippingCost: 0,
             currencyCode: "USD",
             confirmedByEmail: admin.email,
@@ -3711,14 +3740,21 @@ struct GunnAire_OpsTests {
         }
 
         let stale = SupplierConnectorOrderAcceptance(
-            contractVersion: 1,
+            contractVersion: 2,
             purchaseOrderID: order.id,
             purchaseOrderNumber: order.number,
             connectorKind: .lennoxPartner,
             externalOrderID: "ORDER-2",
             reference: "REF-2",
             supplierLocation: nil,
-            confirmedUnitCost: 200,
+            confirmedLines: [
+                SupplierConnectorAcceptedLine(
+                    lineID: orderLineID,
+                    supplierPartNumber: nil,
+                    confirmedQuantity: 1,
+                    confirmedUnitCost: 200
+                )
+            ],
             confirmedShippingCost: 0,
             currencyCode: "USD",
             confirmedByEmail: admin.email,
@@ -6942,7 +6978,7 @@ struct GunnAire_OpsTests {
         #expect(order.supplierOrderSummary.contains("Bill line: 1 × Disconnect at $44.00"))
     }
 
-    @Test func approvedConnectorFailsClosedForMultiLineOrdersUntilContractSupportsArrays() {
+    @Test func approvedConnectorReconcilesEveryMultiLineOrderLineAndRejectsQuantityMismatch() throws {
         let firstLineID = UUID(uuidString: "A1000000-0000-4000-8000-000000000341")!
         let secondLineID = UUID(uuidString: "A1000000-0000-4000-8000-000000000342")!
         let lines = [
@@ -6962,15 +6998,28 @@ struct GunnAire_OpsTests {
         )
         let admin = AppUser(email: "admin@gunnaire.com", role: .admin)
         let now = Date(timeIntervalSince1970: 1_792_500_000)
-        let acceptance = SupplierConnectorOrderAcceptance(
-            contractVersion: 1,
+        let mismatchedAcceptance = SupplierConnectorOrderAcceptance(
+            contractVersion: 2,
             purchaseOrderID: order.id,
             purchaseOrderNumber: order.number,
             connectorKind: .johnstoneDirectConnect,
             externalOrderID: "JS-ORDER-MULTI",
             reference: "JS-MULTI",
             supplierLocation: nil,
-            confirmedUnitCost: 30,
+            confirmedLines: [
+                SupplierConnectorAcceptedLine(
+                    lineID: firstLineID,
+                    supplierPartNumber: "JS-1",
+                    confirmedQuantity: 1,
+                    confirmedUnitCost: 29
+                ),
+                SupplierConnectorAcceptedLine(
+                    lineID: secondLineID,
+                    supplierPartNumber: "JS-2",
+                    confirmedQuantity: 2,
+                    confirmedUnitCost: 44
+                )
+            ],
             confirmedShippingCost: 0,
             currencyCode: "USD",
             confirmedByEmail: admin.email,
@@ -6980,9 +7029,9 @@ struct GunnAire_OpsTests {
             replayed: false
         )
 
-        #expect(throws: PurchaseOrderConfirmationError.connectorSingleLineOnly) {
+        #expect(throws: PurchaseOrderConfirmationError.connectorLineMismatch) {
             try PurchaseOrderOrderingPolicy.applyServerConnectorAcceptance(
-                acceptance,
+                mismatchedAcceptance,
                 to: order,
                 actorEmail: admin.email,
                 users: [admin],
@@ -6991,6 +7040,50 @@ struct GunnAire_OpsTests {
         }
         #expect(order.status == .draft)
         #expect(order.supplierOrderConfirmation == nil)
+
+        let acceptance = SupplierConnectorOrderAcceptance(
+            contractVersion: 2,
+            purchaseOrderID: order.id,
+            purchaseOrderNumber: order.number,
+            connectorKind: .johnstoneDirectConnect,
+            externalOrderID: "JS-ORDER-MULTI",
+            reference: "JS-MULTI",
+            supplierLocation: nil,
+            confirmedLines: [
+                SupplierConnectorAcceptedLine(
+                    lineID: firstLineID,
+                    supplierPartNumber: "JS-1",
+                    confirmedQuantity: 1,
+                    confirmedUnitCost: 29
+                ),
+                SupplierConnectorAcceptedLine(
+                    lineID: secondLineID,
+                    supplierPartNumber: "JS-2",
+                    confirmedQuantity: 1,
+                    confirmedUnitCost: 44
+                )
+            ],
+            confirmedShippingCost: 6,
+            currencyCode: "USD",
+            confirmedByEmail: admin.email,
+            confirmedAt: now,
+            priceAvailabilityCheckedAt: now,
+            idempotencyKey: "supplier-order-multi-line-100",
+            replayed: false
+        )
+
+        try PurchaseOrderOrderingPolicy.applyServerConnectorAcceptance(
+            acceptance,
+            to: order,
+            actorEmail: admin.email,
+            users: [admin],
+            at: now
+        )
+        #expect(order.status == .ordered)
+        #expect(order.acceptedUnitCost(for: firstLineID) == 29)
+        #expect(order.acceptedUnitCost(for: secondLineID) == 44)
+        #expect(order.shippingCost == 6)
+        #expect(order.supplierOrderConfirmation?.connectorContractVersion == 2)
     }
 
     @Test func sharedDocumentUploadFailureRetainsAnActionableRetryState() async throws {

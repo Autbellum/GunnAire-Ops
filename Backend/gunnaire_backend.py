@@ -33,7 +33,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.30.15"
+SERVICE_VERSION = "2026.08.30.16"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -123,7 +123,7 @@ QBO_EXPENSE_ACCOUNT_TYPES = {
 }
 QBO_AP_ACCOUNT_TYPES = {"accounts payable": "Accounts Payable"}
 SUPPLIER_CONNECTOR_IDEMPOTENCY_PATTERN = re.compile(r"[A-Za-z0-9._:-]{16,128}")
-SUPPLIER_CONNECTOR_CONTRACT_VERSION = 1
+SUPPLIER_CONNECTOR_CONTRACT_VERSION = 2
 SUPPLIER_CONNECTOR_MAX_REQUEST_BYTES = min(
     max(int(os.environ.get("GUNNAIRE_SUPPLIER_CONNECTOR_MAX_REQUEST_BYTES", str(64 * 1024))), 1024),
     256 * 1024,
@@ -1129,11 +1129,7 @@ def validate_supplier_order_request(payload: dict[str, object]) -> dict[str, obj
         "purchaseOrderNumber",
         "serviceCallID",
         "vendorName",
-        "itemName",
-        "internalSKU",
-        "supplierPartNumber",
-        "quantity",
-        "expectedUnitCost",
+        "lines",
         "expectedShippingCost",
         "currencyCode",
         "supplierLocation",
@@ -1162,6 +1158,48 @@ def validate_supplier_order_request(payload: dict[str, object]) -> dict[str, obj
     currency_code = supplier_connector_text(payload, "currencyCode", maximum=3)
     if currency_code.upper() != "USD":
         raise ValueError("Only USD supplier orders are supported")
+    raw_lines = payload.get("lines")
+    if not isinstance(raw_lines, list) or not 1 <= len(raw_lines) <= 100:
+        raise ValueError("Supplier order requires 1-100 lines")
+    normalized_lines: list[dict[str, object]] = []
+    seen_line_ids: set[str] = set()
+    for raw_line in raw_lines:
+        if not isinstance(raw_line, dict):
+            raise ValueError("Invalid supplier order line")
+        allowed_line_keys = {
+            "lineID",
+            "itemName",
+            "internalSKU",
+            "supplierPartNumber",
+            "quantity",
+            "expectedUnitCost",
+        }
+        if set(raw_line) - allowed_line_keys:
+            raise ValueError("Supplier order line contains unsupported fields")
+        line_id = supplier_connector_text(raw_line, "lineID", maximum=36)
+        try:
+            line_id = str(uuid.UUID(line_id))
+        except (ValueError, AttributeError) as error:
+            raise ValueError("Invalid supplier order lineID") from error
+        if line_id in seen_line_ids:
+            raise ValueError("Supplier order lineIDs must be unique")
+        seen_line_ids.add(line_id)
+        internal_sku = supplier_connector_text(raw_line, "internalSKU", maximum=120, required=False)
+        supplier_part_number = supplier_connector_text(
+            raw_line, "supplierPartNumber", maximum=120, required=False
+        )
+        if supplier_part_number is None and internal_sku is None:
+            raise ValueError("Each supplier order line requires a supplier part number or internal SKU")
+        normalized_lines.append(
+            {
+                "lineID": line_id,
+                "itemName": supplier_connector_text(raw_line, "itemName", maximum=200),
+                "internalSKU": internal_sku,
+                "supplierPartNumber": supplier_part_number,
+                "quantity": supplier_connector_amount(raw_line, "quantity", positive=True),
+                "expectedUnitCost": supplier_connector_amount(raw_line, "expectedUnitCost"),
+            }
+        )
     normalized: dict[str, object] = {
         "contractVersion": SUPPLIER_CONNECTOR_CONTRACT_VERSION,
         "connectorKind": connector_kind,
@@ -1169,11 +1207,7 @@ def validate_supplier_order_request(payload: dict[str, object]) -> dict[str, obj
         "purchaseOrderNumber": supplier_connector_text(payload, "purchaseOrderNumber", maximum=120),
         "serviceCallID": service_call_id,
         "vendorName": supplier_connector_text(payload, "vendorName", maximum=160),
-        "itemName": supplier_connector_text(payload, "itemName", maximum=200),
-        "internalSKU": supplier_connector_text(payload, "internalSKU", maximum=120, required=False),
-        "supplierPartNumber": supplier_connector_text(payload, "supplierPartNumber", maximum=120, required=False),
-        "quantity": supplier_connector_amount(payload, "quantity", positive=True),
-        "expectedUnitCost": supplier_connector_amount(payload, "expectedUnitCost"),
+        "lines": normalized_lines,
         "expectedShippingCost": supplier_connector_amount(payload, "expectedShippingCost"),
         "currencyCode": "USD",
         "supplierLocation": supplier_connector_text(payload, "supplierLocation", maximum=120, required=False),
@@ -1184,8 +1218,6 @@ def validate_supplier_order_request(payload: dict[str, object]) -> dict[str, obj
         ),
         "orderNotes": supplier_connector_text(payload, "orderNotes", maximum=500, required=False),
     }
-    if normalized["supplierPartNumber"] is None and normalized["internalSKU"] is None:
-        raise ValueError("Supplier order requires a supplier part number or internal SKU")
     return normalized
 
 
@@ -1203,7 +1235,6 @@ def validate_supplier_order_acceptance(
         external_order_id = supplier_connector_text(response, "externalOrderID", maximum=200)
         reference = supplier_connector_text(response, "reference", maximum=120)
         supplier_location = supplier_connector_text(response, "supplierLocation", maximum=120, required=False)
-        confirmed_unit_cost = supplier_connector_amount(response, "confirmedUnitCost")
         confirmed_shipping_cost = supplier_connector_amount(response, "confirmedShippingCost")
         currency_code = supplier_connector_text(response, "currencyCode", maximum=3)
         if currency_code.upper() != "USD":
@@ -1220,6 +1251,59 @@ def validate_supplier_order_acceptance(
             raise ValueError("Invalid confirmedAt")
         if checked_date > confirmed_date + timedelta(minutes=5) or confirmed_date - checked_date > timedelta(hours=24):
             raise ValueError("Invalid priceAvailabilityCheckedAt")
+        request_lines = request.get("lines")
+        response_lines = response.get("confirmedLines")
+        if not isinstance(request_lines, list) or not isinstance(response_lines, list):
+            raise ValueError("Invalid confirmedLines")
+        if len(response_lines) != len(request_lines):
+            raise ValueError("Invalid confirmedLines")
+        request_lines_by_id = {
+            str(line["lineID"]): line for line in request_lines if isinstance(line, dict)
+        }
+        confirmed_lines_by_id: dict[str, dict[str, object]] = {}
+        for raw_line in response_lines:
+            if not isinstance(raw_line, dict):
+                raise ValueError("Invalid confirmed line")
+            allowed_line_keys = {
+                "lineID",
+                "supplierPartNumber",
+                "confirmedQuantity",
+                "confirmedUnitCost",
+            }
+            if set(raw_line) - allowed_line_keys:
+                raise ValueError("Confirmed line contains unsupported fields")
+            line_id = supplier_connector_text(raw_line, "lineID", maximum=36)
+            try:
+                line_id = str(uuid.UUID(line_id))
+            except (ValueError, AttributeError) as error:
+                raise ValueError("Invalid confirmed lineID") from error
+            if line_id in confirmed_lines_by_id or line_id not in request_lines_by_id:
+                raise ValueError("Invalid confirmed lineID")
+            expected_line = request_lines_by_id[line_id]
+            confirmed_quantity = supplier_connector_amount(raw_line, "confirmedQuantity", positive=True)
+            if abs(confirmed_quantity - float(expected_line["quantity"])) > 0.0001:
+                raise ValueError("Confirmed quantity does not match the submitted order")
+            supplier_part_number = supplier_connector_text(
+                raw_line, "supplierPartNumber", maximum=120, required=False
+            )
+            expected_part_number = expected_line.get("supplierPartNumber")
+            if (
+                supplier_part_number is not None
+                and isinstance(expected_part_number, str)
+                and supplier_part_number.casefold() != expected_part_number.casefold()
+            ):
+                raise ValueError("Confirmed supplier part number does not match the submitted order")
+            confirmed_lines_by_id[line_id] = {
+                "lineID": line_id,
+                "supplierPartNumber": supplier_part_number,
+                "confirmedQuantity": confirmed_quantity,
+                "confirmedUnitCost": supplier_connector_amount(raw_line, "confirmedUnitCost"),
+            }
+        if set(confirmed_lines_by_id) != set(request_lines_by_id):
+            raise ValueError("Confirmed lines do not match the submitted order")
+        confirmed_lines = [
+            confirmed_lines_by_id[str(line["lineID"])] for line in request_lines
+        ]
     except ValueError as error:
         raise SupplierConnectorFailure(
             "invalid-adapter-response",
@@ -1234,7 +1318,7 @@ def validate_supplier_order_acceptance(
         "externalOrderID": external_order_id,
         "reference": reference,
         "supplierLocation": supplier_location,
-        "confirmedUnitCost": confirmed_unit_cost,
+        "confirmedLines": confirmed_lines,
         "confirmedShippingCost": confirmed_shipping_cost,
         "currencyCode": "USD",
         "confirmedByEmail": normalize_email(actor_email),

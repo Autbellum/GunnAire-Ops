@@ -815,7 +815,7 @@ enum PurchaseOrderConfirmationError: LocalizedError, Equatable {
     case locationTooLong
     case invalidCost
     case connectorRequiresServer
-    case connectorSingleLineOnly
+    case connectorLineMismatch
     case connectorVendorMismatch
     case serverOrderMismatch
     case staleConnectorPricing
@@ -844,8 +844,8 @@ enum PurchaseOrderConfirmationError: LocalizedError, Equatable {
             "Enter valid confirmed unit and shipping costs of zero or more."
         case .connectorRequiresServer:
             "Electronic connector acceptance must come from the approved server-side supplier adapter."
-        case .connectorSingleLineOnly:
-            "The approved supplier connector currently accepts one item per order. Use manual supplier confirmation for this multi-line purchase order."
+        case .connectorLineMismatch:
+            "The supplier acknowledgement does not match every submitted purchase-order line. Stop and reconcile the order with the supplier."
         case .connectorVendorMismatch:
             "The approved connector does not match this purchase order's supplier."
         case .serverOrderMismatch:
@@ -966,9 +966,6 @@ enum PurchaseOrderOrderingPolicy {
         guard order.status == .draft else {
             throw PurchaseOrderConfirmationError.invalidState
         }
-        guard order.lineCount == 1 else {
-            throw PurchaseOrderConfirmationError.connectorSingleLineOnly
-        }
         guard order.supplierOrderConfirmation == nil else {
             throw PurchaseOrderConfirmationError.alreadyConfirmed
         }
@@ -999,10 +996,8 @@ enum PurchaseOrderOrderingPolicy {
         guard !actor.isEmpty,
               !serverActor.isEmpty,
               serverActorIsKnown,
-              acceptance.contractVersion == 1,
+              acceptance.contractVersion == SupplierConnectorContract.currentVersion,
               acceptance.currencyCode.caseInsensitiveCompare("USD") == .orderedSame,
-              acceptance.confirmedUnitCost.isFinite,
-              acceptance.confirmedUnitCost >= 0,
               acceptance.confirmedShippingCost.isFinite,
               acceptance.confirmedShippingCost >= 0,
               acceptance.reference.isValidSupplierConnectorIdentifier(maximum: 120),
@@ -1016,12 +1011,46 @@ enum PurchaseOrderOrderingPolicy {
         guard priceAge >= -300, priceAge <= 24 * 60 * 60 else {
             throw PurchaseOrderConfirmationError.staleConnectorPricing
         }
+        let orderLines = order.purchaseOrderLines
+        let acceptedLines = acceptance.confirmedLines
+        let acceptedLineIDs = acceptedLines.map(\.lineID)
+        guard acceptedLines.count == orderLines.count,
+              Set(acceptedLineIDs).count == acceptedLineIDs.count,
+              Set(acceptedLineIDs) == Set(orderLines.map(\.id)) else {
+            throw PurchaseOrderConfirmationError.connectorLineMismatch
+        }
+        let acceptedByLineID = Dictionary(uniqueKeysWithValues: acceptedLines.map { ($0.lineID, $0) })
+        guard orderLines.allSatisfy({ line in
+            guard let accepted = acceptedByLineID[line.id],
+                  accepted.confirmedQuantity.isFinite,
+                  abs(accepted.confirmedQuantity - line.quantity) <= 0.0001,
+                  accepted.confirmedUnitCost.isFinite,
+                  accepted.confirmedUnitCost >= 0,
+                  accepted.supplierPartNumber?.isValidSupplierConnectorIdentifier(maximum: 120) ?? true else {
+                return false
+            }
+            guard let confirmedPart = accepted.supplierPartNumber?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !confirmedPart.isEmpty,
+                  let requestedPart = line.vendorPartNumber?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !requestedPart.isEmpty else {
+                return true
+            }
+            return confirmedPart.caseInsensitiveCompare(requestedPart) == .orderedSame
+        }), let primaryLine = orderLines.first,
+              let primaryAcceptance = acceptedByLineID[primaryLine.id] else {
+            throw PurchaseOrderConfirmationError.connectorLineMismatch
+        }
+        let confirmedLineCosts = orderLines.compactMap { line in
+            acceptedByLineID[line.id].map {
+                PurchaseOrderLineUnitCost(lineID: line.id, unitCost: $0.confirmedUnitCost)
+            }
+        }
         guard order.storeSupplierOrderConfirmation(
             SupplierOrderConfirmation(
                 reference: acceptance.reference,
                 channel: .approvedConnector,
                 supplierLocation: acceptance.supplierLocation,
-                confirmedUnitCost: acceptance.confirmedUnitCost,
+                confirmedUnitCost: primaryAcceptance.confirmedUnitCost,
                 confirmedShippingCost: acceptance.confirmedShippingCost,
                 confirmedByEmail: serverActor,
                 confirmedAt: acceptance.confirmedAt,
@@ -1031,13 +1060,11 @@ enum PurchaseOrderOrderingPolicy {
                 externalOrderID: acceptance.externalOrderID,
                 idempotencyKey: acceptance.idempotencyKey
             ),
-            confirmedLineUnitCosts: order.purchaseOrderLines.map {
-                PurchaseOrderLineUnitCost(lineID: $0.id, unitCost: acceptance.confirmedUnitCost)
-            }
+            confirmedLineUnitCosts: confirmedLineCosts
         ) else {
             throw PurchaseOrderConfirmationError.unableToStoreEvidence
         }
-        order.unitCost = acceptance.confirmedUnitCost
+        order.unitCost = primaryAcceptance.confirmedUnitCost
         order.shippingCost = acceptance.confirmedShippingCost
         order.status = .ordered
         order.orderedAt = acceptance.confirmedAt

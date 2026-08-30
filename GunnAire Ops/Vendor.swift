@@ -43,6 +43,10 @@ enum SupplierConnectorKind: String, Codable, CaseIterable, Identifiable {
     var requiresSupplierOnboarding: Bool { self != .genericCatalog }
 }
 
+enum SupplierConnectorContract {
+    static let currentVersion = 2
+}
+
 struct SupplierConnectorReadiness: Codable, Identifiable, Equatable {
     let contractVersion: Int
     let kind: SupplierConnectorKind
@@ -57,11 +61,17 @@ struct SupplierConnectorReadiness: Codable, Identifiable, Equatable {
     var id: SupplierConnectorKind { kind }
 
     var isReady: Bool {
-        canSubmitOrders && status.caseInsensitiveCompare("ready") == .orderedSame
+        contractVersion == SupplierConnectorContract.currentVersion &&
+            capabilities.contains("purchaseOrders") &&
+            canSubmitOrders &&
+            status.caseInsensitiveCompare("ready") == .orderedSame
     }
 
     var statusLabel: String {
-        switch status {
+        if canSubmitOrders && contractVersion != SupplierConnectorContract.currentVersion {
+            return "Connector upgrade required"
+        }
+        return switch status {
         case "ready": "Ready"
         case "onboardingRequired": "Onboarding required"
         case "partnerGated": "Partner approval required"
@@ -116,6 +126,13 @@ enum SupplierConnectorSelectionPolicy {
     }
 }
 
+struct SupplierConnectorAcceptedLine: Equatable {
+    let lineID: UUID
+    let supplierPartNumber: String?
+    let confirmedQuantity: Double
+    let confirmedUnitCost: Double
+}
+
 struct SupplierConnectorOrderAcceptance: Equatable {
     let contractVersion: Int
     let purchaseOrderID: UUID
@@ -124,7 +141,7 @@ struct SupplierConnectorOrderAcceptance: Equatable {
     let externalOrderID: String
     let reference: String
     let supplierLocation: String?
-    let confirmedUnitCost: Double
+    let confirmedLines: [SupplierConnectorAcceptedLine]
     let confirmedShippingCost: Double
     let currencyCode: String
     let confirmedByEmail: String
@@ -132,6 +149,10 @@ struct SupplierConnectorOrderAcceptance: Equatable {
     let priceAvailabilityCheckedAt: Date
     let idempotencyKey: String
     let replayed: Bool
+
+    var confirmedUnitCost: Double {
+        confirmedLines.first?.confirmedUnitCost ?? .nan
+    }
 }
 
 struct SupplierCatalogQuery: Codable, Equatable {

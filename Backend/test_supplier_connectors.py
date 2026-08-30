@@ -23,13 +23,23 @@ class SuccessfulSupplierAdapter(backend.SupplierConnectorAdapter):
         self.recover_calls = 0
 
     @staticmethod
-    def acceptance() -> dict[str, object]:
+    def acceptance(order: dict[str, object]) -> dict[str, object]:
         confirmed_at = datetime.now(timezone.utc)
+        lines = order["lines"]
+        assert isinstance(lines, list)
         return {
             "externalOrderID": "JOHNSTONE-ORDER-48291",
             "reference": "JS-48291",
             "supplierLocation": "Winston-Salem",
-            "confirmedUnitCost": 30.5,
+            "confirmedLines": [
+                {
+                    "lineID": line["lineID"],
+                    "supplierPartNumber": line["supplierPartNumber"],
+                    "confirmedQuantity": line["quantity"],
+                    "confirmedUnitCost": max(float(line["expectedUnitCost"]) - 0.5, 0),
+                }
+                for line in lines
+            ],
             "confirmedShippingCost": 4.0,
             "currencyCode": "USD",
             "confirmedAt": confirmed_at.isoformat(),
@@ -38,11 +48,11 @@ class SuccessfulSupplierAdapter(backend.SupplierConnectorAdapter):
 
     def submit_order(self, order: dict[str, object], idempotency_key: str) -> dict[str, object]:
         self.submit_calls += 1
-        return self.acceptance()
+        return self.acceptance(order)
 
     def recover_order(self, order: dict[str, object], idempotency_key: str) -> dict[str, object] | None:
         self.recover_calls += 1
-        return self.acceptance()
+        return self.acceptance(order)
 
 
 class UnknownOutcomeSupplierAdapter(SuccessfulSupplierAdapter):
@@ -60,7 +70,17 @@ class UnknownOutcomeSupplierAdapter(SuccessfulSupplierAdapter):
 
     def recover_order(self, order: dict[str, object], idempotency_key: str) -> dict[str, object] | None:
         self.recover_calls += 1
-        return self.acceptance() if self.recover_successfully else None
+        return self.acceptance(order) if self.recover_successfully else None
+
+
+class MismatchedLineSupplierAdapter(SuccessfulSupplierAdapter):
+    @staticmethod
+    def acceptance(order: dict[str, object]) -> dict[str, object]:
+        acknowledgement = SuccessfulSupplierAdapter.acceptance(order)
+        confirmed_lines = acknowledgement["confirmedLines"]
+        assert isinstance(confirmed_lines, list)
+        confirmed_lines[-1] = dict(confirmed_lines[-1], confirmedQuantity=999)
+        return acknowledgement
 
 
 class SupplierConnectorTests(unittest.TestCase):
@@ -75,11 +95,16 @@ class SupplierConnectorTests(unittest.TestCase):
             "purchaseOrderNumber": "PO-20260828-0001",
             "serviceCallID": str(uuid.uuid4()),
             "vendorName": "Johnstone Supply",
-            "itemName": "40A Contactor",
-            "internalSKU": "CNT-40A",
-            "supplierPartNumber": "JS-CNT-40A",
-            "quantity": 3,
-            "expectedUnitCost": 31.0,
+            "lines": [
+                {
+                    "lineID": str(uuid.uuid4()),
+                    "itemName": "40A Contactor",
+                    "internalSKU": "CNT-40A",
+                    "supplierPartNumber": "JS-CNT-40A",
+                    "quantity": 3,
+                    "expectedUnitCost": 31.0,
+                }
+            ],
             "expectedShippingCost": 5.0,
             "currencyCode": "USD",
             "supplierLocation": "Winston-Salem",
@@ -202,6 +227,18 @@ class SupplierConnectorTests(unittest.TestCase):
     def test_success_is_idempotent_audited_and_rejects_payload_or_order_reuse(self) -> None:
         adapter = SuccessfulSupplierAdapter()
         payload = self.valid_payload()
+        lines = payload["lines"]
+        assert isinstance(lines, list)
+        lines.append(
+            {
+                "lineID": str(uuid.uuid4()),
+                "itemName": "60A Disconnect",
+                "internalSKU": "DISC-60A",
+                "supplierPartNumber": "JS-DISC-60A",
+                "quantity": 1,
+                "expectedUnitCost": 45.0,
+            }
+        )
         key = "supplier-order-johnstone-0001"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -230,6 +267,12 @@ class SupplierConnectorTests(unittest.TestCase):
                     self.assertEqual(first["connectorKind"], adapter.kind)
                     self.assertEqual(first["purchaseOrderID"], payload["purchaseOrderID"])
                     self.assertEqual(first["confirmedByEmail"], backend.PRIMARY_ADMIN_EMAIL)
+                    self.assertEqual(first["confirmedLines"][0]["lineID"], payload["lines"][0]["lineID"])
+                    self.assertEqual(first["confirmedLines"][0]["confirmedQuantity"], 3)
+                    self.assertEqual(first["confirmedLines"][0]["confirmedUnitCost"], 30.5)
+                    self.assertEqual(len(first["confirmedLines"]), 2)
+                    self.assertEqual(first["confirmedLines"][1]["lineID"], payload["lines"][1]["lineID"])
+                    self.assertEqual(first["confirmedLines"][1]["confirmedUnitCost"], 44.5)
 
                     with urllib.request.urlopen(
                         self.request(
@@ -246,7 +289,7 @@ class SupplierConnectorTests(unittest.TestCase):
                     self.assertEqual(adapter.submit_calls, 1)
 
                     changed = dict(payload)
-                    changed["quantity"] = 4
+                    changed["lines"] = [dict(payload["lines"][0], quantity=4)]
                     with self.assertRaises(urllib.error.HTTPError) as mismatch:
                         urllib.request.urlopen(
                             self.request(
@@ -287,6 +330,58 @@ class SupplierConnectorTests(unittest.TestCase):
                     retained = (attempt["request_json"] + attempt["acceptance_json"]).lower()
                     self.assertNotIn("secret", retained)
                     self.assertNotIn("password", retained)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+
+    def test_adapter_line_mismatch_is_unknown_and_never_persisted_as_accepted(self) -> None:
+        adapter = MismatchedLineSupplierAdapter()
+        payload = self.valid_payload()
+        lines = payload["lines"]
+        assert isinstance(lines, list)
+        lines.append(
+            {
+                "lineID": str(uuid.uuid4()),
+                "itemName": "60A Disconnect",
+                "internalSKU": "DISC-60A",
+                "supplierPartNumber": "JS-DISC-60A",
+                "quantity": 1,
+                "expectedUnitCost": 45.0,
+            }
+        )
+        key = "supplier-order-line-mismatch-0001"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.configured_backend(root), mock.patch.dict(
+                backend.SUPPLIER_CONNECTOR_ADAPTERS,
+                {adapter.kind: adapter},
+                clear=True,
+            ):
+                backend.initialize_database()
+                server, thread, base_url = self.serve()
+                try:
+                    with self.assertRaises(urllib.error.HTTPError) as mismatch:
+                        urllib.request.urlopen(
+                            self.request(
+                                f"{base_url}/api/supplier-connectors/orders",
+                                token=self.api_token,
+                                payload=payload,
+                                idempotency_key=key,
+                            ),
+                            timeout=5,
+                        )
+                    self.assertEqual(mismatch.exception.code, 502)
+                    error = self.error_payload(mismatch.exception)
+                    self.assertEqual(error["errorCode"], "invalid-adapter-response")
+                    self.assertTrue(error["outcomeUnknown"])
+                    with backend.db() as connection:
+                        attempt = connection.execute(
+                            "SELECT status, acceptance_json FROM supplier_order_attempts WHERE idempotency_key = ?",
+                            (key,),
+                        ).fetchone()
+                    self.assertEqual(attempt["status"], "unknown")
+                    self.assertIsNone(attempt["acceptance_json"])
                 finally:
                     server.shutdown()
                     server.server_close()
@@ -419,7 +514,7 @@ class SupplierConnectorTests(unittest.TestCase):
                     self.assertEqual(adapter.submit_calls, 0)
 
                     outdated = self.valid_payload()
-                    outdated["contractVersion"] = 2
+                    outdated["contractVersion"] = 1
                     with self.assertRaises(urllib.error.HTTPError) as unsupported_version:
                         urllib.request.urlopen(
                             self.request(
