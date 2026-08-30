@@ -28,6 +28,7 @@ enum GunnAireModelSchema {
             FieldFormResponse.self,
             FleetVehicle.self,
             FleetVehicleEvent.self,
+            FieldExpenseClaim.self,
         ])
     }
 }

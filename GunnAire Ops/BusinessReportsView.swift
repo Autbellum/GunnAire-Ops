@@ -39,6 +39,7 @@ struct BusinessReportsView: View {
     @Query(sort: \ServiceRequest.createdAt, order: .reverse) private var serviceRequests: [ServiceRequest]
     @Query(sort: \ProjectMilestone.plannedDate, order: .forward) private var projectMilestones: [ProjectMilestone]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var maintenanceContracts: [RecurringMaintenanceContract]
+    @Query(sort: \FieldExpenseClaim.expenseDate, order: .reverse) private var expenseClaims: [FieldExpenseClaim]
 
     @State private var period: BusinessReportPeriod = .currentMonth
     @State private var workspace: BusinessReportWorkspace = .overview
@@ -58,7 +59,8 @@ struct BusinessReportsView: View {
             technicians: technicians,
             serviceRequests: serviceRequests,
             projectMilestones: projectMilestones,
-            maintenanceContracts: maintenanceContracts
+            maintenanceContracts: maintenanceContracts,
+            expenseClaims: expenseClaims
         )
     }
 
@@ -171,6 +173,22 @@ struct BusinessReportsView: View {
 
             reportingCard(title: "Cost Coverage", systemImage: "checklist.checked") {
                 costCoverageRows
+            }
+
+            if snapshot.approvedExpenseCost > 0 ||
+                snapshot.pendingExpenseClaimCount > 0 ||
+                snapshot.pendingExpenseReimbursementAmount > 0 {
+                reportingCard(title: "Field Expense Controls", systemImage: "receipt") {
+                    valueRow("Approved job expense cost", value: currency(snapshot.approvedExpenseCost))
+                    Divider()
+                    valueRow("Claims awaiting review", value: "\(snapshot.pendingExpenseClaimCount)")
+                    Divider()
+                    valueRow("Approved reimbursements pending", value: currency(snapshot.pendingExpenseReimbursementAmount))
+                    Text("These totals use expense date in the selected period. Approval affects internal profitability; reimbursement requires a separate actual-payment reference and neither action posts to QuickBooks.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityIdentifier("FieldExpenseReportCard")
             }
 
             if !snapshot.jobProfitabilityRows.isEmpty || snapshot.invoicesWithoutJobProfitabilityCount > 0 {
@@ -604,13 +622,15 @@ struct BusinessReportsView: View {
         Divider()
         valueRow("Known labor cost", value: currency(snapshot.laborCost))
         Divider()
+        valueRow("Approved field expenses", value: currency(snapshot.approvedExpenseCost))
+        Divider()
         valueRow("Missing material costs", value: "\(snapshot.missingMaterialCostLineCount)")
         Divider()
         valueRow("Invoices missing labor time", value: "\(snapshot.missingLaborTrackingJobCount)")
         Divider()
         valueRow("Uncosted labor", value: "\(snapshot.uncostedLaborMinutes) min")
         if !snapshot.costCoverageComplete {
-            Label("Profit and margin stay hidden until every invoiced line has a cost and every invoiced job has fully costed labor time. This prevents a partial margin from being mistaken for final job profitability.", systemImage: "exclamationmark.triangle")
+            Label("Profit and margin stay hidden until every invoiced line has a cost and every invoiced job has fully costed labor time. Approved field expenses are included without treating pending claims as final cost.", systemImage: "exclamationmark.triangle")
                 .font(.caption)
                 .foregroundStyle(.orange)
                 .padding(.top, 4)
@@ -638,7 +658,7 @@ struct BusinessReportsView: View {
     }
 
     private var costCoverageDetail: String {
-        if snapshot.costCoverageComplete { return "material + labor covered" }
+        if snapshot.costCoverageComplete { return "material + labor covered • approved expenses included" }
         let gaps = snapshot.missingMaterialCostLineCount + snapshot.missingLaborTrackingJobCount
         return "\(gaps) cost gaps • \(snapshot.uncostedLaborMinutes) uncosted min"
     }
@@ -664,6 +684,7 @@ private struct JobProfitabilityReportRowView: View {
                 metric("Invoiced", value: currency(row.invoicedRevenue), detail: "\(row.invoiceCount) invoice\(row.invoiceCount == 1 ? "" : "s")")
                 metric("Known materials", value: currency(row.materialCost), detail: materialDetail)
                 metric("Known labor", value: currency(row.laborCost), detail: laborDetail)
+                metric("Approved expenses", value: currency(row.approvedExpenseCost), detail: "linked field claims")
                 metric(
                     "Gross profit",
                     value: row.knownGrossProfit.map(currency) ?? "Incomplete",

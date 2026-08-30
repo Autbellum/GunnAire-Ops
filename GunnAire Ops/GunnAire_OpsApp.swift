@@ -154,6 +154,7 @@ private enum GunnAireUITestFixtures {
     private static let accountingUserID = UUID(uuidString: "A1000000-0000-4000-8000-000000000038")!
     private static let fleetVehicleID = UUID(uuidString: "A1000000-0000-4000-8000-000000000039")!
     private static let fleetEventID = UUID(uuidString: "A1000000-0000-4000-8000-000000000040")!
+    private static let fieldExpenseClaimID = UUID(uuidString: "A1000000-0000-4000-8000-000000000041")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -188,6 +189,7 @@ private enum GunnAireUITestFixtures {
         let isQualificationReviewFixture = arguments.contains("-uiTestSeedQualificationReview")
         let isServicePackageFixture = arguments.contains("-uiTestSeedServicePackage")
         let isFleetFixture = arguments.contains("-uiTestSeedFleetReadiness")
+        let isFieldExpenseFixture = arguments.contains("-uiTestSeedFieldExpenseReview")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
         for user in appUsers where
@@ -273,8 +275,14 @@ private enum GunnAireUITestFixtures {
         }
         let documentAttachments = try context.fetch(FetchDescriptor<ServiceDocumentAttachment>())
         for attachment in documentAttachments where attachment.id == warrantyEvidenceID ||
-            attachment.fleetVehicleID == fleetVehicleID {
+            attachment.fleetVehicleID == fleetVehicleID ||
+            attachment.expenseClaimID == fieldExpenseClaimID {
             context.delete(attachment)
+        }
+        let fieldExpenseClaims = try context.fetch(FetchDescriptor<FieldExpenseClaim>())
+        for claim in fieldExpenseClaims where claim.id == fieldExpenseClaimID ||
+            (arguments.contains("-uiTestSeedCollectibleJob") && claim.serviceCallID == serviceCallID) {
+            context.delete(claim)
         }
         let fleetEvents = try context.fetch(FetchDescriptor<FleetVehicleEvent>())
         for event in fleetEvents where event.id == fleetEventID || event.vehicleID == fleetVehicleID {
@@ -385,7 +393,8 @@ private enum GunnAireUITestFixtures {
             isAgreementBillingFixture ||
             isQualificationReviewFixture ||
             isServicePackageFixture ||
-            isWarrantyClaimFixture else { return }
+            isWarrantyClaimFixture ||
+            isFieldExpenseFixture else { return }
 
         let customer = Customer(
             id: customerID,
@@ -770,6 +779,26 @@ private enum GunnAireUITestFixtures {
             ))
         }
         context.insert(invoice)
+        if isFieldExpenseFixture {
+            context.insert(try FieldExpenseClaimPolicy.makeClaim(
+                id: fieldExpenseClaimID,
+                serviceCall: call,
+                claimantEmail: GunnAireUITestIdentity.technicianEmail,
+                claimantName: technician.name,
+                claimType: .expense,
+                category: .parkingToll,
+                expenseDate: Date(),
+                merchant: "Downtown Parking Garage",
+                businessPurpose: "Customer service-call parking",
+                amount: 18.50,
+                mileageMiles: nil,
+                mileageRatePerMile: nil,
+                mileageOrigin: nil,
+                mileageDestination: nil,
+                reimbursable: true,
+                receiptAttachmentID: nil
+            ))
+        }
         if isTeamTimeReviewFixture {
             let clockOut = Date().addingTimeInterval(-60 * 60)
             context.insert(TimeEntry(

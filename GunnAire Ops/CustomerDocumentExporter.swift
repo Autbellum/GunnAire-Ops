@@ -910,7 +910,7 @@ enum CustomerDocumentExporter {
         switch attachment.kind {
         case .beforePhoto, .afterPhoto, .diagnosticPhoto, .equipmentDataPlatePhoto, .customerDocument, .other:
             return true
-        case .warrantyEvidence, .serviceReport, .customerProfilePhoto, .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .fleetService:
+        case .warrantyEvidence, .serviceReport, .customerProfilePhoto, .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .expenseReceipt, .fleetService:
             return false
         }
     }

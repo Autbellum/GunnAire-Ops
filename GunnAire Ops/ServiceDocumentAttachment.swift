@@ -14,6 +14,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
     case invoiceSupport = "invoice_support"
     case estimateSupport = "estimate_support"
     case receipt = "receipt"
+    case expenseReceipt = "expense_receipt"
     case fleetService = "fleet_service"
     case other = "other"
 
@@ -33,6 +34,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
         case .invoiceSupport: return "Invoice Support"
         case .estimateSupport: return "Estimate Support"
         case .receipt: return "Receipt"
+        case .expenseReceipt: return "Expense Receipt"
         case .fleetService: return "Fleet Service"
         case .other: return "Other"
         }
@@ -42,7 +44,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
         switch self {
         case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .equipmentDataPlatePhoto:
             return true
-        case .serviceReport, .warrantyEvidence, .customerDocument, .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .fleetService, .other:
+        case .serviceReport, .warrantyEvidence, .customerDocument, .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .expenseReceipt, .fleetService, .other:
             return false
         }
     }
@@ -51,7 +53,7 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
         switch self {
         case .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt:
             return true
-        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .equipmentDataPlatePhoto, .warrantyEvidence, .customerDocument, .fleetService, .other:
+        case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .equipmentDataPlatePhoto, .warrantyEvidence, .customerDocument, .expenseReceipt, .fleetService, .other:
             return false
         }
     }
@@ -66,6 +68,8 @@ enum ServiceDocumentAttachmentKind: String, Codable, CaseIterable, Identifiable 
             return "Invoice Documents"
         case .receipt:
             return "Receipts & Bills"
+        case .expenseReceipt:
+            return "Internal Expense Files"
         case .maintenanceAgreement:
             return "Maintenance Agreements"
         case .warrantyEvidence:
@@ -146,6 +150,7 @@ final class ServiceDocumentAttachment {
     var maintenanceContractID: UUID?
     var fleetVehicleID: UUID?
     var fleetVehicleEventID: UUID?
+    var expenseClaimID: UUID?
     var kindRaw: String = ServiceDocumentAttachmentKind.other.rawValue
     var displayName: String = ""
     var caption: String?
@@ -176,6 +181,7 @@ final class ServiceDocumentAttachment {
         maintenanceContractID: UUID? = nil,
         fleetVehicleID: UUID? = nil,
         fleetVehicleEventID: UUID? = nil,
+        expenseClaimID: UUID? = nil,
         kind: ServiceDocumentAttachmentKind,
         displayName: String,
         caption: String? = nil,
@@ -205,6 +211,7 @@ final class ServiceDocumentAttachment {
         self.maintenanceContractID = maintenanceContractID
         self.fleetVehicleID = fleetVehicleID
         self.fleetVehicleEventID = fleetVehicleEventID
+        self.expenseClaimID = expenseClaimID
         self.kindRaw = kind.rawValue
         self.displayName = displayName
         self.caption = caption
@@ -244,7 +251,7 @@ final class ServiceDocumentAttachment {
         switch kind {
         case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .customerDocument, .other:
             return true
-        case .equipmentDataPlatePhoto, .warrantyEvidence, .serviceReport, .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .fleetService:
+        case .equipmentDataPlatePhoto, .warrantyEvidence, .serviceReport, .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .expenseReceipt, .fleetService:
             return false
         }
     }
@@ -254,7 +261,7 @@ final class ServiceDocumentAttachment {
         switch kind {
         case .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .equipmentDataPlatePhoto, .customerDocument, .other:
             return true
-        case .warrantyEvidence, .serviceReport, .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .fleetService:
+        case .warrantyEvidence, .serviceReport, .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .expenseReceipt, .fleetService:
             return false
         }
     }
@@ -263,7 +270,7 @@ final class ServiceDocumentAttachment {
         switch kind {
         case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .customerProfilePhoto, .equipmentDataPlatePhoto, .warrantyEvidence, .customerDocument, .other:
             return true
-        case .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .fleetService:
+        case .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .expenseReceipt, .fleetService:
             return false
         }
     }
@@ -367,7 +374,7 @@ final class ServiceDocumentAttachment {
         switch kind {
         case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .equipmentDataPlatePhoto, .warrantyEvidence, .customerDocument, .invoiceSupport, .estimateSupport, .other:
             return true
-        case .customerProfilePhoto, .maintenanceAgreement, .receipt, .fleetService:
+        case .customerProfilePhoto, .maintenanceAgreement, .receipt, .expenseReceipt, .fleetService:
             return false
         }
     }
@@ -376,7 +383,7 @@ final class ServiceDocumentAttachment {
         switch kind {
         case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .equipmentDataPlatePhoto, .warrantyEvidence, .customerDocument, .invoiceSupport, .other:
             return true
-        case .customerProfilePhoto, .maintenanceAgreement, .estimateSupport, .receipt, .fleetService:
+        case .customerProfilePhoto, .maintenanceAgreement, .estimateSupport, .receipt, .expenseReceipt, .fleetService:
             return false
         }
     }
@@ -385,7 +392,7 @@ final class ServiceDocumentAttachment {
         switch kind {
         case .serviceReport, .beforePhoto, .afterPhoto, .diagnosticPhoto, .equipmentDataPlatePhoto, .warrantyEvidence, .customerDocument, .estimateSupport, .other:
             return true
-        case .customerProfilePhoto, .maintenanceAgreement, .invoiceSupport, .receipt, .fleetService:
+        case .customerProfilePhoto, .maintenanceAgreement, .invoiceSupport, .receipt, .expenseReceipt, .fleetService:
             return false
         }
     }
@@ -1000,7 +1007,7 @@ final class ServiceDocumentAttachment {
             return 250
         case .customerProfilePhoto:
             return 150
-        case .warrantyEvidence, .serviceReport, .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .fleetService:
+        case .warrantyEvidence, .serviceReport, .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt, .expenseReceipt, .fleetService:
             return 0
         }
     }

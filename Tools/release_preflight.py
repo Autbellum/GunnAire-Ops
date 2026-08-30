@@ -163,6 +163,47 @@ EXPECTED_CLOUDKIT_V17_ADDITIONS = {
     },
 }
 EXPECTED_CLOUDKIT_V17_RECORD_TYPES = {"CD_FleetVehicle", "CD_FleetVehicleEvent"}
+EXPECTED_CLOUDKIT_V18_ADDITIONS = {
+    **EXPECTED_CLOUDKIT_V17_ADDITIONS,
+    "CD_ServiceDocumentAttachment": {
+        **EXPECTED_CLOUDKIT_V17_ADDITIONS["CD_ServiceDocumentAttachment"],
+        "CD_expenseClaimID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_FieldExpenseClaim": {
+        "CD_amount": _CLOUDKIT_NUMBER_FIELD,
+        "CD_auditJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_businessPurpose": _CLOUDKIT_STRING_FIELD,
+        "CD_categoryRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_claimTypeRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_claimantEmail": _CLOUDKIT_STRING_FIELD,
+        "CD_claimantName": _CLOUDKIT_STRING_FIELD,
+        "CD_createdAt": _CLOUDKIT_DATE_FIELD,
+        "CD_customerID": _CLOUDKIT_STRING_FIELD,
+        "CD_customerName": _CLOUDKIT_STRING_FIELD,
+        "CD_entityName": _CLOUDKIT_STRING_FIELD,
+        "CD_expenseDate": _CLOUDKIT_DATE_FIELD,
+        "CD_id": _CLOUDKIT_STRING_FIELD,
+        "CD_jobSummary": _CLOUDKIT_STRING_FIELD,
+        "CD_merchant": _CLOUDKIT_STRING_FIELD,
+        "CD_mileageDestination": _CLOUDKIT_STRING_FIELD,
+        "CD_mileageMiles": _CLOUDKIT_NUMBER_FIELD,
+        "CD_mileageOrigin": _CLOUDKIT_STRING_FIELD,
+        "CD_mileageRatePerMile": _CLOUDKIT_NUMBER_FIELD,
+        "CD_receiptAttachmentID": _CLOUDKIT_STRING_FIELD,
+        "CD_reimbursable": _CLOUDKIT_INTEGER_FIELD,
+        "CD_reimbursedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_reimbursedByEmail": _CLOUDKIT_STRING_FIELD,
+        "CD_reimbursementReference": _CLOUDKIT_STRING_FIELD,
+        "CD_reviewNote": _CLOUDKIT_STRING_FIELD,
+        "CD_reviewedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_reviewedByEmail": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceCallID": _CLOUDKIT_STRING_FIELD,
+        "CD_statusRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_submittedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_updatedAt": _CLOUDKIT_DATE_FIELD,
+    },
+}
+EXPECTED_CLOUDKIT_V18_RECORD_TYPES = {"CD_FieldExpenseClaim"}
 EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES = {
     "CD_AppUser",
     "CD_Customer",
@@ -1005,19 +1046,32 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         added_record_types = dev_record_types - prod_record_types
         fleet_types_in_dev = dev_record_types & EXPECTED_CLOUDKIT_V17_RECORD_TYPES
         fleet_types_in_prod = prod_record_types & EXPECTED_CLOUDKIT_V17_RECORD_TYPES
+        expense_types_in_dev = dev_record_types & EXPECTED_CLOUDKIT_V18_RECORD_TYPES
+        expense_types_in_prod = prod_record_types & EXPECTED_CLOUDKIT_V18_RECORD_TYPES
         approved_record_type_sets = (
             EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES,
             EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES | EXPECTED_CLOUDKIT_V17_RECORD_TYPES,
+            EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES
+            | EXPECTED_CLOUDKIT_V17_RECORD_TYPES
+            | EXPECTED_CLOUDKIT_V18_RECORD_TYPES,
+        )
+        approved_added_type_sets = (
+            set(),
+            EXPECTED_CLOUDKIT_V17_RECORD_TYPES,
+            EXPECTED_CLOUDKIT_V18_RECORD_TYPES,
+            EXPECTED_CLOUDKIT_V17_RECORD_TYPES | EXPECTED_CLOUDKIT_V18_RECORD_TYPES,
         )
         results.require(
             prod_record_types.issubset(dev_record_types)
             and dev_record_types in approved_record_type_sets
             and prod_record_types in approved_record_type_sets
-            and added_record_types in (set(), EXPECTED_CLOUDKIT_V17_RECORD_TYPES)
+            and added_record_types in approved_added_type_sets
             and fleet_types_in_dev in (set(), EXPECTED_CLOUDKIT_V17_RECORD_TYPES)
-            and fleet_types_in_prod in (set(), EXPECTED_CLOUDKIT_V17_RECORD_TYPES),
-            "CloudKit exports retain the exact 24-type baseline and only the approved v17 fleet pair may be additive",
-            "CloudKit record types are not the approved 24-type baseline or 26-type fleet extension: "
+            and fleet_types_in_prod in (set(), EXPECTED_CLOUDKIT_V17_RECORD_TYPES)
+            and expense_types_in_dev in (set(), EXPECTED_CLOUDKIT_V18_RECORD_TYPES)
+            and expense_types_in_prod in (set(), EXPECTED_CLOUDKIT_V18_RECORD_TYPES),
+            "CloudKit exports retain the exact 24-type baseline and only the approved v17 fleet pair plus v18 expense claim may be additive",
+            "CloudKit record types are not the approved 24-type baseline, 26-type fleet extension, or 27-type expense extension: "
             f"development={sorted(dev_record_types)} production={sorted(prod_record_types)}",
         )
         actual_additions: dict[str, dict[str, tuple[str, ...]]] = {}
@@ -1040,22 +1094,22 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
             "Development changes remove or alter no Production CloudKit fields",
             f"Development removes or alters Production fields: {changed_or_removed}",
         )
-        malformed_existing_v17_fields: list[str] = []
-        for record_name, expected_fields in EXPECTED_CLOUDKIT_V17_ADDITIONS.items():
+        malformed_existing_v18_fields: list[str] = []
+        for record_name, expected_fields in EXPECTED_CLOUDKIT_V18_ADDITIONS.items():
             production_fields = prod.get(record_name, {})
             for field_name, expected_definition in expected_fields.items():
                 if (
                     field_name in production_fields
                     and production_fields[field_name] != expected_definition
                 ):
-                    malformed_existing_v17_fields.append(
+                    malformed_existing_v18_fields.append(
                         f"{record_name}.{field_name}"
                     )
         results.require(
-            not malformed_existing_v17_fields,
-            "Existing Production fields through v17 match their approved definitions",
-            "CloudKit Production contains malformed approved fields through v17: "
-            f"{malformed_existing_v17_fields}",
+            not malformed_existing_v18_fields,
+            "Existing Production fields through v18 match their approved definitions",
+            "CloudKit Production contains malformed approved fields through v18: "
+            f"{malformed_existing_v18_fields}",
         )
 
         def expected_remaining(
@@ -1082,14 +1136,27 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 if records.get(record_name, {}).get(field_name) != expected_definition
             ]
 
+        expected_remaining_v18_additions = expected_remaining(EXPECTED_CLOUDKIT_V18_ADDITIONS)
         expected_remaining_v17_additions = expected_remaining(EXPECTED_CLOUDKIT_V17_ADDITIONS)
         expected_remaining_v16_additions = expected_remaining(EXPECTED_CLOUDKIT_V16_ADDITIONS)
+        dev_missing_v18 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V18_ADDITIONS)
+        prod_missing_v18 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V18_ADDITIONS)
         dev_missing_v17 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V17_ADDITIONS)
         prod_missing_v17 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V17_ADDITIONS)
         dev_missing_v16 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V16_ADDITIONS)
         prod_missing_v16 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V16_ADDITIONS)
 
         if (
+            not dev_missing_v18
+            and (
+                not prod_missing_v18
+                or actual_additions == expected_remaining_v18_additions
+            )
+        ):
+            results.pass_(
+                "CloudKit Development contains exactly the approved additive v18 expense record, receipt linkage, and cumulative fleet schema relative to Production"
+            )
+        elif (
             not dev_missing_v17
             and (
                 not prod_missing_v17
@@ -1098,6 +1165,9 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         ):
             results.pass_(
                 "CloudKit Development contains exactly the approved additive v17 fleet records and document linkage relative to Production"
+            )
+            results.warn(
+                "CloudKit source v18 expense records are not staged in Development; run the signed v18 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v16
@@ -1108,40 +1178,40 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         ):
             results.pass_("CloudKit exports exactly satisfy the approved v16 schema")
             results.warn(
-                "CloudKit source v17 fleet records are not staged in Development; run the signed v17 bootstrap before promotion review"
+                "CloudKit source v18 fleet and expense records are not staged in Development; run the signed v18 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V13_ADDITIONS:
             results.pass_(
                 "CloudKit Development v13 delta is exactly six additive tax fields on Estimate and Invoice"
             )
             results.warn(
-                "CloudKit source v17 fields are not staged in Development; run the signed v17 bootstrap before promotion review"
+                "CloudKit source v18 fields are not staged in Development; run the signed v18 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V14_ADDITIONS:
             results.pass_(
                 "CloudKit Development v14 cumulative delta is exactly six tax fields plus Invoice.dueDate"
             )
             results.warn(
-                "CloudKit source v17 fields are not staged in Development; run the signed v17 bootstrap before promotion review"
+                "CloudKit source v18 fields are not staged in Development; run the signed v18 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V15_ADDITIONS:
             results.pass_(
                 "CloudKit Development v15 cumulative delta is exactly the approved tax, due-date, inventory continuity, Item continuity, and service-package fields"
             )
             results.warn(
-                "CloudKit source v17 fleet records are not staged in Development; run the signed v17 bootstrap before promotion review"
+                "CloudKit source v18 fleet and expense records are not staged in Development; run the signed v18 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V16_ADDITIONS:
             results.pass_(
                 "CloudKit Development v16 cumulative delta is exactly the approved tax, due-date, inventory continuity, Item continuity, service-package, document-linkage, and Google Drive fields"
             )
             results.warn(
-                "CloudKit source v17 fleet records are not staged in Development; run the signed v17 bootstrap before promotion review"
+                "CloudKit source v18 fleet and expense records are not staged in Development; run the signed v18 bootstrap before promotion review"
             )
         else:
             results.fail(
-                "Unexpected CloudKit v13/v14/v15/v16/v17 delta: "
-                f"{actual_additions}; missing Development v17 fields: {dev_missing_v17}"
+                "Unexpected CloudKit v13/v14/v15/v16/v17/v18 delta: "
+                f"{actual_additions}; missing Development v18 fields: {dev_missing_v18}"
             )
         results.pass_(f"Development export SHA-256 is {sha256(development)}")
         results.pass_(f"Production export SHA-256 is {sha256(production)}")
@@ -1260,7 +1330,7 @@ def main() -> int:
             results,
         )
     else:
-        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15/v16/v17 Production delta was not rechecked")
+        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15/v16/v17/v18 Production delta was not rechecked")
 
     if args.online:
         check_online(backend_version, results)

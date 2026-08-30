@@ -377,7 +377,7 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
 enum GunnAireCloudKitSchemaBootstrap {
     static let initializeArgument = "-initializeCloudKitSchema"
     static let cleanupArgument = "-cleanupCloudKitSchemaBootstrap"
-    static let schemaVersion = 17
+    static let schemaVersion = 18
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
@@ -690,6 +690,29 @@ enum GunnAireCloudKitSchemaBootstrap {
             newStatus: .outOfService,
             resolvesOutOfService: false
         )
+        let fieldExpenseReceiptID = UUID()
+        let fieldExpenseClaim = FieldExpenseClaim(
+            serviceCallID: serviceCall.id,
+            customerID: customer.id,
+            customerName: customer.name,
+            jobSummary: marker,
+            claimantEmail: bootstrapEmail,
+            claimantName: marker,
+            claimType: .mileage,
+            category: .mileage,
+            expenseDate: now,
+            merchant: "Mileage",
+            businessPurpose: marker,
+            amount: 1,
+            mileageMiles: 1,
+            mileageRatePerMile: 1,
+            mileageOrigin: marker,
+            mileageDestination: marker,
+            reimbursable: true,
+            receiptAttachmentID: fieldExpenseReceiptID,
+            submittedAt: now,
+            createdAt: now
+        )
 
         let models: [any PersistentModel] = [
             item,
@@ -732,6 +755,7 @@ enum GunnAireCloudKitSchemaBootstrap {
             Vendor(name: marker),
             AppUser(email: bootstrapEmail),
             ServiceDocumentAttachment(
+                id: fieldExpenseReceiptID,
                 customer: customer,
                 serviceCallID: serviceCall.id,
                 customerEquipmentID: UUID(),
@@ -740,7 +764,8 @@ enum GunnAireCloudKitSchemaBootstrap {
                 maintenanceContractID: maintenanceAgreement.id,
                 fleetVehicleID: fleetVehicle.id,
                 fleetVehicleEventID: fleetEvent.id,
-                kind: .other,
+                expenseClaimID: fieldExpenseClaim.id,
+                kind: .expenseReceipt,
                 displayName: marker,
                 caption: marker,
                 localFilePath: "/tmp/gunnaire-cloudkit-schema-bootstrap",
@@ -791,6 +816,7 @@ enum GunnAireCloudKitSchemaBootstrap {
             FieldFormResponse(serviceCallID: serviceCall.id, template: template, answers: [:], completedByEmail: bootstrapEmail),
             fleetVehicle,
             fleetEvent,
+            fieldExpenseClaim,
         ]
 
         for model in models {
@@ -800,6 +826,9 @@ enum GunnAireCloudKitSchemaBootstrap {
     }
 
     private static func cleanup(in modelContext: ModelContext) throws {
+        for value in try modelContext.fetch(FetchDescriptor<FieldExpenseClaim>()) where value.claimantEmail == bootstrapEmail {
+            modelContext.delete(value)
+        }
         for value in try modelContext.fetch(FetchDescriptor<FleetVehicleEvent>()) where value.detail == marker {
             modelContext.delete(value)
         }

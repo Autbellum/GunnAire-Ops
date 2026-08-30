@@ -724,6 +724,7 @@ struct ServiceCallDetailView: View {
     @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \FieldExpenseClaim.expenseDate, order: .reverse) private var fieldExpenseClaims: [FieldExpenseClaim]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
     @AppStorage("enablePhotoDocumentation") private var enablePhotoDocumentation = true
@@ -742,6 +743,7 @@ struct ServiceCallDetailView: View {
     @State private var maintenanceAgreementMessage: String?
     @State private var warrantyClaimsEquipment: CustomerEquipment?
     @State private var showingEnRouteHandoff = false
+    @State private var showingFieldExpenseClaim = false
     @State private var activeServiceTextDraft: CustomerServiceTextDraft?
     @State private var customerTextStatus: String?
     @State private var jobActionStatus: String?
@@ -1399,6 +1401,24 @@ GunnAire
             serviceCalls: serviceCalls,
             technicians: technicians
         )
+    }
+
+    private var canSubmitFieldExpenseForCurrentJob: Bool {
+        AppAccess.canSubmitFieldExpenses(email: currentActivityActor, users: users) &&
+        AppAccess.canAccessServiceCall(
+            call,
+            email: currentActivityActor,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+    }
+
+    private var visibleCurrentJobExpenseClaims: [FieldExpenseClaim] {
+        fieldExpenseClaims.filter { claim in
+            claim.serviceCallID == call.id &&
+                AppAccess.canAccessFieldExpenseClaim(claim, email: currentActivityActor, users: users)
+        }
     }
 
     private var canDraftEnRouteText: Bool {
@@ -2689,6 +2709,51 @@ GunnAire
                         }
                     }
 
+                    if selectedWorkspace == .work && (canSubmitFieldExpenseForCurrentJob || !visibleCurrentJobExpenseClaims.isEmpty) {
+                        GroupBox("Field Expenses") {
+                            VStack(alignment: .leading, spacing: 9) {
+                                if visibleCurrentJobExpenseClaims.isEmpty {
+                                    Text("No expense or mileage claims are linked to this job for this account.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    ForEach(visibleCurrentJobExpenseClaims.prefix(3)) { claim in
+                                        HStack {
+                                            Label(claim.category.displayName, systemImage: claim.claimType.systemImage)
+                                                .font(.caption.weight(.semibold))
+                                            Spacer()
+                                            Text(claim.amount, format: .currency(code: "USD"))
+                                                .font(.caption.weight(.semibold))
+                                            Text(claim.status.displayName)
+                                                .font(.caption2)
+                                                .foregroundStyle(claim.status == .reimbursed ? .green : .secondary)
+                                        }
+                                        .accessibilityElement(children: .combine)
+                                    }
+                                    if visibleCurrentJobExpenseClaims.count > 3 {
+                                        Text("\(visibleCurrentJobExpenseClaims.count - 3) more in Time Clock → Expenses & Mileage")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                if canSubmitFieldExpenseForCurrentJob {
+                                    Button {
+                                        showingFieldExpenseClaim = true
+                                    } label: {
+                                        Label("Add Expense or Mileage", systemImage: "plus.circle")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .accessibilityIdentifier("AddJobFieldExpense")
+                                }
+                                Text("Approved claims add internal job cost. Customer invoice lines, inventory use, payroll, reimbursement, and QuickBooks posting remain separate workflows.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .accessibilityIdentifier("ServiceCallFieldExpenses")
+                    }
+
                     if selectedWorkspace == .work {
                     GroupBox("Completion Checklist") {
                         VStack(alignment: .leading, spacing: 10) {
@@ -2849,6 +2914,16 @@ GunnAire
                     openURL(mapsURL)
                 },
                 onCommit: commitEnRouteHandoff
+            )
+            .tint(Color.brandGold)
+        }
+        .sheet(isPresented: $showingFieldExpenseClaim) {
+            FieldExpenseClaimEditor(
+                initialServiceCall: call,
+                existingClaim: nil,
+                serviceCalls: serviceCalls,
+                technicians: technicians,
+                users: users
             )
             .tint(Color.brandGold)
         }
