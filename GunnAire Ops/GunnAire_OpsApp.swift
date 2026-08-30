@@ -152,6 +152,8 @@ private enum GunnAireUITestFixtures {
     private static let warrantyEvidenceID = UUID(uuidString: "A1000000-0000-4000-8000-000000000036")!
     private static let warrantyClaimID = UUID(uuidString: "A1000000-0000-4000-8000-000000000037")!
     private static let accountingUserID = UUID(uuidString: "A1000000-0000-4000-8000-000000000038")!
+    private static let fleetVehicleID = UUID(uuidString: "A1000000-0000-4000-8000-000000000039")!
+    private static let fleetEventID = UUID(uuidString: "A1000000-0000-4000-8000-000000000040")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -185,6 +187,7 @@ private enum GunnAireUITestFixtures {
         let isEquipmentDecisionFixture = arguments.contains("-uiTestSeedEquipmentDecision")
         let isQualificationReviewFixture = arguments.contains("-uiTestSeedQualificationReview")
         let isServicePackageFixture = arguments.contains("-uiTestSeedServicePackage")
+        let isFleetFixture = arguments.contains("-uiTestSeedFleetReadiness")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
         for user in appUsers where
@@ -269,8 +272,17 @@ private enum GunnAireUITestFixtures {
             context.delete(equipment)
         }
         let documentAttachments = try context.fetch(FetchDescriptor<ServiceDocumentAttachment>())
-        for attachment in documentAttachments where attachment.id == warrantyEvidenceID {
+        for attachment in documentAttachments where attachment.id == warrantyEvidenceID ||
+            attachment.fleetVehicleID == fleetVehicleID {
             context.delete(attachment)
+        }
+        let fleetEvents = try context.fetch(FetchDescriptor<FleetVehicleEvent>())
+        for event in fleetEvents where event.id == fleetEventID || event.vehicleID == fleetVehicleID {
+            context.delete(event)
+        }
+        let fleetVehicles = try context.fetch(FetchDescriptor<FleetVehicle>())
+        for vehicle in fleetVehicles where vehicle.id == fleetVehicleID {
+            context.delete(vehicle)
         }
         let serviceLocations = try context.fetch(FetchDescriptor<CustomerServiceLocation>())
         for location in serviceLocations where location.id == serviceLocationID {
@@ -324,6 +336,41 @@ private enum GunnAireUITestFixtures {
                 source: .googleBusinessProfile,
                 createdByEmail: AppAccess.primaryAdminEmail
             ))
+        }
+        if isFleetFixture {
+            let now = Date()
+            let vehicle = FleetVehicle(
+                id: fleetVehicleID,
+                unitNumber: "Fleet UI Truck 21",
+                vin: "1FTBR1C80RKA54321",
+                licensePlate: "GA-UI-21",
+                vehicleYear: 2024,
+                make: "Ford",
+                model: "Transit",
+                stockLocation: "Fleet UI Truck 21 Stock",
+                odometer: 15_000,
+                odometerUpdatedAt: now,
+                nextInspectionDueAt: Calendar.current.date(byAdding: .day, value: -1, to: now),
+                nextServiceDueAt: Calendar.current.date(byAdding: .month, value: 3, to: now),
+                nextServiceDueOdometer: 20_000,
+                notes: "Dedicated UI acceptance fixture.",
+                createdAt: now,
+                updatedAt: now,
+                updatedByEmail: AppAccess.primaryAdminEmail
+            )
+            let event = FleetVehicleEvent(
+                id: fleetEventID,
+                vehicleID: vehicle.id,
+                vehicleUnitNumber: vehicle.unitNumber,
+                kind: .created,
+                occurredAt: now,
+                actorEmail: AppAccess.primaryAdminEmail,
+                detail: "Added the fleet-readiness UI fixture.",
+                odometer: vehicle.odometer,
+                newStatus: .inService
+            )
+            context.insert(vehicle)
+            context.insert(event)
         }
         try context.save()
 

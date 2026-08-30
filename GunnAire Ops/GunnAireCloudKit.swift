@@ -377,7 +377,7 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
 enum GunnAireCloudKitSchemaBootstrap {
     static let initializeArgument = "-initializeCloudKitSchema"
     static let cleanupArgument = "-cleanupCloudKitSchemaBootstrap"
-    static let schemaVersion = 16
+    static let schemaVersion = 17
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
@@ -647,6 +647,49 @@ enum GunnAireCloudKitSchemaBootstrap {
             contentType: "application/pdf",
             fileSizeBytes: 0
         )
+        let fleetVehicle = FleetVehicle(
+            unitNumber: marker,
+            vin: "1GUNNAIRE00000001",
+            licensePlate: "SCHEMA",
+            vehicleYear: 2026,
+            make: marker,
+            model: marker,
+            stockLocation: marker,
+            assignedTechnicianID: technician.id,
+            assignedTechnicianName: technician.name,
+            administrativeStatus: .outOfService,
+            odometer: 1,
+            odometerUpdatedAt: now,
+            latestInspectionAt: now,
+            nextInspectionDueAt: now,
+            nextServiceDueAt: now,
+            nextServiceDueOdometer: 2,
+            notes: marker,
+            createdAt: now,
+            updatedAt: now,
+            updatedByEmail: bootstrapEmail
+        )
+        let fleetEvent = FleetVehicleEvent(
+            vehicleID: fleetVehicle.id,
+            vehicleUnitNumber: fleetVehicle.unitNumber,
+            kind: .inspectionCompleted,
+            occurredAt: now,
+            actorEmail: bootstrapEmail,
+            detail: marker,
+            odometer: 1,
+            inspectionResults: FleetInspectionItem.allCases.map {
+                FleetInspectionResult(item: $0, passed: false)
+            },
+            serviceCategory: .repair,
+            serviceCost: 1,
+            serviceCenter: marker,
+            invoiceNumber: marker,
+            assignmentTechnicianID: technician.id,
+            assignmentTechnicianName: technician.name,
+            priorStatus: .inService,
+            newStatus: .outOfService,
+            resolvesOutOfService: false
+        )
 
         let models: [any PersistentModel] = [
             item,
@@ -695,6 +738,8 @@ enum GunnAireCloudKitSchemaBootstrap {
                 invoiceID: invoice.id,
                 estimateID: estimate.id,
                 maintenanceContractID: maintenanceAgreement.id,
+                fleetVehicleID: fleetVehicle.id,
+                fleetVehicleEventID: fleetEvent.id,
                 kind: .other,
                 displayName: marker,
                 caption: marker,
@@ -744,6 +789,8 @@ enum GunnAireCloudKitSchemaBootstrap {
             projectMilestone,
             template,
             FieldFormResponse(serviceCallID: serviceCall.id, template: template, answers: [:], completedByEmail: bootstrapEmail),
+            fleetVehicle,
+            fleetEvent,
         ]
 
         for model in models {
@@ -753,6 +800,12 @@ enum GunnAireCloudKitSchemaBootstrap {
     }
 
     private static func cleanup(in modelContext: ModelContext) throws {
+        for value in try modelContext.fetch(FetchDescriptor<FleetVehicleEvent>()) where value.detail == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<FleetVehicle>()) where value.unitNumber == marker {
+            modelContext.delete(value)
+        }
         let projectMilestones = try modelContext.fetch(FetchDescriptor<ProjectMilestone>())
         debugLog("cleanup found \(projectMilestones.filter { $0.title == marker }.count) project milestone marker(s)")
         for value in projectMilestones where value.title == marker {

@@ -684,8 +684,8 @@ struct GunnAire_OpsTests {
         #expect(configuration.cloudKitContainerIdentifier == GunnAireCloudKit.containerIdentifier)
         #expect(configuration.isStoredInMemoryOnly == false)
         #expect(configuration.url.lastPathComponent == GunnAireCloudKitSchemaBootstrap.storeFileName)
-        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 16)
-        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V16"))
+        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 17)
+        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V17"))
     }
     #endif
 
@@ -17507,6 +17507,21 @@ struct GunnAire_OpsTests {
         #expect(archivedDocument.googleDriveSyncDetail?.isEmpty == false)
         #expect(archivedDocument.googleDriveLastSyncedAt != nil)
         #expect(archivedDocument.googleDriveArchivedByEmail == "schema-bootstrap@gunnaire.invalid")
+
+        let fleetVehicle = try #require(container.mainContext.fetch(FetchDescriptor<FleetVehicle>()).first)
+        let fleetEvent = try #require(container.mainContext.fetch(FetchDescriptor<FleetVehicleEvent>()).first)
+        #expect(fleetVehicle.assignedTechnicianID == technician.id)
+        #expect(fleetVehicle.stockLocation.isEmpty == false)
+        #expect(fleetVehicle.administrativeStatus == .outOfService)
+        #expect(fleetVehicle.nextInspectionDueAt != nil)
+        #expect(fleetVehicle.nextServiceDueAt != nil)
+        #expect(fleetVehicle.nextServiceDueOdometer != nil)
+        #expect(fleetEvent.vehicleID == fleetVehicle.id)
+        #expect(fleetEvent.kind == .inspectionCompleted)
+        #expect(fleetEvent.inspectionResults.count == FleetInspectionItem.allCases.count)
+        #expect(fleetEvent.serviceCategory == .repair)
+        #expect(archivedDocument.fleetVehicleID == fleetVehicle.id)
+        #expect(archivedDocument.fleetVehicleEventID == fleetEvent.id)
     }
 
     @Test func approvedPricebookPublicationReconcilesUniqueQuickBooksMatchesAndRejectsAmbiguity() throws {
@@ -22621,6 +22636,531 @@ struct GunnAire_OpsTests {
         #expect(!AppAccess.canIssueMaintenanceAgreementInvoices(email: dispatcher.email, users: users))
         #expect(AppAccess.canIssueMaintenanceAgreementInvoices(email: accounting.email, users: users))
         #expect(AppAccess.canIssueMaintenanceAgreementInvoices(email: admin.email, users: users))
+    }
+
+    @Test func fleetRolesSeparateFieldCustodyDispatchAccountingAndAdministration() {
+        let field = AppUser(email: "fleet-field@gunnaire.com", role: .fieldTechnician)
+        let dispatch = AppUser(email: "fleet-dispatch@gunnaire.com", role: .dispatcher)
+        let accounting = AppUser(email: "fleet-accounting@gunnaire.com", role: .accounting)
+        let admin = AppUser(email: "fleet-admin@gunnaire.com", role: .admin)
+        let standard = AppUser(email: "fleet-standard@gunnaire.com", role: .standard)
+        let users = [field, dispatch, accounting, admin, standard]
+
+        #expect(AppAccess.canRecordFleetInspection(email: field.email, users: users))
+        #expect(!AppAccess.canRecordFleetInspection(email: accounting.email, users: users))
+        #expect(AppAccess.canRecordFleetService(email: field.email, users: users))
+        #expect(AppAccess.canRecordFleetService(email: accounting.email, users: users))
+        #expect(!AppAccess.canRecordFleetService(email: dispatch.email, users: users))
+        #expect(AppAccess.canManageFleetOperations(email: dispatch.email, users: users))
+        #expect(!AppAccess.canManageFleetOperations(email: accounting.email, users: users))
+        #expect(AppAccess.canAdministerFleet(email: admin.email, users: users))
+        #expect(!AppAccess.canAdministerFleet(email: dispatch.email, users: users))
+        #expect(!AppAccess.canRecordFleetInspection(email: standard.email, users: users))
+    }
+
+    @Test func fleetVehicleCreationNormalizesIdentityAndRejectsDuplicateOrMalformedRecords() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 900_000)
+        let vehicleYear = Calendar.current.component(.year, from: now)
+        let inspectionDue = now.addingTimeInterval(30 * 86_400)
+        let serviceDue = now.addingTimeInterval(180 * 86_400)
+        let (vehicle, event) = try FleetVehiclePolicy.createVehicle(
+            unitNumber: "  Truck   12 ",
+            vin: " 1ftbr1c86rka12345 ",
+            licensePlate: " hvac-12 ",
+            vehicleYear: vehicleYear,
+            make: " Ford ",
+            model: " Transit ",
+            stockLocation: " Truck 12 Stock ",
+            odometer: 12_500,
+            nextInspectionDueAt: inspectionDue,
+            nextServiceDueAt: serviceDue,
+            nextServiceDueOdometer: 17_500,
+            notes: " Primary installation vehicle ",
+            existingVehicles: [],
+            actorEmail: " Fleet.Admin@GunnAire.com ",
+            role: .admin,
+            now: now
+        )
+
+        #expect(vehicle.unitNumber == "Truck 12")
+        #expect(vehicle.vin == "1FTBR1C86RKA12345")
+        #expect(vehicle.licensePlate == "HVAC-12")
+        #expect(vehicle.stockLocation == "Truck 12 Stock")
+        #expect(vehicle.odometer == 12_500)
+        #expect(event.vehicleID == vehicle.id)
+        #expect(event.kind == .created)
+        #expect(event.actorEmail == "fleet.admin@gunnaire.com")
+
+        #expect(throws: FleetVehiclePolicyError.duplicateUnitNumber) {
+            try FleetVehiclePolicy.createVehicle(
+                unitNumber: "truck 12",
+                vin: nil,
+                licensePlate: nil,
+                vehicleYear: nil,
+                make: nil,
+                model: nil,
+                stockLocation: "Overflow",
+                odometer: nil,
+                nextInspectionDueAt: inspectionDue,
+                nextServiceDueAt: nil,
+                nextServiceDueOdometer: nil,
+                notes: nil,
+                existingVehicles: [vehicle],
+                actorEmail: "admin@gunnaire.com",
+                role: .admin,
+                now: now
+            )
+        }
+        #expect(throws: FleetVehiclePolicyError.duplicateVIN) {
+            try FleetVehiclePolicy.createVehicle(
+                unitNumber: "Truck 13",
+                vin: "1FTBR1C86RKA12345",
+                licensePlate: nil,
+                vehicleYear: nil,
+                make: nil,
+                model: nil,
+                stockLocation: "Truck 13 Stock",
+                odometer: nil,
+                nextInspectionDueAt: inspectionDue,
+                nextServiceDueAt: nil,
+                nextServiceDueOdometer: nil,
+                notes: nil,
+                existingVehicles: [vehicle],
+                actorEmail: "admin@gunnaire.com",
+                role: .admin,
+                now: now
+            )
+        }
+        #expect(throws: FleetVehiclePolicyError.invalidVIN) {
+            try FleetVehiclePolicy.createVehicle(
+                unitNumber: "Truck 14",
+                vin: "VIN-CONTAINS-I",
+                licensePlate: nil,
+                vehicleYear: nil,
+                make: nil,
+                model: nil,
+                stockLocation: "Truck 14 Stock",
+                odometer: nil,
+                nextInspectionDueAt: inspectionDue,
+                nextServiceDueAt: nil,
+                nextServiceDueOdometer: nil,
+                notes: nil,
+                existingVehicles: [vehicle],
+                actorEmail: "admin@gunnaire.com",
+                role: .admin,
+                now: now
+            )
+        }
+        #expect(throws: FleetVehiclePolicyError.invalidServiceInterval) {
+            try FleetVehiclePolicy.createVehicle(
+                unitNumber: "Truck 15",
+                vin: nil,
+                licensePlate: nil,
+                vehicleYear: nil,
+                make: nil,
+                model: nil,
+                stockLocation: "Truck 15 Stock",
+                odometer: 10_000,
+                nextInspectionDueAt: inspectionDue,
+                nextServiceDueAt: nil,
+                nextServiceDueOdometer: .infinity,
+                notes: nil,
+                existingVehicles: [vehicle],
+                actorEmail: "admin@gunnaire.com",
+                role: .admin,
+                now: now
+            )
+        }
+    }
+
+    @Test func fleetAssignmentsAreRoleBoundAndPreventDuplicateActiveVehicleCustody() throws {
+        let technician = Technician(name: "Fleet Technician", contactInfo: "fleet-tech@gunnaire.com")
+        let vehicle = FleetVehicle(unitNumber: "Truck 3", stockLocation: "Truck 3 Stock")
+        let otherVehicle = FleetVehicle(
+            unitNumber: "Truck 4",
+            stockLocation: "Truck 4 Stock",
+            assignedTechnicianID: technician.id,
+            assignedTechnicianName: technician.name
+        )
+
+        #expect(throws: FleetVehiclePolicyError.fleetManagerRequired) {
+            try FleetVehiclePolicy.assign(
+                vehicle,
+                to: technician,
+                existingVehicles: [vehicle],
+                actorEmail: "accounting@gunnaire.com",
+                role: .accounting
+            )
+        }
+        #expect(throws: FleetVehiclePolicyError.technicianAlreadyAssigned) {
+            try FleetVehiclePolicy.assign(
+                vehicle,
+                to: technician,
+                existingVehicles: [vehicle, otherVehicle],
+                actorEmail: "dispatch@gunnaire.com",
+                role: .dispatcher
+            )
+        }
+        otherVehicle.administrativeStatus = .retired
+        let event = try FleetVehiclePolicy.assign(
+            vehicle,
+            to: technician,
+            existingVehicles: [vehicle, otherVehicle],
+            actorEmail: "dispatch@gunnaire.com",
+            role: .dispatcher
+        )
+        #expect(vehicle.assignedTechnicianID == technician.id)
+        #expect(event.kind == .assignmentChanged)
+        #expect(event.assignmentTechnicianID == technician.id)
+    }
+
+    @Test func fleetInspectionRequiresEveryCheckAndFailsClosedForTheAssignedTechnician() throws {
+        let technician = Technician(name: "Inspection Technician", contactInfo: "inspection@gunnaire.com")
+        let vehicle = FleetVehicle(
+            unitNumber: "Truck 8",
+            stockLocation: "Truck 8 Stock",
+            assignedTechnicianID: technician.id,
+            assignedTechnicianName: technician.name,
+            odometer: 20_000
+        )
+        let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        let nextDue = now.addingTimeInterval(30 * 86_400)
+        var results = Dictionary(uniqueKeysWithValues: FleetInspectionItem.allCases.map { ($0, true) })
+
+        #expect(throws: FleetVehiclePolicyError.inspectionIncomplete) {
+            try FleetVehiclePolicy.recordInspection(
+                for: vehicle,
+                results: [.tiresAndWheels: true],
+                odometer: 20_100,
+                notes: nil,
+                nextInspectionDueAt: nextDue,
+                actorEmail: "inspection@gunnaire.com",
+                role: .fieldTechnician,
+                actorTechnicianID: technician.id,
+                now: now
+            )
+        }
+        #expect(throws: FleetVehiclePolicyError.assignedVehicleRequired) {
+            try FleetVehiclePolicy.recordInspection(
+                for: vehicle,
+                results: results,
+                odometer: 20_100,
+                notes: nil,
+                nextInspectionDueAt: nextDue,
+                actorEmail: "other@gunnaire.com",
+                role: .fieldTechnician,
+                actorTechnicianID: UUID(),
+                now: now
+            )
+        }
+
+        results[.brakesAndSteering] = false
+        #expect(throws: FleetVehiclePolicyError.inspectionFailureNoteRequired) {
+            try FleetVehiclePolicy.recordInspection(
+                for: vehicle,
+                results: results,
+                odometer: 20_100,
+                notes: " ",
+                nextInspectionDueAt: nextDue,
+                actorEmail: "inspection@gunnaire.com",
+                role: .fieldTechnician,
+                actorTechnicianID: technician.id,
+                now: now
+            )
+        }
+        #expect(vehicle.administrativeStatus == .inService)
+
+        let failedEvent = try FleetVehiclePolicy.recordInspection(
+            for: vehicle,
+            results: results,
+            odometer: 20_100,
+            notes: "Brake pedal travels to the floor.",
+            nextInspectionDueAt: nextDue,
+            actorEmail: "inspection@gunnaire.com",
+            role: .fieldTechnician,
+            actorTechnicianID: technician.id,
+            now: now
+        )
+        #expect(vehicle.administrativeStatus == .outOfService)
+        #expect(vehicle.nextInspectionDueAt == now)
+        #expect(failedEvent.failedInspectionItems == [.brakesAndSteering])
+        #expect(failedEvent.inspectionResults.count == FleetInspectionItem.allCases.count)
+    }
+
+    @Test func fleetReturnToServiceRequiresACompletePassingInspectionAfterTheLatestFailure() throws {
+        let technician = Technician(name: "Repair Technician", contactInfo: "repair-tech@gunnaire.com")
+        let vehicle = FleetVehicle(
+            unitNumber: "Truck 9",
+            stockLocation: "Truck 9 Stock",
+            assignedTechnicianID: technician.id,
+            assignedTechnicianName: technician.name,
+            odometer: 30_000
+        )
+        let failureTime = Date(timeIntervalSinceReferenceDate: 1_100_000)
+        var failing = Dictionary(uniqueKeysWithValues: FleetInspectionItem.allCases.map { ($0, true) })
+        failing[.tiresAndWheels] = false
+        let failedEvent = try FleetVehiclePolicy.recordInspection(
+            for: vehicle,
+            results: failing,
+            odometer: 30_100,
+            notes: "Right rear tire sidewall damage.",
+            nextInspectionDueAt: failureTime.addingTimeInterval(86_400),
+            actorEmail: technician.contactInfo,
+            role: .fieldTechnician,
+            actorTechnicianID: technician.id,
+            now: failureTime
+        )
+
+        #expect(throws: FleetVehiclePolicyError.passingInspectionRequired) {
+            try FleetVehiclePolicy.returnToService(
+                vehicle,
+                events: [failedEvent],
+                reason: "Tire replaced.",
+                actorEmail: "admin@gunnaire.com",
+                role: .admin,
+                now: failureTime.addingTimeInterval(60)
+            )
+        }
+
+        let passingTime = failureTime.addingTimeInterval(120)
+        let passing = Dictionary(uniqueKeysWithValues: FleetInspectionItem.allCases.map { ($0, true) })
+        let passedEvent = try FleetVehiclePolicy.recordInspection(
+            for: vehicle,
+            results: passing,
+            odometer: 30_101,
+            notes: "Replacement tire installed and verified.",
+            nextInspectionDueAt: passingTime.addingTimeInterval(30 * 86_400),
+            actorEmail: technician.contactInfo,
+            role: .fieldTechnician,
+            actorTechnicianID: technician.id,
+            now: passingTime
+        )
+        #expect(vehicle.administrativeStatus == .outOfService)
+
+        let release = try FleetVehiclePolicy.returnToService(
+            vehicle,
+            events: [failedEvent, passedEvent],
+            reason: "Repair complete and follow-up inspection passed.",
+            actorEmail: "admin@gunnaire.com",
+            role: .admin,
+            now: passingTime.addingTimeInterval(60)
+        )
+        #expect(vehicle.administrativeStatus == .inService)
+        #expect(release.resolvesOutOfService == true)
+        #expect(release.priorStatusRaw == FleetVehicleAdministrativeStatus.outOfService.rawValue)
+        #expect(release.newStatusRaw == FleetVehicleAdministrativeStatus.inService.rawValue)
+    }
+
+    @Test func fleetManualSafetyHoldRequiresANewerPassingInspectionBeforeRelease() throws {
+        let vehicle = FleetVehicle(
+            unitNumber: "Truck 9B",
+            stockLocation: "Truck 9B Stock",
+            odometer: 31_000
+        )
+        let priorInspectionTime = Date(timeIntervalSinceReferenceDate: 1_200_000)
+        let passing = FleetInspectionItem.allCases.map {
+            FleetInspectionResult(item: $0, passed: true)
+        }
+        let priorPassingInspection = FleetVehicleEvent(
+            vehicleID: vehicle.id,
+            vehicleUnitNumber: vehicle.unitNumber,
+            kind: .inspectionCompleted,
+            occurredAt: priorInspectionTime,
+            actorEmail: "dispatch@gunnaire.com",
+            detail: "Earlier inspection passed.",
+            odometer: 31_000,
+            inspectionResults: passing,
+            priorStatus: .inService,
+            newStatus: .inService
+        )
+        let holdTime = priorInspectionTime.addingTimeInterval(60)
+        let hold = try FleetVehiclePolicy.setOutOfService(
+            vehicle,
+            reason: "Steering concern reported after the earlier inspection.",
+            actorEmail: "dispatch@gunnaire.com",
+            role: .dispatcher,
+            now: holdTime
+        )
+
+        #expect(throws: FleetVehiclePolicyError.passingInspectionRequired) {
+            try FleetVehiclePolicy.returnToService(
+                vehicle,
+                events: [priorPassingInspection, hold],
+                reason: "Concern reviewed.",
+                actorEmail: "admin@gunnaire.com",
+                role: .admin,
+                now: holdTime.addingTimeInterval(30)
+            )
+        }
+
+        let followUpTime = holdTime.addingTimeInterval(120)
+        let followUp = try FleetVehiclePolicy.recordInspection(
+            for: vehicle,
+            results: Dictionary(uniqueKeysWithValues: FleetInspectionItem.allCases.map { ($0, true) }),
+            odometer: 31_001,
+            notes: "Steering repair verified in a complete follow-up inspection.",
+            nextInspectionDueAt: followUpTime.addingTimeInterval(30 * 86_400),
+            actorEmail: "admin@gunnaire.com",
+            role: .admin,
+            actorTechnicianID: nil,
+            now: followUpTime
+        )
+        let release = try FleetVehiclePolicy.returnToService(
+            vehicle,
+            events: [priorPassingInspection, hold, followUp],
+            reason: "Repair complete and the newer inspection passed.",
+            actorEmail: "admin@gunnaire.com",
+            role: .admin,
+            now: followUpTime.addingTimeInterval(60)
+        )
+
+        #expect(vehicle.administrativeStatus == .inService)
+        #expect(release.resolvesOutOfService == true)
+    }
+
+    @Test func fleetServiceKeepsCostFinanciallyRestrictedAndOdometerMonotonic() throws {
+        let technician = Technician(name: "Service Technician", contactInfo: "service-tech@gunnaire.com")
+        let vehicle = FleetVehicle(
+            unitNumber: "Truck 10",
+            stockLocation: "Truck 10 Stock",
+            assignedTechnicianID: technician.id,
+            assignedTechnicianName: technician.name,
+            odometer: 40_000
+        )
+
+        #expect(throws: FleetVehiclePolicyError.fieldCostRestricted) {
+            try FleetVehiclePolicy.recordService(
+                for: vehicle,
+                category: .preventiveMaintenance,
+                detail: "Oil and filter change",
+                odometer: 40_100,
+                cost: 189,
+                serviceCenter: "Fleet Shop",
+                invoiceNumber: "FS-100",
+                nextServiceDueAt: nil,
+                nextServiceDueOdometer: 45_100,
+                actorEmail: technician.contactInfo,
+                role: .fieldTechnician,
+                actorTechnicianID: technician.id
+            )
+        }
+        let fieldEvent = try FleetVehiclePolicy.recordService(
+            for: vehicle,
+            category: .preventiveMaintenance,
+            detail: "Oil and filter change",
+            odometer: 40_100,
+            cost: nil,
+            serviceCenter: "Fleet Shop",
+            invoiceNumber: "FS-100",
+            nextServiceDueAt: nil,
+            nextServiceDueOdometer: 45_100,
+            actorEmail: technician.contactInfo,
+            role: .fieldTechnician,
+            actorTechnicianID: technician.id
+        )
+        #expect(fieldEvent.serviceCost == nil)
+        #expect(vehicle.odometer == 40_100)
+
+        #expect(throws: FleetVehiclePolicyError.odometerWentBackward) {
+            try FleetVehiclePolicy.recordService(
+                for: vehicle,
+                category: .repair,
+                detail: "Mirror repair",
+                odometer: 40_000,
+                cost: 75,
+                serviceCenter: nil,
+                invoiceNumber: nil,
+                nextServiceDueAt: nil,
+                nextServiceDueOdometer: nil,
+                actorEmail: "accounting@gunnaire.com",
+                role: .accounting,
+                actorTechnicianID: nil
+            )
+        }
+        #expect(throws: FleetVehiclePolicyError.invalidServiceCost) {
+            try FleetVehiclePolicy.recordService(
+                for: vehicle,
+                category: .repair,
+                detail: "Mirror repair",
+                odometer: 40_100,
+                cost: .infinity,
+                serviceCenter: nil,
+                invoiceNumber: nil,
+                nextServiceDueAt: nil,
+                nextServiceDueOdometer: nil,
+                actorEmail: "accounting@gunnaire.com",
+                role: .accounting,
+                actorTechnicianID: nil
+            )
+        }
+        let accountingEvent = try FleetVehiclePolicy.recordService(
+            for: vehicle,
+            category: .repair,
+            detail: "Passenger mirror replaced",
+            odometer: 40_150,
+            cost: 275,
+            serviceCenter: "Fleet Shop",
+            invoiceNumber: "FS-101",
+            nextServiceDueAt: nil,
+            nextServiceDueOdometer: 45_150,
+            actorEmail: "accounting@gunnaire.com",
+            role: .accounting,
+            actorTechnicianID: nil
+        )
+        #expect(accountingEvent.serviceCost == 275)
+        #expect(accountingEvent.serviceCategory == .repair)
+        #expect(accountingEvent.invoiceNumber == "FS-101")
+        #expect(vehicle.nextServiceDueOdometer == 45_150)
+    }
+
+    @Test func fleetReadinessCombinesAdministrativeInspectionAndServiceExceptions() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 30)))
+        let vehicle = FleetVehicle(
+            unitNumber: "Truck 11",
+            stockLocation: "Truck 11 Stock",
+            odometer: 49_000,
+            nextInspectionDueAt: calendar.date(byAdding: .day, value: 1, to: now),
+            nextServiceDueAt: calendar.date(byAdding: .day, value: 30, to: now),
+            nextServiceDueOdometer: 50_000
+        )
+
+        #expect(vehicle.readiness(asOf: now, calendar: calendar).isDispatchReady)
+        vehicle.odometer = 50_000
+        #expect(vehicle.readiness(asOf: now, calendar: calendar).serviceDue)
+        vehicle.nextServiceDueOdometer = 55_000
+        vehicle.nextInspectionDueAt = now
+        #expect(vehicle.readiness(asOf: now, calendar: calendar).inspectionDue)
+        vehicle.nextInspectionDueAt = calendar.date(byAdding: .day, value: 1, to: now)
+        vehicle.administrativeStatus = .outOfService
+        #expect(vehicle.readiness(asOf: now, calendar: calendar).needsAttention)
+        #expect(!vehicle.readiness(asOf: now, calendar: calendar).isDispatchReady)
+    }
+
+    @Test func fleetServiceFilesRetainVehicleLineageWithoutEnteringCustomerOrQuickBooksEvidence() {
+        let vehicleID = UUID()
+        let eventID = UUID()
+        let attachment = ServiceDocumentAttachment(
+            customer: nil,
+            serviceCallID: nil,
+            fleetVehicleID: vehicleID,
+            fleetVehicleEventID: eventID,
+            kind: .fleetService,
+            displayName: "truck-12-service.pdf",
+            localFilePath: "/tmp/truck-12-service.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 1
+        )
+
+        #expect(attachment.fleetVehicleID == vehicleID)
+        #expect(attachment.fleetVehicleEventID == eventID)
+        #expect(attachment.kind == .fleetService)
+        #expect(!attachment.kind.isPhoto)
+        #expect(attachment.kind.customerProfileGroupTitle == "Fleet Files")
+        #expect(!attachment.canLinkToQuickBooksInvoiceAttachment)
+        #expect(!attachment.canLinkToQuickBooksInvoiceDocument)
+        #expect(!attachment.canLinkToQuickBooksEstimateDocument)
     }
 
 }

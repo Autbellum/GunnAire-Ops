@@ -1533,7 +1533,7 @@ struct SyncIntegrationsView: View {
             guard canManageGoogleDriveArchive else {
                 throw GoogleDriveAPIError.authorizationChanged
             }
-            guard attachment.customer != nil else {
+            guard attachment.customer != nil || attachment.fleetVehicleID != nil else {
                 throw GoogleDriveArchivePreparationError.unresolvedCustomer
             }
 
@@ -1622,6 +1622,9 @@ struct SyncIntegrationsView: View {
             details.append("Invoice \(invoiceID.uuidString.prefix(8))")
         } else if let estimateID = attachment.estimateID {
             details.append("Estimate \(estimateID.uuidString.prefix(8))")
+        }
+        if let fleetVehicleID = attachment.fleetVehicleID {
+            details.append("Fleet \(fleetVehicleID.uuidString.prefix(8))")
         }
         return details.joined(separator: " • ")
     }

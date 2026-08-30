@@ -21,6 +21,7 @@ struct OperationsDashboardView: View {
     @Query(sort: \ProjectMilestone.plannedDate, order: .forward) private var projectMilestones: [ProjectMilestone]
     @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
     @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
+    @Query(sort: \FleetVehicle.unitNumber, order: .forward) private var fleetVehicles: [FleetVehicle]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
@@ -30,6 +31,7 @@ struct OperationsDashboardView: View {
     @State private var showingCommandPalette = false
     @State private var isBusinessOverviewExpanded = false
     @State private var isOperationalStatusExpanded = false
+    @State private var showingFleetWorkspace = false
 
     private let calendar = Calendar.current
 
@@ -81,6 +83,41 @@ struct OperationsDashboardView: View {
 
     private var isAdminUser: Bool {
         AppAccess.isAdmin(email: currentUserEmail, users: users)
+    }
+
+    private var currentUserRole: AppUserRole? {
+        AppAccess.activeRole(email: currentUserEmail, users: users)
+    }
+
+    private var currentTechnicianID: UUID? {
+        AppAccess.ownPerformanceTechnicianID(
+            email: currentUserEmail,
+            users: users,
+            technicians: technicians
+        )
+    }
+
+    private var visibleFleetVehicles: [FleetVehicle] {
+        switch currentUserRole {
+        case .fieldTechnician:
+            guard let currentTechnicianID else { return [] }
+            return fleetVehicles.filter { $0.assignedTechnicianID == currentTechnicianID }
+        case .standard, nil:
+            return []
+        case .dispatcher, .accounting, .admin:
+            return fleetVehicles
+        }
+    }
+
+    private var fleetAttentionVehicles: [FleetVehicle] {
+        visibleFleetVehicles
+            .filter { $0.readiness().needsAttention }
+            .sorted {
+                if $0.administrativeStatus != $1.administrativeStatus {
+                    return $0.administrativeStatus == .outOfService
+                }
+                return $0.unitNumber.localizedCaseInsensitiveCompare($1.unitNumber) == .orderedAscending
+            }
     }
 
     private var todayCalls: [ServiceCall] {
@@ -210,6 +247,7 @@ struct OperationsDashboardView: View {
             quickBooksAttentionInvoices.first != nil,
             quickBooksAttentionPayments.first != nil,
             followUpCalls.first != nil,
+            fleetAttentionVehicles.first != nil,
             upcomingCalls.first != nil
         ]
         .filter { $0 }
@@ -368,6 +406,10 @@ struct OperationsDashboardView: View {
                     canViewFinancials: canViewFinancials,
                     canCollectFieldPayments: canCollectFieldPayments
                 )
+                    .tint(Color.brandGold)
+            }
+            .sheet(isPresented: $showingFleetWorkspace) {
+                FleetWorkspaceView()
                     .tint(Color.brandGold)
             }
         }
@@ -636,6 +678,20 @@ struct OperationsDashboardView: View {
                     }
                 }
 
+                if let vehicle = fleetAttentionVehicles.first {
+                    priorityRow(
+                        title: "Fleet readiness",
+                        subtitle: "\(vehicle.unitNumber) • \(vehicle.assignedTechnicianName ?? "Unassigned")",
+                        value: vehicle.readiness().title,
+                        systemImage: "car.rear.and.tire.marks",
+                        tint: vehicle.administrativeStatus == .outOfService ? .red : .orange,
+                        actionTitle: "Review"
+                    ) {
+                        showingFleetWorkspace = true
+                    }
+                    .accessibilityIdentifier("ReviewFleetReadiness")
+                }
+
                 if let call = upcomingCalls.first {
                     priorityRow(
                         title: "Next scheduled job",
@@ -779,9 +835,21 @@ struct OperationsDashboardView: View {
 
     private var fieldTeamSection: some View {
         dashboardSection(title: "Field Team", systemImage: "person.2") {
-            if technicians.isEmpty && unassignedUpcomingCalls.isEmpty {
+            if technicians.isEmpty && unassignedUpcomingCalls.isEmpty && visibleFleetVehicles.isEmpty && !isAdminUser {
                 emptyState("No technicians or upcoming assignments yet.")
             } else {
+                if !visibleFleetVehicles.isEmpty || isAdminUser {
+                    summaryStrip(
+                        title: fleetSummaryTitle,
+                        subtitle: fleetSummaryDetail,
+                        systemImage: fleetAttentionVehicles.isEmpty ? "car.fill" : "car.rear.and.tire.marks",
+                        tint: fleetAttentionVehicles.isEmpty ? .green : .orange
+                    ) {
+                        showingFleetWorkspace = true
+                    }
+                    .accessibilityIdentifier("OpenFleetWorkspace")
+                }
+
                 if !unassignedUpcomingCalls.isEmpty {
                     summaryStrip(
                         title: "\(unassignedUpcomingCalls.count) unassigned job\(unassignedUpcomingCalls.count == 1 ? "" : "s") this week",
@@ -827,6 +895,26 @@ struct OperationsDashboardView: View {
                 }
             }
         }
+    }
+
+    private var fleetSummaryTitle: String {
+        if visibleFleetVehicles.isEmpty {
+            return "Add fleet vehicles"
+        }
+        if fleetAttentionVehicles.isEmpty {
+            return "Fleet ready"
+        }
+        return "\(fleetAttentionVehicles.count) fleet vehicle\(fleetAttentionVehicles.count == 1 ? "" : "s") need attention"
+    }
+
+    private var fleetSummaryDetail: String {
+        if visibleFleetVehicles.isEmpty {
+            return "Connect each service truck, technician, and stock location."
+        }
+        if let vehicle = fleetAttentionVehicles.first {
+            return "\(vehicle.unitNumber) • \(vehicle.readiness().title)"
+        }
+        return "\(visibleFleetVehicles.count) vehicle\(visibleFleetVehicles.count == 1 ? "" : "s") dispatch-ready"
     }
 
     private var systemsSection: some View {

@@ -174,6 +174,29 @@ enum AppAccess {
         return role == .dispatcher || role == .admin
     }
 
+    /// Vehicle assignment and operational holds affect field capacity without
+    /// granting accounting or integration administration. Dispatch may
+    /// coordinate active vehicles; only Admin creates, retires, or returns a
+    /// repaired vehicle to service.
+    static func canManageFleetOperations(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .dispatcher || role == .admin
+    }
+
+    static func canAdministerFleet(email: String?, users: [AppUser]) -> Bool {
+        activeRole(email: email, users: users) == .admin
+    }
+
+    static func canRecordFleetInspection(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .fieldTechnician || role == .dispatcher || role == .admin
+    }
+
+    static func canRecordFleetService(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .fieldTechnician || role == .accounting || role == .admin
+    }
+
     /// Progress updates are operational job custody, distinct from changing the
     /// dispatch board. Assigned field technicians may advance their work, while
     /// Dispatch/Admin may coordinate it; Standard and Accounting remain read-only.

@@ -104,6 +104,91 @@ EXPECTED_CLOUDKIT_V16_ADDITIONS = {
         "CD_sharedCompanySyncStatus": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
     },
 }
+_CLOUDKIT_STRING_FIELD = ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE")
+_CLOUDKIT_NUMBER_FIELD = ("DOUBLE", "QUERYABLE", "SORTABLE")
+_CLOUDKIT_INTEGER_FIELD = ("INT64", "QUERYABLE", "SORTABLE")
+_CLOUDKIT_DATE_FIELD = ("TIMESTAMP", "QUERYABLE", "SORTABLE")
+EXPECTED_CLOUDKIT_V17_ADDITIONS = {
+    **EXPECTED_CLOUDKIT_V16_ADDITIONS,
+    "CD_ServiceDocumentAttachment": {
+        **EXPECTED_CLOUDKIT_V16_ADDITIONS["CD_ServiceDocumentAttachment"],
+        "CD_fleetVehicleEventID": _CLOUDKIT_STRING_FIELD,
+        "CD_fleetVehicleID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_FleetVehicle": {
+        "CD_administrativeStatusRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_assignedTechnicianID": _CLOUDKIT_STRING_FIELD,
+        "CD_assignedTechnicianName": _CLOUDKIT_STRING_FIELD,
+        "CD_createdAt": _CLOUDKIT_DATE_FIELD,
+        "CD_entityName": _CLOUDKIT_STRING_FIELD,
+        "CD_id": _CLOUDKIT_STRING_FIELD,
+        "CD_latestInspectionAt": _CLOUDKIT_DATE_FIELD,
+        "CD_licensePlate": _CLOUDKIT_STRING_FIELD,
+        "CD_make": _CLOUDKIT_STRING_FIELD,
+        "CD_model": _CLOUDKIT_STRING_FIELD,
+        "CD_nextInspectionDueAt": _CLOUDKIT_DATE_FIELD,
+        "CD_nextServiceDueAt": _CLOUDKIT_DATE_FIELD,
+        "CD_nextServiceDueOdometer": _CLOUDKIT_NUMBER_FIELD,
+        "CD_notes": _CLOUDKIT_STRING_FIELD,
+        "CD_odometer": _CLOUDKIT_NUMBER_FIELD,
+        "CD_odometerUpdatedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_stockLocation": _CLOUDKIT_STRING_FIELD,
+        "CD_unitNumber": _CLOUDKIT_STRING_FIELD,
+        "CD_updatedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_updatedByEmail": _CLOUDKIT_STRING_FIELD,
+        "CD_vehicleYear": _CLOUDKIT_INTEGER_FIELD,
+        "CD_vin": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_FleetVehicleEvent": {
+        "CD_actorEmail": _CLOUDKIT_STRING_FIELD,
+        "CD_assignmentTechnicianID": _CLOUDKIT_STRING_FIELD,
+        "CD_assignmentTechnicianName": _CLOUDKIT_STRING_FIELD,
+        "CD_detail": _CLOUDKIT_STRING_FIELD,
+        "CD_entityName": _CLOUDKIT_STRING_FIELD,
+        "CD_failedInspectionItemsRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_id": _CLOUDKIT_STRING_FIELD,
+        "CD_inspectionResultsJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_invoiceNumber": _CLOUDKIT_STRING_FIELD,
+        "CD_kindRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_newStatusRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_occurredAt": _CLOUDKIT_DATE_FIELD,
+        "CD_odometer": _CLOUDKIT_NUMBER_FIELD,
+        "CD_priorStatusRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_resolvesOutOfService": _CLOUDKIT_INTEGER_FIELD,
+        "CD_serviceCategoryRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceCenter": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceCost": _CLOUDKIT_NUMBER_FIELD,
+        "CD_vehicleID": _CLOUDKIT_STRING_FIELD,
+        "CD_vehicleUnitNumber": _CLOUDKIT_STRING_FIELD,
+    },
+}
+EXPECTED_CLOUDKIT_V17_RECORD_TYPES = {"CD_FleetVehicle", "CD_FleetVehicleEvent"}
+EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES = {
+    "CD_AppUser",
+    "CD_Customer",
+    "CD_CustomerCommunication",
+    "CD_CustomerEquipment",
+    "CD_CustomerServiceLocation",
+    "CD_Estimate",
+    "CD_FieldFormResponse",
+    "CD_FieldFormTemplate",
+    "CD_InventoryMovement",
+    "CD_Invoice",
+    "CD_Item",
+    "CD_Payment",
+    "CD_ProjectMilestone",
+    "CD_PurchaseOrder",
+    "CD_RecurringMaintenanceContract",
+    "CD_ServiceCall",
+    "CD_ServiceCallActivity",
+    "CD_ServiceDocumentAttachment",
+    "CD_ServiceRequest",
+    "CD_Technician",
+    "CD_TechnicianAvailabilityBlock",
+    "CD_TimeEntry",
+    "CD_Vendor",
+    "Users",
+}
 
 
 @dataclass
@@ -915,10 +1000,25 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
     try:
         dev = parse_cloudkit_schema(development)
         prod = parse_cloudkit_schema(production)
+        dev_record_types = set(dev)
+        prod_record_types = set(prod)
+        added_record_types = dev_record_types - prod_record_types
+        fleet_types_in_dev = dev_record_types & EXPECTED_CLOUDKIT_V17_RECORD_TYPES
+        fleet_types_in_prod = prod_record_types & EXPECTED_CLOUDKIT_V17_RECORD_TYPES
+        approved_record_type_sets = (
+            EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES,
+            EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES | EXPECTED_CLOUDKIT_V17_RECORD_TYPES,
+        )
         results.require(
-            set(dev) == set(prod) and len(dev) == 24,
-            "CloudKit exports contain the same 24 record types",
-            f"CloudKit record types differ: development={len(dev)} production={len(prod)}",
+            prod_record_types.issubset(dev_record_types)
+            and dev_record_types in approved_record_type_sets
+            and prod_record_types in approved_record_type_sets
+            and added_record_types in (set(), EXPECTED_CLOUDKIT_V17_RECORD_TYPES)
+            and fleet_types_in_dev in (set(), EXPECTED_CLOUDKIT_V17_RECORD_TYPES)
+            and fleet_types_in_prod in (set(), EXPECTED_CLOUDKIT_V17_RECORD_TYPES),
+            "CloudKit exports retain the exact 24-type baseline and only the approved v17 fleet pair may be additive",
+            "CloudKit record types are not the approved 24-type baseline or 26-type fleet extension: "
+            f"development={sorted(dev_record_types)} production={sorted(prod_record_types)}",
         )
         actual_additions: dict[str, dict[str, tuple[str, ...]]] = {}
         changed_or_removed: list[str] = []
@@ -940,84 +1040,109 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
             "Development changes remove or alter no Production CloudKit fields",
             f"Development removes or alters Production fields: {changed_or_removed}",
         )
-        malformed_existing_v16_fields: list[str] = []
-        for record_name, expected_fields in EXPECTED_CLOUDKIT_V16_ADDITIONS.items():
+        malformed_existing_v17_fields: list[str] = []
+        for record_name, expected_fields in EXPECTED_CLOUDKIT_V17_ADDITIONS.items():
             production_fields = prod.get(record_name, {})
             for field_name, expected_definition in expected_fields.items():
                 if (
                     field_name in production_fields
                     and production_fields[field_name] != expected_definition
                 ):
-                    malformed_existing_v16_fields.append(
+                    malformed_existing_v17_fields.append(
                         f"{record_name}.{field_name}"
                     )
         results.require(
-            not malformed_existing_v16_fields,
-            "Existing Production v16 fields match their approved definitions",
-            "CloudKit Production contains malformed approved v16 fields: "
-            f"{malformed_existing_v16_fields}",
+            not malformed_existing_v17_fields,
+            "Existing Production fields through v17 match their approved definitions",
+            "CloudKit Production contains malformed approved fields through v17: "
+            f"{malformed_existing_v17_fields}",
         )
-        expected_remaining_v16_additions = {
-            record_name: {
-                field_name: definition
-                for field_name, definition in expected_fields.items()
-                if prod.get(record_name, {}).get(field_name) != definition
+
+        def expected_remaining(
+            expected: dict[str, dict[str, tuple[str, ...]]]
+        ) -> dict[str, dict[str, tuple[str, ...]]]:
+            remaining = {
+                record_name: {
+                    field_name: definition
+                    for field_name, definition in expected_fields.items()
+                    if prod.get(record_name, {}).get(field_name) != definition
+                }
+                for record_name, expected_fields in expected.items()
             }
-            for record_name, expected_fields in EXPECTED_CLOUDKIT_V16_ADDITIONS.items()
-        }
-        expected_remaining_v16_additions = {
-            record_name: fields
-            for record_name, fields in expected_remaining_v16_additions.items()
-            if fields
-        }
-        if not actual_additions:
-            missing_or_changed_v16_fields: list[str] = []
-            for record_name, expected_fields in EXPECTED_CLOUDKIT_V16_ADDITIONS.items():
-                development_fields = dev.get(record_name, {})
-                production_fields = prod.get(record_name, {})
-                for field_name, expected_definition in expected_fields.items():
-                    if (
-                        development_fields.get(field_name) != expected_definition
-                        or production_fields.get(field_name) != expected_definition
-                    ):
-                        missing_or_changed_v16_fields.append(f"{record_name}.{field_name}")
-            results.require(
-                not missing_or_changed_v16_fields,
-                "CloudKit Production exactly matches Development with every approved v16 field",
-                "CloudKit exports match, but approved v16 fields are missing or changed: "
-                f"{missing_or_changed_v16_fields}",
+            return {record_name: fields for record_name, fields in remaining.items() if fields}
+
+        def missing_or_changed(
+            records: dict[str, dict[str, tuple[str, ...]]],
+            expected: dict[str, dict[str, tuple[str, ...]]],
+        ) -> list[str]:
+            return [
+                f"{record_name}.{field_name}"
+                for record_name, expected_fields in expected.items()
+                for field_name, expected_definition in expected_fields.items()
+                if records.get(record_name, {}).get(field_name) != expected_definition
+            ]
+
+        expected_remaining_v17_additions = expected_remaining(EXPECTED_CLOUDKIT_V17_ADDITIONS)
+        expected_remaining_v16_additions = expected_remaining(EXPECTED_CLOUDKIT_V16_ADDITIONS)
+        dev_missing_v17 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V17_ADDITIONS)
+        prod_missing_v17 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V17_ADDITIONS)
+        dev_missing_v16 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V16_ADDITIONS)
+        prod_missing_v16 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V16_ADDITIONS)
+
+        if (
+            not dev_missing_v17
+            and (
+                not prod_missing_v17
+                or actual_additions == expected_remaining_v17_additions
             )
-        elif actual_additions == expected_remaining_v16_additions:
+        ):
             results.pass_(
-                "CloudKit Development contains exactly the remaining additive v16 fields relative to Production"
+                "CloudKit Development contains exactly the approved additive v17 fleet records and document linkage relative to Production"
+            )
+        elif (
+            not dev_missing_v16
+            and (
+                not prod_missing_v16
+                or actual_additions == expected_remaining_v16_additions
+            )
+        ):
+            results.pass_("CloudKit exports exactly satisfy the approved v16 schema")
+            results.warn(
+                "CloudKit source v17 fleet records are not staged in Development; run the signed v17 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V13_ADDITIONS:
             results.pass_(
                 "CloudKit Development v13 delta is exactly six additive tax fields on Estimate and Invoice"
             )
             results.warn(
-                "CloudKit source v16 fields are not staged in Development; run the signed v16 bootstrap before promotion review"
+                "CloudKit source v17 fields are not staged in Development; run the signed v17 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V14_ADDITIONS:
             results.pass_(
                 "CloudKit Development v14 cumulative delta is exactly six tax fields plus Invoice.dueDate"
             )
             results.warn(
-                "CloudKit source v16 fields are not staged in Development; run the signed v16 bootstrap before promotion review"
+                "CloudKit source v17 fields are not staged in Development; run the signed v17 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V15_ADDITIONS:
             results.pass_(
                 "CloudKit Development v15 cumulative delta is exactly the approved tax, due-date, inventory continuity, Item continuity, and service-package fields"
             )
             results.warn(
-                "CloudKit source v16 document-linkage and Google Drive fields are not staged in Development; run the signed v16 bootstrap before promotion review"
+                "CloudKit source v17 fleet records are not staged in Development; run the signed v17 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V16_ADDITIONS:
             results.pass_(
                 "CloudKit Development v16 cumulative delta is exactly the approved tax, due-date, inventory continuity, Item continuity, service-package, document-linkage, and Google Drive fields"
             )
+            results.warn(
+                "CloudKit source v17 fleet records are not staged in Development; run the signed v17 bootstrap before promotion review"
+            )
         else:
-            results.fail(f"Unexpected CloudKit v13/v14/v15/v16 delta: {actual_additions}")
+            results.fail(
+                "Unexpected CloudKit v13/v14/v15/v16/v17 delta: "
+                f"{actual_additions}; missing Development v17 fields: {dev_missing_v17}"
+            )
         results.pass_(f"Development export SHA-256 is {sha256(development)}")
         results.pass_(f"Production export SHA-256 is {sha256(production)}")
     except (OSError, ValueError) as error:
@@ -1135,7 +1260,7 @@ def main() -> int:
             results,
         )
     else:
-        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15/v16 Production delta was not rechecked")
+        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15/v16/v17 Production delta was not rechecked")
 
     if args.online:
         check_online(backend_version, results)
