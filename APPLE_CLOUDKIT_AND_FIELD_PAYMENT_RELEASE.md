@@ -23,10 +23,11 @@ and schema status as of 2026-08-30.
 - Production remains schema v15 across 24 record types in retained export
   `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
   `f81de36537620a10fe34fde22883a94dc6f5b00deea6fec08004160c0aae7594`.
-  The signed isolated bootstrap initialized Development schema v16 and exported
-  `/Users/gunnaire/Downloads/cloudkit-development-9.ckdb`, SHA-256
-  `faf57f850f598380e4786581269d66d6ddaf07ea52fa4136b20133bc59116fd8`.
-- Working source is now schema v22. It retains the exact v16 attachment delta;
+  The signed isolated bootstrap now initializes the complete Development schema
+  v22 across 33 record types. Fresh export
+  `/Users/gunnaire/Downloads/cloudkit-development-11.ckdb` has SHA-256
+  `9d357a64b9b17b7efcc8256c5c0d8bb6670b86357e2b48a145d95a5603f77f8b`.
+- Source schema v22 retains the exact v16 attachment delta;
   adds the v17 fleet vehicle/event pair and attachment linkage; the v18 field
   expense record and receipt linkage; the v19 customer operational-alert record;
   the v20 business-task/event pair; and the v21 technician-time-off
@@ -35,22 +36,31 @@ and schema status as of 2026-08-30.
   `CD_TechnicianWorkShift` record for regular/on-call weekly capacity,
   effective dates, time zone, stable creation evidence, and reason-required
   retirement history. The isolated Debug bootstrap writes every optional value
-  through v22, and unit contracts assert the complete seed. The release
+  through v22, and unit contracts assert the complete seed. The signed staging
+  run exposed and fixed ten previously absent optional values: six expense
+  review/reimbursement fields and four operational-alert resolution fields.
+  The release
   preflight accepts only the exact cumulative additive v22 delta or an
   exact post-promotion match, requires each new record family to be all-or-none,
   and rejects partial v21 availability-block fields or a partial v22 shift
-  record. A matching retained
-  Development-v16/Production-v15 export therefore cannot masquerade as current
-  readiness.
-- Schema v16 initialization and marker cleanup completed in CloudKit
-  Development. Local mirroring metadata records successful setup/import/export
-  events, no pending upload or delete, and no synthetic marker record after the
-  cleanup passes. The retained Development export differs from v15 Production
-  by exactly the sixteen approved optional attachment fields with zero removed
-  or changed Production fields. Source v17-v22 is not staged in either retained
-  export. Run a signed isolated v22 Development bootstrap, export and review the
-  exact cumulative delta, complete signed two-device role/offline merge
-  acceptance, and only then promote the reviewed schema to Production.
+  record.
+- Exact export comparison proves Development differs from Production by only
+  the nine approved additive record families and 212 additive fields across 11
+  affected record types. No existing Production field, system field, or
+  security grant is removed or changed, and every added record uses the
+  approved system fields and default private-database grants. The exact schema
+  audit passes **9/9**; the strengthened verifier regression suite passes
+  **5/5**.
+- Versioned marker cleanup identifies the synthetic operational alert by the
+  dedicated bootstrap actor rather than its title, because CloudKit truncates
+  that title to 32 characters. A regression now proves cleanup removes the
+  complete 32-model synthetic graph. The final signed cleanup left zero marker
+  strings, only the 16 intended starter rows, no pending bootstrap process, and
+  **29/29** successful CloudKit mirroring events with zero failures.
+- Production was not promoted. Complete representative signed two-device
+  iPad/Mac/iPhone role, offline, conflict, and reconnect acceptance before
+  deploying the reviewed v22 schema. After promotion, export Production again
+  and require exact Development/Production parity before business use.
 
 Historical deployment evidence follows:
 

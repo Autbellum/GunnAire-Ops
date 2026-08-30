@@ -20,13 +20,37 @@ class CloudKitV22PreflightTests(unittest.TestCase):
         self.development = copy.deepcopy(self.production)
         for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V22_ADDITIONS.items():
             self.development.setdefault(record_name, {}).update(fields)
+        baseline_metadata = {
+            "system_fields": release_preflight.EXPECTED_CLOUDKIT_SYSTEM_FIELDS,
+            "grants": release_preflight.EXPECTED_CLOUDKIT_RECORD_GRANTS,
+        }
+        self.production_metadata = {
+            record_name: copy.deepcopy(baseline_metadata)
+            for record_name in self.production
+        }
+        self.development_metadata = {
+            record_name: copy.deepcopy(baseline_metadata)
+            for record_name in self.development
+        }
 
-    def check(self, development: dict, production: dict) -> release_preflight.Results:
+    def check(
+        self,
+        development: dict,
+        production: dict,
+        development_metadata=None,
+        production_metadata=None,
+    ) -> release_preflight.Results:
         def schema(path: Path) -> dict:
             return development if path.name == "development.ckdb" else production
 
+        def metadata(path: Path) -> dict:
+            if path.name == "development.ckdb":
+                return development_metadata or self.development_metadata
+            return production_metadata or self.production_metadata
+
         results = release_preflight.Results()
         with patch.object(release_preflight, "parse_cloudkit_schema", side_effect=schema), \
+             patch.object(release_preflight, "parse_cloudkit_record_metadata", side_effect=metadata), \
              patch.object(release_preflight, "sha256", return_value="synthetic"), \
              contextlib.redirect_stdout(io.StringIO()):
             release_preflight.check_cloudkit(
@@ -68,6 +92,19 @@ class CloudKitV22PreflightTests(unittest.TestCase):
 
         self.assertTrue(results.failures)
         self.assertTrue(any("v22" in failure.lower() for failure in results.failures))
+
+    def test_existing_record_security_grant_change_is_rejected(self) -> None:
+        altered_metadata = copy.deepcopy(self.development_metadata)
+        altered_metadata["CD_AppUser"]["grants"] = ('GRANT READ TO "_world"',)
+
+        results = self.check(
+            self.development,
+            self.production,
+            development_metadata=altered_metadata,
+        )
+
+        self.assertTrue(results.failures)
+        self.assertTrue(any("security grants" in failure.lower() for failure in results.failures))
 
 
 if __name__ == "__main__":

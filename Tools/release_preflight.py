@@ -383,6 +383,19 @@ EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES = {
     "CD_Vendor",
     "Users",
 }
+EXPECTED_CLOUDKIT_SYSTEM_FIELDS = (
+    '"___createTime" TIMESTAMP',
+    '"___createdBy" REFERENCE',
+    '"___etag" STRING',
+    '"___modTime" TIMESTAMP',
+    '"___modifiedBy" REFERENCE',
+    '"___recordID" REFERENCE',
+)
+EXPECTED_CLOUDKIT_RECORD_GRANTS = (
+    'GRANT WRITE TO "_creator"',
+    'GRANT CREATE TO "_icloud"',
+    'GRANT READ TO "_world"',
+)
 
 
 @dataclass
@@ -1190,13 +1203,70 @@ def parse_cloudkit_schema(path: Path) -> dict[str, dict[str, tuple[str, ...]]]:
     return records
 
 
+def parse_cloudkit_record_metadata(
+    path: Path,
+) -> dict[str, dict[str, tuple[str, ...]]]:
+    text = path.read_text(encoding="utf-8")
+    records: dict[str, dict[str, tuple[str, ...]]] = {}
+    for match in re.finditer(r"RECORD TYPE\s+(\w+)\s*\((.*?)\n\s*\);", text, re.DOTALL):
+        system_fields: list[str] = []
+        grants: list[str] = []
+        for raw_line in match.group(2).splitlines():
+            line = " ".join(raw_line.strip().rstrip(",").split())
+            if not line or line.startswith("CD_"):
+                continue
+            if line.startswith("GRANT "):
+                grants.append(line)
+            else:
+                system_fields.append(line)
+        records[match.group(1)] = {
+            "system_fields": tuple(system_fields),
+            "grants": tuple(grants),
+        }
+    if not records:
+        raise ValueError(f"No CloudKit record metadata found in {path}")
+    return records
+
+
 def check_cloudkit(development: Path, production: Path, results: Results) -> None:
     try:
         dev = parse_cloudkit_schema(development)
         prod = parse_cloudkit_schema(production)
+        dev_metadata = parse_cloudkit_record_metadata(development)
+        prod_metadata = parse_cloudkit_record_metadata(production)
         dev_record_types = set(dev)
         prod_record_types = set(prod)
         added_record_types = dev_record_types - prod_record_types
+        results.require(
+            set(dev_metadata) == dev_record_types and set(prod_metadata) == prod_record_types,
+            "CloudKit field, system-field, and security-grant parsers cover the same record types",
+            "CloudKit export metadata does not cover the same record types as the field schema",
+        )
+        changed_existing_metadata = [
+            record_name
+            for record_name in sorted(prod_record_types)
+            if dev_metadata.get(record_name) != prod_metadata.get(record_name)
+        ]
+        results.require(
+            not changed_existing_metadata,
+            "Development changes alter no existing CloudKit system fields or security grants",
+            "Development alters existing CloudKit system fields or security grants: "
+            f"{changed_existing_metadata}",
+        )
+        invalid_added_metadata = [
+            record_name
+            for record_name in sorted(added_record_types)
+            if dev_metadata.get(record_name, {}).get("system_fields")
+            != EXPECTED_CLOUDKIT_SYSTEM_FIELDS
+            or dev_metadata.get(record_name, {}).get("grants")
+            != EXPECTED_CLOUDKIT_RECORD_GRANTS
+        ]
+        results.require(
+            not invalid_added_metadata,
+            "Added CloudKit record types use the approved system fields and default private-database grants",
+            "Added CloudKit record types have unexpected system fields or security grants: "
+            f"{invalid_added_metadata}",
+        )
         fleet_types_in_dev = dev_record_types & EXPECTED_CLOUDKIT_V17_RECORD_TYPES
         fleet_types_in_prod = prod_record_types & EXPECTED_CLOUDKIT_V17_RECORD_TYPES
         expense_types_in_dev = dev_record_types & EXPECTED_CLOUDKIT_V18_RECORD_TYPES

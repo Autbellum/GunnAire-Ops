@@ -18379,6 +18379,66 @@ struct GunnAire_OpsTests {
         #expect(workShift.retirementOperationID != nil)
     }
 
+    @Test @MainActor func cloudKitDevelopmentBootstrapCleanupRemovesTheCompleteSyntheticGraph() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = container.mainContext
+
+        try GunnAireCloudKitSchemaBootstrap.seedDevelopmentSchemaForTesting(in: context)
+        let seededAlert = try #require(context.fetch(FetchDescriptor<CustomerOperationalAlert>()).first)
+        #expect(seededAlert.title.count == CustomerOperationalAlertPolicy.titleLimit)
+        #expect(seededAlert.createdByEmail == "schema-bootstrap@gunnaire.invalid")
+        #expect(seededAlert.resolvedAt != nil)
+        #expect(seededAlert.resolvedByEmail == "schema-bootstrap@gunnaire.invalid")
+        #expect(seededAlert.resolutionNote?.isEmpty == false)
+        #expect(seededAlert.resolutionOperationID != nil)
+        let seededExpense = try #require(context.fetch(FetchDescriptor<FieldExpenseClaim>()).first)
+        #expect(seededExpense.reviewedAt != nil)
+        #expect(seededExpense.reviewedByEmail == "schema-bootstrap@gunnaire.invalid")
+        #expect(seededExpense.reviewNote?.isEmpty == false)
+        #expect(seededExpense.reimbursedAt != nil)
+        #expect(seededExpense.reimbursedByEmail == "schema-bootstrap@gunnaire.invalid")
+        #expect(seededExpense.reimbursementReference?.isEmpty == false)
+
+        try GunnAireCloudKitSchemaBootstrap.cleanupDevelopmentSchemaForTesting(in: context)
+
+        #expect(try context.fetch(FetchDescriptor<AppUser>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<BusinessTask>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<BusinessTaskEvent>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<Customer>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<CustomerCommunication>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<CustomerEquipment>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<CustomerOperationalAlert>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<CustomerServiceLocation>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<Estimate>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<FieldExpenseClaim>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<FieldFormResponse>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<FieldFormTemplate>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<FleetVehicle>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<FleetVehicleEvent>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<InventoryMovement>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<Invoice>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<Item>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<Payment>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<ProjectMilestone>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<PurchaseOrder>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<RecurringMaintenanceContract>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<ServiceCall>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<ServiceCallActivity>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<ServiceRequest>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<Technician>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<TechnicianAvailabilityBlock>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<TechnicianAvailabilityEvent>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<TechnicianTimeOffRequest>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<TechnicianWorkShift>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<TimeEntry>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<Vendor>()).isEmpty)
+    }
+
     @Test func timeOffRolePolicyFailsClosedOnAmbiguousTechnicianIdentity() {
         let fieldEmail = "field.timeoff@gunnaire.com"
         let fieldUser = AppUser(email: fieldEmail, role: .fieldTechnician)

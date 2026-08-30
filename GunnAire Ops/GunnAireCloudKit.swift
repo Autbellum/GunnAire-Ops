@@ -456,6 +456,12 @@ enum GunnAireCloudKitSchemaBootstrap {
         try seedDevelopmentSchema(in: modelContext)
     }
 
+    /// Keeps marker cleanup directly testable so bounded model fields cannot
+    /// silently strand synthetic records in CloudKit Development.
+    static func cleanupDevelopmentSchemaForTesting(in modelContext: ModelContext) throws {
+        try cleanup(in: modelContext)
+    }
+
     private static func seedDevelopmentSchema(in modelContext: ModelContext) throws {
         // Versioned bootstraps can be run repeatedly as the shared schema grows.
         // Remove only prior marker records so one migration does not leave a
@@ -713,6 +719,19 @@ enum GunnAireCloudKitSchemaBootstrap {
             submittedAt: now,
             createdAt: now
         )
+        try fieldExpenseClaim.approve(
+            reviewerEmail: bootstrapEmail,
+            reviewerRole: .admin,
+            note: marker,
+            hasReceipt: true,
+            now: now
+        )
+        try fieldExpenseClaim.markReimbursed(
+            reference: marker,
+            actorEmail: bootstrapEmail,
+            actorRole: .admin,
+            now: now
+        )
         let operationalAlert = CustomerOperationalAlert(
             customerID: customer.id,
             customerName: customer.name,
@@ -723,6 +742,13 @@ enum GunnAireCloudKitSchemaBootstrap {
             detail: marker,
             createdAt: now,
             createdByEmail: bootstrapEmail
+        )
+        try CustomerOperationalAlertPolicy.resolve(
+            operationalAlert,
+            actorEmail: bootstrapEmail,
+            note: marker,
+            now: now,
+            resolutionOperationID: UUID()
         )
         let businessTask = BusinessTask(
             creationOperationID: UUID(),
@@ -964,7 +990,7 @@ enum GunnAireCloudKitSchemaBootstrap {
         for value in try modelContext.fetch(FetchDescriptor<BusinessTask>()) where value.title == marker {
             modelContext.delete(value)
         }
-        for value in try modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>()) where value.title == marker {
+        for value in try modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>()) where value.createdByEmail == bootstrapEmail {
             modelContext.delete(value)
         }
         for value in try modelContext.fetch(FetchDescriptor<FieldExpenseClaim>()) where value.claimantEmail == bootstrapEmail {
