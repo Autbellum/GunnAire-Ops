@@ -1,6 +1,6 @@
 # GunnAire backend operations runbook
 
-Last verified: 2026-08-26
+Last verified: 2026-08-30
 
 This runbook covers the shared GunnAire service at
 `https://gunnaire-api.onrender.com`. It does not authorize accounting changes,
@@ -18,25 +18,93 @@ credential rotation, production restores, or customer communications.
 
 ## Release verification
 
-1. Install the canonical dependency set with `python3 -m pip install -r requirements.txt`.
-2. Run:
+1. Run the read-only local release preflight against the exact current-source
+   archive and retained CloudKit exports:
 
    ```sh
-   python3 -m unittest \
-     Backend.test_deployment_entrypoint \
-     Backend.test_qbo_token_storage \
-     Backend.test_backend_readiness \
-     Backend.test_backup_backend -v
+   python3 Tools/release_preflight.py \
+     --archive /private/tmp/GunnAireOps-current-2026083001-qbo-vendor-ios-devsigned.xcarchive \
+     --mac-app "/private/tmp/GunnAireOps-current-2026083001-qbo-vendor-mac-devsigned.xcarchive/Products/Applications/GunnAire Ops.app" \
+     --mac-result /private/tmp/GunnAireOps-qbo-vendor-release-mac-2026083001.xcresult \
+     --cloudkit-development-export /Users/gunnaire/Downloads/cloudkit-development-8.ckdb \
+     --cloudkit-production-export /Users/gunnaire/Downloads/cloudkit-production-7.ckdb \
+     --online
    ```
 
-3. Deploy only the reviewed commit. Do not change Render secrets as part of a
-   routine code deployment.
-4. Confirm `/health` returns HTTP 200 and the expected `serviceVersion`.
-5. From an authenticated Admin account, open **Settings → Sync → Shared Server
+   The utility validates source/archive version parity, strict signing,
+   entitlements and development-profile identity, the independently installed
+   App Store profile's production APNs/TestFlight/Production CloudKit/Apple
+   login scope, the exact universal Mac Catalyst Release app/result, privacy
+   manifests, hardened runtime, release configuration, QBO/Google OAuth
+   identifiers, app/dSYM UUIDs, binary hygiene, and the exact additive CloudKit
+   delta. Development-signing warnings are expected until the Apple
+   Distribution private key is installed. Use
+   `--require-app-store-signing` only for the final upload candidate.
+2. Install the canonical dependency set with `python3 -m pip install -r requirements.txt`.
+3. Run the complete backend suite rather than a hand-selected subset:
+
+   ```sh
+   python3 -m unittest discover -s Backend -p 'test_*.py' -v
+   ```
+
+   Source `2026.08.30.15` has 69 expected tests. A different count requires
+   review before deployment even when the discovered subset is green.
+   The same suite must pass in the **Backend regression** GitHub workflow on
+   Python 3.13 and the production-aligned Python 3.14 job. A green workflow is
+   evidence for the reviewed commit; it does not itself authorize Render to
+   deploy that commit.
+4. Record the current GitHub commit, `/health` response, and deployment ID.
+   Confirm a recent verified off-host backup exists before a release that adds
+   database tables. The `.12` Apple identity tables, `.13` supplier-attempt
+   table/indexes, and `.15` Accounts Payable configuration columns are additive;
+   rolling code back does not require deleting them or restoring the database.
+5. Do not push release source directly to `main`. The repository includes the
+   **Backend regression / Python 3.13** and **Backend regression / Python 3.14**
+   checks. The main branch should have a GitHub ruleset that requires a pull
+   request and both successful checks before merge. Until that ruleset is
+   enabled, record the control gap and manually verify both checks on the exact
+   head commit before merging. Prepare a release branch, review the exact diff
+   against the recorded commit, and merge only with deployment-owner
+   authorization. Render follows `main`, so the merge is a production
+   deployment. Do not change Render secrets as part of a routine code deploy.
+6. After the authorized deployment, rerun the same preflight with `--online`.
+   Confirm `/health` returns HTTP 200 and exact `serviceVersion`
+   `2026.08.30.15`.
+7. Confirm the new public Apple route is present without fabricating an Apple
+   event or storing data:
+
+   ```sh
+   curl -i -X POST \
+     -H 'Content-Type: application/json' \
+     --data '{}' \
+     https://gunnaire-api.onrender.com/api/auth/apple/notifications
+   ```
+
+   The expected result is HTTP 400 with `Invalid Apple account notification`.
+   HTTP 401 indicates the previous backend is still serving the route. Never
+   use a locally invented payload as production acceptance evidence.
+8. From an authenticated Admin account, open **Settings → Sync → Shared Server
    Readiness**. Investigate every attention/error component before enabling a
    provider workflow.
-6. Roll back if health remains unavailable, the version does not advance, the
+9. When staff alerts are intended for the release, confirm **Staff Push
+   Notifications** is ready. The APNs Team ID, Key ID, base64 `.p8`, exact app
+   topic, HTTP/2 dependency, and dedicated device-token encryption key must all
+   be present in the deployment secret manager. Do not create or rotate the
+   Apple key as part of an ordinary code deployment.
+10. Confirm the primary App ID's existing Sign in with Apple server-to-server
+   notification URL remains
+   `https://gunnaire-api.onrender.com/api/auth/apple/notifications`. Record the
+   Record the Apple configuration time and test signed-device sign-in, relay status,
+   consent revocation, delayed-event protection, and account deletion. The raw
+   Apple JWS, private-relay address, and provider subject must not appear in
+   logs or incident notes.
+11. Roll back if health remains unavailable, the version does not advance, the
    Admin readiness request fails, or database/document probes report an error.
+   If the Apple notification URL was already activated, remove it before
+   rolling back to a version that does not expose the endpoint so Apple does
+   not repeatedly deliver events to an unauthorized route. Roll back code to
+   the last reviewed commit; do not restore the database solely to remove
+   additive `.12`, `.13`, or `.15` schema changes.
 
 ## Create and verify a backup
 
@@ -104,8 +172,30 @@ as part of restore validation without accounting-owner approval.
   portal test event and inspect Render logs plus Admin readiness. Never bypass
   signature verification, realm binding, event-ID deduplication, or the rule
   that acknowledgement follows a complete successful reconciliation.
+- Staff Push Notifications error: keep alerts disabled while checking the
+  dedicated Fernet key, Apple Team/Key IDs, exact bundle topic, base64 `.p8`,
+  and installed HTTP/2 dependency. Never print the private key, device token,
+  ciphertext, or payload. An APNs credential rejection leaves delivery rows
+  pending for recovery; correct the secret through the deployment manager and
+  verify readiness before retrying.
+- Staff Push Notifications backlog: first verify `/health`, persistent-disk
+  access, worker startup, and APNs reachability. `BadDeviceToken`,
+  `DeviceTokenNotForTopic`, `ExpiredToken`, `Unregistered`, and HTTP 410 are
+  permanent for that registration and must deactivate it; 429 and 5xx failures
+  remain bounded retries. Do not reactivate a token manually—have the opted-in
+  user reopen the signed app so Apple supplies the current token again.
 - Google authentication attention: keep shared routes closed until approved
   business identity mode is restored.
+- Sign in with Apple account-notification failures: keep Apple login available
+  only if normal identity exchange remains healthy, but treat consent and
+  deletion handling as release-blocking. Confirm the deployed version, TLS,
+  Apple audience/bundle ID, Apple signing-key retrieval, database availability,
+  and the exact configured URL. Invalid signature or claim responses must stay
+  `401`; malformed envelopes must stay `400`; unknown but correctly signed
+  subjects are acknowledged without creating a user. Never bypass verification
+  or manually mark an event processed. If the endpoint cannot be restored,
+  remove the URL in Apple Developer with owner authorization and preserve the
+  incident timeline until a signed-device revocation retest passes.
 - Customer communication is required when an outage delays a confirmed visit,
   prevents field access to required records, or creates a credible risk that a
   payment/document was not retained. Do not include secrets or internal logs.
