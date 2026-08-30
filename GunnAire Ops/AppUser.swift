@@ -53,11 +53,7 @@ enum AppAccess {
     }
 
     static func isAdmin(email: String?, users: [AppUser]) -> Bool {
-        let email = normalizedEmail(email)
-        if email == primaryAdminEmail {
-            return true
-        }
-        return users.contains { $0.isActive && $0.email == email && $0.role == .admin }
+        activeRole(email: email, users: users) == .admin
     }
 
     static func activeRole(email: String?, users: [AppUser]) -> AppUserRole? {
@@ -78,11 +74,7 @@ enum AppAccess {
     }
 
     static func isAuthorized(email: String?, users: [AppUser]) -> Bool {
-        let email = normalizedEmail(email)
-        if email == primaryAdminEmail {
-            return true
-        }
-        return users.contains { $0.isActive && $0.email == email }
+        activeRole(email: email, users: users) != nil
     }
 
     static func canAccessSidebarItem(_ item: SidebarItem, email: String?, users: [AppUser]) -> Bool {
@@ -93,7 +85,7 @@ enum AppAccess {
         case .customers:
             return role != .fieldTechnician
         case .timeClock:
-            return role != .accounting
+            return true
         case .scheduleAndJobs, .onsiteDocumentation:
             return role != .accounting
         case .mail, .estimates:
@@ -110,6 +102,32 @@ enum AppAccess {
     static func canViewFinancialManagement(email: String?, users: [AppUser]) -> Bool {
         guard let role = activeRole(email: email, users: users) else { return false }
         return role == .admin || role == .accounting
+    }
+
+    /// Team time approval is an office control between field capture and QBO.
+    /// Accounting may review time without receiving dispatch or QBO-admin
+    /// privileges; administrators retain the same authority across the suite.
+    static func canReviewTeamTime(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .accounting || role == .admin
+    }
+
+    /// Field scorecards expose only the signed-in technician's own operational
+    /// results. Office-wide financial reporting remains Accounting/Admin-only.
+    static func ownPerformanceTechnicianID(
+        email: String?,
+        users: [AppUser],
+        technicians: [Technician]
+    ) -> UUID? {
+        guard activeRole(email: email, users: users) == .fieldTechnician else { return nil }
+        let normalized = normalizedEmail(email)
+        let matches = technicians.filter {
+            normalizedEmail($0.contactInfo) == normalized
+        }
+        // Duplicate technician identities are an authorization ambiguity, not
+        // a reason to merge another person's results into this account.
+        guard matches.count == 1 else { return nil }
+        return matches[0].id
     }
 
     static func canViewBillingFinancialDetails(email: String?, users: [AppUser]) -> Bool {
@@ -142,11 +160,130 @@ enum AppAccess {
         activeRole(email: email, users: users) == .admin
     }
 
+    /// A job-specific price may change customer revenue without changing the
+    /// shared catalog. Keep that exception Admin-only and preserve its evidence
+    /// on the estimate or invoice line snapshot.
+    static func canAuthorizePriceAdjustments(email: String?, users: [AppUser]) -> Bool {
+        activeRole(email: email, users: users) == .admin
+    }
+
     /// Creating a job from an incoming customer request changes the committed
     /// dispatch board, so it is limited to dispatch and administrative staff.
     static func canManageDispatch(email: String?, users: [AppUser]) -> Bool {
         guard let role = activeRole(email: email, users: users) else { return false }
         return role == .dispatcher || role == .admin
+    }
+
+    /// Enumerates every Schedule mutation so a new control cannot silently
+    /// inherit broader read access. Standard and field accounts may review the
+    /// jobs already visible to them, but only Dispatch/Admin may commit company
+    /// capacity, assignments, follow-up visits, or destructive schedule edits.
+    enum ScheduleMutationAction: CaseIterable, Sendable {
+        case createServiceCall
+        case editServiceCall
+        case deleteServiceCall
+        case assignTechnician
+        case scheduleFollowUp
+        case scheduleMaintenance
+        case scheduleApprovedWork
+        case manageServiceRequest
+        case syncGoogleCalendar
+        case manageAvailability
+    }
+
+    static func canPerformScheduleMutation(
+        _ action: ScheduleMutationAction,
+        email: String?,
+        users: [AppUser]
+    ) -> Bool {
+        switch action {
+        case .createServiceCall,
+             .editServiceCall,
+             .deleteServiceCall,
+             .assignTechnician,
+             .scheduleFollowUp,
+             .scheduleMaintenance,
+             .scheduleApprovedWork,
+             .manageServiceRequest,
+             .syncGoogleCalendar,
+             .manageAvailability:
+            return canManageDispatch(email: email, users: users)
+        }
+    }
+
+    /// Unassigned work must pass through the same job-visibility boundary as
+    /// every other Schedule query. This keeps it available to authorized office
+    /// reviewers while preventing a field account from discovering or claiming
+    /// work that has not been explicitly assigned to that technician.
+    static func visibleUnassignedServiceCalls(
+        email: String?,
+        users: [AppUser],
+        serviceCalls: [ServiceCall],
+        technicians: [Technician] = []
+    ) -> [ServiceCall] {
+        let visibleIDs = visibleServiceCallIDs(
+            email: email,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+        return serviceCalls.filter { call in
+            visibleIDs.contains(call.id) && call.assignedTechnician == nil
+        }
+    }
+
+    /// A staged billing plan changes when revenue becomes billable against an
+    /// approved contract. Keep plan creation and allocation Admin-only; field
+    /// staff update work evidence and Accounting reviews resulting invoices.
+    static func canManageProjectBillingPlans(email: String?, users: [AppUser]) -> Bool {
+        activeRole(email: email, users: users) == .admin
+    }
+
+    /// Assigned field technicians may complete operational milestones without
+    /// gaining company-wide project or financial access. The job-level access
+    /// check remains mandatory at the mutation call site.
+    static func canCompleteProjectMilestones(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .fieldTechnician || role == .admin
+    }
+
+    /// Issuing a progress invoice is an accounting mutation. It is narrower
+    /// than field collection and does not grant QBO administration privileges.
+    static func canIssueProjectProgressInvoices(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .accounting || role == .admin
+    }
+
+    /// Warranty requests begin in the field, move through an office submission
+    /// and manufacturer decision, and end only after replacement/credit recovery.
+    /// Keeping each mutation explicit prevents access to a job or customer from
+    /// silently granting authority over vendor credits or claim cancellation.
+    enum WarrantyClaimAction: CaseIterable, Sendable {
+        case request
+        case submit
+        case recordDecision
+        case receiveReplacement
+        case recordCredit
+        case close
+        case cancel
+    }
+
+    static func canPerformWarrantyClaimAction(
+        _ action: WarrantyClaimAction,
+        email: String?,
+        users: [AppUser]
+    ) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        switch action {
+        case .request:
+            return role == .fieldTechnician || role == .dispatcher || role == .admin
+        case .submit, .recordDecision, .receiveReplacement:
+            return role == .dispatcher || role == .admin
+        case .recordCredit:
+            return role == .accounting || role == .admin
+        case .close, .cancel:
+            return role == .admin
+        }
     }
 
     /// Customer contact, consent, installed-system, file, and agreement changes
@@ -155,6 +292,29 @@ enum AppAccess {
     static func canManageCustomerRecords(email: String?, users: [AppUser]) -> Bool {
         guard let role = activeRole(email: email, users: users) else { return false }
         return role == .dispatcher || role == .admin
+    }
+
+    /// Assigned technicians can present or capture a customer-approved service
+    /// agreement from the job screen. Dispatch and Admin can do the same from
+    /// office workflows; every field mutation still requires job-level access.
+    static func canOfferMaintenanceAgreements(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .fieldTechnician || role == .dispatcher || role == .admin
+    }
+
+    /// Billing-template selection changes how an approved agreement reaches
+    /// the accounting catalog. Keep that mapping Admin-only; it never changes
+    /// the customer-approved price or interval.
+    static func canConfigureMaintenanceAgreementBilling(email: String?, users: [AppUser]) -> Bool {
+        activeRole(email: email, users: users) == .admin
+    }
+
+    /// Issuing an invoice from an already approved agreement is an accounting
+    /// mutation. Accounting and Admin can perform it; Dispatch and field roles
+    /// may create/serve agreements without gaining company-wide billing access.
+    static func canIssueMaintenanceAgreementInvoices(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .accounting || role == .admin
     }
 
     /// Removing a customer cascades through local operational and financial

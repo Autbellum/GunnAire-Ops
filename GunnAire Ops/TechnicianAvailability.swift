@@ -104,6 +104,7 @@ struct TechnicianAvailabilityView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \TechnicianAvailabilityBlock.startsAt, order: .forward) private var availabilityBlocks: [TechnicianAvailabilityBlock]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
 
     @State private var selectedTechnicianID: UUID?
     @State private var showingAddBlock = false
@@ -117,61 +118,74 @@ struct TechnicianAvailabilityView: View {
         return availabilityBlocks.filter { $0.technicianID == technician.id }
     }
 
+    private var canManageAvailability: Bool {
+        AppAccess.canPerformScheduleMutation(
+            .manageAvailability,
+            email: AppIdentity.currentEmail,
+            users: users
+        )
+    }
+
     var body: some View {
         NavigationStack {
-            List {
-                Section("Technician") {
-                    if technicians.isEmpty {
-                        ContentUnavailableView("No technicians", systemImage: "person.badge.plus", description: Text("Add a technician before recording time off, breaks, or training."))
-                    } else {
-                        Picker("Technician", selection: Binding(
-                            get: { selectedTechnician?.id ?? UUID() },
-                            set: { selectedTechnicianID = $0 }
-                        )) {
-                            ForEach(technicians) { technician in
-                                Text(technician.name).tag(technician.id)
+            Group {
+                if canManageAvailability {
+                    List {
+                        Section("Technician") {
+                            if technicians.isEmpty {
+                                ContentUnavailableView("No technicians", systemImage: "person.badge.plus", description: Text("Add a technician before recording time off, breaks, or training."))
+                            } else {
+                                Picker("Technician", selection: Binding(
+                                    get: { selectedTechnician?.id ?? UUID() },
+                                    set: { selectedTechnicianID = $0 }
+                                )) {
+                                    ForEach(technicians) { technician in
+                                        Text(technician.name).tag(technician.id)
+                                    }
+                                }
+
+                                Button {
+                                    selectedTechnicianID = selectedTechnician?.id
+                                    showingAddBlock = true
+                                } label: {
+                                    Label("Add unavailable time", systemImage: "plus.circle")
+                                }
+                                .disabled(selectedTechnician == nil)
                             }
                         }
 
-                        Button {
-                            selectedTechnicianID = selectedTechnician?.id
-                            showingAddBlock = true
-                        } label: {
-                            Label("Add unavailable time", systemImage: "plus.circle")
-                        }
-                        .disabled(selectedTechnician == nil)
-                    }
-                }
-
-                Section("Unavailable time") {
-                    if visibleBlocks.isEmpty {
-                        Text("No breaks, time off, training, or unavailable time recorded for this technician.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(visibleBlocks) { block in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(block.dispatchLabel)
-                                    .font(.headline)
-                                Text("\(block.startsAt.formatted(date: .abbreviated, time: .shortened)) – \(block.endsAt.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.caption)
+                        Section("Unavailable time") {
+                            if visibleBlocks.isEmpty {
+                                Text("No breaks, time off, training, or unavailable time recorded for this technician.")
+                                    .font(.subheadline)
                                     .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(visibleBlocks) { block in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(block.dispatchLabel)
+                                            .font(.headline)
+                                        Text("\(block.startsAt.formatted(date: .abbreviated, time: .shortened)) – \(block.endsAt.formatted(date: .abbreviated, time: .shortened))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .padding(.vertical, 2)
+                                }
+                                .onDelete(perform: deleteBlocks)
                             }
-                            .padding(.vertical, 2)
                         }
-                        .onDelete { offsets in
-                            for index in offsets {
-                                modelContext.delete(visibleBlocks[index])
-                            }
-                            try? modelContext.save()
+
+                        Section {
+                            Text("Dispatch moves a proposed assignment past recorded unavailable time. It remains a recommendation: a dispatcher can still review and deliberately change the appointment.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                }
-
-                Section {
-                    Text("Dispatch moves a proposed assignment past recorded unavailable time. It remains a recommendation: a dispatcher can still review and deliberately change the appointment.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                } else {
+                    ContentUnavailableView(
+                        "Dispatch Access Required",
+                        systemImage: "person.badge.shield.checkmark",
+                        description: Text("Only a dispatcher or administrator can change technician availability.")
+                    )
                 }
             }
             .navigationTitle("Technician Availability")
@@ -181,7 +195,7 @@ struct TechnicianAvailabilityView: View {
                 }
             }
             .sheet(isPresented: $showingAddBlock) {
-                if let technician = selectedTechnician {
+                if canManageAvailability, let technician = selectedTechnician {
                     AddTechnicianAvailabilityBlockView(technician: technician)
                         .tint(Color.brandGold)
                 }
@@ -191,19 +205,43 @@ struct TechnicianAvailabilityView: View {
                     selectedTechnicianID = technicians.first?.id
                 }
             }
+            .onChange(of: canManageAvailability) { _, isAllowed in
+                if !isAllowed { showingAddBlock = false }
+            }
         }
+    }
+
+    private func deleteBlocks(at offsets: IndexSet) {
+        guard AppAccess.canPerformScheduleMutation(
+            .manageAvailability,
+            email: AppIdentity.currentEmail,
+            users: users
+        ) else { return }
+        for index in offsets {
+            modelContext.delete(visibleBlocks[index])
+        }
+        try? modelContext.save()
     }
 }
 
 private struct AddTechnicianAvailabilityBlockView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
 
     let technician: Technician
     @State private var kind: TechnicianAvailabilityKind = .timeOff
     @State private var startsAt = Date()
     @State private var endsAt = Calendar.current.date(byAdding: .hour, value: 1, to: Date()) ?? Date()
     @State private var reason = ""
+
+    private var canManageAvailability: Bool {
+        AppAccess.canPerformScheduleMutation(
+            .manageAvailability,
+            email: AppIdentity.currentEmail,
+            users: users
+        )
+    }
 
     var body: some View {
         NavigationStack {
@@ -221,6 +259,7 @@ private struct AddTechnicianAvailabilityBlockView: View {
                         .lineLimit(2...3)
                 }
             }
+            .disabled(!canManageAvailability)
             .navigationTitle("Unavailable Time")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -228,6 +267,10 @@ private struct AddTechnicianAvailabilityBlockView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
+                        guard canManageAvailability else {
+                            dismiss()
+                            return
+                        }
                         let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
                         modelContext.insert(TechnicianAvailabilityBlock(
                             technicianID: technician.id,
@@ -239,8 +282,14 @@ private struct AddTechnicianAvailabilityBlockView: View {
                         try? modelContext.save()
                         dismiss()
                     }
-                    .disabled(endsAt <= startsAt)
+                    .disabled(endsAt <= startsAt || !canManageAvailability)
                 }
+            }
+            .onAppear {
+                if !canManageAvailability { dismiss() }
+            }
+            .onChange(of: canManageAvailability) { _, isAllowed in
+                if !isAllowed { dismiss() }
             }
         }
     }

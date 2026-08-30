@@ -19,6 +19,78 @@ private struct QuickBooksKeychainPayload: Codable {
     let scopeSignature: String?
 }
 
+enum QuickBooksProviderResponseError: LocalizedError, Equatable {
+    case missingIdentifier(entity: String)
+    case missingAttachment
+    case queryPageLimitExceeded(entity: String, maximumRecords: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingIdentifier(let entity):
+            return "QuickBooks returned \(entity) without a provider identifier. The operation remains unresolved and must be reconciled before retrying."
+        case .missingAttachment:
+            return "QuickBooks did not confirm an uploaded attachment. The file remains pending and can be retried after reconciliation."
+        case .queryPageLimitExceeded(let entity, let maximumRecords):
+            return "QuickBooks returned more than \(maximumRecords) \(entity) records. Narrow the reconciliation scope before retrying so no records are silently omitted."
+        }
+    }
+}
+
+enum QuickBooksProviderResponsePolicy {
+    static func requiredIdentifier(_ value: String?, entity: String) throws -> String {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalized.isEmpty else {
+            throw QuickBooksProviderResponseError.missingIdentifier(entity: entity)
+        }
+        return normalized
+    }
+
+    static func validated<T>(_ value: T, identifier: String?, entity: String) -> Result<T, Error> {
+        do {
+            _ = try requiredIdentifier(identifier, entity: entity)
+            return .success(value)
+        } catch {
+            return .failure(error)
+        }
+    }
+}
+
+enum QuickBooksQueryPagination {
+    static let pageSize = 500
+    static let maximumPageCount = 200
+
+    static func query(baseSQL: String, startPosition: Int, maxResults: Int = pageSize) -> String {
+        let safeStart = max(1, startPosition)
+        let safeMaximum = max(1, maxResults)
+        return "\(baseSQL) STARTPOSITION \(safeStart) MAXRESULTS \(safeMaximum)"
+    }
+
+    static func nextStartPosition(
+        currentStart: Int,
+        receivedCount: Int,
+        pageSize: Int = pageSize
+    ) -> Int? {
+        guard receivedCount >= max(1, pageSize) else { return nil }
+        return max(1, currentStart) + receivedCount
+    }
+}
+
+enum QuickBooksUploadResponsePolicy {
+    static func attachmentID(from data: Data) throws -> String {
+        guard !data.isEmpty else {
+            throw QuickBooksProviderResponseError.missingAttachment
+        }
+        let response = try JSONDecoder().decode(QuickBooksUploadResponse.self, from: data)
+        guard let attachment = response.AttachableResponse.first else {
+            throw QuickBooksProviderResponseError.missingAttachment
+        }
+        return try QuickBooksProviderResponsePolicy.requiredIdentifier(
+            attachment.Id,
+            entity: "uploaded attachment"
+        )
+    }
+}
+
 final class QuickBooksDataAPI: ObservableObject {
     static let shared = QuickBooksDataAPI()
 
@@ -608,6 +680,68 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
+    private func performPaginatedQuery<Response: Decodable, Entity>(
+        baseSQL: String,
+        entityName: String,
+        decode type: Response.Type,
+        entities: @escaping (Response) -> [Entity],
+        identifier: @escaping (Entity) -> String,
+        completion: @escaping (Result<[Entity], Error>) -> Void
+    ) {
+        var accumulated: [Entity] = []
+        var seenIdentifiers: Set<String> = []
+
+        func fetchPage(startPosition: Int, pageNumber: Int) {
+            let query = QuickBooksQueryPagination.query(
+                baseSQL: baseSQL,
+                startPosition: startPosition
+            )
+            performAuthorizedDecodingRequest(
+                { self.makeQueryRequest(query) },
+                decode: type
+            ) { result in
+                switch result {
+                case .failure(let error):
+                    completion(.failure(error))
+                case .success(let response):
+                    let page = entities(response)
+                    do {
+                        for entity in page {
+                            let providerID = try QuickBooksProviderResponsePolicy.requiredIdentifier(
+                                identifier(entity),
+                                entity: entityName
+                            )
+                            if seenIdentifiers.insert(providerID).inserted {
+                                accumulated.append(entity)
+                            }
+                        }
+                    } catch {
+                        completion(.failure(error))
+                        return
+                    }
+
+                    guard let nextStart = QuickBooksQueryPagination.nextStartPosition(
+                        currentStart: startPosition,
+                        receivedCount: page.count
+                    ) else {
+                        completion(.success(accumulated))
+                        return
+                    }
+                    guard pageNumber < QuickBooksQueryPagination.maximumPageCount else {
+                        completion(.failure(QuickBooksProviderResponseError.queryPageLimitExceeded(
+                            entity: entityName,
+                            maximumRecords: QuickBooksQueryPagination.pageSize * QuickBooksQueryPagination.maximumPageCount
+                        )))
+                        return
+                    }
+                    fetchPage(startPosition: nextStart, pageNumber: pageNumber + 1)
+                }
+            }
+        }
+
+        fetchPage(startPosition: 1, pageNumber: 1)
+    }
+
     private func performPaymentsDecodingRequest<T: Decodable>(
         _ requestBuilder: @escaping () -> URLRequest?,
         decode type: T.Type,
@@ -662,12 +796,14 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     func fetchCustomers(completion: @escaping (Result<[QuickBooksCustomer], Error>) -> Void) {
-        performAuthorizedDecodingRequest(
-            { self.makeQueryRequest("SELECT * FROM Customer") },
-            decode: QuickBooksCustomerQueryResponse.self
-        ) { result in
-            completion(result.map { $0.QueryResponse.Customer ?? [] })
-        }
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM Customer",
+            entityName: "customer",
+            decode: QuickBooksCustomerQueryResponse.self,
+            entities: { $0.QueryResponse.Customer ?? [] },
+            identifier: \QuickBooksCustomer.Id,
+            completion: completion
+        )
     }
 
     func validateAccountingConnection(completion: @escaping (Result<QuickBooksCompanyInfo, Error>) -> Void) {
@@ -689,16 +825,45 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "customer", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksCustomerResponse.self
         ) { result in
-            completion(result.map(\.Customer))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Customer,
+                    identifier: $0.Customer.Id,
+                    entity: "customer"
+                )
+            })
         }
     }
 
     func fetchItems(completion: @escaping (Result<[QuickBooksItem], Error>) -> Void) {
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM Item",
+            entityName: "catalog item",
+            decode: QuickBooksItemQueryResponse.self,
+            entities: { $0.QueryResponse.Item ?? [] },
+            identifier: \QuickBooksItem.Id,
+            completion: completion
+        )
+    }
+
+    func fetchItem(id: String, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {
+        let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty,
+              let encodedID = trimmedID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            completion(.failure(QBError.noData))
+            return
+        }
         performAuthorizedDecodingRequest(
-            { self.makeQueryRequest("SELECT * FROM Item") },
-            decode: QuickBooksItemQueryResponse.self
+            { self.authorizedRequest(path: "item/\(encodedID)") },
+            decode: QuickBooksItemResponse.self
         ) { result in
-            completion(result.map { $0.QueryResponse.Item ?? [] })
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Item,
+                    identifier: $0.Item.Id,
+                    entity: "catalog item"
+                )
+            })
         }
     }
 
@@ -708,17 +873,50 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "item", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksItemResponse.self
         ) { result in
-            completion(result.map(\.Item))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Item,
+                    identifier: $0.Item.Id,
+                    entity: "catalog item"
+                )
+            })
+        }
+    }
+
+    func updateItem(_ item: QuickBooksItemUpdate, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {
+        let body = try? JSONEncoder().encode(item)
+        let requestID = UUID().uuidString
+        performAuthorizedDecodingRequest(
+            {
+                self.authorizedRequest(
+                    path: "item",
+                    queryItems: [URLQueryItem(name: "requestid", value: requestID)],
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
+            decode: QuickBooksItemResponse.self
+        ) { result in
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Item,
+                    identifier: $0.Item.Id,
+                    entity: "catalog item"
+                )
+            })
         }
     }
 
     func fetchEstimates(completion: @escaping (Result<[QuickBooksEstimate], Error>) -> Void) {
-        performAuthorizedDecodingRequest(
-            { self.makeQueryRequest("SELECT * FROM Estimate") },
-            decode: QuickBooksEstimateQueryResponse.self
-        ) { result in
-            completion(result.map { $0.QueryResponse.Estimate ?? [] })
-        }
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM Estimate",
+            entityName: "estimate",
+            decode: QuickBooksEstimateQueryResponse.self,
+            entities: { $0.QueryResponse.Estimate ?? [] },
+            identifier: \QuickBooksEstimate.Id,
+            completion: completion
+        )
     }
 
     func createEstimate(_ estimate: QuickBooksEstimateCreate, completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
@@ -727,7 +925,13 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "estimate", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksEstimateResponse.self
         ) { result in
-            completion(result.map(\.Estimate))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Estimate,
+                    identifier: $0.Estimate.Id,
+                    entity: "estimate"
+                )
+            })
         }
     }
 
@@ -746,17 +950,25 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "estimate/\(encodedID)/send", queryItems: queryItems, method: "POST") },
             decode: QuickBooksEstimateResponse.self
         ) { result in
-            completion(result.map(\.Estimate))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Estimate,
+                    identifier: $0.Estimate.Id,
+                    entity: "estimate"
+                )
+            })
         }
     }
 
     func fetchInvoices(completion: @escaping (Result<[QuickBooksInvoice], Error>) -> Void) {
-        performAuthorizedDecodingRequest(
-            { self.makeQueryRequest("SELECT * FROM Invoice") },
-            decode: QuickBooksInvoiceQueryResponse.self
-        ) { result in
-            completion(result.map { $0.QueryResponse.Invoice ?? [] })
-        }
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM Invoice",
+            entityName: "invoice",
+            decode: QuickBooksInvoiceQueryResponse.self,
+            entities: { $0.QueryResponse.Invoice ?? [] },
+            identifier: \QuickBooksInvoice.Id,
+            completion: completion
+        )
     }
 
     func fetchInvoice(id: String, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
@@ -770,7 +982,13 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "invoice/\(encodedID)") },
             decode: QuickBooksInvoiceResponse.self
         ) { result in
-            completion(result.map(\.Invoice))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Invoice,
+                    identifier: $0.Invoice.Id,
+                    entity: "invoice"
+                )
+            })
         }
     }
 
@@ -780,7 +998,13 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "invoice", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksInvoiceResponse.self
         ) { result in
-            completion(result.map(\.Invoice))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Invoice,
+                    identifier: $0.Invoice.Id,
+                    entity: "invoice"
+                )
+            })
         }
     }
 
@@ -799,7 +1023,13 @@ final class QuickBooksDataAPI: ObservableObject {
             },
             decode: QuickBooksInvoiceResponse.self
         ) { result in
-            completion(result.map(\.Invoice))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Invoice,
+                    identifier: $0.Invoice.Id,
+                    entity: "invoice"
+                )
+            })
         }
     }
 
@@ -818,36 +1048,105 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "invoice/\(encodedID)/send", queryItems: queryItems, method: "POST") },
             decode: QuickBooksInvoiceResponse.self
         ) { result in
-            completion(result.map(\.Invoice))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Invoice,
+                    identifier: $0.Invoice.Id,
+                    entity: "invoice"
+                )
+            })
         }
     }
 
     func fetchBills(completion: @escaping (Result<[QuickBooksBill], Error>) -> Void) {
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM Bill",
+            entityName: "bill",
+            decode: QuickBooksBillQueryResponse.self,
+            entities: { $0.QueryResponse.Bill ?? [] },
+            identifier: \QuickBooksBill.Id,
+            completion: completion
+        )
+    }
+
+    func createBill(
+        _ bill: QuickBooksBillCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksBill, Error>) -> Void
+    ) {
+        let body = try? JSONEncoder().encode(bill)
+        let queryItems = requestID.map { [URLQueryItem(name: "requestid", value: $0)] } ?? []
         performAuthorizedDecodingRequest(
-            { self.makeQueryRequest("SELECT * FROM Bill") },
-            decode: QuickBooksBillQueryResponse.self
+            {
+                self.authorizedRequest(
+                    path: "bill",
+                    queryItems: queryItems,
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
+            decode: QuickBooksBillResponse.self
         ) { result in
-            completion(result.map { $0.QueryResponse.Bill ?? [] })
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Bill,
+                    identifier: $0.Bill.Id,
+                    entity: "bill"
+                )
+            })
         }
     }
 
-    func createBill(_ bill: QuickBooksBillCreate, completion: @escaping (Result<QuickBooksBill, Error>) -> Void) {
-        let body = try? JSONEncoder().encode(bill)
+    func fetchVendorCredits(completion: @escaping (Result<[QuickBooksVendorCredit], Error>) -> Void) {
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM VendorCredit",
+            entityName: "vendor credit",
+            decode: QuickBooksVendorCreditQueryResponse.self,
+            entities: { $0.QueryResponse.VendorCredit ?? [] },
+            identifier: \QuickBooksVendorCredit.Id,
+            completion: completion
+        )
+    }
+
+    func createVendorCredit(
+        _ vendorCredit: QuickBooksVendorCreditCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksVendorCredit, Error>) -> Void
+    ) {
+        let body = try? JSONEncoder().encode(vendorCredit)
+        let queryItems = requestID.map { [URLQueryItem(name: "requestid", value: $0)] } ?? []
         performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "bill", method: "POST", body: body, contentType: "application/json") },
-            decode: QuickBooksBillResponse.self
+            {
+                self.authorizedRequest(
+                    path: "vendorcredit",
+                    queryItems: queryItems,
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
+            decode: QuickBooksVendorCreditResponse.self
         ) { result in
-            completion(result.map(\.Bill))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.VendorCredit,
+                    identifier: $0.VendorCredit.Id,
+                    entity: "vendor credit"
+                )
+            })
         }
     }
 
     func fetchPurchases(completion: @escaping (Result<[QuickBooksPurchase], Error>) -> Void) {
-        performAuthorizedDecodingRequest(
-            { self.makeQueryRequest("SELECT * FROM Purchase") },
-            decode: QuickBooksPurchaseQueryResponse.self
-        ) { result in
-            completion(result.map { $0.QueryResponse.Purchase ?? [] })
-        }
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM Purchase",
+            entityName: "purchase",
+            decode: QuickBooksPurchaseQueryResponse.self,
+            entities: { $0.QueryResponse.Purchase ?? [] },
+            identifier: \QuickBooksPurchase.Id,
+            completion: completion
+        )
     }
 
     func createPurchase(_ purchase: QuickBooksPurchaseCreate, completion: @escaping (Result<QuickBooksPurchase, Error>) -> Void) {
@@ -856,17 +1155,25 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "purchase", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksPurchaseResponse.self
         ) { result in
-            completion(result.map(\.Purchase))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Purchase,
+                    identifier: $0.Purchase.Id,
+                    entity: "purchase"
+                )
+            })
         }
     }
 
     func fetchVendors(completion: @escaping (Result<[QuickBooksVendor], Error>) -> Void) {
-        performAuthorizedDecodingRequest(
-            { self.makeQueryRequest("SELECT * FROM Vendor") },
-            decode: QuickBooksVendorQueryResponse.self
-        ) { result in
-            completion(result.map { $0.QueryResponse.Vendor ?? [] })
-        }
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM Vendor",
+            entityName: "vendor",
+            decode: QuickBooksVendorQueryResponse.self,
+            entities: { $0.QueryResponse.Vendor ?? [] },
+            identifier: \QuickBooksVendor.Id,
+            completion: completion
+        )
     }
 
     func createVendor(_ vendor: QuickBooksVendorCreate, completion: @escaping (Result<QuickBooksVendor, Error>) -> Void) {
@@ -875,17 +1182,25 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "vendor", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksVendorResponse.self
         ) { result in
-            completion(result.map(\.Vendor))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Vendor,
+                    identifier: $0.Vendor.Id,
+                    entity: "vendor"
+                )
+            })
         }
     }
 
     func fetchTimeActivities(completion: @escaping (Result<[QuickBooksTimeActivity], Error>) -> Void) {
-        performAuthorizedDecodingRequest(
-            { self.makeQueryRequest("SELECT * FROM TimeActivity") },
-            decode: QuickBooksTimeActivityQueryResponse.self
-        ) { result in
-            completion(result.map { $0.QueryResponse.TimeActivity ?? [] })
-        }
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM TimeActivity",
+            entityName: "time activity",
+            decode: QuickBooksTimeActivityQueryResponse.self,
+            entities: { $0.QueryResponse.TimeActivity ?? [] },
+            identifier: \QuickBooksTimeActivity.Id,
+            completion: completion
+        )
     }
 
     func createTimeActivity(_ activity: QuickBooksTimeActivityCreate, completion: @escaping (Result<QuickBooksTimeActivity, Error>) -> Void) {
@@ -894,17 +1209,25 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "timeactivity", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksTimeActivityResponse.self
         ) { result in
-            completion(result.map(\.TimeActivity))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.TimeActivity,
+                    identifier: $0.TimeActivity.Id,
+                    entity: "time activity"
+                )
+            })
         }
     }
 
     func fetchPayments(completion: @escaping (Result<[QuickBooksPayment], Error>) -> Void) {
-        performAuthorizedDecodingRequest(
-            { self.makeQueryRequest("SELECT * FROM Payment") },
-            decode: QuickBooksPaymentQueryResponse.self
-        ) { result in
-            completion(result.map { $0.QueryResponse.Payment ?? [] })
-        }
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM Payment",
+            entityName: "payment",
+            decode: QuickBooksPaymentQueryResponse.self,
+            entities: { $0.QueryResponse.Payment ?? [] },
+            identifier: \QuickBooksPayment.Id,
+            completion: completion
+        )
     }
 
     func createPayment(_ payment: QuickBooksPaymentCreate, completion: @escaping (Result<QuickBooksPayment, Error>) -> Void) {
@@ -913,17 +1236,25 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "payment", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksPaymentResponse.self
         ) { result in
-            completion(result.map(\.Payment))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Payment,
+                    identifier: $0.Payment.Id,
+                    entity: "payment"
+                )
+            })
         }
     }
 
     func fetchSalesReceipts(completion: @escaping (Result<[QuickBooksSalesReceipt], Error>) -> Void) {
-        performAuthorizedDecodingRequest(
-            { self.makeQueryRequest("SELECT * FROM SalesReceipt") },
-            decode: QuickBooksSalesReceiptQueryResponse.self
-        ) { result in
-            completion(result.map { $0.QueryResponse.SalesReceipt ?? [] })
-        }
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM SalesReceipt",
+            entityName: "sales receipt",
+            decode: QuickBooksSalesReceiptQueryResponse.self,
+            entities: { $0.QueryResponse.SalesReceipt ?? [] },
+            identifier: \QuickBooksSalesReceipt.Id,
+            completion: completion
+        )
     }
 
     func createSalesReceipt(_ salesReceipt: QuickBooksSalesReceiptCreate, completion: @escaping (Result<QuickBooksSalesReceipt, Error>) -> Void) {
@@ -932,17 +1263,25 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "salesreceipt", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksSalesReceiptResponse.self
         ) { result in
-            completion(result.map(\.SalesReceipt))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.SalesReceipt,
+                    identifier: $0.SalesReceipt.Id,
+                    entity: "sales receipt"
+                )
+            })
         }
     }
 
     func fetchPaymentMethods(completion: @escaping (Result<[QuickBooksPaymentMethod], Error>) -> Void) {
-        performAuthorizedDecodingRequest(
-            { self.makeQueryRequest("SELECT * FROM PaymentMethod") },
-            decode: QuickBooksPaymentMethodQueryResponse.self
-        ) { result in
-            completion(result.map { $0.QueryResponse.PaymentMethod ?? [] })
-        }
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM PaymentMethod",
+            entityName: "payment method",
+            decode: QuickBooksPaymentMethodQueryResponse.self,
+            entities: { $0.QueryResponse.PaymentMethod ?? [] },
+            identifier: \QuickBooksPaymentMethod.Id,
+            completion: completion
+        )
     }
 
     func createPaymentMethod(_ method: QuickBooksPaymentMethodCreate, completion: @escaping (Result<QuickBooksPaymentMethod, Error>) -> Void) {
@@ -951,17 +1290,25 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "paymentmethod", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksPaymentMethodResponse.self
         ) { result in
-            completion(result.map(\.PaymentMethod))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.PaymentMethod,
+                    identifier: $0.PaymentMethod.Id,
+                    entity: "payment method"
+                )
+            })
         }
     }
 
     func fetchDeposits(completion: @escaping (Result<[QuickBooksDeposit], Error>) -> Void) {
-        performAuthorizedDecodingRequest(
-            { self.makeQueryRequest("SELECT * FROM Deposit") },
-            decode: QuickBooksDepositQueryResponse.self
-        ) { result in
-            completion(result.map { $0.QueryResponse.Deposit ?? [] })
-        }
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM Deposit",
+            entityName: "deposit",
+            decode: QuickBooksDepositQueryResponse.self,
+            entities: { $0.QueryResponse.Deposit ?? [] },
+            identifier: \QuickBooksDeposit.Id,
+            completion: completion
+        )
     }
 
     func createDeposit(_ deposit: QuickBooksDepositCreate, completion: @escaping (Result<QuickBooksDeposit, Error>) -> Void) {
@@ -970,7 +1317,13 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "deposit", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksDepositResponse.self
         ) { result in
-            completion(result.map(\.Deposit))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.Deposit,
+                    identifier: $0.Deposit.Id,
+                    entity: "deposit"
+                )
+            })
         }
     }
 
@@ -986,12 +1339,14 @@ final class QuickBooksDataAPI: ObservableObject {
         }
         sql += " order by FullyQualifiedName"
 
-        performAuthorizedDecodingRequest(
-            { self.makeQueryRequest(sql) },
-            decode: QuickBooksAccountQueryResponse.self
-        ) { result in
-            completion(result.map { $0.QueryResponse.Account ?? [] })
-        }
+        performPaginatedQuery(
+            baseSQL: sql,
+            entityName: "account",
+            decode: QuickBooksAccountQueryResponse.self,
+            entities: { $0.QueryResponse.Account ?? [] },
+            identifier: \QuickBooksAccount.Id,
+            completion: completion
+        )
     }
 
     func createCardToken(_ tokenRequest: QuickBooksPaymentsTokenCreateRequest, completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void) {
@@ -1143,7 +1498,13 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedRequest(path: "refundreceipt", method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksRefundReceiptResponse.self
         ) { result in
-            completion(result.map(\.RefundReceipt))
+            completion(result.flatMap {
+                QuickBooksProviderResponsePolicy.validated(
+                    $0.RefundReceipt,
+                    identifier: $0.RefundReceipt.Id,
+                    entity: "refund receipt"
+                )
+            })
         }
     }
 
@@ -1256,12 +1617,13 @@ final class QuickBooksDataAPI: ObservableObject {
                         completion(.failure(QBError.noData))
                         return
                     }
-                    if let parsed = try? JSONDecoder().decode(QuickBooksUploadResponse.self, from: data),
-                       let attachable = parsed.AttachableResponse.first {
-                        completion(.success(attachable.Id))
-                        return
+                    do {
+                        completion(.success(try QuickBooksUploadResponsePolicy.attachmentID(from: data)))
+                    } catch {
+                        completion(.failure(QBError.decodingDetail(
+                            "QuickBooks did not confirm the attachment identifier: \(error.localizedDescription)"
+                        )))
                     }
-                    completion(.success("uploaded-\(filename)"))
                 }
             }.resume()
         }
@@ -1353,7 +1715,7 @@ final class QuickBooksDataAPI: ObservableObject {
             case .paymentsScopeDisabled:
                 return "QuickBooks Payments scope is disabled for this build. Enable QB_ENABLE_PAYMENTS_SCOPE, authorize the Payments permission in Intuit, then reconnect QuickBooks before using live payment endpoints."
             case .missingDefaultIncomeAccountRef:
-                return "QuickBooks needs an income account before the app can create new Products and Services. Set QB_DEFAULT_INCOME_ACCOUNT_REF to a valid QBO income Account.Id, or sync a default QuickBooks item that already has an IncomeAccountRef."
+                return "QuickBooks needs an income account before the app can create new products and services. Ask an administrator to open QuickBooks Management → Overview → Accounting Mappings and choose the company income account."
             case .missingSyncToken(let entity):
                 return "QuickBooks did not return the current SyncToken for \(entity). Refresh accounting data, then retry so the app does not overwrite a newer change."
             case .rateLimited(let detail):
@@ -1464,15 +1826,14 @@ private extension QuickBooksDataAPI {
                         return
                     }
 
-                    let headerChargeID = Self.chargeIDFromHeaders(response)
                     guard let data, !data.isEmpty else {
-                        if let headerChargeID {
-                            completion(.success(QuickBooksPaymentsChargeResponse.placeholder(id: headerChargeID, status: "captured")))
-                        } else {
-                            completion(.failure(QBError.decodingDetail("QuickBooks Payments returned an empty charge response. Headers: \(Self.headerSummary(response))")))
-                        }
+                        completion(.failure(QBError.decodingDetail(
+                            "QuickBooks Payments returned an empty charge response. The transaction outcome is unknown; do not retry until the payment is reconciled in QuickBooks. Headers: \(Self.headerSummary(response))"
+                        )))
                         return
                     }
+
+                    let headerChargeID = QuickBooksPaymentsHeaderPolicy.chargeID(from: response)
 
                     if let decoded = try? JSONDecoder().decode(QuickBooksPaymentsChargeResponse.self, from: data) {
                         completion(.success(decoded))
@@ -1508,21 +1869,6 @@ private extension QuickBooksDataAPI {
     static func headerSummary(_ response: URLResponse?) -> String {
         guard let http = response as? HTTPURLResponse else { return "No HTTP response" }
         return http.allHeaderFields.map { "\($0.key): \($0.value)" }.joined(separator: "; ")
-    }
-
-    static func chargeIDFromHeaders(_ response: URLResponse?) -> String? {
-        guard let http = response as? HTTPURLResponse else { return nil }
-        let candidates = ["Location", "location", "Intuit-Tid", "intuit_tid", "intuit_tid"]
-        for key in candidates {
-            if let value = http.allHeaderFields[key] as? String {
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmed.contains("/") {
-                    return trimmed.split(separator: "/").last.map(String.init)
-                }
-                if !trimmed.isEmpty { return trimmed }
-            }
-        }
-        return nil
     }
 
     static func firstStringValue(in data: Data, matching keys: Set<String>) -> String? {
@@ -1590,6 +1936,30 @@ private extension QuickBooksDataAPI {
     }
 }
 
+enum QuickBooksPaymentsHeaderPolicy {
+    static func chargeID(from response: URLResponse?) -> String? {
+        guard let http = response as? HTTPURLResponse else { return nil }
+        let location = http.allHeaderFields.first { key, _ in
+            String(describing: key).caseInsensitiveCompare("Location") == .orderedSame
+        }?.value
+        guard let rawLocation = location as? String else { return nil }
+        let trimmed = rawLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let url = URL(string: trimmed) {
+            let lastComponent = url.pathComponents.last?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let lastComponent, !lastComponent.isEmpty, lastComponent != "/" {
+                return lastComponent
+            }
+        }
+
+        let fallback = trimmed.split(separator: "/").last.map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return fallback?.isEmpty == false ? fallback : nil
+    }
+}
+
 private struct QuickBooksRefreshTokenResponse: Codable {
     let access_token: String
     let refresh_token: String?
@@ -1610,6 +1980,26 @@ struct QuickBooksCompanyInfo: Codable {
 
 struct QuickBooksCompanyEmailAddress: Codable {
     let Address: String?
+}
+
+enum QuickBooksDateOnly {
+    static func string(from date: Date, calendar: Calendar = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    static func date(from value: String, calendar: Calendar = .current) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: value)
+    }
 }
 
 struct QuickBooksReference: Codable, Hashable {
@@ -1663,11 +2053,35 @@ struct QuickBooksSalesItemLineDetail: Codable {
     let ItemRef: QuickBooksReference
     let Qty: Double?
     let UnitPrice: Double?
+    let TaxCodeRef: QuickBooksReference?
 
-    init(ItemRef: QuickBooksReference, Qty: Double? = nil, UnitPrice: Double? = nil) {
+    init(
+        ItemRef: QuickBooksReference,
+        Qty: Double? = nil,
+        UnitPrice: Double? = nil,
+        TaxCodeRef: QuickBooksReference? = nil
+    ) {
         self.ItemRef = ItemRef
         self.Qty = Qty
         self.UnitPrice = UnitPrice
+        self.TaxCodeRef = TaxCodeRef
+    }
+}
+
+struct QuickBooksTxnTaxDetail: Codable {
+    let TotalTax: Double?
+
+    private enum CodingKeys: String, CodingKey {
+        case TotalTax
+    }
+
+    init(TotalTax: Double?) {
+        self.TotalTax = TotalTax
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        TotalTax = QuickBooksFlexibleDecoding.double(container, .TotalTax)
     }
 }
 
@@ -1789,6 +2203,7 @@ struct QuickBooksItemList: Codable {
 
 struct QuickBooksItem: Codable, Identifiable {
     let Id: String
+    let SyncToken: String?
     let Name: String
     let ItemType: String?
     let Description: String?
@@ -1805,7 +2220,7 @@ struct QuickBooksItem: Codable, Identifiable {
     var id: String { Id }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, Name, Description, Sku, PurchaseDesc, UnitPrice, PurchaseCost, Taxable, Active, IncomeAccountRef, ExpenseAccountRef, PrefVendorRef
+        case Id, SyncToken, Name, Description, Sku, PurchaseDesc, UnitPrice, PurchaseCost, Taxable, Active, IncomeAccountRef, ExpenseAccountRef, PrefVendorRef
         case ItemType = "Type"
     }
 }
@@ -1829,37 +2244,92 @@ struct QuickBooksItemCreate: Codable {
     }
 }
 
+struct QuickBooksItemUpdate: Codable {
+    let Id: String
+    let SyncToken: String
+    let sparse: Bool
+    let Name: String
+    let Description: String
+    let Sku: String
+    let PurchaseDesc: String
+    let UnitPrice: Double
+    let PurchaseCost: Double
+    let Taxable: Bool
+    let PrefVendorRef: QuickBooksReference?
+
+    init(
+        Id: String,
+        SyncToken: String,
+        Name: String,
+        Description: String,
+        Sku: String,
+        PurchaseDesc: String,
+        UnitPrice: Double,
+        PurchaseCost: Double,
+        Taxable: Bool,
+        PrefVendorRef: QuickBooksReference?
+    ) {
+        self.Id = Id
+        self.SyncToken = SyncToken
+        self.sparse = true
+        self.Name = Name
+        self.Description = Description
+        self.Sku = Sku
+        self.PurchaseDesc = PurchaseDesc
+        self.UnitPrice = UnitPrice
+        self.PurchaseCost = PurchaseCost
+        self.Taxable = Taxable
+        self.PrefVendorRef = PrefVendorRef
+    }
+}
+
 struct QuickBooksItemResponse: Codable {
     let Item: QuickBooksItem
 }
 
 enum QuickBooksItemAccountResolver {
-    static func configuredIncomeAccountRef() -> QuickBooksReference? {
-        guard Config.QuickBooks.hasExplicitDefaultIncomeAccountRef else { return nil }
-        return QuickBooksReference(value: Config.QuickBooks.defaultIncomeAccountRef, name: nil)
+    static func defaultSalesItemRef(
+        configuration: BackendQuickBooksAccountingConfiguration? = nil
+    ) -> QuickBooksReference? {
+        guard let configuration, configuration.isComplete else { return nil }
+        return configuration.salesItemReference
     }
 
-    static func configuredExpenseAccountRef() -> QuickBooksReference? {
-        guard Config.QuickBooks.hasExplicitDefaultExpenseAccountRef else { return nil }
-        return QuickBooksReference(value: Config.QuickBooks.defaultExpenseAccountRef, name: nil)
+    static func configuredIncomeAccountRef(
+        configuration: BackendQuickBooksAccountingConfiguration? = nil
+    ) -> QuickBooksReference? {
+        guard let configuration, configuration.isComplete else { return nil }
+        return configuration.incomeAccountReference
     }
 
-    static func incomeAccountRef(from quickBooksItems: [QuickBooksItem]) -> QuickBooksReference? {
-        if let configured = configuredIncomeAccountRef() {
+    static func configuredExpenseAccountRef(
+        configuration: BackendQuickBooksAccountingConfiguration? = nil
+    ) -> QuickBooksReference? {
+        guard let configuration, configuration.isComplete else { return nil }
+        return configuration.expenseAccountReference
+    }
+
+    static func paymentAccountRef(
+        for paymentType: String,
+        configuration: BackendQuickBooksAccountingConfiguration? = nil
+    ) -> QuickBooksReference? {
+        configuration?.paymentAccountReference(for: paymentType)
+    }
+
+    static func incomeAccountRef(
+        from quickBooksItems: [QuickBooksItem],
+        configuration: BackendQuickBooksAccountingConfiguration? = nil
+    ) -> QuickBooksReference? {
+        if let configured = configuredIncomeAccountRef(configuration: configuration) {
             return configured
         }
 
-        let defaultItemID = Config.QuickBooks.defaultSalesItemRef.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !defaultItemID.isEmpty,
+        if let defaultItemID = defaultSalesItemRef(configuration: configuration)?.value,
            let defaultItem = quickBooksItems.first(where: { $0.Id == defaultItemID }),
            let reference = usableReference(defaultItem.IncomeAccountRef) {
             return reference
         }
-
-        return quickBooksItems
-            .filter { $0.Active != false }
-            .compactMap { usableReference($0.IncomeAccountRef) }
-            .first
+        return nil
     }
 
     private static func usableReference(_ reference: QuickBooksReference?) -> QuickBooksReference? {
@@ -1887,8 +2357,34 @@ struct QuickBooksEstimate: Codable, Identifiable {
     let BillEmail: QuickBooksEmailAddress?
     let EmailStatus: String?
     let ShipAddr: QuickBooksAddress?
+    let PrivateNote: String?
+    let TxnTaxDetail: QuickBooksTxnTaxDetail?
 
     var id: String { Id }
+
+    init(
+        Id: String,
+        DocNumber: String? = nil,
+        CustomerRef: QuickBooksReference,
+        TotalAmt: Double,
+        TxnDate: String? = nil,
+        BillEmail: QuickBooksEmailAddress? = nil,
+        EmailStatus: String? = nil,
+        ShipAddr: QuickBooksAddress? = nil,
+        PrivateNote: String? = nil,
+        TxnTaxDetail: QuickBooksTxnTaxDetail? = nil
+    ) {
+        self.Id = Id
+        self.DocNumber = DocNumber
+        self.CustomerRef = CustomerRef
+        self.TotalAmt = TotalAmt
+        self.TxnDate = TxnDate
+        self.BillEmail = BillEmail
+        self.EmailStatus = EmailStatus
+        self.ShipAddr = ShipAddr
+        self.PrivateNote = PrivateNote
+        self.TxnTaxDetail = TxnTaxDetail
+    }
 }
 
 struct QuickBooksEstimateCreate: Codable {
@@ -1897,24 +2393,110 @@ struct QuickBooksEstimateCreate: Codable {
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
     let ShipAddr: QuickBooksAddress?
+    let GlobalTaxCalculation: String?
 
     init(
         CustomerRef: QuickBooksReference,
         Line: [QuickBooksLineItem],
         PrivateNote: String?,
         BillEmail: QuickBooksEmailAddress? = nil,
-        ShipAddr: QuickBooksAddress? = nil
+        ShipAddr: QuickBooksAddress? = nil,
+        GlobalTaxCalculation: String? = nil
     ) {
         self.CustomerRef = CustomerRef
         self.Line = Line
         self.PrivateNote = PrivateNote
         self.BillEmail = BillEmail
         self.ShipAddr = ShipAddr
+        self.GlobalTaxCalculation = GlobalTaxCalculation
     }
 }
 
 struct QuickBooksEstimateResponse: Codable {
     let Estimate: QuickBooksEstimate
+}
+
+enum QuickBooksEstimateLineage {
+    private static let estimateIDPrefix = "GunnAire Estimate ID:"
+    private static let proposalGroupPrefix = "GunnAire Proposal Group:"
+    private static let proposalOptionPrefix = "GunnAire Proposal Option:"
+    private static let recommendationPrefix = "GunnAire Recommended Option:"
+
+    static func operationMarker(for estimate: Estimate) -> String {
+        "\(estimateIDPrefix) \(estimate.id.uuidString.uppercased())"
+    }
+
+    static func appendingLineage(to existing: String?, for estimate: Estimate) -> String {
+        let reservedPrefixes = [
+            estimateIDPrefix,
+            proposalGroupPrefix,
+            proposalOptionPrefix,
+            recommendationPrefix
+        ]
+        var lines = (existing ?? "")
+            .split(whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { line in
+                !line.isEmpty && !reservedPrefixes.contains {
+                    line.range(of: $0, options: [.anchored, .caseInsensitive]) != nil
+                }
+            }
+
+        lines.append(operationMarker(for: estimate))
+        if let groupID = estimate.proposalGroupID, let option = estimate.proposalOptionKind, option != .standalone {
+            lines.append("\(proposalGroupPrefix) \(groupID.uuidString.uppercased())")
+            lines.append("\(proposalOptionPrefix) \(option.displayName)")
+            if estimate.proposalIsRecommended {
+                lines.append("\(recommendationPrefix) Yes")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    static func localEstimateID(from privateNote: String?) -> UUID? {
+        UUID(uuidString: value(after: estimateIDPrefix, in: privateNote) ?? "")
+    }
+
+    static func proposalGroupID(from privateNote: String?) -> UUID? {
+        UUID(uuidString: value(after: proposalGroupPrefix, in: privateNote) ?? "")
+    }
+
+    static func proposalOption(from privateNote: String?) -> EstimateProposalOption? {
+        guard let value = value(after: proposalOptionPrefix, in: privateNote) else { return nil }
+        return EstimateProposalOption.allCases.first {
+            $0.rawValue.caseInsensitiveCompare(value) == .orderedSame ||
+                $0.displayName.caseInsensitiveCompare(value) == .orderedSame
+        }
+    }
+
+    static func isRecommendedOption(from privateNote: String?) -> Bool {
+        guard let value = value(after: recommendationPrefix, in: privateNote) else { return false }
+        return ["yes", "true", "1"].contains(value.lowercased())
+    }
+
+    static func matches(_ estimate: Estimate, remoteEstimate: QuickBooksEstimate) -> Bool {
+        localEstimateID(from: remoteEstimate.PrivateNote) == estimate.id
+    }
+
+    static func matchingRemoteEstimates(
+        for estimate: Estimate,
+        in remoteEstimates: [QuickBooksEstimate]
+    ) -> [QuickBooksEstimate] {
+        remoteEstimates.filter { matches(estimate, remoteEstimate: $0) }
+    }
+
+    private static func value(after prefix: String, in privateNote: String?) -> String? {
+        guard let line = privateNote?
+            .split(whereSeparator: \.isNewline)
+            .map({ String($0).trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: {
+                $0.range(of: prefix, options: [.anchored, .caseInsensitive]) != nil
+            }) else {
+            return nil
+        }
+        let value = String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
 }
 
 struct QuickBooksInvoiceQueryResponse: Codable {
@@ -1933,20 +2515,22 @@ struct QuickBooksInvoice: Codable, Identifiable {
     let TotalAmt: Double
     let Balance: Double?
     let TxnDate: String?
+    let DueDate: String?
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
     let EmailStatus: String?
     let ShipAddr: QuickBooksAddress?
+    let TxnTaxDetail: QuickBooksTxnTaxDetail?
 
     var id: String { Id }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, PrivateNote, BillEmail, EmailStatus, ShipAddr
+        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, DueDate, PrivateNote, BillEmail, EmailStatus, ShipAddr, TxnTaxDetail
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
+        Id = try QuickBooksFlexibleDecoding.requiredIdentifier(container, .Id, entity: "Invoice")
         SyncToken = try container.decodeIfPresent(String.self, forKey: .SyncToken)
         DocNumber = try container.decodeIfPresent(String.self, forKey: .DocNumber)
         CustomerRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .CustomerRef)
@@ -1954,10 +2538,12 @@ struct QuickBooksInvoice: Codable, Identifiable {
         TotalAmt = Self.decodeFlexibleDouble(container, key: .TotalAmt) ?? 0
         Balance = Self.decodeFlexibleDouble(container, key: .Balance)
         TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
+        DueDate = try container.decodeIfPresent(String.self, forKey: .DueDate)
         PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
         BillEmail = try container.decodeIfPresent(QuickBooksEmailAddress.self, forKey: .BillEmail)
         EmailStatus = try container.decodeIfPresent(String.self, forKey: .EmailStatus)
         ShipAddr = try container.decodeIfPresent(QuickBooksAddress.self, forKey: .ShipAddr)
+        TxnTaxDetail = try container.decodeIfPresent(QuickBooksTxnTaxDetail.self, forKey: .TxnTaxDetail)
     }
 
     private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {
@@ -1980,19 +2566,25 @@ struct QuickBooksInvoiceCreate: Codable {
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
     let ShipAddr: QuickBooksAddress?
+    let DueDate: String?
+    let GlobalTaxCalculation: String?
 
     init(
         CustomerRef: QuickBooksReference,
         Line: [QuickBooksLineItem],
         PrivateNote: String?,
         BillEmail: QuickBooksEmailAddress? = nil,
-        ShipAddr: QuickBooksAddress? = nil
+        ShipAddr: QuickBooksAddress? = nil,
+        DueDate: String? = nil,
+        GlobalTaxCalculation: String? = nil
     ) {
         self.CustomerRef = CustomerRef
         self.Line = Line
         self.PrivateNote = PrivateNote
         self.BillEmail = BillEmail
         self.ShipAddr = ShipAddr
+        self.DueDate = DueDate
+        self.GlobalTaxCalculation = GlobalTaxCalculation
     }
 }
 
@@ -2005,6 +2597,8 @@ struct QuickBooksInvoiceUpdate: Codable {
     let PrivateNote: String?
     let BillEmail: QuickBooksEmailAddress?
     let ShipAddr: QuickBooksAddress?
+    let DueDate: String?
+    let GlobalTaxCalculation: String?
 
     init(
         Id: String,
@@ -2013,7 +2607,9 @@ struct QuickBooksInvoiceUpdate: Codable {
         Line: [QuickBooksLineItem],
         PrivateNote: String?,
         BillEmail: QuickBooksEmailAddress? = nil,
-        ShipAddr: QuickBooksAddress? = nil
+        ShipAddr: QuickBooksAddress? = nil,
+        DueDate: String? = nil,
+        GlobalTaxCalculation: String? = nil
     ) {
         self.Id = Id
         self.SyncToken = SyncToken
@@ -2023,6 +2619,8 @@ struct QuickBooksInvoiceUpdate: Codable {
         self.PrivateNote = PrivateNote
         self.BillEmail = BillEmail
         self.ShipAddr = ShipAddr
+        self.DueDate = DueDate
+        self.GlobalTaxCalculation = GlobalTaxCalculation
     }
 }
 
@@ -2041,39 +2639,95 @@ struct QuickBooksBillList: Codable {
 struct QuickBooksBill: Codable, Identifiable {
     let Id: String
     let VendorRef: QuickBooksReference
+    let APAccountRef: QuickBooksReference?
     let TotalAmt: Double
     let Balance: Double?
     let TxnDate: String?
     let DueDate: String?
+    let DocNumber: String?
     let PrivateNote: String?
 
     var id: String { Id }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, VendorRef, TotalAmt, Balance, TxnDate, DueDate, PrivateNote
+        case Id, VendorRef, APAccountRef, TotalAmt, Balance, TxnDate, DueDate, DocNumber, PrivateNote
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
+        Id = try QuickBooksFlexibleDecoding.requiredIdentifier(container, .Id, entity: "Bill")
         VendorRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .VendorRef)
             ?? QuickBooksReference(value: "", name: "Unknown Vendor")
+        APAccountRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .APAccountRef)
         TotalAmt = try container.decodeIfPresent(Double.self, forKey: .TotalAmt) ?? 0
         Balance = try container.decodeIfPresent(Double.self, forKey: .Balance)
         TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
         DueDate = try container.decodeIfPresent(String.self, forKey: .DueDate)
+        DocNumber = try container.decodeIfPresent(String.self, forKey: .DocNumber)
         PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
     }
 }
 
 struct QuickBooksBillCreate: Codable {
     let VendorRef: QuickBooksReference
+    let APAccountRef: QuickBooksReference
     let Line: [QuickBooksBillLine]
+    let TxnDate: String
+    let DocNumber: String?
     let PrivateNote: String?
 }
 
 struct QuickBooksBillResponse: Codable {
     let Bill: QuickBooksBill
+}
+
+struct QuickBooksVendorCreditQueryResponse: Codable {
+    let QueryResponse: QuickBooksVendorCreditList
+}
+
+struct QuickBooksVendorCreditList: Codable {
+    let VendorCredit: [QuickBooksVendorCredit]?
+}
+
+struct QuickBooksVendorCredit: Codable, Identifiable {
+    let Id: String
+    let VendorRef: QuickBooksReference
+    let APAccountRef: QuickBooksReference?
+    let TotalAmt: Double
+    let TxnDate: String?
+    let DocNumber: String?
+    let PrivateNote: String?
+
+    var id: String { Id }
+
+    private enum CodingKeys: String, CodingKey {
+        case Id, VendorRef, APAccountRef, TotalAmt, TxnDate, DocNumber, PrivateNote
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        Id = try QuickBooksFlexibleDecoding.requiredIdentifier(container, .Id, entity: "VendorCredit")
+        VendorRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .VendorRef)
+            ?? QuickBooksReference(value: "", name: "Unknown Vendor")
+        APAccountRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .APAccountRef)
+        TotalAmt = QuickBooksFlexibleDecoding.double(container, .TotalAmt) ?? 0
+        TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
+        DocNumber = try container.decodeIfPresent(String.self, forKey: .DocNumber)
+        PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
+    }
+}
+
+struct QuickBooksVendorCreditCreate: Codable {
+    let VendorRef: QuickBooksReference
+    let APAccountRef: QuickBooksReference
+    let Line: [QuickBooksBillLine]
+    let TxnDate: String
+    let DocNumber: String?
+    let PrivateNote: String?
+}
+
+struct QuickBooksVendorCreditResponse: Codable {
+    let VendorCredit: QuickBooksVendorCredit
 }
 
 struct QuickBooksPurchaseQueryResponse: Codable {
@@ -2131,7 +2785,7 @@ struct QuickBooksVendor: Codable, Identifiable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
+        Id = try QuickBooksFlexibleDecoding.requiredIdentifier(container, .Id, entity: "Vendor")
         DisplayName = try container.decodeIfPresent(String.self, forKey: .DisplayName) ?? "Unnamed Vendor"
         PrimaryEmailAddr = try container.decodeIfPresent(QuickBooksEmailAddress.self, forKey: .PrimaryEmailAddr)
         PrimaryPhone = try container.decodeIfPresent(QuickBooksPhoneNumber.self, forKey: .PrimaryPhone)
@@ -2234,7 +2888,7 @@ struct QuickBooksPayment: Codable, Identifiable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
+        Id = try QuickBooksFlexibleDecoding.requiredIdentifier(container, .Id, entity: "Payment")
         CustomerRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .CustomerRef)
         TotalAmt = Self.decodeFlexibleDouble(container, key: .TotalAmt) ?? 0
         TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
@@ -2314,7 +2968,7 @@ struct QuickBooksSalesReceipt: Codable, Identifiable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
+        Id = try QuickBooksFlexibleDecoding.requiredIdentifier(container, .Id, entity: "SalesReceipt")
         DocNumber = try container.decodeIfPresent(String.self, forKey: .DocNumber)
         CustomerRef = try container.decodeIfPresent(QuickBooksReference.self, forKey: .CustomerRef)
         TotalAmt = Self.decodeFlexibleDouble(container, key: .TotalAmt) ?? 0
@@ -2445,7 +3099,7 @@ struct QuickBooksDeposit: Codable, Identifiable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        Id = try container.decodeIfPresent(String.self, forKey: .Id) ?? UUID().uuidString
+        Id = try QuickBooksFlexibleDecoding.requiredIdentifier(container, .Id, entity: "Deposit")
         TxnDate = try container.decodeIfPresent(String.self, forKey: .TxnDate)
         TotalAmt = QuickBooksFlexibleDecoding.double(container, .TotalAmt) ?? 0
         PrivateNote = try container.decodeIfPresent(String.self, forKey: .PrivateNote)
@@ -2466,6 +3120,31 @@ struct QuickBooksDepositResponse: Codable {
 
 
 private enum QuickBooksFlexibleDecoding {
+    static func requiredIdentifier<K: CodingKey>(
+        _ container: KeyedDecodingContainer<K>,
+        _ key: K,
+        entity: String
+    ) throws -> String {
+        guard let raw = string(container, key) else {
+            throw DecodingError.keyNotFound(
+                key,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "QuickBooks \(entity) response is missing its provider identifier."
+                )
+            )
+        }
+        let identifier = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !identifier.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "QuickBooks \(entity) response contains a blank provider identifier."
+            )
+        }
+        return identifier
+    }
+
     static func string<K: CodingKey>(_ container: KeyedDecodingContainer<K>, _ key: K) -> String? {
         if let value = try? container.decodeIfPresent(String.self, forKey: key) {
             return value
@@ -2647,7 +3326,7 @@ struct QuickBooksPaymentsCardRecord: Decodable, Identifiable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = QuickBooksFlexibleDecoding.string(container, .id) ?? UUID().uuidString
+        id = try QuickBooksFlexibleDecoding.requiredIdentifier(container, .id, entity: "stored card")
         customerID = nil
         name = QuickBooksFlexibleDecoding.string(container, .name)
         expMonth = QuickBooksFlexibleDecoding.string(container, .expMonth)
@@ -2932,23 +3611,6 @@ struct QuickBooksPaymentsChargeResponse: Decodable {
         self.captureDetail = captureDetail
     }
 
-    static func placeholder(id: String, status: String?) -> QuickBooksPaymentsChargeResponse {
-        QuickBooksPaymentsChargeResponse(
-            created: nil,
-            status: status,
-            amount: nil,
-            currency: nil,
-            token: nil,
-            capture: true,
-            id: id,
-            authCode: nil,
-            clientTransID: nil,
-            card: nil,
-            context: nil,
-            captureDetail: nil
-        )
-    }
-
     private enum CodingKeys: String, CodingKey {
         case created, status, amount, currency, token, capture, id, authCode, clientTransID, card, context, captureDetail
     }
@@ -2965,7 +3627,7 @@ struct QuickBooksPaymentsChargeResponse: Decodable {
         currency = QuickBooksFlexibleDecoding.string(container, .currency)
         token = QuickBooksFlexibleDecoding.string(container, .token)
         capture = QuickBooksFlexibleDecoding.bool(container, .capture)
-        id = QuickBooksFlexibleDecoding.string(container, .id) ?? UUID().uuidString
+        id = try QuickBooksFlexibleDecoding.requiredIdentifier(container, .id, entity: "Payments charge")
         authCode = QuickBooksFlexibleDecoding.string(container, .authCode)
         clientTransID = QuickBooksFlexibleDecoding.string(container, .clientTransID)
         card = (try? container.decodeIfPresent(QuickBooksPaymentsMaskedCard.self, forKey: .card)) ?? nil
@@ -3047,7 +3709,7 @@ struct QuickBooksPaymentsRefundResponse: Decodable {
         status = QuickBooksFlexibleDecoding.string(container, .status)
         amount = QuickBooksFlexibleDecoding.string(container, .amount)
         description = QuickBooksFlexibleDecoding.string(container, .description)
-        id = QuickBooksFlexibleDecoding.string(container, .id) ?? UUID().uuidString
+        id = try QuickBooksFlexibleDecoding.requiredIdentifier(container, .id, entity: "Payments refund")
         context = (try? container.decodeIfPresent(QuickBooksPaymentsResponseContext.self, forKey: .context)) ?? nil
         type = QuickBooksFlexibleDecoding.string(container, .type)
     }

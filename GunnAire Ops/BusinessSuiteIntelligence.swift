@@ -21,9 +21,11 @@ enum BusinessSuiteDestination: Equatable {
     case payments
     case sync
     case quickBooks
+    case quickBooksSales
     case estimates
     case invoices
     case timeClock
+    case mail
 }
 
 enum BusinessSuiteWorkstreamKind: String, CaseIterable {
@@ -80,6 +82,20 @@ struct BusinessSuiteSnapshot: Equatable {
     let actions: [BusinessSuiteAction]
 }
 
+struct BusinessSuiteSyncAttentionSummary: Equatable {
+    let paymentCount: Int
+    let calendarCount: Int
+    let quickBooksDocumentCount: Int
+    let pricebookCount: Int
+    let timeEntryCount: Int
+    let sharedFileCount: Int
+    let communicationCount: Int
+
+    var total: Int {
+        paymentCount + calendarCount + quickBooksDocumentCount + pricebookCount + timeEntryCount + sharedFileCount + communicationCount
+    }
+}
+
 enum BusinessSuiteIntelligence {
     static func snapshot(
         customers: [Customer],
@@ -90,11 +106,13 @@ enum BusinessSuiteIntelligence {
         invoices: [Invoice],
         payments: [Payment],
         attachments: [ServiceDocumentAttachment] = [],
+        communications: [CustomerCommunication] = [],
         timeEntries: [TimeEntry],
         items: [Item] = [],
         vendors: [Vendor] = [],
         googleConnected: Bool,
         quickBooksConnected: Bool,
+        sharedServerConfigured: Bool = GunnAireBackendService.isConfigured,
         onsitePaymentsReady: Bool,
         now: Date = Date(),
         calendar: Calendar = .current
@@ -114,7 +132,6 @@ enum BusinessSuiteIntelligence {
         let startOfToday = calendar.startOfDay(for: now)
         let dispatchWindowEnd = calendar.date(byAdding: .day, value: 3, to: startOfToday) ?? now
         let sevenDaysAhead = calendar.date(byAdding: .day, value: 7, to: now) ?? now
-        let overdueInvoiceCutoff = calendar.date(byAdding: .day, value: -7, to: now) ?? now
 
         let upcomingCalls = serviceCalls.filter {
             $0.status != .cancelled &&
@@ -151,7 +168,9 @@ enum BusinessSuiteIntelligence {
             guard balance > 0 else { return nil }
             return (invoice, balance)
         }
-        let overdueInvoices = openInvoiceBalances.filter { $0.invoice.createdAt <= overdueInvoiceCutoff }
+        let overdueInvoices = openInvoiceBalances.filter {
+            Invoice.isOverdue($0.invoice, payments: payments, now: now, calendar: calendar)
+        }
         let openReceivablesTotal = openInvoiceBalances.reduce(0) { $0 + $1.balance }
 
         let openEstimates = estimates.filter(isOpenEstimate)
@@ -171,18 +190,25 @@ enum BusinessSuiteIntelligence {
             $0.isOverdue || $0.isUpcoming || $0.needsReminder
         }
 
-        let paymentSyncAttention = payments.filter(\.needsQuickBooksAttention)
-        let calendarLinkGaps = googleConnected ? dispatchWindowCalls.filter { call in
-            if call.googleEventID?.isEmpty != false {
-                return true
-            }
-            guard call.assignedTechnician != nil else { return false }
-            return ServiceCalendarRouting.hasStaleAssignedCalendarRoute(
-                calendarID: call.googleCalendarID,
-                technician: call.assignedTechnician
-            )
-        }.count : 0
-        let quickBooksDocumentGaps = quickBooksConnected ? quickBooksGapCount(estimates: estimates, invoices: invoices, attachments: attachments) : 0
+        let syncAttention = syncAttentionSummary(
+            serviceCalls: serviceCalls,
+            estimates: estimates,
+            invoices: invoices,
+            payments: payments,
+            attachments: attachments,
+            communications: communications,
+            timeEntries: timeEntries,
+            items: items,
+            googleConnected: googleConnected,
+            quickBooksConnected: quickBooksConnected,
+            sharedServerConfigured: sharedServerConfigured,
+            now: now,
+            calendar: calendar
+        )
+        let paymentSyncAttention = payments.filter {
+            $0.needsQuickBooksAttention || $0.needsSharedCompanyQueueUpload
+        }
+        let calendarLinkGaps = syncAttention.calendarCount
         let catalogItems = items.filter {
             !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
@@ -265,9 +291,12 @@ enum BusinessSuiteIntelligence {
         let integrationScore = score(
             (googleConnected ? 0 : 18) +
             (quickBooksConnected ? 0 : 24) +
-            paymentSyncAttention.count * 12 +
-            calendarLinkGaps * 4 +
-            quickBooksDocumentGaps * 3
+            syncAttention.paymentCount * 12 +
+            syncAttention.calendarCount * 4 +
+            syncAttention.quickBooksDocumentCount * 3 +
+            syncAttention.pricebookCount * 4 +
+            syncAttention.timeEntryCount * 6 +
+            syncAttention.sharedFileCount * 6
         )
 
         let overallScore = weightedAverage([
@@ -338,7 +367,7 @@ enum BusinessSuiteIntelligence {
                 systemImage: "tag.circle",
                 score: pricebookScore,
                 severity: severity(for: pricebookScore),
-                destination: .quickBooks
+                destination: .quickBooksSales
             ),
             BusinessSuiteWorkstream(
                 id: .agreements,
@@ -365,9 +394,13 @@ enum BusinessSuiteIntelligence {
             BusinessSuiteWorkstream(
                 id: .integrations,
                 title: "Integrations",
-                value: "\(paymentSyncAttention.count + calendarLinkGaps + quickBooksDocumentGaps)",
+                value: "\(syncAttention.total)",
                 status: statusLabel(for: integrationScore),
-                detail: "\(calendarLinkGaps) calendar, \(quickBooksDocumentGaps) QuickBooks gaps",
+                detail: integrationDetail(
+                    googleConnected: googleConnected,
+                    quickBooksConnected: quickBooksConnected,
+                    syncAttention: syncAttention
+                ),
                 systemImage: "point.3.connected.trianglepath.dotted",
                 score: integrationScore,
                 severity: severity(for: integrationScore),
@@ -394,7 +427,7 @@ enum BusinessSuiteIntelligence {
                 score: overallScore,
                 readyToBillCount: readyToBillCalls.count,
                 openReceivablesTotal: openReceivablesTotal,
-                syncAttentionCount: paymentSyncAttention.count + calendarLinkGaps + quickBooksDocumentGaps
+                syncAttentionCount: syncAttention.total
             ),
             monthInvoiceTotal: monthInvoiceTotal,
             monthPaymentTotal: monthPaymentTotal,
@@ -404,7 +437,7 @@ enum BusinessSuiteIntelligence {
             readyToBillCount: readyToBillCalls.count,
             openWorkCount: activeCalls.count,
             customerRiskCount: customerSnapshots.filter(\.hasRisk).count,
-            syncAttentionCount: paymentSyncAttention.count + calendarLinkGaps + quickBooksDocumentGaps,
+            syncAttentionCount: syncAttention.total,
             pricebookAttentionCount: pricebookAttentionCount,
             catalogItemCount: catalogItems.count,
             fieldCoverage: fieldCoverage,
@@ -428,8 +461,7 @@ enum BusinessSuiteIntelligence {
                 averageGrossMargin: averageGrossMargin,
                 googleConnected: googleConnected,
                 quickBooksConnected: quickBooksConnected,
-                calendarLinkGaps: calendarLinkGaps,
-                quickBooksDocumentGaps: quickBooksDocumentGaps
+                syncAttention: syncAttention
             )
         )
     }
@@ -453,8 +485,7 @@ enum BusinessSuiteIntelligence {
         averageGrossMargin: Double,
         googleConnected: Bool,
         quickBooksConnected: Bool,
-        calendarLinkGaps: Int,
-        quickBooksDocumentGaps: Int
+        syncAttention: BusinessSuiteSyncAttentionSummary
     ) -> [BusinessSuiteAction] {
         var actions: [BusinessSuiteAction] = []
 
@@ -576,7 +607,7 @@ enum BusinessSuiteIntelligence {
                     value: "No price",
                     systemImage: "tag.slash",
                     severity: .critical,
-                    destination: .quickBooks
+                    destination: .quickBooksSales
                 )
             )
         } else if let item = lowMarginItems.sorted(by: { grossMargin(for: $0) < grossMargin(for: $1) }).first {
@@ -588,7 +619,7 @@ enum BusinessSuiteIntelligence {
                     value: percent(grossMargin(for: item)),
                     systemImage: "chart.line.downtrend.xyaxis",
                     severity: .warning,
-                    destination: .quickBooks
+                    destination: .quickBooksSales
                 )
             )
         } else if let item = missingCostItems.sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }).first {
@@ -600,7 +631,7 @@ enum BusinessSuiteIntelligence {
                     value: "Cost gap",
                     systemImage: "tag.circle",
                     severity: .notice,
-                    destination: .quickBooks
+                    destination: .quickBooksSales
                 )
             )
         } else if let item = unlinkedCatalogItems.sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }).first {
@@ -612,7 +643,7 @@ enum BusinessSuiteIntelligence {
                     value: "QB link",
                     systemImage: "arrow.triangle.2.circlepath",
                     severity: .notice,
-                    destination: .quickBooks
+                    destination: .quickBooksSales
                 )
             )
         } else if vendorCoverageGap {
@@ -643,7 +674,7 @@ enum BusinessSuiteIntelligence {
             )
         }
 
-        if !googleConnected || !quickBooksConnected || calendarLinkGaps > 0 || quickBooksDocumentGaps > 0 {
+        if !googleConnected || !quickBooksConnected || syncAttention.total > 0 {
             actions.append(
                 BusinessSuiteAction(
                     id: "integration-readiness",
@@ -651,10 +682,9 @@ enum BusinessSuiteIntelligence {
                     detail: integrationDetail(
                         googleConnected: googleConnected,
                         quickBooksConnected: quickBooksConnected,
-                        calendarLinkGaps: calendarLinkGaps,
-                        quickBooksDocumentGaps: quickBooksDocumentGaps
+                        syncAttention: syncAttention
                     ),
-                    value: "\(calendarLinkGaps + quickBooksDocumentGaps)",
+                    value: "\(syncAttention.total)",
                     systemImage: "point.3.connected.trianglepath.dotted",
                     severity: (!googleConnected || !quickBooksConnected) ? .warning : .notice,
                     destination: .sync
@@ -685,13 +715,96 @@ enum BusinessSuiteIntelligence {
             .map { $0 }
     }
 
-    private static func quickBooksGapCount(estimates: [Estimate], invoices: [Invoice], attachments: [ServiceDocumentAttachment]) -> Int {
-        let billingDocumentGaps = estimates.filter { isOpenEstimate($0) && $0.quickBooksID?.isEmpty != false }.count +
-            invoices.filter {
-            CustomerIntelligence.outstandingBalance(for: $0, payments: []) > 0 &&
-                ($0.quickBooksID?.isEmpty != false || $0.quickBooksSyncState != "synced")
+    static func syncAttentionSummary(
+        serviceCalls: [ServiceCall],
+        estimates: [Estimate],
+        invoices: [Invoice],
+        payments: [Payment],
+        attachments: [ServiceDocumentAttachment],
+        communications: [CustomerCommunication] = [],
+        timeEntries: [TimeEntry],
+        items: [Item],
+        googleConnected: Bool,
+        quickBooksConnected: Bool,
+        sharedServerConfigured: Bool = GunnAireBackendService.isConfigured,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> BusinessSuiteSyncAttentionSummary {
+        let startOfToday = calendar.startOfDay(for: now)
+        let dispatchWindowEnd = calendar.date(byAdding: .day, value: 3, to: startOfToday) ?? now
+        let dispatchWindowCalls = serviceCalls.filter {
+            $0.status != .cancelled &&
+            $0.status != .completed &&
+            $0.scheduledDate >= startOfToday &&
+            $0.scheduledDate < dispatchWindowEnd
+        }
+        let calendarCount = googleConnected ? dispatchWindowCalls.filter { call in
+            if call.googleEventID?.isEmpty != false {
+                return true
+            }
+            guard call.assignedTechnician != nil else { return false }
+            return ServiceCalendarRouting.hasStaleAssignedCalendarRoute(
+                calendarID: call.googleCalendarID,
+                technician: call.assignedTechnician
+            )
+        }.count : 0
+
+        let paymentCount = payments.filter {
+            $0.needsQuickBooksAttention || $0.needsSharedCompanyQueueUpload
         }.count
+        let pricebookCount = items.filter { item in
+            item.requiresPricebookReview ||
+            item.needsQuickBooksAttention ||
+            (quickBooksConnected && item.quickBooksCatalogSyncState != "synced")
+        }.count
+        let timeEntryCount = timeEntries.filter { entry in
+            if entry.needsTeamReview { return true }
+            return entry.isApprovedForQuickBooksPublication &&
+                entry.quickBooksTimeActivityID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+                entry.quickBooksTimeActivitySyncError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }.count
+        let sharedFileCount = attachments.filter(\.needsSharedCompanyStorageUpload).count
+        let communicationCount = sharedServerConfigured
+            ? communications.filter(\.needsSharedCompanySync).count
+            : 0
+
+        return BusinessSuiteSyncAttentionSummary(
+            paymentCount: paymentCount,
+            calendarCount: calendarCount,
+            quickBooksDocumentCount: quickBooksGapCount(
+                estimates: estimates,
+                invoices: invoices,
+                attachments: attachments,
+                quickBooksConnected: quickBooksConnected
+            ),
+            pricebookCount: pricebookCount,
+            timeEntryCount: timeEntryCount,
+            sharedFileCount: sharedFileCount,
+            communicationCount: communicationCount
+        )
+    }
+
+    private static func quickBooksGapCount(
+        estimates: [Estimate],
+        invoices: [Invoice],
+        attachments: [ServiceDocumentAttachment],
+        quickBooksConnected: Bool
+    ) -> Int {
+        let estimateGaps = quickBooksConnected
+            ? estimates.filter { isOpenEstimate($0) && $0.quickBooksID?.isEmpty != false }.count
+            : 0
+        let billingDocumentGaps = estimateGaps +
+            invoices.filter {
+                $0.needsQuickBooksAttention ||
+                    (quickBooksConnected &&
+                        CustomerIntelligence.outstandingBalance(for: $0, payments: []) > 0 &&
+                        ($0.quickBooksID?.isEmpty != false || $0.quickBooksSyncState != "synced"))
+            }.count
         let attachmentGaps = attachments.filter { attachment in
+            if attachment.quickBooksSyncError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                return true
+            }
+            guard quickBooksConnected else { return false }
             guard attachment.quickBooksAttachableID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
                 return false
             }
@@ -776,15 +889,37 @@ enum BusinessSuiteIntelligence {
     private static func integrationDetail(
         googleConnected: Bool,
         quickBooksConnected: Bool,
-        calendarLinkGaps: Int,
-        quickBooksDocumentGaps: Int
+        syncAttention: BusinessSuiteSyncAttentionSummary
     ) -> String {
         var details: [String] = []
         if !googleConnected { details.append("Connect Google") }
         if !quickBooksConnected { details.append("Connect QuickBooks") }
-        if calendarLinkGaps > 0 { details.append("\(calendarLinkGaps) calendar gaps") }
-        if quickBooksDocumentGaps > 0 { details.append("\(quickBooksDocumentGaps) QuickBooks gaps") }
+        if syncAttention.calendarCount > 0 {
+            details.append(counted(syncAttention.calendarCount, singular: "calendar assignment", plural: "calendar assignments"))
+        }
+        if syncAttention.quickBooksDocumentCount > 0 {
+            details.append(counted(syncAttention.quickBooksDocumentCount, singular: "QuickBooks document", plural: "QuickBooks documents"))
+        }
+        if syncAttention.pricebookCount > 0 {
+            details.append(counted(syncAttention.pricebookCount, singular: "pricebook item", plural: "pricebook items"))
+        }
+        if syncAttention.paymentCount > 0 {
+            details.append(counted(syncAttention.paymentCount, singular: "payment", plural: "payments"))
+        }
+        if syncAttention.timeEntryCount > 0 {
+            details.append(counted(syncAttention.timeEntryCount, singular: "time entry", plural: "time entries"))
+        }
+        if syncAttention.sharedFileCount > 0 {
+            details.append(counted(syncAttention.sharedFileCount, singular: "file", plural: "files"))
+        }
+        if syncAttention.communicationCount > 0 {
+            details.append(counted(syncAttention.communicationCount, singular: "communication", plural: "communications"))
+        }
         return details.isEmpty ? "All connected systems are current." : details.joined(separator: ", ")
+    }
+
+    private static func counted(_ count: Int, singular: String, plural: String) -> String {
+        "\(count) \(count == 1 ? singular : plural)"
     }
 
     private static func pricebookDetail(

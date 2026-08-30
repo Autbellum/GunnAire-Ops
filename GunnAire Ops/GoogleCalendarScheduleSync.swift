@@ -439,7 +439,7 @@ enum GoogleCalendarScheduleSync {
         switch call.type {
         case .meeting, .reminder, .siteVisit, .other:
             return true
-        case .service, .estimate, .install, .maintenance:
+        case .service, .repair, .estimate, .replacement, .install, .maintenance:
             return false
         }
     }

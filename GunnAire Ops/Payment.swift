@@ -153,6 +153,9 @@ extension Payment {
 
 enum PaymentCollectionGuard {
     static func validationMessage(invoice: Invoice, amount: Double, payments: [Payment]) -> String? {
+        if let blockedMessage = invoice.paymentCollectionBlockedMessage {
+            return blockedMessage
+        }
         guard amount > 0 else { return "Enter a payment amount greater than zero." }
         let balanceDue = Invoice.outstandingBalance(for: invoice, payments: payments)
         guard balanceDue > 0.005 else {

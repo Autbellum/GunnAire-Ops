@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct PaymentsAndReceiptsView: View {
     private enum PaymentMethod: String, CaseIterable, Identifiable {
@@ -25,6 +26,7 @@ struct PaymentsAndReceiptsView: View {
     @StateObject private var onsitePaymentManager = OnsitePaymentManager.shared
     @State private var selectedWorkspace: PaymentsWorkspace = .overview
     @State private var showingRecordPaymentSheet = false
+    @State private var showingContactlessPaymentGuide = false
     @State private var showingRefundSheet = false
     @State private var selectedInvoiceID: UUID?
     @State private var refundPaymentID: UUID?
@@ -45,7 +47,9 @@ struct PaymentsAndReceiptsView: View {
     @State private var fieldPaymentAssignments: [BackendFieldPaymentAssignmentRecord] = []
     @State private var fieldPaymentAssignmentMessage = ""
     @State private var isLoadingFieldPaymentAssignments = false
-    @State private var fieldCollectionPrompt: BackendFieldPaymentAssignmentRecord?
+    @State private var deferredCollectionInvoiceID: UUID?
+    @State private var deferredCollectionPrefersContactlessGuide = false
+    @State private var contactlessGuideMessage = ""
     @State private var syncingPaymentID: UUID?
     @State private var isProcessingQuickBooksPayment = false
     @State private var isProcessingQuickBooksRefund = false
@@ -65,6 +69,9 @@ struct PaymentsAndReceiptsView: View {
 
     private let liveAPI = QuickBooksDataAPI.shared
     private let googleAuth = GoogleAuthManager.shared
+    private let collectionActionColumns = [
+        GridItem(.adaptive(minimum: 185), spacing: 8, alignment: .leading)
+    ]
 
     private var selectedInvoice: Invoice? {
         guard let selectedInvoiceID else { return nil }
@@ -128,7 +135,7 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private var signedInEmail: String? {
-        googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        AppIdentity.currentEmail
     }
 
     private var outstandingInvoices: [(invoice: Invoice, balanceDue: Double)] {
@@ -147,6 +154,10 @@ struct PaymentsAndReceiptsView: View {
 
     private var totalOutstandingBalance: Double {
         outstandingInvoices.reduce(0) { $0 + $1.balanceDue }
+    }
+
+    private var collectibleOutstandingInvoices: [(invoice: Invoice, balanceDue: Double)] {
+        outstandingInvoices.filter { $0.invoice.isReadyForPaymentCollection }
     }
 
     private var activeFieldCollectionTechnicians: [AppUser] {
@@ -221,7 +232,7 @@ struct PaymentsAndReceiptsView: View {
                                 .foregroundColor(GunnAireBackendService.isConfigured ? .green : .secondary)
                         }
                         if OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild {
-                            Text("Tap to Pay: \(processorIsReady ? selectedProcessor.displayName : "Not Ready")")
+                            Text("Tap to Pay on iPhone: \(processorIsReady ? selectedProcessor.displayName : "Not Ready")")
                                 .foregroundColor(processorIsReady ? .green : .secondary)
                             Text(onsitePaymentManager.processorStatusDetail())
                                 .font(.caption)
@@ -235,9 +246,13 @@ struct PaymentsAndReceiptsView: View {
                     }
 
                     if selectedWorkspace == .collect {
-                    if GunnAireBackendService.isConfigured {
-                        fieldPaymentAssignmentSection
-                    }
+                        if deferredCollectionInvoiceID != nil {
+                            deferredCollectionHandoffSection
+                        }
+
+                        if GunnAireBackendService.isConfigured {
+                            fieldPaymentAssignmentSection
+                        }
 
                     Section("Outstanding Invoices") {
                         if outstandingInvoices.isEmpty {
@@ -253,9 +268,17 @@ struct PaymentsAndReceiptsView: View {
                                             Text(entry.invoice.lineItemSummary.isEmpty ? "Invoice \(entry.invoice.id.uuidString.prefix(8))" : entry.invoice.lineItemSummary)
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
-                                            Text(isOverdue(entry.invoice) ? "Overdue follow-up needed" : "Awaiting collection")
+                                            Text(Invoice.dueStatusDetail(for: entry.invoice, payments: payments))
                                                 .font(.caption2)
                                                 .foregroundColor(isOverdue(entry.invoice) ? .red : .secondary)
+                                            if let blockedMessage = entry.invoice.paymentCollectionBlockedMessage {
+                                                Label(entry.invoice.taxCalculationStatus.displayName, systemImage: "building.columns")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(Color.orange)
+                                                Text(blockedMessage)
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                            }
                                         }
                                         Spacer()
                                         VStack(alignment: .trailing, spacing: 4) {
@@ -267,7 +290,7 @@ struct PaymentsAndReceiptsView: View {
                                         }
                                     }
 
-                                    HStack {
+                                    LazyVGrid(columns: collectionActionColumns, alignment: .leading, spacing: 8) {
                                         Button("Open Invoice") {
                                             selectedInvoiceID = entry.invoice.id
                                         }
@@ -285,13 +308,17 @@ struct PaymentsAndReceiptsView: View {
                                         }
                                         .buttonStyle(.bordered)
 
-                                        Button("Collect") {
-                                            preparePaymentForm(for: entry.invoice)
-                                            showingRecordPaymentSheet = true
+                                        if entry.invoice.isReadyForPaymentCollection {
+                                            Button("Collect") {
+                                                preparePaymentForm(for: entry.invoice)
+                                                showingRecordPaymentSheet = true
+                                            }
+                                            .buttonStyle(.bordered)
                                         }
-                                        .buttonStyle(.bordered)
 
-                                        if isAdminUser, !activeFieldCollectionTechnicians.isEmpty {
+                                        if entry.invoice.isReadyForPaymentCollection,
+                                           isAdminUser,
+                                           !activeFieldCollectionTechnicians.isEmpty {
                                             Menu {
                                                 ForEach(activeFieldCollectionTechnicians, id: \.id) { technician in
                                                     Button(technician.email) {
@@ -310,7 +337,8 @@ struct PaymentsAndReceiptsView: View {
                                             .accessibilityHint("Creates a server-authorized collection task for the selected field technician.")
                                         }
 
-                                        if FieldPaymentHandoff.shared.canStartFromCurrentDevice {
+                                        if entry.invoice.isReadyForPaymentCollection,
+                                           FieldPaymentHandoff.shared.canStartFromCurrentDevice {
                                             Button("Send to Field iPhone") {
                                                 let didStart = FieldPaymentHandoff.shared.begin(
                                                     invoiceID: entry.invoice.id,
@@ -324,8 +352,8 @@ struct PaymentsAndReceiptsView: View {
                                             .accessibilityHint(FieldPaymentHandoff.requirementsDetail)
                                         }
 
-                                        if processorIsReady {
-                                            Button("Tap to Pay") {
+                                        if entry.invoice.isReadyForPaymentCollection, processorIsReady {
+                                            Button("Tap to Pay on iPhone") {
                                                 preparePaymentForm(for: entry.invoice, preferredMethod: .card)
                                                 showingRecordPaymentSheet = true
                                             }
@@ -334,6 +362,7 @@ struct PaymentsAndReceiptsView: View {
                                             .foregroundStyle(Color.primaryBlack)
                                         }
                                     }
+                                    .accessibilityIdentifier("InvoiceCollectionActions-\(entry.invoice.id.uuidString)")
 
                                     HStack {
                                         if let phoneURL = customerPhoneURL(for: entry.invoice) {
@@ -365,10 +394,12 @@ struct PaymentsAndReceiptsView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(Color.brandGold)
                         .foregroundStyle(Color.primaryBlack)
-                        .disabled(outstandingInvoices.isEmpty)
+                        .disabled(collectibleOutstandingInvoices.isEmpty)
 
-                        if outstandingInvoices.isEmpty {
-                            Text("No unpaid or partially paid invoices are available for collection.")
+                        if collectibleOutstandingInvoices.isEmpty {
+                            Text(outstandingInvoices.isEmpty
+                                ? "No unpaid or partially paid invoices are available for collection."
+                                : "Open invoices are waiting for an authoritative QuickBooks tax total before collection.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -632,6 +663,9 @@ struct PaymentsAndReceiptsView: View {
         .sheet(isPresented: $showingRecordPaymentSheet) {
             paymentSheet
         }
+        .sheet(isPresented: $showingContactlessPaymentGuide) {
+            contactlessPaymentGuide
+        }
         .sheet(isPresented: $showingRefundSheet) {
             refundSheet
         }
@@ -651,44 +685,42 @@ struct PaymentsAndReceiptsView: View {
                 }
             }
         }
-        .task(id: fieldCollectionPollingKey) {
-            guard fieldCollectionPollingKey != nil else { return }
-            while !Task.isCancelled {
-                await refreshFieldPaymentAssignments()
-                do {
-                    try await Task.sleep(for: .seconds(45))
-                } catch {
-                    return
-                }
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
             applyPendingIntentInvoiceIfNeeded()
         }
-        .alert("Field collection assigned", isPresented: Binding(
-            get: { fieldCollectionPrompt != nil },
-            set: { if !$0 { fieldCollectionPrompt = nil } }
-        ), actions: {
-            Button("View Task") {
-                guard let invoiceID = fieldCollectionPrompt?.invoiceUUID else {
-                    fieldCollectionPrompt = nil
-                    return
+        .onChange(of: visibleInvoices.map(\.id)) { _, _ in
+            resolveDeferredCollectionRouteIfPossible()
+        }
+    }
+
+    @ViewBuilder
+    private var deferredCollectionHandoffSection: some View {
+        Section("Collection Handoff") {
+            Label(
+                "Waiting for the assigned invoice",
+                systemImage: "iphone.and.arrow.forward"
+            )
+            .foregroundStyle(Color.orange)
+
+            Text("The task is preserved while company sync confirms that this invoice belongs to your account. It will open automatically when the authorized job and invoice arrive.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Button("Retry") {
+                    resolveDeferredCollectionRouteIfPossible()
                 }
-                fieldCollectionPrompt = nil
-                if visibleInvoices.contains(where: { $0.id == invoiceID }) {
-                    GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
-                } else {
-                    actionMessage = "The collection task is ready. Its job and invoice details will appear after company sync finishes on this device."
+                .buttonStyle(.bordered)
+
+                Button("Dismiss", role: .cancel) {
+                    deferredCollectionInvoiceID = nil
+                    GunnAireAppIntentRouter.clearDeferredPaymentCollectionRoute()
+                    actionMessage = "Collection handoff dismissed. The server task remains available in Your Field Collection Tasks."
                 }
+                .buttonStyle(.bordered)
             }
-            Button("Later", role: .cancel) {
-                fieldCollectionPrompt = nil
-            }
-        }, message: {
-            if let assignment = fieldCollectionPrompt {
-                Text("Collect \(assignment.amount.formatted(.currency(code: "USD"))) from \(assignment.customerName). Accept the task, then open collection when the invoice appears on this device.")
-            }
-        })
+        }
+        .accessibilityIdentifier("DeferredFieldCollectionHandoff")
     }
 
     @ViewBuilder
@@ -754,7 +786,10 @@ struct PaymentsAndReceiptsView: View {
                                visibleInvoices.contains(where: { $0.id == invoiceID }),
                                assignment.isActionable {
                                 Button("Open Collection") {
-                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
+                                    GunnAireAppIntentRouter.storePaymentCollectionRoute(
+                                        invoiceID,
+                                        prefersContactlessGuide: true
+                                    )
                                 }
                                 .buttonStyle(.bordered)
                             } else if !isAdminUser, assignment.isActionable {
@@ -802,7 +837,7 @@ struct PaymentsAndReceiptsView: View {
 
                     if selectedMethod == .card {
                         if enableOnsitePayments && OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild {
-                            Button(onsitePaymentManager.isProcessing ? "Processing Tap to Pay..." : "Start Tap to Pay") {
+                            Button(onsitePaymentManager.isProcessing ? "Processing Tap to Pay on iPhone..." : "Start Tap to Pay on iPhone") {
                                 Task {
                                     await runTapToPay()
                                 }
@@ -907,6 +942,110 @@ struct PaymentsAndReceiptsView: View {
         .tint(Color.brandGold)
     }
 
+    private var contactlessPaymentGuide: some View {
+        NavigationStack {
+            Form {
+                if let invoice = selectedInvoice {
+                    let balance = outstandingBalance(for: invoice)
+                    let quickBooksReference = FieldPaymentHandoff.quickBooksInvoiceReference(invoice.quickBooksID)
+
+                    Section("Collection") {
+                        LabeledContent("Customer", value: invoice.customer.name)
+                        LabeledContent("Authorized balance", value: balance.formatted(.currency(code: "USD")))
+                    }
+
+                    if let quickBooksReference {
+                        Section("QuickBooks Invoice") {
+                            LabeledContent("Invoice ID", value: quickBooksReference)
+                                .accessibilityIdentifier("ContactlessQuickBooksInvoiceID")
+
+                            Button {
+                                UIPasteboard.general.string = quickBooksReference
+                                contactlessGuideMessage = "QuickBooks invoice ID copied."
+                            } label: {
+                                Label("Copy QuickBooks Invoice ID", systemImage: "doc.on.doc")
+                            }
+                        }
+
+                        Section("Use Tap to Pay on iPhone in QuickBooks") {
+                            ForEach(Array(FieldPaymentHandoff.quickBooksTapToPaySteps.enumerated()), id: \.offset) { index, step in
+                                HStack(alignment: .top, spacing: 10) {
+                                    Text("\(index + 1)")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(Color.primaryBlack)
+                                        .frame(width: 24, height: 24)
+                                        .background(Color.brandGold, in: Circle())
+                                    Text(step)
+                                }
+                            }
+
+                            Text("QuickBooks does not publish a supported link that opens a specific invoice, so GunnAire Ops provides the verified QBO identifier without sending customer or card data through Handoff.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Section("After Collection") {
+                            Text("Return to GunnAire Ops after QuickBooks confirms payment. Refresh QuickBooks before recording anything manually so the invoice is not paid twice.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Button("Record Cash, Check, or Another Verified Payment") {
+                                openVerifiedPaymentEntryFromContactlessGuide()
+                            }
+                        }
+                    } else {
+                        Section("QuickBooks Invoice Required") {
+                            Label(
+                                "Contactless collection is waiting for QuickBooks publication.",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .foregroundStyle(Color.orange)
+
+                            Text("Ask the office to publish this invoice to QuickBooks, then reopen the collection task. GunnAire Ops will not present a local identifier as though QuickBooks could find it.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Button("Record Cash, Check, or Another Verified Payment") {
+                                openVerifiedPaymentEntryFromContactlessGuide()
+                            }
+                        }
+                    }
+
+                    if !contactlessGuideMessage.isEmpty {
+                        Section("Status") {
+                            Text(contactlessGuideMessage)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    ContentUnavailableView(
+                        "Invoice Unavailable",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text("The invoice is no longer available to this business account.")
+                    )
+                }
+            }
+            .navigationTitle("Contactless Payment")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        showingContactlessPaymentGuide = false
+                    }
+                }
+            }
+        }
+        .tint(Color.brandGold)
+    }
+
+    private func openVerifiedPaymentEntryFromContactlessGuide() {
+        showingContactlessPaymentGuide = false
+        Task { @MainActor in
+            await Task.yield()
+            showingRecordPaymentSheet = true
+        }
+    }
+
     private var paymentConfirmationTitle: String {
         if isProcessingQuickBooksPayment {
             return "Processing..."
@@ -991,31 +1130,77 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private func preparePaymentForm() {
-        if let firstOutstanding = outstandingInvoices.first?.invoice {
+        if let firstOutstanding = collectibleOutstandingInvoices.first?.invoice {
             preparePaymentForm(for: firstOutstanding)
         }
     }
 
     private func applyPendingIntentInvoiceIfNeeded() {
-        guard let pendingInvoiceID = GunnAireAppIntentRouter.consumePendingInvoiceCollectionID() else {
-            return
+        let newlyRequestedInvoiceID = GunnAireAppIntentRouter.consumePendingInvoiceCollectionID()
+        let newlyRequestedContactlessGuide = newlyRequestedInvoiceID == nil
+            ? false
+            : GunnAireAppIntentRouter.consumePendingContactlessPaymentGuidePreference()
+        if let newlyRequestedInvoiceID {
+            GunnAireAppIntentRouter.storeDeferredPaymentCollectionRoute(
+                newlyRequestedInvoiceID,
+                ownerEmail: signedInEmail,
+                prefersContactlessGuide: newlyRequestedContactlessGuide
+            )
         }
+        guard let pendingInvoiceID = newlyRequestedInvoiceID ?? GunnAireAppIntentRouter.deferredPaymentCollectionID(
+            ownerEmail: signedInEmail
+        ) else { return }
         selectedWorkspace = .collect
-        guard let invoice = visibleInvoices.first(where: { $0.id == pendingInvoiceID }) else {
-            actionMessage = "This payment request is not assigned to your business account. Ask dispatch to assign the job before collecting payment."
-            return
-        }
-        guard outstandingBalance(for: invoice) > 0.005 else {
-            actionMessage = "This invoice has no open balance. Refresh payment history before collecting again."
-            return
-        }
-        withAnimation(.easeInOut(duration: 0.2)) {
-            preparePaymentForm(for: invoice)
-            showingRecordPaymentSheet = true
+        deferredCollectionInvoiceID = pendingInvoiceID
+        deferredCollectionPrefersContactlessGuide = newlyRequestedInvoiceID == nil
+            ? GunnAireAppIntentRouter.deferredPaymentCollectionPrefersContactlessGuide(ownerEmail: signedInEmail)
+            : newlyRequestedContactlessGuide
+        resolveDeferredCollectionRouteIfPossible()
+    }
+
+    private func resolveDeferredCollectionRouteIfPossible() {
+        guard let invoiceID = deferredCollectionInvoiceID else { return }
+        selectedWorkspace = .collect
+
+        switch FieldCollectionInvoiceRouteResolver.decision(
+            invoiceID: invoiceID,
+            visibleInvoices: visibleInvoices,
+            payments: payments
+        ) {
+        case .waitingForAuthorizedInvoice:
+            actionMessage = "The assigned invoice is not available to this account yet. The handoff is preserved while company sync confirms the job assignment."
+        case .waitingForAuthoritativeTotal(let message):
+            actionMessage = message
+        case .alreadySettled:
+            deferredCollectionInvoiceID = nil
+            deferredCollectionPrefersContactlessGuide = false
+            GunnAireAppIntentRouter.clearDeferredPaymentCollectionRoute()
+            actionMessage = "This invoice no longer has an open balance. Refresh payment history before collecting again."
+        case .collect:
+            guard let invoice = visibleInvoices.first(where: { $0.id == invoiceID }) else { return }
+            let presentsContactlessGuide = deferredCollectionPrefersContactlessGuide
+            deferredCollectionInvoiceID = nil
+            deferredCollectionPrefersContactlessGuide = false
+            GunnAireAppIntentRouter.clearDeferredPaymentCollectionRoute()
+            withAnimation(.easeInOut(duration: 0.2)) {
+                preparePaymentForm(for: invoice)
+                if presentsContactlessGuide {
+                    contactlessGuideMessage = ""
+                    showingContactlessPaymentGuide = true
+                } else {
+                    showingRecordPaymentSheet = true
+                }
+            }
         }
     }
 
     private func preparePaymentForm(for invoice: Invoice, preferredMethod: PaymentMethod = .card) {
+        guard invoice.isReadyForPaymentCollection else {
+            selectedInvoiceID = nil
+            amountText = ""
+            actionMessage = invoice.paymentCollectionBlockedMessage ?? "This invoice is not ready for collection."
+            return
+        }
         selectedInvoiceID = invoice.id
         amountText = String(format: "%.2f", outstandingBalance(for: invoice))
         selectedMethod = preferredMethod
@@ -1159,7 +1344,6 @@ struct PaymentsAndReceiptsView: View {
         do {
             let assignments = try await GunnAireBackendService.fetchFieldPaymentAssignments()
             fieldPaymentAssignments = assignments
-            announceNewFieldCollectionIfNeeded(from: assignments)
             fieldPaymentAssignmentMessage = fieldPaymentAssignments.isEmpty
                 ? "No active field collection tasks."
                 : "Loaded \(fieldPaymentAssignments.count) field collection assignment\(fieldPaymentAssignments.count == 1 ? "" : "s")."
@@ -1168,37 +1352,11 @@ struct PaymentsAndReceiptsView: View {
         }
     }
 
-    private func announceNewFieldCollectionIfNeeded(from assignments: [BackendFieldPaymentAssignmentRecord]) {
-        guard !isAdminUser else { return }
-        let announcedKey = "GunnAireAnnouncedFieldPaymentAssignmentIDs"
-        let announcedIDs = Set(UserDefaults.standard.stringArray(forKey: announcedKey) ?? [])
-        guard let assignment = FieldPaymentAssignmentPromptQueue.nextUnannouncedPendingAssignment(
-            from: assignments,
-            announcedIDs: announcedIDs
-        ) else {
+    private func assignFieldCollection(invoice: Invoice, amount: Double, technicianEmail: String) async {
+        if let blockedMessage = invoice.paymentCollectionBlockedMessage {
+            actionMessage = blockedMessage
             return
         }
-        UserDefaults.standard.set(
-            FieldPaymentAssignmentPromptQueue.recordingAnnouncement(
-                for: assignment.id,
-                previouslyAnnouncedIDs: announcedIDs
-            ),
-            forKey: announcedKey
-        )
-        fieldCollectionPrompt = assignment
-    }
-
-    private var fieldCollectionPollingKey: String? {
-        guard !isAdminUser,
-              GunnAireBackendService.isConfigured,
-              let signedInEmail,
-              !signedInEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return nil
-        }
-        return signedInEmail
-    }
-
-    private func assignFieldCollection(invoice: Invoice, amount: Double, technicianEmail: String) async {
         guard GunnAireBackendService.isConfigured else {
             actionMessage = "Configure shared company storage before assigning a field collection."
             return
@@ -1389,11 +1547,11 @@ struct PaymentsAndReceiptsView: View {
 
     private func runTapToPay() async {
         guard let invoice = selectedInvoice else {
-            tapToPayMessage = "Select an invoice before starting Tap to Pay."
+            tapToPayMessage = "Select an invoice before starting Tap to Pay on iPhone."
             return
         }
         guard let amount = Double(amountText), amount > 0 else {
-            tapToPayMessage = "Enter a valid amount before starting Tap to Pay."
+            tapToPayMessage = "Enter a valid amount before starting Tap to Pay on iPhone."
             return
         }
         if let issue = PaymentCollectionGuard.validationMessage(invoice: invoice, amount: amount, payments: payments) {
@@ -1417,9 +1575,7 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private func isOverdue(_ invoice: Invoice) -> Bool {
-        guard outstandingBalance(for: invoice) > 0 else { return false }
-        guard let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) else { return false }
-        return invoice.createdAt < cutoff
+        Invoice.isOverdue(invoice, payments: payments)
     }
 
     private func balanceStatusLabel(for invoice: Invoice, balanceDue: Double) -> String {
@@ -1469,6 +1625,7 @@ Hello \(invoice.customer.name),
 This is a reminder that your current invoice balance is \(balanceDue.formatted(.currency(code: "USD"))).
 
 Invoice reference: \(invoiceReference(for: invoice))
+Due date: \(invoice.effectiveDueDate().formatted(date: .long, time: .omitted))
 
 Thank you,
 GunnAire
@@ -1533,7 +1690,8 @@ GunnAire
                 body: draft.body,
                 customerID: payment.invoice.customer.id,
                 serviceCallID: payment.invoice.serviceCallID,
-                invoiceID: payment.invoice.id
+                invoiceID: payment.invoice.id,
+                workflow: .receipt
             )
         } else {
             openURL(fallbackURL)

@@ -6,17 +6,78 @@ struct TimeClockView: View {
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var entries: [TimeEntry]
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
+    @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
+    @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
+    @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @State private var syncMessage: String?
+    @State private var selectedActivity: TimeEntryActivity = .general
     @State private var selectedServiceCallID: UUID?
     @State private var syncingEntryIDs: Set<UUID> = []
+    @State private var selectedWorkspace: TimeClockWorkspace = .myTime
+    @State private var reviewPeriod: TeamTimeReviewPeriod = .currentWeek
+    @State private var performancePeriod: BusinessReportPeriod = .currentMonth
+    @State private var entryPendingCorrection: TimeEntry?
+    @State private var entryPendingCorrectionRequest: TimeEntry?
+    @State private var reviewMessage: String?
 
     private var signedInEmail: String {
-        googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") ?? "testing@gunnaire.com"
+        let candidate = AppIdentity.currentEmail
+            ?? ""
+        return AppAccess.normalizedEmail(candidate)
+    }
+
+    private var hasAuthenticatedUser: Bool {
+        !signedInEmail.isEmpty
     }
 
     private var isOwnerAccount: Bool {
         AppAccess.isPrimaryAdmin(signedInEmail)
+    }
+
+    private var activeRole: AppUserRole? {
+        AppAccess.activeRole(email: signedInEmail, users: users)
+    }
+
+    private var canReviewTeamTime: Bool {
+        AppAccess.canReviewTeamTime(email: signedInEmail, users: users)
+    }
+
+    private var canRecordOwnTime: Bool {
+        hasAuthenticatedUser && !isOwnerAccount && activeRole != .accounting
+    }
+
+    private var availableWorkspaces: [TimeClockWorkspace] {
+        var workspaces: [TimeClockWorkspace] = canRecordOwnTime ? [.myTime] : []
+        if ownPerformanceTechnicianID != nil {
+            workspaces.append(.myPerformance)
+        }
+        if canReviewTeamTime {
+            workspaces.append(.teamReview)
+        }
+        return workspaces.isEmpty ? [.myTime] : workspaces
+    }
+
+    private var ownPerformanceTechnicianID: UUID? {
+        AppAccess.ownPerformanceTechnicianID(
+            email: signedInEmail,
+            users: users,
+            technicians: technicians
+        )
+    }
+
+    @MainActor
+    private var ownPerformanceRow: TechnicianReportRow? {
+        guard let technicianID = ownPerformanceTechnicianID else { return nil }
+        return BusinessReporting.snapshot(
+            period: performancePeriod,
+            serviceCalls: serviceCalls,
+            estimates: estimates,
+            invoices: invoices,
+            payments: [],
+            timeEntries: entries,
+            technicians: technicians
+        ).technicianRows.first { $0.id == technicianID }
     }
 
     private var userEntries: [TimeEntry] {
@@ -52,8 +113,24 @@ struct TimeClockView: View {
         return trackableServiceCalls.first { $0.id == selectedServiceCallID }
     }
 
-    private var currentTechnicianTimeMapping: TechnicianQuickBooksTimeMapping? {
-        QuickBooksTimeActivitySync.mapping(for: signedInEmail, technicians: technicians)
+    private var teamReviewEntries: [TimeEntry] {
+        let interval = reviewPeriod.dateInterval(now: Date())
+        return entries.filter { entry in
+            entry.isOpen || (entry.clockIn >= interval.start && entry.clockIn < interval.end)
+        }
+    }
+
+    private var teamMemberEmails: [String] {
+        Array(Set(teamReviewEntries.map { AppAccess.normalizedEmail($0.userEmail) }.filter { !$0.isEmpty }))
+            .sorted { teamMemberDisplayName(for: $0).localizedCaseInsensitiveCompare(teamMemberDisplayName(for: $1)) == .orderedAscending }
+    }
+
+    private var entriesReadyForApproval: [TimeEntry] {
+        teamReviewEntries.filter { !$0.isOpen && $0.reviewStatus == .submitted }
+    }
+
+    private var teamReviewAttentionCount: Int {
+        teamReviewEntries.filter { $0.isOpen || $0.needsTeamReview }.count
     }
 
     private func serviceCall(for id: UUID?) -> ServiceCall? {
@@ -64,145 +141,709 @@ struct TimeClockView: View {
     var body: some View {
         NavigationStack {
             List {
-                if isOwnerAccount {
-                    Section("Owner Account") {
-                        Text("Owner account signed in.")
-                            .font(.headline)
-                        Text("Clock in/out is not required for Eric Gunn.")
+                if !hasAuthenticatedUser {
+                    Section("Sign In Required") {
+                        Text("Sign in with an approved GunnAire business account before recording time.")
                             .foregroundColor(.secondary)
                     }
                 } else {
-                    Section("Current Status") {
-                        if let openEntry {
-                            Text("Clocked in since \(openEntry.clockIn.formatted(date: .abbreviated, time: .shortened))")
-                            if let serviceCall = openEntry.serviceCall {
-                                Text("Job: \(serviceCall.customer.name)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            if !trackableServiceCalls.isEmpty {
-                                Picker("Current job", selection: Binding(
-                                    get: { openEntry.serviceCall?.id },
-                                    set: { openEntry.serviceCall = serviceCall(for: $0) }
-                                )) {
-                                    Text("No job selected").tag(UUID?.none)
-                                    ForEach(trackableServiceCalls) { call in
-                                        Text(jobLabel(for: call)).tag(UUID?.some(call.id))
-                                    }
-                                }
-                                Text("Optional. Link time to the job currently being worked so labor and QBO time activity retain the customer context.")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            Button("Clock Out") {
-                                clockOut(openEntry)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.brandGold)
-                            .foregroundStyle(Color.primaryBlack)
-                            if let syncMessage {
-                                Text(syncMessage)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        } else {
-                            Text("You are clocked out.")
-                                .foregroundColor(.secondary)
-                            if !trackableServiceCalls.isEmpty {
-                                Picker("Job for this shift", selection: $selectedServiceCallID) {
-                                    Text("General time / no job").tag(UUID?.none)
-                                    ForEach(trackableServiceCalls) { call in
-                                        Text(jobLabel(for: call)).tag(UUID?.some(call.id))
-                                    }
+                    if availableWorkspaces.count > 1 {
+                        Section("Time Workspace") {
+                            Picker("Time Workspace", selection: $selectedWorkspace) {
+                                ForEach(availableWorkspaces) { workspace in
+                                    Text(workspace.displayName).tag(workspace)
                                 }
                             }
-                            Button("Clock In") {
-                                modelContext.insert(TimeEntry(userEmail: signedInEmail, serviceCall: selectedServiceCall))
-                                selectedServiceCallID = nil
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.brandGold)
-                            .foregroundStyle(Color.primaryBlack)
-                            Text("Job link is optional. Use general time for non-job work.")
+                            .pickerStyle(.segmented)
+                            .accessibilityIdentifier("TimeClockWorkspacePicker")
+                            Text(selectedWorkspace.guidance)
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            if Config.QuickBooksTime.enabled {
-                                Text(qboTimeSyncConfigurationMessage)
-                                    .font(.caption)
-                                    .foregroundColor(currentTechnicianTimeMapping == nil ? .orange : .secondary)
-                            }
                         }
                     }
-                }
 
-                if !isOwnerAccount {
-                    Section("Recent Time Entries") {
-                        if userEntries.isEmpty {
-                            Text("No time entries yet.")
-                                .foregroundColor(.secondary)
-                        } else {
-                            ForEach(userEntries.prefix(20)) { entry in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(entry.clockIn.formatted(date: .abbreviated, time: .shortened))
-                                        .font(.headline)
-                                    Text(entry.clockOut.map { "Out: \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "Open shift")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    if let quickBooksID = entry.quickBooksTimeActivityID {
-                                        Text("QBO TimeActivity \(quickBooksID)")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    } else if let syncError = entry.quickBooksTimeActivitySyncError {
-                                        Text("QBO sync issue: \(syncError)")
-                                            .font(.caption)
-                                            .foregroundColor(.orange)
-                                    }
-                                    if Config.QuickBooksTime.enabled,
-                                       !entry.isOpen,
-                                       entry.quickBooksTimeActivityID == nil {
-                                        Button(syncingEntryIDs.contains(entry.id) ? "Checking QuickBooks..." : "Retry QBO Sync") {
-                                            syncCompletedEntryToQuickBooks(entry)
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .disabled(syncingEntryIDs.contains(entry.id))
-                                        .accessibilityIdentifier("RetryQBOTimeSync-\(entry.id.uuidString)")
-                                    }
-                                    if let serviceCall = entry.serviceCall {
-                                        Text("Job: \(serviceCall.customer.name)")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                            }
-                        }
+                    switch selectedWorkspace {
+                    case .myTime:
+                        personalTimeSections
+                    case .myPerformance:
+                        personalPerformanceSections
+                    case .teamReview:
+                        teamReviewSections
                     }
                 }
             }
             .navigationTitle("Time Clock")
+            .onAppear(perform: normalizeSelectedWorkspace)
+            .onChange(of: activeRole) { _, _ in normalizeSelectedWorkspace() }
+            .sheet(item: $entryPendingCorrection) { entry in
+                TimeEntryCorrectionSheet(
+                    entry: entry,
+                    serviceCalls: editableServiceCalls(for: entry)
+                ) { draft in
+                    applyCorrection(draft, to: entry)
+                }
+            }
+            .sheet(item: $entryPendingCorrectionRequest) { entry in
+                TimeEntryCorrectionRequestSheet(entry: entry) { reason in
+                    requestCorrection(for: entry, reason: reason)
+                }
+            }
         }
     }
 
-    private var qboTimeSyncConfigurationMessage: String {
-        guard Config.QuickBooksTime.enabled else { return "QBO time sync is off." }
-        guard let currentTechnicianTimeMapping else {
-            return "QBO time sync needs this technician's Employee or Vendor ID in Sync & Integrations."
+    @ViewBuilder
+    private var personalPerformanceSections: some View {
+        if ownPerformanceTechnicianID == nil {
+            Section("Performance Unavailable") {
+                Text("Your business account does not resolve to one unique technician profile. Ask an administrator to correct the technician email mapping.")
+                    .foregroundColor(.secondary)
+            }
+        } else {
+            Section("Scorecard Period") {
+                Picker("Scorecard Period", selection: $performancePeriod) {
+                    ForEach(BusinessReportPeriod.allCases) { period in
+                        Text(period.displayName).tag(period)
+                    }
+                }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("MyPerformancePeriodPicker")
+
+                Text("This coaching view uses only your own lead-job sales and quality results. Crew work still appears in assigned completions and time, but revenue is never counted twice.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section("My Scorecard") {
+                if let row = ownPerformanceRow {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 10)], spacing: 10) {
+                        personalPerformanceMetric("Assigned Completed", value: "\(row.completedJobs)", detail: "lead or crew")
+                        personalPerformanceMetric("Lead Invoiced", value: row.leadInvoicedRevenue.formatted(.currency(code: "USD")), detail: "\(row.leadInvoiceCount) invoice\(row.leadInvoiceCount == 1 ? "" : "s")")
+                        personalPerformanceMetric("Average Invoice", value: row.leadInvoiceCount == 0 ? "—" : row.leadAverageInvoice.formatted(.currency(code: "USD")), detail: "lead-linked jobs")
+                        personalPerformanceMetric("Estimate Close", value: row.leadEstimateConversionRate?.formatted(.percent.precision(.fractionLength(1))) ?? "—", detail: "\(row.leadAcceptedOpportunityCount) of \(row.leadEstimateOpportunityCount)")
+                        personalPerformanceMetric("Corrective Rate", value: row.leadCorrectiveVisitRate?.formatted(.percent.precision(.fractionLength(1))) ?? "—", detail: "\(row.leadCorrectiveVisitCount) callback or warranty")
+                        personalPerformanceMetric("Recorded Hours", value: String(format: "%.1f", row.recordedHours), detail: "completed entries")
+                        personalPerformanceMetric("Job Time Mix", value: row.jobTimeShare?.formatted(.percent.precision(.fractionLength(1))) ?? "—", detail: "\(formatHours(row.jobHours)) job of \(formatHours(row.recordedHours))")
+                    }
+                    .accessibilityIdentifier("MyTechnicianScorecard")
+
+                    if row.recordedHours > 0 {
+                        Label(
+                            "\(formatHours(row.travelHours)) travel • \(formatHours(row.otherPaidHours)) other paid",
+                            systemImage: "clock.arrow.2.circlepath"
+                        )
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    }
+
+                    Text("Job Time Mix is completed customer Job Labor divided by all payable completed time; unpaid breaks are excluded. Scorecards do not calculate sold-hour efficiency, payroll, commission, or final accounting revenue.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ContentUnavailableView(
+                        "No activity in this period",
+                        systemImage: "chart.bar.xaxis",
+                        description: Text("Completed assigned jobs, linked estimates or invoices, and completed time will appear here.")
+                    )
+                }
+            }
         }
-        return "QBO sync uses \(currentTechnicianTimeMapping.kind.displayName) \(currentTechnicianTimeMapping.referenceID) for this technician after clock-out."
+    }
+
+    private func personalPerformanceMetric(_ title: String, value: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(value)
+                .font(.headline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Text(title)
+                .font(.caption.weight(.semibold))
+            Text(detail)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
+        .padding(10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func formatHours(_ value: Double) -> String {
+        String(format: "%.1fh", value)
+    }
+
+    @ViewBuilder
+    private var personalTimeSections: some View {
+        if isOwnerAccount {
+            Section("Owner Account") {
+                Text("Owner account signed in.")
+                    .font(.headline)
+                Text("Clock in/out is not required for Eric Gunn. Use Team Review to approve staff time.")
+                    .foregroundColor(.secondary)
+            }
+        } else if activeRole == .accounting {
+            Section("Team Review") {
+                Text("Accounting accounts review submitted staff time and do not create personal clock entries.")
+                    .foregroundColor(.secondary)
+            }
+        } else {
+            Section("Current Status") {
+                currentStatusContent
+            }
+
+            Section("Recent Time Entries") {
+                if userEntries.isEmpty {
+                    Text("No time entries yet.")
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(userEntries.prefix(20)) { entry in
+                        personalEntryRow(entry)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var currentStatusContent: some View {
+        if let openEntry {
+            Text("Clocked in since \(openEntry.clockIn.formatted(date: .abbreviated, time: .shortened))")
+            Picker("Activity", selection: Binding(
+                get: { openEntry.activity },
+                set: { updateActivity($0, for: openEntry) }
+            )) {
+                ForEach(TimeEntryActivity.allCases) { activity in
+                    Label(activity.displayName, systemImage: activity.systemImage).tag(activity)
+                }
+            }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("ActiveTimeActivityPicker")
+
+            if openEntry.activity.requiresServiceCall {
+                Picker("Current job", selection: Binding(
+                    get: { openEntry.serviceCall?.id },
+                    set: { updateServiceCall(serviceCall(for: $0), for: openEntry) }
+                )) {
+                    Text("Choose a job").tag(UUID?.none)
+                    ForEach(selectableServiceCalls(for: openEntry)) { call in
+                        Text(jobLabel(for: call)).tag(UUID?.some(call.id))
+                    }
+                }
+                .accessibilityIdentifier("ActiveTimeJobPicker")
+                Text(openEntry.serviceCall == nil
+                    ? "Choose the active service job before clocking out."
+                    : "Job labor stays linked to the customer, visit, job costing, and approved QBO TimeActivity.")
+                    .font(.caption)
+                    .foregroundColor(openEntry.serviceCall == nil ? .orange : .secondary)
+            } else if openEntry.activity == .unpaidBreak {
+                Text("Unpaid break time remains in the review audit and is excluded from payable-hour and QBO totals.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Button("Clock Out & Submit") {
+                clockOut(openEntry)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.brandGold)
+            .foregroundStyle(Color.primaryBlack)
+            .disabled(openEntry.activity.requiresServiceCall && openEntry.serviceCall == nil)
+        } else {
+            Text("You are clocked out.")
+                .foregroundColor(.secondary)
+            Picker("Activity", selection: $selectedActivity) {
+                ForEach(TimeEntryActivity.allCases) { activity in
+                    Label(activity.displayName, systemImage: activity.systemImage).tag(activity)
+                }
+            }
+            .pickerStyle(.menu)
+            .accessibilityIdentifier("TimeActivityPicker")
+            .onChange(of: selectedActivity) { _, activity in
+                if !activity.requiresServiceCall {
+                    selectedServiceCallID = nil
+                }
+            }
+
+            if selectedActivity.requiresServiceCall {
+                Picker("Job for this shift", selection: $selectedServiceCallID) {
+                    Text("Choose a job").tag(UUID?.none)
+                    ForEach(trackableServiceCalls) { call in
+                        Text(jobLabel(for: call)).tag(UUID?.some(call.id))
+                    }
+                }
+                .accessibilityIdentifier("TimeJobPicker")
+                if trackableServiceCalls.isEmpty {
+                    Text("No assigned active jobs are available. Choose another activity or ask Dispatch to assign the visit.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+            Button("Clock In") {
+                clockIn()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.brandGold)
+            .foregroundStyle(Color.primaryBlack)
+            .disabled(selectedActivity.requiresServiceCall && selectedServiceCall == nil)
+            Text("Choose the activity once. Job labor asks for the visit; non-job time stays categorized without adding another workflow. Clock-out submits for office review.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        if let syncMessage {
+            Text(syncMessage)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func personalEntryRow(_ entry: TimeEntry) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(entry.clockIn.formatted(date: .abbreviated, time: .shortened))
+                    .font(.headline)
+                Spacer()
+                timeReviewStatusLabel(for: entry)
+            }
+            Text(entry.clockOut.map { "Out: \($0.formatted(date: .abbreviated, time: .shortened)) • \(durationLabel(entry))" } ?? "Open shift")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Label(entry.activity.displayName, systemImage: entry.activity.systemImage)
+                .font(.caption.weight(.semibold))
+            if let serviceCall = entry.serviceCall {
+                Text("Job: \(serviceCall.customer.name)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            if entry.reviewStatus == .correctionRequested, let note = entry.reviewNote {
+                Label(note, systemImage: "exclamationmark.bubble")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                Button("Correct & Resubmit") {
+                    entryPendingCorrection = entry
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("CorrectTimeEntry-\(entry.id.uuidString)")
+            } else if entry.reviewStatus == .submitted, !entry.isOpen {
+                Text("Waiting for Accounting or Admin review. QuickBooks publication is blocked until approval.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            if let quickBooksID = entry.quickBooksTimeActivityID {
+                Text("QBO TimeActivity \(quickBooksID)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if entry.reviewStatus == .approved, !entry.activity.isQuickBooksPublishable {
+                Text("Approved unpaid break • excluded from QBO paid time")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if entry.reviewStatus == .approved, Config.QuickBooksTime.enabled {
+                Text(entry.quickBooksTimeActivitySyncError.map { "QBO sync issue: \($0)" } ?? "Approved; waiting for QBO publication.")
+                    .font(.caption)
+                    .foregroundColor(entry.quickBooksTimeActivitySyncError == nil ? .secondary : .orange)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var teamReviewSections: some View {
+        if !canReviewTeamTime {
+            Section("Restricted") {
+                Text("Only Accounting and Admin accounts can review team time.")
+                    .foregroundColor(.secondary)
+            }
+        } else {
+            Section("Review Period") {
+                Picker("Review Period", selection: $reviewPeriod) {
+                    ForEach(TeamTimeReviewPeriod.allCases) { period in
+                        Text(period.displayName).tag(period)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                HStack(spacing: 12) {
+                    timeMetric("\(teamReviewEntries.count)", label: "Entries")
+                    timeMetric("\(teamReviewAttentionCount)", label: "Attention")
+                    timeMetric("\(entriesReadyForApproval.count)", label: "Ready")
+                    timeMetric(durationLabel(minutes: approvedTeamMinutes), label: "Approved")
+                }
+
+                DisclosureGroup("Activity Summary") {
+                    ForEach(TimeEntryActivity.allCases) { activity in
+                        let activityEntries = teamReviewEntries.filter { $0.activity == activity }
+                        let minutes = activityEntries.compactMap(\.durationMinutes).reduce(0, +)
+                        if !activityEntries.isEmpty {
+                            HStack {
+                                Label(activity.displayName, systemImage: activity.systemImage)
+                                Spacer()
+                                Text(minutes == 0 ? "Open" : durationLabel(minutes: minutes))
+                                    .foregroundColor(.secondary)
+                                if !activity.countsTowardPayableTime {
+                                    Text("unpaid")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundColor(.orange)
+                                }
+                            }
+                            .font(.caption)
+                        }
+                    }
+                }
+                .accessibilityIdentifier("TeamTimeActivitySummary")
+
+                if !entriesReadyForApproval.isEmpty {
+                    Button("Approve \(entriesReadyForApproval.count) Ready \(entriesReadyForApproval.count == 1 ? "Entry" : "Entries")") {
+                        approveAllReadyEntries()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.brandGold)
+                    .foregroundStyle(Color.primaryBlack)
+                    .accessibilityIdentifier("ApproveReadyTimeEntries")
+                }
+                Text("Approval locks the local time record and authorizes QBO publication. Open shifts and correction requests are never included in bulk approval.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if let reviewMessage {
+                    Text(reviewMessage)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Section("Team Time") {
+                if teamMemberEmails.isEmpty {
+                    ContentUnavailableView(
+                        "No time entries",
+                        systemImage: "clock",
+                        description: Text("No team time falls in this review period.")
+                    )
+                } else {
+                    ForEach(teamMemberEmails, id: \.self) { email in
+                        teamMemberDisclosure(email: email)
+                    }
+                }
+            }
+        }
+    }
+
+    private var approvedTeamMinutes: Int {
+        teamReviewEntries
+            .filter { $0.reviewStatus == .approved }
+            .compactMap(\.payableDurationMinutes)
+            .reduce(0, +)
+    }
+
+    private func timeMetric(_ value: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.headline)
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private func teamMemberDisclosure(email: String) -> some View {
+        let memberEntries = teamReviewEntries
+            .filter { AppAccess.normalizedEmail($0.userEmail) == email }
+            .sorted { $0.clockIn > $1.clockIn }
+        let attention = memberEntries.filter { $0.isOpen || $0.needsTeamReview }.count
+        let minutes = memberEntries.compactMap(\.payableDurationMinutes).reduce(0, +)
+        let unpaidMinutes = memberEntries
+            .filter { !$0.activity.countsTowardPayableTime }
+            .compactMap(\.durationMinutes)
+            .reduce(0, +)
+
+        return DisclosureGroup {
+            ForEach(memberEntries) { entry in
+                teamReviewEntryRow(entry)
+                    .padding(.vertical, 6)
+            }
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(teamMemberDisplayName(for: email))
+                        .font(.headline)
+                    Text("\(memberEntries.count) entries • \(minutes / 60)h \(minutes % 60)m payable\(unpaidMinutes > 0 ? " • \(unpaidMinutes)m unpaid" : "")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                if attention > 0 {
+                    Text("\(attention) review")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.orange)
+                } else {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .accessibilityLabel("No review issues")
+                }
+            }
+            .accessibilityIdentifier("TeamTimeMember-\(email)")
+        }
+    }
+
+    private func teamReviewEntryRow(_ entry: TimeEntry) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.clockIn.formatted(date: .abbreviated, time: .shortened))
+                        .font(.subheadline.weight(.semibold))
+                    Text(entry.clockOut.map { "\($0.formatted(date: .omitted, time: .shortened)) • \(durationLabel(entry))" } ?? "Open shift — clock-out required")
+                        .font(.caption)
+                        .foregroundColor(entry.isOpen ? .orange : .secondary)
+                }
+                Spacer()
+                timeReviewStatusLabel(for: entry)
+            }
+            if let serviceCall = entry.serviceCall {
+                Text("\(serviceCall.customer.name) • \(serviceCall.type.displayName)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("General / non-job time")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Label(entry.activity.displayName, systemImage: entry.activity.systemImage)
+                .font(.caption.weight(.semibold))
+            if !entry.activity.countsTowardPayableTime {
+                Text("Excluded from payable-hour and QBO totals")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            if let note = entry.reviewNote, entry.reviewStatus == .correctionRequested {
+                Text("Correction: \(note)")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+            if let quickBooksID = entry.quickBooksTimeActivityID {
+                Text("QBO TimeActivity \(quickBooksID)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if let error = entry.quickBooksTimeActivitySyncError {
+                Text("QBO: \(error)")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+
+            if !entry.isOpen && entry.quickBooksTimeActivityID == nil {
+                HStack {
+                    if entry.reviewStatus == .submitted {
+                        Button("Approve") { approveEntry(entry) }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .accessibilityIdentifier("ApproveTimeEntry-\(entry.id.uuidString)")
+                        Button("Request Correction") { entryPendingCorrectionRequest = entry }
+                            .buttonStyle(.bordered)
+                        Button("Edit") { entryPendingCorrection = entry }
+                            .buttonStyle(.bordered)
+                    } else if entry.reviewStatus == .correctionRequested {
+                        Button("Correct Entry") { entryPendingCorrection = entry }
+                            .buttonStyle(.bordered)
+                    } else if Config.QuickBooksTime.enabled, entry.activity.isQuickBooksPublishable {
+                        Button(syncingEntryIDs.contains(entry.id) ? "Checking QuickBooks..." : "Retry QBO Sync") {
+                            syncCompletedEntryToQuickBooks(entry)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(syncingEntryIDs.contains(entry.id))
+                        .accessibilityIdentifier("RetryQBOTimeSync-\(entry.id.uuidString)")
+                    }
+                }
+            }
+        }
+    }
+
+    private func timeReviewStatusLabel(for entry: TimeEntry) -> some View {
+        let label = entry.isOpen ? "Open" : entry.reviewStatus.displayName
+        let image = entry.isOpen ? "clock.badge.exclamationmark" : entry.reviewStatus.systemImage
+        let color: Color = entry.isOpen || entry.reviewStatus == .correctionRequested
+            ? .orange
+            : (entry.reviewStatus == .approved ? .green : Color.brandGold)
+        return Label(label, systemImage: image)
+            .font(.caption.weight(.semibold))
+            .foregroundColor(color)
+    }
+
+    private func normalizeSelectedWorkspace() {
+        guard availableWorkspaces.contains(selectedWorkspace) else {
+            selectedWorkspace = availableWorkspaces.first ?? .myTime
+            return
+        }
+        if !canRecordOwnTime, canReviewTeamTime {
+            selectedWorkspace = .teamReview
+        }
+    }
+
+    private func teamMemberDisplayName(for email: String) -> String {
+        if let technician = technicians.first(where: {
+            AppAccess.normalizedEmail($0.contactInfo) == AppAccess.normalizedEmail(email)
+        }) {
+            return technician.name
+        }
+        return AppAccess.inferredDisplayName(fromEmail: email)
+    }
+
+    private func durationLabel(_ entry: TimeEntry) -> String {
+        guard let minutes = entry.durationMinutes else { return "Open" }
+        return durationLabel(minutes: minutes)
+    }
+
+    private func durationLabel(minutes: Int) -> String {
+        "\(minutes / 60)h \(minutes % 60)m"
+    }
+
+    private func editableServiceCalls(for entry: TimeEntry) -> [ServiceCall] {
+        let ownerEmail = AppAccess.normalizedEmail(entry.userEmail)
+        let ownerTechnicianIDs = Set(technicians.compactMap { technician in
+            AppAccess.normalizedEmail(technician.contactInfo) == ownerEmail ? technician.id : nil
+        })
+        return serviceCalls.filter { call in
+            if call.id == entry.serviceCall?.id { return true }
+            let isLead = AppAccess.normalizedEmail(call.assignedTechnician?.contactInfo) == ownerEmail
+            let isCrew = !ownerTechnicianIDs.isDisjoint(with: call.assignedCrewTechnicianIDs)
+            return isLead || isCrew
+        }
+        .sorted { $0.scheduledDate > $1.scheduledDate }
+    }
+
+    private func applyCorrection(_ draft: TimeEntryCorrectionDraft, to entry: TimeEntry) -> String? {
+        do {
+            let selectedCall = draft.activity.requiresServiceCall
+                ? draft.serviceCallID.flatMap { id in
+                    editableServiceCalls(for: entry).first { $0.id == id }
+                }
+                : nil
+            try TimeEntryReviewPolicy.applyCorrection(
+                draft,
+                to: entry,
+                serviceCall: selectedCall,
+                allEntries: entries,
+                actorEmail: signedInEmail,
+                users: users
+            )
+            try modelContext.save()
+            reviewMessage = "Corrected time was resubmitted for review."
+            syncMessage = reviewMessage
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private func requestCorrection(for entry: TimeEntry, reason: String) -> String? {
+        do {
+            try TimeEntryReviewPolicy.requestCorrection(
+                for: entry,
+                reason: reason,
+                actorEmail: signedInEmail,
+                users: users
+            )
+            try modelContext.save()
+            reviewMessage = "Correction requested from \(teamMemberDisplayName(for: entry.userEmail))."
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private func approveEntry(_ entry: TimeEntry) {
+        do {
+            try TimeEntryReviewPolicy.approve(entry, actorEmail: signedInEmail, users: users)
+            try modelContext.save()
+            reviewMessage = "Approved \(durationLabel(entry)) for \(teamMemberDisplayName(for: entry.userEmail))."
+            syncCompletedEntryToQuickBooks(entry)
+        } catch {
+            reviewMessage = error.localizedDescription
+        }
+    }
+
+    private func approveAllReadyEntries() {
+        var approved: [TimeEntry] = []
+        for entry in entriesReadyForApproval {
+            do {
+                try TimeEntryReviewPolicy.approve(entry, actorEmail: signedInEmail, users: users)
+                approved.append(entry)
+            } catch {
+                reviewMessage = error.localizedDescription
+            }
+        }
+        guard !approved.isEmpty else { return }
+        do {
+            try modelContext.save()
+            reviewMessage = "Approved \(approved.count) \(approved.count == 1 ? "entry" : "entries")."
+            for entry in approved {
+                syncCompletedEntryToQuickBooks(entry)
+            }
+        } catch {
+            reviewMessage = "Could not save time approvals: \(error.localizedDescription)"
+        }
+    }
+
+    private func clockIn() {
+        guard hasAuthenticatedUser else {
+            syncMessage = "Sign in with an approved GunnAire business account before recording time."
+            return
+        }
+        guard !selectedActivity.requiresServiceCall || selectedServiceCall != nil else {
+            syncMessage = "Choose the active service job before recording Job Labor."
+            return
+        }
+        let entry = TimeEntry(
+            userEmail: signedInEmail,
+            serviceCall: selectedActivity.requiresServiceCall ? selectedServiceCall : nil,
+            activity: selectedActivity
+        )
+        modelContext.insert(entry)
+        do {
+            try modelContext.save()
+            syncMessage = "Recording \(selectedActivity.displayName.lowercased()) time on this device."
+            selectedActivity = .general
+            selectedServiceCallID = nil
+        } catch {
+            modelContext.delete(entry)
+            syncMessage = "Could not start the time entry: \(error.localizedDescription)"
+        }
     }
 
     private func clockOut(_ entry: TimeEntry) {
-        entry.clockOut = Date()
-        entry.quickBooksTimeActivitySyncError = nil
-        syncMessage = nil
-        try? modelContext.save()
-        syncCompletedEntryToQuickBooks(entry)
+        let now = Date()
+        let previousClockOut = entry.clockOut
+        let previousReviewStatusRawValue = entry.reviewStatusRawValue
+        let previousReviewedByEmail = entry.reviewedByEmail
+        let previousReviewedAt = entry.reviewedAt
+        let previousReviewNote = entry.reviewNote
+        let previousQuickBooksSyncError = entry.quickBooksTimeActivitySyncError
+        let previousReviewAuditJSON = entry.reviewAuditJSON
+        entry.clockOut = now
+        do {
+            try TimeEntryReviewPolicy.submitAfterClockOut(entry, actorEmail: signedInEmail, at: now)
+            try modelContext.save()
+            syncMessage = "Time stayed local and was submitted for office review. QuickBooks publication begins only after approval."
+        } catch {
+            entry.clockOut = previousClockOut
+            entry.reviewStatusRawValue = previousReviewStatusRawValue
+            entry.reviewedByEmail = previousReviewedByEmail
+            entry.reviewedAt = previousReviewedAt
+            entry.reviewNote = previousReviewNote
+            entry.quickBooksTimeActivitySyncError = previousQuickBooksSyncError
+            entry.reviewAuditJSON = previousReviewAuditJSON
+            syncMessage = error.localizedDescription
+        }
     }
 
     private func syncCompletedEntryToQuickBooks(_ entry: TimeEntry) {
         guard Config.QuickBooksTime.enabled else { return }
         guard entry.quickBooksTimeActivityID == nil else { return }
-        guard !entry.isOpen else {
-            entry.quickBooksTimeActivitySyncError = "Clock out before syncing time."
+        guard entry.isApprovedForQuickBooksPublication else {
+            reviewMessage = "Approve this completed time entry before QuickBooks publication."
+            return
+        }
+        guard entry.activity.isQuickBooksPublishable else {
+            entry.quickBooksTimeActivitySyncError = nil
+            reviewMessage = "Approved unpaid break stayed in the time audit and was excluded from QBO paid time."
+            try? modelContext.save()
             return
         }
         guard let mapping = QuickBooksTimeActivitySync.mapping(
@@ -210,26 +851,26 @@ struct TimeClockView: View {
             technicians: technicians
         ) else {
             entry.quickBooksTimeActivitySyncError = "No technician-specific QuickBooks Employee or Vendor ID is configured."
-            syncMessage = qboTimeSyncConfigurationMessage
+            reviewMessage = "Approved time stayed local because this technician needs one QBO Employee or Vendor mapping in Sync & Integrations."
             try? modelContext.save()
             return
         }
         guard QuickBooksDataAPI.shared.isAuthenticated else {
             entry.quickBooksTimeActivitySyncError = "QuickBooks is not connected."
-            syncMessage = "QuickBooks is not connected; time stayed local."
+            reviewMessage = "Time is approved, but QuickBooks is not connected. It stayed in the recovery queue."
             try? modelContext.save()
             return
         }
         guard let payload = QuickBooksTimeActivitySync.makePayload(for: entry, mapping: mapping) else {
             entry.quickBooksTimeActivitySyncError = "Could not build a valid TimeActivity duration."
-            syncMessage = entry.quickBooksTimeActivitySyncError
+            reviewMessage = entry.quickBooksTimeActivitySyncError
             try? modelContext.save()
             return
         }
 
         syncingEntryIDs.insert(entry.id)
         entry.quickBooksTimeActivitySyncError = nil
-        syncMessage = "Checking QuickBooks before publishing completed time..."
+        reviewMessage = "Checking QuickBooks for the stable time marker before publication..."
         try? modelContext.save()
 
         QuickBooksDataAPI.shared.fetchTimeActivities { result in
@@ -238,7 +879,7 @@ struct TimeClockView: View {
                 case .failure(let error):
                     syncingEntryIDs.remove(entry.id)
                     entry.quickBooksTimeActivitySyncError = "Could not reconcile existing QBO time: \(error.localizedDescription)"
-                    syncMessage = "QuickBooks reconciliation failed; time stayed local and was not duplicated."
+                    reviewMessage = "QuickBooks reconciliation failed; approved time stayed local and was not duplicated."
                     try? modelContext.save()
                 case .success(let activities):
                     if let existing = QuickBooksTimeActivitySync.matchingActivity(
@@ -258,7 +899,7 @@ struct TimeClockView: View {
         _ payload: QuickBooksTimeActivityCreate,
         for entry: TimeEntry
     ) {
-        syncMessage = "Publishing completed time to QuickBooks..."
+        reviewMessage = "Publishing approved time to QuickBooks..."
         QuickBooksDataAPI.shared.createTimeActivity(payload) { result in
             DispatchQueue.main.async {
                 switch result {
@@ -267,7 +908,7 @@ struct TimeClockView: View {
                 case .failure(let error):
                     syncingEntryIDs.remove(entry.id)
                     entry.quickBooksTimeActivitySyncError = error.localizedDescription
-                    syncMessage = "QBO time sync failed; time stayed local and can be retried."
+                    reviewMessage = "QBO time sync failed; approved time stayed local and can be retried."
                     try? modelContext.save()
                 }
             }
@@ -284,9 +925,10 @@ struct TimeClockView: View {
         entry.quickBooksTimeActivitySyncToken = activity.SyncToken
         entry.quickBooksTimeActivitySyncedAt = Date()
         entry.quickBooksTimeActivitySyncError = nil
-        syncMessage = reconciled
+        reviewMessage = reconciled
             ? "Recovered existing QBO TimeActivity \(activity.Id); no duplicate was created."
             : "Synced to QBO TimeActivity \(activity.Id)."
+        syncMessage = reviewMessage
         try? modelContext.save()
     }
 
@@ -294,6 +936,248 @@ struct TimeClockView: View {
         "\(call.customer.name) • \(call.type.displayName) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))"
     }
 
+    private func selectableServiceCalls(for entry: TimeEntry) -> [ServiceCall] {
+        guard let current = entry.serviceCall,
+              !trackableServiceCalls.contains(where: { $0.id == current.id }) else {
+            return trackableServiceCalls
+        }
+        return [current] + trackableServiceCalls
+    }
+
+    private func updateActivity(_ activity: TimeEntryActivity, for entry: TimeEntry) {
+        entry.activity = activity
+        if !activity.requiresServiceCall {
+            entry.serviceCall = nil
+        }
+        saveOpenTimeContext()
+    }
+
+    private func updateServiceCall(_ serviceCall: ServiceCall?, for entry: TimeEntry) {
+        entry.serviceCall = serviceCall
+        saveOpenTimeContext()
+    }
+
+    private func saveOpenTimeContext() {
+        do {
+            try modelContext.save()
+            syncMessage = "Current time context saved on this device."
+        } catch {
+            syncMessage = "Could not save the time context: \(error.localizedDescription)"
+        }
+    }
+
+}
+
+private enum TimeClockWorkspace: String, CaseIterable, Identifiable {
+    case myTime
+    case myPerformance
+    case teamReview
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .myTime: "My Time"
+        case .myPerformance: "My Performance"
+        case .teamReview: "Team Review"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .myTime:
+            "Clock in, link work to a job, and resolve any correction requested by the office."
+        case .myPerformance:
+            "Review your own lead-job sales, quality, assigned work, and recorded time without exposing another technician's results."
+        case .teamReview:
+            "Review submitted time, return errors for correction, approve valid hours, and recover approved QBO publication."
+        }
+    }
+}
+
+private enum TeamTimeReviewPeriod: String, CaseIterable, Identifiable {
+    case currentWeek
+    case previousWeek
+    case trailingFourteenDays
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .currentWeek: "This Week"
+        case .previousWeek: "Last Week"
+        case .trailingFourteenDays: "14 Days"
+        }
+    }
+
+    func dateInterval(now: Date, calendar: Calendar = .current) -> DateInterval {
+        let currentWeek = calendar.dateInterval(of: .weekOfYear, for: now)
+            ?? DateInterval(start: calendar.startOfDay(for: now), duration: 7 * 24 * 60 * 60)
+        switch self {
+        case .currentWeek:
+            return currentWeek
+        case .previousWeek:
+            let start = calendar.date(byAdding: .weekOfYear, value: -1, to: currentWeek.start)
+                ?? currentWeek.start.addingTimeInterval(-7 * 24 * 60 * 60)
+            return DateInterval(start: start, end: currentWeek.start)
+        case .trailingFourteenDays:
+            let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now
+            let start = calendar.date(byAdding: .day, value: -14, to: end) ?? end.addingTimeInterval(-14 * 24 * 60 * 60)
+            return DateInterval(start: start, end: end)
+        }
+    }
+}
+
+private struct TimeEntryCorrectionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let entry: TimeEntry
+    let serviceCalls: [ServiceCall]
+    let onSave: (TimeEntryCorrectionDraft) -> String?
+
+    @State private var draft: TimeEntryCorrectionDraft
+    @State private var errorMessage: String?
+
+    init(
+        entry: TimeEntry,
+        serviceCalls: [ServiceCall],
+        onSave: @escaping (TimeEntryCorrectionDraft) -> String?
+    ) {
+        self.entry = entry
+        self.serviceCalls = serviceCalls
+        self.onSave = onSave
+        _draft = State(initialValue: TimeEntryCorrectionDraft(entry: entry))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Time") {
+                    DatePicker("Clock in", selection: $draft.clockIn)
+                    DatePicker("Clock out", selection: $draft.clockOut)
+                    Text("Corrections must not overlap another entry and cannot exceed 24 hours.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Section("Work Context") {
+                    Picker("Activity", selection: $draft.activity) {
+                        ForEach(TimeEntryActivity.allCases) { activity in
+                            Label(activity.displayName, systemImage: activity.systemImage).tag(activity)
+                        }
+                    }
+                    .accessibilityIdentifier("CorrectedTimeActivityPicker")
+
+                    if draft.activity.requiresServiceCall {
+                        Picker("Job", selection: $draft.serviceCallID) {
+                            Text("Choose a job").tag(UUID?.none)
+                            ForEach(serviceCalls) { call in
+                                Text("\(call.customer.name) • \(call.type.displayName) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
+                                    .tag(UUID?.some(call.id))
+                            }
+                        }
+                        if draft.serviceCallID == nil {
+                            Text("Job Labor requires a service job before resubmission.")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                    } else if draft.activity == .unpaidBreak {
+                        Text("Unpaid break time remains auditable and is excluded from payable-hour and QBO totals.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    TextField("Work notes", text: $draft.notes, axis: .vertical)
+                        .lineLimit(2...5)
+                }
+
+                Section("Approval") {
+                    Text("Saving resubmits this entry for office approval. Approved or QBO-published time cannot be changed here.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                }
+            }
+            .navigationTitle("Correct Time Entry")
+            .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: draft.activity) { _, activity in
+                if !activity.requiresServiceCall {
+                    draft.serviceCallID = nil
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save & Resubmit") {
+                        if let error = onSave(draft) {
+                            errorMessage = error
+                        } else {
+                            dismiss()
+                        }
+                    }
+                    .accessibilityIdentifier("SaveCorrectedTimeEntry")
+                }
+            }
+        }
+    }
+}
+
+private struct TimeEntryCorrectionRequestSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let entry: TimeEntry
+    let onSubmit: (String) -> String?
+
+    @State private var reason = ""
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Time Entry") {
+                    Text(entry.userEmail)
+                        .font(.headline)
+                    Text("\(entry.clockIn.formatted(date: .abbreviated, time: .shortened)) – \(entry.clockOut?.formatted(date: .omitted, time: .shortened) ?? "Open")")
+                        .foregroundColor(.secondary)
+                }
+                Section("Correction Needed") {
+                    TextField("Explain the correction", text: $reason, axis: .vertical)
+                        .lineLimit(3...6)
+                    Text("The reason appears beside the employee's time entry and remains in its review audit.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                }
+            }
+            .navigationTitle("Request Correction")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Send Request") {
+                        if let error = onSubmit(reason) {
+                            errorMessage = error
+                        } else {
+                            dismiss()
+                        }
+                    }
+                    .disabled(reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("SubmitTimeCorrectionRequest")
+                }
+            }
+        }
+    }
 }
 
 enum QuickBooksTimeActivitySync {
@@ -329,7 +1213,8 @@ enum QuickBooksTimeActivitySync {
         for entry: TimeEntry,
         mapping: TechnicianQuickBooksTimeMapping
     ) -> QuickBooksTimeActivityCreate? {
-        guard let durationMinutes = entry.durationMinutes else { return nil }
+        guard entry.isEligibleForQuickBooksPublication else { return nil }
+        guard let durationMinutes = entry.payableDurationMinutes, durationMinutes > 0 else { return nil }
         let hours = durationMinutes / 60
         let minutes = durationMinutes % 60
         let nameOf = mapping.kind.quickBooksNameOf
@@ -340,6 +1225,7 @@ enum QuickBooksTimeActivitySync {
         let itemID = Config.QuickBooksTime.itemRef.trimmingCharacters(in: .whitespacesAndNewlines)
         let payrollItemID = Config.QuickBooksTime.payrollItemRef.trimmingCharacters(in: .whitespacesAndNewlines)
         let description = [
+            "Activity: \(entry.activity.displayName)",
             entry.notes?.trimmingCharacters(in: .whitespacesAndNewlines),
             entry.serviceCall.map { "GunnAire Ops time for \($0.customer.name)" },
             "Clocked \(entry.clockIn.formatted(date: .abbreviated, time: .shortened)) - \(entry.clockOut?.formatted(date: .abbreviated, time: .shortened) ?? "")",

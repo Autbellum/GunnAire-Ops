@@ -24,9 +24,6 @@ This app reads its API credentials from Xcode build settings, not from hardcoded
 - `QB_REDIRECT_URI`
 - `QB_CALLBACK_SCHEME`
 - `QB_ENVIRONMENT`
-- `QB_DEFAULT_ITEM_REF`
-- `QB_DEFAULT_INCOME_ACCOUNT_REF`
-- `QB_DEFAULT_EXPENSE_ACCOUNT_REF`
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_REDIRECT_URI`
@@ -47,10 +44,23 @@ For production, expose that backend only via HTTPS. Rotate any Intuit client sec
 
 For a multi-user deployment, set `GUNNAIRE_BACKEND_AUTH_MODE = google-id-token` in the app configuration and follow the Google ID-token verification setup in `Backend/README.md`. The legacy shared `GUNNAIRE_BACKEND_API_TOKEN` mode is for a controlled LAN/development setup only.
 
+### Realm-bound accounting mappings
+
+Do not put QuickBooks item or account IDs in the app build configuration. After the backend is deployed and the approved company is connected, an administrator must open **QuickBooks Management → Overview → Accounting Mappings** and choose:
+
+- the default sales item;
+- the income account for new pricebook items;
+- the expense or cost-of-goods account;
+- the Accounts Payable liability account used for reviewed supplier Bills and Vendor Credits;
+- the bank account used for cash and check purchases; and
+- the credit-card liability account used for credit-card purchases.
+
+The backend stores this audited configuration against the exact Intuit company realm and environment. GunnAire Ops refuses new accounting transactions when that mapping is absent or belongs to another company; build-time fallback IDs are not used.
+
 ## Product Catalog
 
 The in-app product catalog is the SwiftData `Item` model used by the billing flow. Invoice-capable users can select existing catalog lines or create service/non-inventory items in Invoices & Estimates, set quantities, and retain the selected price/cost/quantity in each document snapshot.
 
-When the authorized company QBO session is connected, newly created items publish immediately as QBO service or non-inventory items. Existing matching QBO items are linked rather than duplicated. Each local item keeps a durable `pending`, `needs_attention`, or `synced` state, and the invoice builder exposes a compact **Publish Pending** retry action.
+When the authorized company QBO session is connected and its realm-bound accounting mappings are complete, newly approved items publish as QBO service or non-inventory items. Existing matching QBO items are linked rather than duplicated. Each local item keeps a durable `pending`, `needs_attention`, or `synced` state, and the invoice builder exposes a compact **Publish Pending** retry action.
 
 The app receives only a short-lived QBO access token. The backend encrypts and retains the rotating company refresh token using `GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY`; do not copy that credential or key into a technician device or shared configuration file. For separate staff Apple accounts, deploy the backend in `google-id-token` mode and use the field-collection/task APIs for company workflows.

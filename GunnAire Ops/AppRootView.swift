@@ -1,4 +1,5 @@
 import SwiftUI
+import AuthenticationServices
 import AVKit
 import AVFoundation
 import os
@@ -28,6 +29,42 @@ struct AppRootView: View {
                 showingSplash = false
             }
         }
+        .task {
+            await validatePersistedAuthenticationIfNeeded()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: ASAuthorizationAppleIDProvider.credentialRevokedNotification
+            )
+        ) { _ in
+            guard AppleAuthManager.shared.isAuthenticated else { return }
+            AppleAuthManager.shared.signOut()
+            hasAuthenticatedUser = false
+        }
+    }
+
+    @MainActor
+    private func validatePersistedAuthenticationIfNeeded() async {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-uiTestAuthenticatedAdmin") ||
+            arguments.contains("-uiTestAuthenticatedAccounting") ||
+            arguments.contains("-uiTestAuthenticatedTechnician") ||
+            arguments.contains("-uiTestAuthenticatedStandard") ||
+            arguments.contains("-appStoreScreenshotFixtures") {
+            return
+        }
+        #endif
+        guard hasAuthenticatedUser else { return }
+        if AppleAuthManager.shared.isAuthenticated {
+            if !(await AppleAuthManager.shared.validateCredentialState()) {
+                hasAuthenticatedUser = false
+            }
+            return
+        }
+        if !GoogleAuthManager.shared.isAuthenticated {
+            hasAuthenticatedUser = false
+        }
     }
 
     /// UI tests need to reach role-specific iPad workspaces without obtaining
@@ -40,6 +77,8 @@ struct AppRootView: View {
         if arguments.contains("-uiTestAuthenticatedAdmin") ||
             arguments.contains("-appStoreScreenshotFixtures") {
             email = AppAccess.primaryAdminEmail
+        } else if arguments.contains("-uiTestAuthenticatedAccounting") {
+            email = GunnAireUITestIdentity.accountingEmail
         } else if arguments.contains("-uiTestAuthenticatedTechnician") {
             email = GunnAireUITestIdentity.technicianEmail
         } else if arguments.contains("-uiTestAuthenticatedStandard") {
@@ -57,6 +96,7 @@ struct AppRootView: View {
 enum GunnAireUITestIdentity {
     static let standardEmail = "standard-ui-test@gunnaire.com"
     static let technicianEmail = "technician-ui-test@gunnaire.com"
+    static let accountingEmail = "accounting-ui-test@gunnaire.com"
 }
 #endif
 

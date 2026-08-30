@@ -12,16 +12,23 @@ struct ScheduleView: View {
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
+    @Query(sort: \FieldFormTemplate.createdAt, order: .forward) private var fieldFormTemplates: [FieldFormTemplate]
+    @Query(sort: \FieldFormResponse.completedAt, order: .reverse) private var fieldFormResponses: [FieldFormResponse]
+    @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
+    @Query(sort: \Item.name, order: .forward) private var items: [Item]
+    @Query(sort: \InventoryMovement.createdAt, order: .reverse) private var inventoryMovements: [InventoryMovement]
+    @Query(sort: \ProjectMilestone.plannedDate, order: .forward) private var projectMilestones: [ProjectMilestone]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \ServiceRequest.createdAt, order: .forward) private var serviceRequests: [ServiceRequest]
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
+    @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
     @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
-    
+
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showingAddCallSheet = false
     @State private var editingCall: ServiceCall?
@@ -36,6 +43,9 @@ struct ScheduleView: View {
     @State private var showingNewRequestSheet = false
     @State private var showingAvailabilityBlocks = false
     @State private var showingDispatchWeekBoard = false
+    @State private var showingWorkQueue = false
+    @State private var requestForQualification: ServiceRequest?
+    @State private var requestForDecline: ServiceRequest?
     @State private var requestMessage: String?
     @State private var maintenanceMessage: String?
     @State private var approvedWorkMessage: String?
@@ -57,7 +67,13 @@ struct ScheduleView: View {
     }
 
     private var snapshotCalls: [ServiceCall] {
-        Array(upcomingJobs.prefix(3))
+        guard let nextFieldRouteCall else {
+            return Array(upcomingJobs.prefix(3))
+        }
+        return Array(
+            ([nextFieldRouteCall] + upcomingJobs.filter { $0.id != nextFieldRouteCall.id })
+                .prefix(3)
+        )
     }
 
     private var searchedJobs: [ServiceCall] {
@@ -105,7 +121,7 @@ struct ScheduleView: View {
     }
 
     private var signedInTechnician: Technician? {
-        guard let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail") else {
+        guard let email = AppIdentity.currentEmail else {
             return nil
         }
         return technicians.first { technician in
@@ -121,9 +137,13 @@ struct ScheduleView: View {
     private var unassignedUpcomingCalls: [ServiceCall] {
         let now = Date()
         let sevenDaysAhead = Calendar.current.date(byAdding: .day, value: 7, to: now) ?? now
-        return serviceCalls
+        return AppAccess.visibleUnassignedServiceCalls(
+            email: AppIdentity.currentEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
             .filter { call in
-                call.assignedTechnician == nil &&
                 call.status != .cancelled &&
                 call.scheduledDate >= now &&
                 call.scheduledDate <= sevenDaysAhead
@@ -152,7 +172,7 @@ struct ScheduleView: View {
     }
 
     private var openServiceRequests: [ServiceRequest] {
-        serviceRequests.filter { $0.status == .new || $0.status == .qualified }
+        ServiceRequestPipelinePolicy.sortedOpenRequests(serviceRequests)
     }
 
     private var quickBooksAttentionPayments: [Payment] {
@@ -164,12 +184,31 @@ struct ScheduleView: View {
             .sorted { $0.date > $1.date }
     }
 
+    private var workQueueSummary: ScheduleWorkQueueSummary {
+        ScheduleWorkQueueSummary(itemCounts: [
+            followUpCalls.count,
+            maintenanceAttentionContracts.count,
+            canManageDispatch ? approvedEstimateCalls.count : 0,
+            unassignedUpcomingCalls.count,
+            isAdminUser ? readyToInvoiceCalls.count : 0,
+            isAdminUser ? needsCloseoutCalls.count : 0,
+            isAdminUser ? quickBooksAttentionPayments.count : 0
+        ])
+    }
+
     private var callsForSignedInUser: [ServiceCall] {
-        let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        let email = AppIdentity.currentEmail
         let visibleIDs = AppAccess.visibleServiceCallIDs(email: email, users: users, serviceCalls: serviceCalls, technicians: technicians)
         return serviceCalls.filter { visibleIDs.contains($0.id) }
     }
-    
+
+    private var nextFieldRouteCall: ServiceCall? {
+        guard AppAccess.activeRole(email: AppIdentity.currentEmail, users: users) == .fieldTechnician else {
+            return nil
+        }
+        return TechnicianRoutePolicy.nextNavigableStop(from: callsForSignedInUser)
+    }
+
     var activeRecurringContracts: [RecurringMaintenanceContract] {
         let now = Date()
         return recurringContracts.filter { $0.nextDate >= now }
@@ -193,20 +232,20 @@ struct ScheduleView: View {
     }
 
     private var isAdminUser: Bool {
-        let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        let email = AppIdentity.currentEmail
         return AppAccess.isAdmin(email: email, users: users)
     }
 
     private var canManageDispatch: Bool {
-        let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        let email = AppIdentity.currentEmail
         return AppAccess.canManageDispatch(email: email, users: users)
     }
 
     private var canCollectFieldPayments: Bool {
-        let email = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        let email = AppIdentity.currentEmail
         return AppAccess.canCollectFieldPayments(email: email, users: users)
     }
-    
+
     var body: some View {
         ZStack {
             WatermarkBackground()
@@ -247,43 +286,16 @@ struct ScheduleView: View {
                                 emptyDayState
                             } else {
                                 LazyVStack(spacing: 10) {
-                                    ForEach(selectedDayCalls) { call in
-                                        serviceCallCard(for: call)
-                                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                            if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
-                                                Button {
-                                                    openDocumentationInCloseout = true
-                                                    openDocumentationInTapToPay = tapToPayReady
-                                                    documentationCall = call
-                                                } label: {
-                                                    Label(tapToPayReady ? "Tap to Pay" : "Take Payment", systemImage: "creditcard")
-                                                }
-                                                .tint(.green)
-                                            }
-
-                                            if isAdminUser || canCollectFieldPayments {
-                                                Button {
-                                                    openDocumentationInCloseout = false
-                                                    openDocumentationInTapToPay = false
-                                                    documentationCall = call
-                                                } label: {
-                                                    Label(documentationActionTitle(for: call, compact: true), systemImage: "doc.text")
-                                                }
-                                                .tint(Color.brandGold)
-                                            }
+                                    if canManageDispatch {
+                                        ForEach(selectedDayCalls) { call in
+                                            selectedDayCallRow(for: call)
                                         }
-                                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                            if hasNavigableAddress(for: call) {
-                                                Button {
-                                                    openMaps(for: call)
-                                                } label: {
-                                                    Label("Navigate", systemImage: "map")
-                                                }
-                                                .tint(.blue)
-                                            }
+                                        .onDelete(perform: deleteCalls)
+                                    } else {
+                                        ForEach(selectedDayCalls) { call in
+                                            selectedDayCallRow(for: call)
                                         }
                                     }
-                                    .onDelete(perform: deleteCalls)
                                 }
                             }
                         }
@@ -317,6 +329,7 @@ struct ScheduleView: View {
                                     Label("Week Board", systemImage: "rectangle.split.3x1")
                                 }
                                 .tint(Color.brandGold)
+                                .accessibilityIdentifier("DispatchWeekBoard")
 
                                 Button {
                                     showingAvailabilityBlocks = true
@@ -324,29 +337,35 @@ struct ScheduleView: View {
                                     Label("Availability", systemImage: "person.badge.clock")
                                 }
                                 .tint(Color.brandGold)
-                            }
+                                .accessibilityIdentifier("ManageTechnicianAvailability")
 
-                            Button {
-                                syncGoogleCalendar()
-                            } label: {
-                                Label(isSyncingGoogleCalendar ? "Syncing..." : "Sync Google", systemImage: "arrow.triangle.2.circlepath")
-                                    .bold()
-                            }
-                            .disabled(isSyncingGoogleCalendar || !googleAuth.isAuthenticated)
-                            .tint(Color.brandGold)
+                                Button {
+                                    showingAddCallSheet = true
+                                } label: {
+                                    Label("Add Call", systemImage: "plus")
+                                        .bold()
+                                }
+                                .tint(Color.brandGold)
+                                .accessibilityIdentifier("AddServiceCall")
 
-                            Button {
-                                showingAddCallSheet = true
-                            } label: {
-                                Label("Add Call", systemImage: "plus")
-                                    .bold()
+                                Button {
+                                    syncGoogleCalendar()
+                                } label: {
+                                    Label(isSyncingGoogleCalendar ? "Syncing..." : "Sync Google", systemImage: "arrow.triangle.2.circlepath")
+                                        .bold()
+                                }
+                                .disabled(isSyncingGoogleCalendar || !googleAuth.isAuthenticated)
+                                .tint(Color.brandGold)
+                                .accessibilityIdentifier("SyncGoogleCalendar")
                             }
-                            .tint(Color.brandGold)
                         }
                     }
                     ToolbarItem(placement: .navigationBarLeading) {
-                        EditButton()
-                            .tint(Color.brandGold)
+                        if canManageDispatch {
+                            EditButton()
+                                .tint(Color.brandGold)
+                                .accessibilityIdentifier("EditScheduleList")
+                        }
                     }
                 }
                 .navigationDestination(for: ServiceCall.self) { call in
@@ -360,51 +379,123 @@ struct ScheduleView: View {
                 .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                     applyPendingScheduleIntentIfNeeded()
                 }
+                .onChange(of: canManageDispatch) { _, isAllowed in
+                    guard !isAllowed else { return }
+                    showingAddCallSheet = false
+                    editingCall = nil
+                    deleteConfirmationCall = nil
+                    showingNewRequestSheet = false
+                    requestForQualification = nil
+                    requestForDecline = nil
+                    showingAvailabilityBlocks = false
+                    showingDispatchWeekBoard = false
+                    selectedEstimateForScheduling = nil
+                }
                 .sheet(isPresented: $showingAddCallSheet) {
-                    AddServiceCallView(selectedDate: selectedDate) { createdCall in
-                        openDocumentationInCloseout = false
-                        openDocumentationInTapToPay = false
-                        documentationCall = createdCall
+                    if canManageDispatch {
+                        AddServiceCallView(selectedDate: selectedDate) { createdCall in
+                            openDocumentationInCloseout = false
+                            openDocumentationInTapToPay = false
+                            documentationCall = createdCall
+                        }
+                            .tint(Color.brandGold)
+                    } else {
+                        dispatchAccessRequiredView
                     }
-                        .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingNewRequestSheet) {
-                    NewServiceRequestView { request in
-                        modelContext.insert(request)
-                        try? modelContext.save()
-                        requestMessage = "Request saved. Qualify it, then schedule without changing a committed appointment."
+                    if canManageDispatch {
+                        NewServiceRequestView { request in
+                            guard canManageDispatch else {
+                                requestMessage = "Dispatcher or administrator access is required to create requests."
+                                return
+                            }
+                            modelContext.insert(request)
+                            try? modelContext.save()
+                            requestMessage = "Request saved. Qualify it, then schedule without changing a committed appointment."
+                        }
+                        .tint(Color.brandGold)
+                    } else {
+                        dispatchAccessRequiredView
                     }
-                    .tint(Color.brandGold)
+                }
+                .sheet(item: $requestForQualification) { request in
+                    if canManageDispatch {
+                        ServiceRequestQualificationSheet(request: request) { source, sourceDetail, notes, nextFollowUpAt in
+                            saveQualification(
+                                for: request,
+                                source: source,
+                                sourceDetail: sourceDetail,
+                                notes: notes,
+                                nextFollowUpAt: nextFollowUpAt
+                            )
+                        }
+                        .tint(Color.brandGold)
+                    } else {
+                        dispatchAccessRequiredView
+                    }
+                }
+                .sheet(item: $requestForDecline) { request in
+                    if canManageDispatch {
+                        ServiceRequestDeclineSheet(request: request) { reason, notes in
+                            decline(request, reason: reason, notes: notes)
+                        }
+                        .tint(Color.brandGold)
+                    } else {
+                        dispatchAccessRequiredView
+                    }
                 }
                 .sheet(isPresented: $showingAvailabilityBlocks) {
-                    TechnicianAvailabilityView()
-                        .tint(Color.brandGold)
+                    if canManageDispatch {
+                        TechnicianAvailabilityView()
+                            .tint(Color.brandGold)
+                    } else {
+                        dispatchAccessRequiredView
+                    }
                 }
                 .sheet(item: $selectedEstimateForScheduling) { estimate in
-                    ApprovedEstimateSchedulingSheet(
-                        estimate: estimate,
-                        sourceCall: sourceCall(for: estimate)
-                    ) { scheduledDate, duration, workType in
-                        createApprovedWorkOrder(
-                            for: estimate,
-                            scheduledDate: scheduledDate,
-                            duration: duration,
-                            workType: workType
-                        )
+                    if canManageDispatch {
+                        ApprovedEstimateSchedulingSheet(
+                            estimate: estimate,
+                            sourceCall: sourceCall(for: estimate)
+                        ) { scheduledDate, duration, workType in
+                            createApprovedWorkOrder(
+                                for: estimate,
+                                scheduledDate: scheduledDate,
+                                duration: duration,
+                                workType: workType
+                            )
+                        }
+                        .tint(Color.brandGold)
+                    } else {
+                        dispatchAccessRequiredView
                     }
-                    .tint(Color.brandGold)
                 }
                 .fullScreenCover(isPresented: $showingDispatchWeekBoard) {
-                    DispatchWeekBoardView(
-                        initialDate: selectedDate,
-                        calls: callsForSignedInUser,
-                        onMove: moveCallFromDispatchBoard
-                    )
-                    .tint(Color.brandGold)
+                    if canManageDispatch {
+                        DispatchWeekBoardView(
+                            initialDate: selectedDate,
+                            calls: callsForSignedInUser,
+                            onMove: { callID, targetDay, overrideReason in
+                                moveCallFromDispatchBoard(
+                                    callID,
+                                    targetDay,
+                                    overrideReason: overrideReason
+                                )
+                            }
+                        )
+                        .tint(Color.brandGold)
+                    } else {
+                        dispatchAccessRequiredView
+                    }
                 }
                 .fullScreenCover(item: $editingCall) { call in
-                    EditServiceCallView(call: call)
-                        .tint(Color.brandGold)
+                    if canManageDispatch {
+                        EditServiceCallView(call: call)
+                            .tint(Color.brandGold)
+                    } else {
+                        dispatchAccessRequiredView
+                    }
                 }
                 .fullScreenCover(item: $documentationCall) { call in
                     BillingDocumentsView(
@@ -504,20 +595,34 @@ struct ScheduleView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
+                        Label(request.leadSourceSummary, systemImage: "point.3.connected.trianglepath.dotted")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                         if let preferredDate = request.preferredDate {
                             Text("Requested: \(preferredDate.formatted(date: .abbreviated, time: .shortened))")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                        if let nextFollowUpAt = request.nextFollowUpAt {
+                            Label(
+                                "Follow-up \(nextFollowUpAt.formatted(date: .abbreviated, time: .shortened))",
+                                systemImage: request.isFollowUpOverdue() ? "exclamationmark.circle.fill" : "clock"
+                            )
+                            .font(.caption2.weight(request.isFollowUpOverdue() ? .semibold : .regular))
+                            .foregroundStyle(request.isFollowUpOverdue() ? .red : .secondary)
+                            .accessibilityIdentifier("ServiceRequestFollowUp-\(request.id.uuidString)")
+                        } else if request.status == .qualified {
+                            Label("Ready to schedule", systemImage: "checkmark.circle.fill")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.green)
+                                .accessibilityIdentifier("ServiceRequestReady-\(request.id.uuidString)")
+                        }
                         HStack {
-                            Button(request.status == .new ? "Qualify" : "Qualified") {
-                                request.status = .qualified
-                                request.qualifiedAt = request.qualifiedAt ?? Date()
-                                try? modelContext.save()
-                                requestMessage = "Request qualified. Choose Schedule when the appointment window is confirmed."
+                            Button(request.status == .new ? "Qualify" : "Review") {
+                                requestForQualification = request
                             }
                             .buttonStyle(.bordered)
-                            .disabled(request.status != .new)
+                            .accessibilityIdentifier("QualifyServiceRequest-\(request.id.uuidString)")
 
                             Button("Schedule") {
                                 schedule(request)
@@ -526,22 +631,98 @@ struct ScheduleView: View {
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
                             .disabled(!request.canSchedule)
+                            .accessibilityIdentifier("ScheduleServiceRequest-\(request.id.uuidString)")
 
                             Button("Decline", role: .destructive) {
-                                request.status = .declined
-                                try? modelContext.save()
+                                requestForDecline = request
                             }
                             .buttonStyle(.bordered)
+                            .accessibilityIdentifier("DeclineServiceRequest-\(request.id.uuidString)")
                         }
                     }
                     .padding(12)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
+                if openServiceRequests.count > 5 {
+                    Text("\(openServiceRequests.count - 5) more request\(openServiceRequests.count == 6 ? "" : "s") remain in the queue.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
 
+    private func saveQualification(
+        for request: ServiceRequest,
+        source: ServiceRequestSource,
+        sourceDetail: String?,
+        notes: String?,
+        nextFollowUpAt: Date?
+    ) -> String? {
+        guard canManageDispatch else {
+            return "Dispatcher or administrator access is required to qualify requests."
+        }
+        let previousStatusRaw = request.statusRaw
+        let previousQualificationNotes = request.qualificationNotes
+        let previousQualifiedAt = request.qualifiedAt
+        let now = Date()
+        guard request.recordQualification(
+            source: source,
+            sourceDetail: sourceDetail,
+            notes: notes,
+            nextFollowUpAt: nextFollowUpAt,
+            actorEmail: AppIdentity.currentEmail,
+            at: now
+        ) else {
+            return "Add the required source detail and choose a future follow-up time."
+        }
+        do {
+            try modelContext.save()
+            requestMessage = nextFollowUpAt == nil
+                ? "Request qualified and ready to schedule."
+                : "Request qualified. The follow-up commitment is now in the queue."
+            return nil
+        } catch {
+            request.statusRaw = previousStatusRaw
+            request.qualificationNotes = previousQualificationNotes
+            request.qualifiedAt = previousQualifiedAt
+            return "Could not save this qualification: \(error.localizedDescription)"
+        }
+    }
+
+    private func decline(
+        _ request: ServiceRequest,
+        reason: ServiceRequestLostReason,
+        notes: String?
+    ) -> String? {
+        guard canManageDispatch else {
+            return "Dispatcher or administrator access is required to close requests."
+        }
+        let previousStatusRaw = request.statusRaw
+        let previousQualificationNotes = request.qualificationNotes
+        guard request.recordDecline(
+            reason: reason,
+            notes: notes,
+            actorEmail: AppIdentity.currentEmail
+        ) else {
+            return "Choose a reason and add notes when Other is selected."
+        }
+        do {
+            try modelContext.save()
+            requestMessage = "Request closed as \(reason.displayName.lowercased()). It remains in the lead history."
+            return nil
+        } catch {
+            request.statusRaw = previousStatusRaw
+            request.qualificationNotes = previousQualificationNotes
+            return "Could not close this request: \(error.localizedDescription)"
+        }
+    }
+
     private func schedule(_ request: ServiceRequest) {
+        guard canManageDispatch else {
+            requestMessage = "Dispatcher or administrator access is required to schedule requests."
+            return
+        }
         guard request.canSchedule else {
             requestMessage = "Qualify the request before creating an appointment."
             return
@@ -560,6 +741,13 @@ struct ScheduleView: View {
         }
         let scheduledDate = request.preferredDate ?? defaultRequestScheduleDate()
         let serviceLocation = serviceLocationForScheduledRequest(request, customer: customer)
+        var intakeContext = [
+            "Request intake: \(request.summary)",
+            "Lead source: \(request.leadSourceSummary)"
+        ]
+        if let qualificationNotes = request.intakeQualificationNotes {
+            intakeContext.append("Qualification: \(qualificationNotes)")
+        }
         let call = ServiceCall(
             eventTitle: "\(request.requestedServiceType.displayName) request",
             siteAddress: serviceLocation?.address ?? request.address,
@@ -568,15 +756,15 @@ struct ScheduleView: View {
             dispatchUrgency: request.urgency,
             scheduledDate: scheduledDate,
             customer: customer,
-            notes: "Request intake: \(request.summary)"
+            notes: intakeContext.joined(separator: "\n")
         )
         modelContext.insert(call)
         request.markScheduled(customerID: customer.id, serviceCallID: call.id)
         ServiceCallActivity.record(
             for: call,
             action: "Request scheduled",
-            detail: "Created from a \(request.urgency.displayName.lowercased()) service request received \(request.createdAt.formatted(date: .abbreviated, time: .shortened)).",
-            actorEmail: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
+            detail: "Created from a \(request.leadSource.displayName.lowercased()) \(request.urgency.displayName.lowercased()) service request received \(request.createdAt.formatted(date: .abbreviated, time: .shortened)).",
+            actorEmail: AppIdentity.currentEmail,
             in: modelContext
         )
         do {
@@ -614,7 +802,7 @@ struct ScheduleView: View {
     }
 
     private func importOnlineRequests() {
-        guard GunnAireBackendService.isConfigured else { return }
+        guard canManageDispatch, GunnAireBackendService.isConfigured else { return }
         isImportingOnlineRequests = true
         Task {
             do {
@@ -679,32 +867,57 @@ struct ScheduleView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(snapshotCalls) { job in
-                    Button {
-                        selectedDate = Calendar.current.startOfDay(for: job.scheduledDate)
-                        navigationPath.append(job)
-                    } label: {
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(displayTitle(for: job))
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                                Text(displaySubtitle(for: job))
+                    HStack(spacing: 10) {
+                        Button {
+                            selectedDate = Calendar.current.startOfDay(for: job.scheduledDate)
+                            navigationPath.append(job)
+                        } label: {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(displayTitle(for: job))
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                    Text(displaySubtitle(for: job))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                            Spacer()
-                            Text(job.scheduledDate.formatted(date: .abbreviated, time: .shortened))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if job.id == nextFieldRouteCall?.id, hasNavigableAddress(for: job) {
+                            Button {
+                                openMaps(for: job)
+                            } label: {
+                                ViewThatFits(in: .horizontal) {
+                                    Label("Next Stop", systemImage: "car.fill")
+                                        .lineLimit(1)
+                                    Image(systemName: "car.fill")
+                                }
+                                .frame(minWidth: 34, minHeight: 34)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.blue)
+                            .accessibilityLabel("Navigate to next stop")
+                            .accessibilityIdentifier("NavigateNextStop")
                         }
                     }
-                    .buttonStyle(.plain)
                     if job.id != snapshotCalls.last?.id {
                         Divider()
                     }
                 }
             }
 
+            if workQueueSummary.itemCount > 0 {
+                Divider()
+
+                DisclosureGroup(isExpanded: $showingWorkQueue) {
+                    VStack(alignment: .leading, spacing: 12) {
             if !followUpCalls.isEmpty {
                 Divider()
                 Text("Follow-Up Queue")
@@ -732,7 +945,7 @@ struct ScheduleView: View {
                                     .foregroundStyle(.secondary)
                             }
 
-                            if job.followUpRequired || job.type == .estimate {
+                            if (job.followUpRequired || job.type == .estimate) && canManageDispatch {
                                 HStack(spacing: 10) {
                                     Button("Schedule Follow-Up Visit") {
                                         scheduleFollowUpVisit(for: job)
@@ -821,12 +1034,16 @@ struct ScheduleView: View {
                         .accessibilityIdentifier("MaintenanceVisitAction-\(contract.id.uuidString)")
 
                         if let maintenanceReminderEmailURL = maintenanceReminderEmailURL(for: contract) {
-                            Button("Send Reminder") {
+                            Button(maintenanceReminderActionTitle(for: contract)) {
                                 openMaintenanceReminderEmail(for: contract, fallbackURL: maintenanceReminderEmailURL)
-                                contract.active = true
                             }
                             .buttonStyle(.bordered)
                             .tint(Color.brandGold)
+                            if let deliveredAt = lastMaintenanceReminderDate(for: contract) {
+                                Text("Last sent \(deliveredAt.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -895,32 +1112,34 @@ struct ScheduleView: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        if let signedInTechnician {
-                            Button("Assign To Me") {
-                                assign(job, to: signedInTechnician)
+                        if canManageDispatch {
+                            if let signedInTechnician {
+                                Button("Assign To Me") {
+                                    assign(job, to: signedInTechnician)
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(Color.brandGold)
                             }
-                            .buttonStyle(.bordered)
-                            .tint(Color.brandGold)
-                        }
 
-                        if !assignableTechnicians.isEmpty {
-                            Menu {
-                                ForEach(assignableTechnicians) { technician in
-                                    if let nextAvailableStart = nextAvailableStart(for: technician, proposedStart: job.scheduledDate, duration: job.duration),
-                                       nextAvailableStart > job.scheduledDate {
-                                        Button("\(AppAccess.scheduleLabel(for: technician)) • move to \(nextAvailableStart.formatted(date: .omitted, time: .shortened))") {
-                                            assign(job, to: technician, reschedulingTo: nextAvailableStart)
-                                        }
-                                    } else {
-                                        Button(AppAccess.scheduleLabel(for: technician)) {
-                                            assign(job, to: technician)
+                            if !assignableTechnicians.isEmpty {
+                                Menu {
+                                    ForEach(assignableTechnicians) { technician in
+                                        if let nextAvailableStart = nextAvailableStart(for: technician, proposedStart: job.scheduledDate, duration: job.duration),
+                                           nextAvailableStart > job.scheduledDate {
+                                            Button("\(AppAccess.scheduleLabel(for: technician)) • move to \(nextAvailableStart.formatted(date: .omitted, time: .shortened))") {
+                                                assign(job, to: technician, reschedulingTo: nextAvailableStart)
+                                            }
+                                        } else {
+                                            Button(AppAccess.scheduleLabel(for: technician)) {
+                                                assign(job, to: technician)
+                                            }
                                         }
                                     }
+                                } label: {
+                                    Label("Assign Technician", systemImage: "person.crop.circle.badge.plus")
                                 }
-                            } label: {
-                                Label("Assign Technician", systemImage: "person.crop.circle.badge.plus")
+                                .tint(Color.brandGold)
                             }
-                            .tint(Color.brandGold)
                         }
                     }
                 }
@@ -1026,6 +1245,19 @@ struct ScheduleView: View {
                     }
                 }
             }
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        Label("Work Queue", systemImage: "tray.full")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.brandGold)
+                        Spacer()
+                        Text(workQueueSummary.detail)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -1099,6 +1331,44 @@ struct ScheduleView: View {
     }
 
     @ViewBuilder
+    private func selectedDayCallRow(for call: ServiceCall) -> some View {
+        serviceCallCard(for: call)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
+                    Button {
+                        openDocumentationInCloseout = true
+                        openDocumentationInTapToPay = tapToPayReady
+                        documentationCall = call
+                    } label: {
+                        Label(tapToPayReady ? "Tap to Pay on iPhone" : "Take Payment", systemImage: "creditcard")
+                    }
+                    .tint(.green)
+                }
+
+                if isAdminUser || canCollectFieldPayments {
+                    Button {
+                        openDocumentationInCloseout = false
+                        openDocumentationInTapToPay = false
+                        documentationCall = call
+                    } label: {
+                        Label(documentationActionTitle(for: call, compact: true), systemImage: "doc.text")
+                    }
+                    .tint(Color.brandGold)
+                }
+            }
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                if hasNavigableAddress(for: call) {
+                    Button {
+                        openMaps(for: call)
+                    } label: {
+                        Label("Navigate", systemImage: "map")
+                    }
+                    .tint(.blue)
+                }
+            }
+    }
+
+    @ViewBuilder
     private func serviceCallCard(for call: ServiceCall) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
@@ -1114,24 +1384,28 @@ struct ScheduleView: View {
                 .accessibilityLabel("Open job details")
                 .accessibilityIdentifier("OpenServiceCall-\(call.id.uuidString)")
 
-                Button {
-                    editingCall = call
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .frame(width: 34, height: 34)
-                }
-                .buttonStyle(.bordered)
-                .accessibilityLabel("Edit schedule")
+                if canManageDispatch {
+                    Button {
+                        editingCall = call
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                            .frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Edit schedule")
+                    .accessibilityIdentifier("EditSchedule-\(call.id.uuidString)")
 
-                Button(role: .destructive) {
-                    deleteConfirmationCall = call
-                } label: {
-                    Image(systemName: "trash")
-                        .frame(width: 34, height: 34)
+                    Button(role: .destructive) {
+                        deleteConfirmationCall = call
+                    } label: {
+                        Image(systemName: "trash")
+                            .frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .accessibilityLabel("Delete calendar event")
+                    .accessibilityIdentifier("DeleteSchedule-\(call.id.uuidString)")
                 }
-                .buttonStyle(.bordered)
-                .tint(.red)
-                .accessibilityLabel("Delete calendar event")
             }
 
             HStack(spacing: 10) {
@@ -1168,7 +1442,7 @@ struct ScheduleView: View {
                         documentationCall = call
                     }
                     .buttonStyle(.bordered)
-                } else if call.assignedTechnician == nil, let signedInTechnician {
+                } else if canManageDispatch, call.assignedTechnician == nil, let signedInTechnician {
                     Button("Assign To Me") {
                         assign(call, to: signedInTechnician)
                     }
@@ -1297,7 +1571,7 @@ struct ScheduleView: View {
         switch call.type {
         case .estimate:
             return hasDocumentation ? (compact ? "Estimate" : "Continue Estimate") : "Start Estimate"
-        case .install, .maintenance, .service, .meeting, .reminder, .siteVisit, .other:
+        case .install, .replacement, .maintenance, .repair, .service, .meeting, .reminder, .siteVisit, .other:
             if call.linkedInvoiceID != nil {
                 return compact ? "Invoice" : "Continue Invoice"
             }
@@ -1356,8 +1630,16 @@ struct ScheduleView: View {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty && !$0.localizedCaseInsensitiveContains("Calendar event:") }
     }
-    
+
     private func deleteCalls(offsets: IndexSet) {
+        guard AppAccess.canPerformScheduleMutation(
+            .deleteServiceCall,
+            email: AppIdentity.currentEmail,
+            users: users
+        ) else {
+            syncMessage = "Dispatcher or administrator access is required to delete schedule entries."
+            return
+        }
         withAnimation {
             for index in offsets.sorted(by: >) {
                 deleteCall(selectedDayCalls[index])
@@ -1366,6 +1648,14 @@ struct ScheduleView: View {
     }
 
     private func deleteCall(_ call: ServiceCall) {
+        guard AppAccess.canPerformScheduleMutation(
+            .deleteServiceCall,
+            email: AppIdentity.currentEmail,
+            users: users
+        ) else {
+            syncMessage = "Dispatcher or administrator access is required to delete schedule entries."
+            return
+        }
         let shouldTryGoogleDelete = GoogleCalendarScheduleSync.shouldAttemptManagedCalendarDeletion(for: call)
         if call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
             GoogleCalendarScheduleSync.markCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: call.googleEventID)
@@ -1428,7 +1718,9 @@ struct ScheduleView: View {
             Text("No events for this date.")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
-            Text("Choose another date on the calendar or add a new service call.")
+            Text(canManageDispatch
+                 ? "Choose another date on the calendar or add a new service call."
+                 : "Choose another date or ask Dispatch to schedule work.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -1437,14 +1729,40 @@ struct ScheduleView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
+    private var dispatchAccessRequiredView: some View {
+        NavigationStack {
+            ContentUnavailableView(
+                "Dispatch Access Required",
+                systemImage: "person.badge.shield.checkmark",
+                description: Text("Only a dispatcher or administrator can change company appointments, assignments, or capacity.")
+            )
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        showingAddCallSheet = false
+                        editingCall = nil
+                    }
+                }
+            }
+        }
+    }
+
     private func syncGoogleCalendar() {
+        guard AppAccess.canPerformScheduleMutation(
+            .syncGoogleCalendar,
+            email: AppIdentity.currentEmail,
+            users: users
+        ) else {
+            syncMessage = "Dispatcher or administrator access is required to import Google Calendar appointments."
+            return
+        }
         guard googleAuth.isAuthenticated else {
-            syncMessage = "Sign in with Google first."
+            syncMessage = "Google Calendar requires a Google sign-in. Your Apple sign-in still protects the rest of GunnAire Ops."
             return
         }
         isSyncingGoogleCalendar = true
         syncMessage = "Syncing Google Calendar..."
-        let signedInEmail = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        let signedInEmail = AppIdentity.currentEmail
         GoogleCalendarScheduleSync.sync(
             auth: googleAuth,
             modelContext: modelContext,
@@ -1472,20 +1790,19 @@ struct ScheduleView: View {
     }
 
     private func openMaps(for call: ServiceCall) {
-        let address = (call.siteAddress ?? call.customer.address)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let address, !address.isEmpty else { return }
-        var components = URLComponents(string: "http://maps.apple.com/")
-        components?.queryItems = [URLQueryItem(name: "q", value: address)]
-        if let url = components?.url {
+        if let url = AppleMapsDirections.destinationURL(
+            siteAddress: call.siteAddress,
+            customerAddress: call.customer?.address
+        ) {
             openURL(url)
         }
     }
 
     private func hasNavigableAddress(for call: ServiceCall) -> Bool {
-        let address = (call.siteAddress ?? call.customer.address)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return !(address?.isEmpty ?? true)
+        AppleMapsDirections.destinationURL(
+            siteAddress: call.siteAddress,
+            customerAddress: call.customer?.address
+        ) != nil
     }
 
     private func invoice(for call: ServiceCall) -> Invoice? {
@@ -1510,9 +1827,8 @@ struct ScheduleView: View {
     private func isCollectionOverdue(for call: ServiceCall) -> Bool {
         guard let invoice = invoice(for: call),
               let due = balanceDue(for: call),
-              due > 0,
-              let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: Date()) else { return false }
-        return invoice.createdAt < cutoff
+              due > 0 else { return false }
+        return Invoice.isOverdue(invoice, payments: payments)
     }
 
     private func followUpReason(for call: ServiceCall) -> String {
@@ -1539,7 +1855,7 @@ struct ScheduleView: View {
     private func closeoutReason(for call: ServiceCall) -> String {
         guard let invoice = invoice(for: call) else { return "Invoice needs closeout" }
         let readiness = closeoutReadiness(for: call, invoice: invoice)
-        return readiness.missingSummary(limit: 1)
+        return readiness.missingActionSummary(limit: 1)
     }
 
     private func closeoutAttentionText(for call: ServiceCall) -> String? {
@@ -1553,7 +1869,7 @@ struct ScheduleView: View {
         }
         let readiness = closeoutReadiness(for: call, invoice: invoice(for: call))
         guard !readiness.isReady else { return nil }
-        return "Closeout: \(readiness.missingSummary(limit: 2))"
+        return "Closeout next: \(readiness.missingActionSummary(limit: 2))"
     }
 
     private func closeoutReadiness(for call: ServiceCall, invoice: Invoice?) -> JobCloseoutReadiness {
@@ -1563,7 +1879,18 @@ struct ScheduleView: View {
                 guard let invoice else { return false }
                 return payment.invoice.id == invoice.id
             },
-            attachments: attachments.filter { $0.serviceCallID == call.id }
+            attachments: attachments.filter { $0.serviceCallID == call.id },
+            fieldFormTemplates: fieldFormTemplates,
+            fieldFormResponses: fieldFormResponses,
+            timeEntries: timeEntries,
+            materialReadiness: JobMaterialCloseoutPolicy.summary(
+                for: call,
+                invoice: invoice,
+                estimates: estimates,
+                projectMilestones: projectMilestones,
+                items: items,
+                movements: inventoryMovements
+            )
         )
     }
 
@@ -1647,6 +1974,25 @@ GunnAire
         )
     }
 
+    private func maintenanceReminderWorkflow(for contract: RecurringMaintenanceContract) -> GunnAireMailWorkflow {
+        contract.needsRenewalAttention ? .maintenanceRenewal : .maintenanceVisitReminder
+    }
+
+    private func lastMaintenanceReminderDate(for contract: RecurringMaintenanceContract) -> Date? {
+        customerCommunications.first { communication in
+            communication.maintenanceContractID == contract.id &&
+            communication.workflow == maintenanceReminderWorkflow(for: contract) &&
+            communication.normalizedDeliveryStatus == "sent"
+        }?.deliveredAt
+    }
+
+    private func maintenanceReminderActionTitle(for contract: RecurringMaintenanceContract) -> String {
+        if lastMaintenanceReminderDate(for: contract) != nil {
+            return contract.needsRenewalAttention ? "Draft Another Renewal" : "Draft Another Reminder"
+        }
+        return contract.needsRenewalAttention ? "Draft Renewal" : "Draft Reminder"
+    }
+
     private func openFollowUpEmail(for call: ServiceCall, fallbackURL: URL) {
         if googleAuth.isAuthenticated, let draft = followUpEmailDraft(for: call) {
             GunnAireAppIntentRouter.storeMailDraftRoute(
@@ -1654,7 +2000,8 @@ GunnAire
                 subject: draft.subject,
                 body: draft.body,
                 customerID: call.customer.id,
-                serviceCallID: call.id
+                serviceCallID: call.id,
+                workflow: .serviceFollowUp
             )
         } else {
             openURL(fallbackURL)
@@ -1667,7 +2014,9 @@ GunnAire
                 to: draft.to,
                 subject: draft.subject,
                 body: draft.body,
-                customerID: contract.customer.id
+                customerID: contract.customer.id,
+                maintenanceContractID: contract.id,
+                workflow: maintenanceReminderWorkflow(for: contract)
             )
         } else {
             openURL(fallbackURL)
@@ -1675,6 +2024,14 @@ GunnAire
     }
 
     private func scheduleMaintenanceVisit(for contract: RecurringMaintenanceContract) {
+        guard AppAccess.canPerformScheduleMutation(
+            .scheduleMaintenance,
+            email: AppIdentity.currentEmail,
+            users: users
+        ) else {
+            maintenanceMessage = "Dispatcher or administrator access is required to schedule maintenance visits."
+            return
+        }
         guard contract.canScheduleVisit else { return }
         if let existingVisit = contract.scheduledVisit(forDueDate: contract.nextDate, in: serviceCalls) {
             selectedDate = Calendar.current.startOfDay(for: existingVisit.scheduledDate)
@@ -1734,9 +2091,17 @@ GunnAire
     }
 
     private func scheduleFollowUpVisit(for sourceCall: ServiceCall) {
+        guard AppAccess.canPerformScheduleMutation(
+            .scheduleFollowUp,
+            email: AppIdentity.currentEmail,
+            users: users
+        ) else {
+            syncMessage = "Dispatcher or administrator access is required to schedule follow-up visits."
+            return
+        }
         let followUpCall = sourceCall.makeFollowUpVisit()
         modelContext.insert(followUpCall)
-        let actorEmail = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        let actorEmail = AppIdentity.currentEmail
         ServiceCallActivity.record(
             for: sourceCall,
             action: sourceCall.isCorrectiveWorkClassification ? "Corrective visit scheduled" : "Follow-up visit scheduled",
@@ -1806,7 +2171,7 @@ GunnAire
             sourceCall?.followUpRequired = false
             sourceCall?.followUpAction = nil
             sourceCall?.followUpDueDate = nil
-            let actorEmail = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+            let actorEmail = AppIdentity.currentEmail
             ServiceCallActivity.record(
                 for: approvedWorkCall,
                 action: "Approved estimate scheduled",
@@ -1840,7 +2205,7 @@ GunnAire
     private func publishToGoogleCalendar(_ call: ServiceCall) {
         guard googleAuth.isAuthenticated else { return }
         try? modelContext.save()
-        let signedInEmail = googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        let signedInEmail = AppIdentity.currentEmail
         GoogleCalendarScheduleSync.exportImmediately(
             call: call,
             auth: googleAuth,
@@ -1850,7 +2215,11 @@ GunnAire
         )
     }
 
-    private func moveCallFromDispatchBoard(_ callID: UUID, _ targetDay: Date) -> DispatchBoardMoveResult {
+    private func moveCallFromDispatchBoard(
+        _ callID: UUID,
+        _ targetDay: Date,
+        overrideReason: String? = nil
+    ) -> DispatchBoardMoveResult {
         guard canManageDispatch else {
             return .rejected("Your business account cannot change the dispatch schedule.")
         }
@@ -1871,23 +2240,50 @@ GunnAire
         guard proposedStart != call.scheduledDate else {
             return .unchanged("This job is already scheduled on that day.")
         }
-        if let conflict = DispatchBoardScheduling.conflictSummary(
+        let conflict = DispatchBoardScheduling.conflictSummary(
             for: call,
             proposedStart: proposedStart,
             serviceCalls: serviceCalls,
             availabilityBlocks: technicianAvailabilityBlocks,
             technicians: technicians
-        ) {
-            return .rejected("Move blocked: \(conflict) Open the job to choose another time or deliberately resolve the conflict.")
+        )
+        let overrideDecision = DispatchBoardScheduling.conflictOverrideDecision(
+            conflictSummary: conflict,
+            overrideReason: overrideReason
+        )
+        switch overrideDecision {
+        case .moveNormally:
+            break
+        case .needsReason(let conflictSummary):
+            return .requiresOverride(
+                DispatchConflictOverrideRequest(
+                    callID: call.id,
+                    targetDay: targetDay,
+                    proposedStart: proposedStart,
+                    conflictSummary: conflictSummary
+                )
+            )
+        case .documented:
+            break
         }
 
         let originalStart = call.scheduledDate
         call.scheduledDate = proposedStart
+        let activityAction: String
+        let activityDetail: String
+        switch overrideDecision {
+        case .documented(let conflictSummary, let reason):
+            activityAction = "Dispatch conflict overridden"
+            activityDetail = "Moved from \(originalStart.formatted(date: .abbreviated, time: .shortened)) to \(proposedStart.formatted(date: .abbreviated, time: .shortened)); appointment time preserved. Conflict: \(conflictSummary) Override reason: \(reason)"
+        case .moveNormally, .needsReason:
+            activityAction = "Dispatch board rescheduled"
+            activityDetail = "Moved from \(originalStart.formatted(date: .abbreviated, time: .shortened)) to \(proposedStart.formatted(date: .abbreviated, time: .shortened)); appointment time preserved."
+        }
         let activity = ServiceCallActivity(
             serviceCallID: call.id,
-            action: "Dispatch board rescheduled",
-            detail: "Moved from \(originalStart.formatted(date: .abbreviated, time: .shortened)) to \(proposedStart.formatted(date: .abbreviated, time: .shortened)); appointment time preserved.",
-            actorEmail: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+            action: activityAction,
+            detail: activityDetail,
+            actorEmail: AppIdentity.currentEmail
         )
         modelContext.insert(activity)
 
@@ -1905,10 +2301,21 @@ GunnAire
             GoogleCalendarScheduleSync.markCalendarCallLocallyEdited(call)
             publishToGoogleCalendar(call)
         }
+        if case .documented = overrideDecision {
+            return .moved("\(displayTitle(for: call)) moved with a documented conflict override.")
+        }
         return .moved("\(displayTitle(for: call)) moved to \(proposedStart.formatted(date: .abbreviated, time: .shortened)).")
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician) {
+        guard AppAccess.canPerformScheduleMutation(
+            .assignTechnician,
+            email: AppIdentity.currentEmail,
+            users: users
+        ) else {
+            syncMessage = "Dispatcher or administrator access is required to assign technicians."
+            return
+        }
         let previousTechnician = call.assignedTechnician?.name
         call.assignedTechnician = technician
         var additionalCrew = call.additionalTechnicianIDs
@@ -1919,7 +2326,7 @@ GunnAire
             for: call,
             action: previousTechnician == nil ? "Technician assigned" : "Technician reassigned",
             detail: assignmentDetail,
-            actorEmail: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
+            actorEmail: AppIdentity.currentEmail,
             in: modelContext
         )
         if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
@@ -1934,6 +2341,14 @@ GunnAire
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician, reschedulingTo newStart: Date) {
+        guard AppAccess.canPerformScheduleMutation(
+            .assignTechnician,
+            email: AppIdentity.currentEmail,
+            users: users
+        ) else {
+            syncMessage = "Dispatcher or administrator access is required to assign or reschedule technicians."
+            return
+        }
         let originalStart = call.scheduledDate
         let previousTechnician = call.assignedTechnician?.name
         call.assignedTechnician = technician
@@ -1949,7 +2364,7 @@ GunnAire
             for: call,
             action: "Assignment and schedule updated",
             detail: "\(technicianDetail) Moved from \(originalStart.formatted(date: .abbreviated, time: .shortened)) to \(newStart.formatted(date: .abbreviated, time: .shortened)).",
-            actorEmail: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
+            actorEmail: AppIdentity.currentEmail,
             in: modelContext
         )
         guard GoogleCalendarScheduleSync.shouldPublishAfterLocalSave(for: call) else {
@@ -1972,15 +2387,35 @@ GunnAire
 
 }
 
+struct ScheduleWorkQueueSummary: Equatable, Sendable {
+    let queueCount: Int
+    let itemCount: Int
+
+    init(itemCounts: [Int]) {
+        let visibleCounts = itemCounts.map { max($0, 0) }.filter { $0 > 0 }
+        queueCount = visibleCounts.count
+        itemCount = visibleCounts.reduce(0, +)
+    }
+
+    var detail: String {
+        let itemLabel = itemCount == 1 ? "item" : "items"
+        let queueLabel = queueCount == 1 ? "queue" : "queues"
+        return "\(itemCount) \(itemLabel) • \(queueCount) \(queueLabel)"
+    }
+}
+
 enum DispatchBoardMoveResult: Equatable {
     case moved(String)
     case unchanged(String)
     case rejected(String)
+    case requiresOverride(DispatchConflictOverrideRequest)
 
     var message: String {
         switch self {
         case .moved(let message), .unchanged(let message), .rejected(let message):
             message
+        case .requiresOverride(let request):
+            "Move blocked: \(request.conflictSummary)"
         }
     }
 
@@ -1990,7 +2425,27 @@ enum DispatchBoardMoveResult: Equatable {
     }
 }
 
+struct DispatchConflictOverrideRequest: Identifiable, Equatable {
+    let callID: UUID
+    let targetDay: Date
+    let proposedStart: Date
+    let conflictSummary: String
+
+    var id: String {
+        "\(callID.uuidString)-\(proposedStart.timeIntervalSinceReferenceDate)"
+    }
+}
+
+enum DispatchConflictOverrideDecision: Equatable {
+    case moveNormally
+    case needsReason(conflictSummary: String)
+    case documented(conflictSummary: String, reason: String)
+}
+
 enum DispatchBoardScheduling {
+    static let minimumOverrideReasonLength = 10
+    static let maximumOverrideReasonLength = 240
+
     static func startOfWeek(containing date: Date, calendar: Calendar = .current) -> Date {
         let day = calendar.startOfDay(for: date)
         let weekday = calendar.component(.weekday, from: day)
@@ -2020,6 +2475,27 @@ enum DispatchBoardScheduling {
     static func canMove(_ call: ServiceCall) -> Bool {
         guard call.status != .completed, call.status != .cancelled else { return false }
         return !GoogleCalendarScheduleSync.isExternalGoogleCalendarEvent(call) || call.googleEventManagedByApp
+    }
+
+    static func normalizedOverrideReason(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard normalized.count >= minimumOverrideReasonLength else { return nil }
+        return String(normalized.prefix(maximumOverrideReasonLength))
+    }
+
+    static func conflictOverrideDecision(
+        conflictSummary: String?,
+        overrideReason: String?
+    ) -> DispatchConflictOverrideDecision {
+        guard let conflictSummary else { return .moveNormally }
+        guard let reason = normalizedOverrideReason(overrideReason) else {
+            return .needsReason(conflictSummary: conflictSummary)
+        }
+        return .documented(conflictSummary: conflictSummary, reason: reason)
     }
 
     static func conflictSummary(
@@ -2062,17 +2538,18 @@ private struct DispatchWeekBoardView: View {
     @Environment(\.dismiss) private var dismiss
 
     let calls: [ServiceCall]
-    let onMove: (UUID, Date) -> DispatchBoardMoveResult
+    let onMove: (UUID, Date, String?) -> DispatchBoardMoveResult
 
     @State private var weekAnchor: Date
     @State private var actionMessage: String?
     @State private var lastMoveSucceeded = false
     @State private var editingCall: ServiceCall?
+    @State private var pendingConflictOverride: DispatchConflictOverrideRequest?
 
     init(
         initialDate: Date,
         calls: [ServiceCall],
-        onMove: @escaping (UUID, Date) -> DispatchBoardMoveResult
+        onMove: @escaping (UUID, Date, String?) -> DispatchBoardMoveResult
     ) {
         self.calls = calls
         self.onMove = onMove
@@ -2151,6 +2628,13 @@ private struct DispatchWeekBoardView: View {
             .fullScreenCover(item: $editingCall) { call in
                 EditServiceCallView(call: call)
                     .tint(Color.brandGold)
+            }
+            .sheet(item: $pendingConflictOverride) { request in
+                DispatchConflictOverrideSheet(request: request) { reason in
+                    pendingConflictOverride = nil
+                    performMove(request.callID, to: request.targetDay, overrideReason: reason)
+                }
+                .tint(Color.brandGold)
             }
         }
     }
@@ -2315,16 +2799,83 @@ private struct DispatchWeekBoardView: View {
         }
     }
 
-    private func performMove(_ callID: UUID, to day: Date) {
-        let result = onMove(callID, day)
+    private func performMove(_ callID: UUID, to day: Date, overrideReason: String? = nil) {
+        let result = onMove(callID, day, overrideReason)
         actionMessage = result.message
         lastMoveSucceeded = result.isSuccess
+        if case .requiresOverride(let request) = result {
+            pendingConflictOverride = request
+        }
     }
 
     private func moveWeek(by offset: Int) {
         guard let next = Calendar.current.date(byAdding: .day, value: offset * 7, to: weekAnchor) else { return }
         withAnimation { weekAnchor = next }
         actionMessage = nil
+    }
+}
+
+private struct DispatchConflictOverrideSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let request: DispatchConflictOverrideRequest
+    let onConfirm: (String) -> Void
+
+    @State private var reason = ""
+
+    private var normalizedReason: String? {
+        DispatchBoardScheduling.normalizedOverrideReason(reason)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Scheduling Conflict") {
+                    Label(request.conflictSummary, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    LabeledContent("Proposed start") {
+                        Text(request.proposedStart.formatted(date: .abbreviated, time: .shortened))
+                    }
+                }
+
+                Section("Required Reason") {
+                    TextEditor(text: $reason)
+                        .frame(minHeight: 92)
+                        .accessibilityLabel("Conflict override reason")
+                        .accessibilityIdentifier("DispatchConflictOverrideReason")
+                    Text("Explain the operational reason for accepting this conflict. The signed-in dispatcher, time, conflict, and reason are retained in the job history.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Label(
+                        "Completed, cancelled, and Google-owned events remain locked and cannot use this override.",
+                        systemImage: "lock.shield"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Override Conflict")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Override Move") {
+                        guard let normalizedReason else { return }
+                        onConfirm(normalizedReason)
+                        dismiss()
+                    }
+                    .disabled(normalizedReason == nil)
+                    .accessibilityIdentifier("ConfirmDispatchConflictOverride")
+                }
+            }
+            .interactiveDismissDisabled(!reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 
@@ -2338,6 +2889,8 @@ private struct NewServiceRequestView: View {
     @State private var address = ""
     @State private var serviceType: ServiceCallType = .service
     @State private var urgency: ServiceRequestUrgency = .normal
+    @State private var source: ServiceRequestSource = .phone
+    @State private var sourceDetail = ""
     @State private var summary = ""
     @State private var includesPreferredDate = false
     @State private var preferredDate = Date()
@@ -2357,6 +2910,16 @@ private struct NewServiceRequestView: View {
                 }
 
                 Section("Request") {
+                    Picker("Lead source", selection: $source) {
+                        ForEach(ServiceRequestSource.allCases) { source in
+                            Text(source.displayName).tag(source)
+                        }
+                    }
+                    .accessibilityIdentifier("NewServiceRequestSource")
+                    if source.requiresDetail {
+                        TextField("Source detail", text: $sourceDetail)
+                            .accessibilityIdentifier("NewServiceRequestSourceDetail")
+                    }
                     Picker("Requested work", selection: $serviceType) {
                         ForEach(ServiceCallType.allCases, id: \.rawValue) { type in
                             Text(type.displayName).tag(type)
@@ -2395,14 +2958,211 @@ private struct NewServiceRequestView: View {
                             urgency: urgency,
                             summary: summary.trimmingCharacters(in: .whitespacesAndNewlines),
                             preferredDate: includesPreferredDate ? preferredDate : nil,
-                            createdByEmail: GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+                            source: source,
+                            sourceDetail: sourceDetail,
+                            createdByEmail: AppIdentity.currentEmail
                         ))
                         dismiss()
                     }
-                    .disabled(customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        (source.requiresDetail && sourceDetail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    )
                 }
             }
         }
+    }
+}
+
+private struct ServiceRequestQualificationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let request: ServiceRequest
+    let onSave: (ServiceRequestSource, String?, String?, Date?) -> String?
+
+    @State private var source: ServiceRequestSource
+    @State private var sourceDetail: String
+    @State private var notes: String
+    @State private var includesFollowUp: Bool
+    @State private var nextFollowUpAt: Date
+    @State private var errorMessage: String?
+
+    init(
+        request: ServiceRequest,
+        onSave: @escaping (ServiceRequestSource, String?, String?, Date?) -> String?
+    ) {
+        self.request = request
+        self.onSave = onSave
+        let now = Date()
+        let storedFollowUp = request.nextFollowUpAt
+        _source = State(initialValue: request.leadSource)
+        _sourceDetail = State(initialValue: request.leadSourceDetail ?? "")
+        _notes = State(initialValue: request.intakeQualificationNotes ?? "")
+        _includesFollowUp = State(initialValue: storedFollowUp != nil)
+        _nextFollowUpAt = State(
+            initialValue: max(storedFollowUp ?? now.addingTimeInterval(24 * 60 * 60), now.addingTimeInterval(60))
+        )
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Lead") {
+                    LabeledContent("Customer", value: request.customerName)
+                    Picker("Source", selection: $source) {
+                        ForEach(ServiceRequestSource.allCases) { source in
+                            Text(source.displayName).tag(source)
+                        }
+                    }
+                    .accessibilityIdentifier("ServiceRequestQualificationSource")
+                    if source.requiresDetail {
+                        TextField("Source detail", text: $sourceDetail)
+                            .accessibilityIdentifier("ServiceRequestQualificationSourceDetail")
+                    }
+                }
+
+                Section("Qualification") {
+                    TextField("Qualification notes", text: $notes, axis: .vertical)
+                        .lineLimit(3...6)
+                        .accessibilityIdentifier("ServiceRequestQualificationNotes")
+                    Toggle("Set next follow-up", isOn: $includesFollowUp)
+                        .accessibilityIdentifier("ServiceRequestFollowUpToggle")
+                    if includesFollowUp {
+                        DatePicker(
+                            "Next follow-up",
+                            selection: $nextFollowUpAt,
+                            in: Date()...,
+                            displayedComponents: [.date, .hourAndMinute]
+                        )
+                    }
+                }
+
+                if let errorMessage {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("ServiceRequestQualificationError")
+                    }
+                }
+
+                Section {
+                    Text("Qualification records who contacted the lead and keeps any promised follow-up visible. Scheduling remains a separate commitment.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle(request.status == .new ? "Qualify Request" : "Review Request")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(request.status == .new ? "Confirm Qualification" : "Save") {
+                        errorMessage = onSave(
+                            source,
+                            sourceDetail.requestValue,
+                            notes.requestValue,
+                            includesFollowUp ? nextFollowUpAt : nil
+                        )
+                        if errorMessage == nil { dismiss() }
+                    }
+                    .disabled(
+                        source.requiresDetail &&
+                        sourceDetail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+                    .accessibilityIdentifier("ConfirmServiceRequestQualification")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
+private struct ServiceRequestDeclineSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let request: ServiceRequest
+    let onDecline: (ServiceRequestLostReason, String?) -> String?
+
+    @State private var reason: ServiceRequestLostReason?
+    @State private var notes: String
+    @State private var errorMessage: String?
+
+    init(
+        request: ServiceRequest,
+        onDecline: @escaping (ServiceRequestLostReason, String?) -> String?
+    ) {
+        self.request = request
+        self.onDecline = onDecline
+        _reason = State(initialValue: request.lostReason)
+        _notes = State(initialValue: request.intakeQualificationNotes ?? "")
+    }
+
+    private var canClose: Bool {
+        guard let reason else { return false }
+        return !reason.requiresNotes || !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Close Lead") {
+                    LabeledContent("Customer", value: request.customerName)
+                    LabeledContent("Source", value: request.leadSourceSummary)
+                    Picker("Reason", selection: $reason) {
+                        Text("Choose a reason").tag(ServiceRequestLostReason?.none)
+                        ForEach(ServiceRequestLostReason.allCases) { reason in
+                            Text(reason.displayName).tag(ServiceRequestLostReason?.some(reason))
+                        }
+                    }
+                    .accessibilityIdentifier("ServiceRequestLostReason")
+                    TextField(reason?.requiresNotes == true ? "Notes (required)" : "Notes", text: $notes, axis: .vertical)
+                        .lineLimit(3...6)
+                        .accessibilityIdentifier("ServiceRequestDeclineNotes")
+                }
+
+                if let errorMessage {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("ServiceRequestDeclineError")
+                    }
+                }
+
+                Section {
+                    Text("The lead leaves the active queue but its source, reason, staff account, and time remain available for funnel review.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Decline Request")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Close Request", role: .destructive) {
+                        guard let reason else { return }
+                        errorMessage = onDecline(
+                            reason,
+                            notes.requestValue
+                        )
+                        if errorMessage == nil { dismiss() }
+                    }
+                    .disabled(!canClose)
+                    .accessibilityIdentifier("ConfirmServiceRequestDecline")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
+private extension String {
+    var requestValue: String? {
+        let normalized = trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? nil : normalized
     }
 }
 

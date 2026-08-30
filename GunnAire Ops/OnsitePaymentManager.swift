@@ -25,6 +25,20 @@ enum OnsitePaymentProcessor: String, CaseIterable, Identifiable {
     }
 }
 
+enum OnsitePaymentReadiness {
+    static func processorIsReady(
+        bridgeAvailable: Bool,
+        processor: OnsitePaymentProcessor,
+        deviceMarkedReady: Bool,
+        quickBooksPaymentsAuthorized: Bool
+    ) -> Bool {
+        guard bridgeAvailable,
+              processor.supportsTapToPay,
+              deviceMarkedReady else { return false }
+        return !processor.requiresQuickBooksSession || quickBooksPaymentsAuthorized
+    }
+}
+
 struct OnsitePaymentCaptureResult: Sendable {
     let amount: Double
     let cardLast4: String
@@ -44,15 +58,15 @@ enum OnsitePaymentError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .processorUnavailable:
-            return "No Tap to Pay processor is configured on this device."
+            return "No Tap to Pay on iPhone processor is configured on this device."
         case .invalidAmount:
-            return "Enter a valid payment amount before starting Tap to Pay."
+            return "Enter a valid payment amount before starting Tap to Pay on iPhone."
         case .quickBooksAuthenticationRequired:
-            return "QuickBooks Payments requires an active QuickBooks connection before Tap to Pay can start."
+            return "QuickBooks Payments requires an active QuickBooks connection before Tap to Pay on iPhone can start."
         case .quickBooksPaymentsScopeRequired:
-            return "QuickBooks Payments scope is disabled. Enable the payments scope and reconnect QuickBooks before starting Tap to Pay."
+            return "QuickBooks Payments scope is disabled. Enable the payments scope and reconnect QuickBooks before starting Tap to Pay on iPhone."
         case .quickBooksSDKNotIntegrated:
-            return "QuickBooks Tap to Pay is available in QuickBooks Mobile or GoPayment. This custom app does not embed a Tap to Pay capture flow."
+            return "Tap to Pay on iPhone is available in QuickBooks Mobile or GoPayment. This custom app does not embed that capture flow."
         }
     }
 }
@@ -84,14 +98,12 @@ final class OnsitePaymentManager: ObservableObject {
 
     func processorReady() -> Bool {
         let processor = configuredProcessor()
-        guard tapToPayAvailableInCurrentBuild else { return false }
-        guard UserDefaults.standard.bool(forKey: "onsitePaymentProcessorReady") else {
-            return false
-        }
-        if processor.requiresQuickBooksSession {
-            return QuickBooksDataAPI.shared.canUseQuickBooksPaymentsAPI
-        }
-        return true
+        return OnsitePaymentReadiness.processorIsReady(
+            bridgeAvailable: tapToPayAvailableInCurrentBuild,
+            processor: processor,
+            deviceMarkedReady: UserDefaults.standard.bool(forKey: "onsitePaymentProcessorReady"),
+            quickBooksPaymentsAuthorized: QuickBooksDataAPI.shared.canUseQuickBooksPaymentsAPI
+        )
     }
 
     func processorStatusDetail() -> String {
@@ -100,24 +112,24 @@ final class OnsitePaymentManager: ObservableObject {
         case .none:
             return tapToPayAvailableInCurrentBuild
                 ? "No on-device payment processor is selected."
-                : "Use QuickBooks Mobile or GoPayment on the field iPhone for contactless Tap to Pay."
+                : "Use QuickBooks Mobile or GoPayment on the field iPhone for Tap to Pay on iPhone."
         case .quickBooksPayments:
             guard tapToPayAvailableInCurrentBuild else {
-                return "Use QuickBooks Mobile or GoPayment on the field iPhone for contactless Tap to Pay."
+                return "Use QuickBooks Mobile or GoPayment on the field iPhone for Tap to Pay on iPhone."
             }
             if !Config.QuickBooks.enablePaymentsScope {
-                return "Enable the QuickBooks Payments scope and reconnect QuickBooks before using live Tap to Pay capture."
+                return "Enable the QuickBooks Payments scope and reconnect QuickBooks before using live Tap to Pay on iPhone capture."
             }
             if !QuickBooksDataAPI.shared.isAuthenticated {
-                return "Connect QuickBooks first, then mark this device ready for Tap to Pay."
+                return "Connect QuickBooks first, then mark this device ready for Tap to Pay on iPhone."
             }
             if let diagnostic = QuickBooksDataAPI.shared.paymentsAuthorizationDiagnostic {
                 return diagnostic
             }
             if !UserDefaults.standard.bool(forKey: "onsitePaymentProcessorReady") {
-                return "QuickBooks Payments is connected. Use the QuickBooks field app for its supported Tap to Pay checkout."
+                return "QuickBooks Payments is connected. Use the QuickBooks field app for its supported Tap to Pay on iPhone checkout."
             }
-            return "QuickBooks Payments is selected and ready for live Tap to Pay capture."
+            return "QuickBooks Payments is selected and ready for live Tap to Pay on iPhone capture."
         }
     }
 

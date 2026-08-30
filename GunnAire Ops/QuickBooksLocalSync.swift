@@ -33,15 +33,16 @@ enum QuickBooksLocalSync {
             }
         }
 
+        let itemMappingConflicts = QuickBooksCatalogMappingIntegrity.conflicts(in: existingItems)
+        let conflictedItemIDs = Set(itemMappingConflicts.map(\.id))
+        QuickBooksCatalogMappingIntegrity.markConflictsForReview(in: existingItems)
+
         var itemsByQBID: [String: Item] = [:]
-        var itemsByName: [String: Item] = [:]
         for item in existingItems {
             if let quickBooksID = item.quickBooksID?.nilIfEmpty {
-                itemsByQBID[quickBooksID] = itemsByQBID[quickBooksID] ?? item
-            }
-            let nameKey = normalized(item.name)
-            if !nameKey.isEmpty {
-                itemsByName[nameKey] = itemsByName[nameKey] ?? item
+                let normalizedID = QuickBooksCatalogMappingIntegrity.normalizedIdentifier(quickBooksID)
+                guard !conflictedItemIDs.contains(normalizedID) else { continue }
+                itemsByQBID[normalizedID] = item
             }
         }
 
@@ -99,13 +100,37 @@ enum QuickBooksLocalSync {
         }
 
         for quickBooksItem in items {
-            let item = itemsByQBID[quickBooksItem.Id]
-                ?? itemsByName[normalized(quickBooksItem.Name)]
+            let normalizedQuickBooksID = QuickBooksCatalogMappingIntegrity.normalizedIdentifier(quickBooksItem.Id)
+            // Never select an arbitrary local owner or create a third record
+            // when this QBO identity is already ambiguous. The conflict stays
+            // local and visible until an administrator chooses the owner.
+            guard !conflictedItemIDs.contains(normalizedQuickBooksID) else { continue }
+            let item = itemsByQBID[normalizedQuickBooksID]
+                ?? Item.matchingLocalCatalogItem(
+                    in: existingItems,
+                    quickBooksID: quickBooksItem.Id,
+                    name: quickBooksItem.Name,
+                    sku: quickBooksItem.Sku
+                )
                 ?? Item(name: quickBooksItem.Name, unitPrice: quickBooksItem.UnitPrice ?? 0)
             if item.modelContext == nil {
                 modelContext.insert(item)
             }
+            if item.hasPendingQuickBooksCatalogUpdate,
+               !QuickBooksCatalogReconciliation.differences(
+                    localItem: item,
+                    remoteItem: quickBooksItem
+               ).isEmpty {
+                // An administrator deliberately staged these local changes.
+                // Keep them intact until the QBO console shows the live diff
+                // and the administrator chooses a direction.
+                itemsByQBID[normalizedQuickBooksID] = item
+                continue
+            }
             item.quickBooksID = quickBooksItem.Id
+            item.quickBooksSyncStatus = "synced"
+            item.quickBooksSyncDetail = nil
+            item.quickBooksLastSyncedAt = Date()
             item.name = quickBooksItem.Name
             item.itemTypeRawValue = quickBooksItem.ItemType ?? item.itemTypeRawValue
             item.unitPrice = quickBooksItem.UnitPrice ?? item.unitPrice
@@ -116,8 +141,7 @@ enum QuickBooksLocalSync {
             item.purchaseDescription = quickBooksItem.PurchaseDesc ?? item.purchaseDescription
             item.preferredVendorName = quickBooksItem.PrefVendorRef?.name ?? item.preferredVendorName
             item.preferredVendorQuickBooksID = quickBooksItem.PrefVendorRef?.value ?? item.preferredVendorQuickBooksID
-            itemsByQBID[quickBooksItem.Id] = item
-            itemsByName[normalized(item.name)] = item
+            itemsByQBID[normalizedQuickBooksID] = item
         }
 
         for quickBooksVendor in vendors {
@@ -140,19 +164,31 @@ enum QuickBooksLocalSync {
 
         for quickBooksEstimate in estimates {
             let customer = resolveCustomer(ref: quickBooksEstimate.CustomerRef, cacheByQBID: &customersByQBID, cacheByName: &customersByName, modelContext: modelContext)
-            let estimate = estimatesByQBID[quickBooksEstimate.Id]
+            let lineageMatch = QuickBooksEstimateLineage.localEstimateID(from: quickBooksEstimate.PrivateNote)
+                .flatMap { localID in existingEstimates.first { $0.id == localID } }
+            let existingEstimate = estimatesByQBID[quickBooksEstimate.Id]
+                ?? lineageMatch
                 ?? matchingUnlinkedEstimate(for: quickBooksEstimate, customer: customer, in: existingEstimates)
-                ?? Estimate(customer: customer)
+            let estimate = existingEstimate ?? Estimate(customer: customer)
+            let isNewQuickBooksImport = existingEstimate == nil
             if estimate.modelContext == nil {
                 modelContext.insert(estimate)
             }
             estimate.quickBooksID = quickBooksEstimate.Id
             estimate.customer = customer
-            estimate.amount = quickBooksEstimate.TotalAmt
-            estimate.lineItemSummary = quickBooksEstimate.DocNumber ?? "QuickBooks Estimate"
-            estimate.notes = quickBooksEstimate.DocNumber
-            estimate.status = "pending"
-            estimate.createdAt = parseQuickBooksDate(quickBooksEstimate.TxnDate) ?? estimate.createdAt
+            _ = estimate.applyQuickBooksTaxResult(
+                total: quickBooksEstimate.TotalAmt,
+                reportedTax: quickBooksEstimate.TxnTaxDetail?.TotalTax
+            )
+            if isNewQuickBooksImport {
+                estimate.lineItemSummary = quickBooksEstimate.DocNumber ?? "QuickBooks Estimate"
+                estimate.notes = quickBooksEstimate.DocNumber
+                estimate.status = "pending"
+                estimate.createdAt = parseQuickBooksDate(quickBooksEstimate.TxnDate) ?? estimate.createdAt
+                estimate.proposalGroupID = QuickBooksEstimateLineage.proposalGroupID(from: quickBooksEstimate.PrivateNote)
+                estimate.proposalOption = QuickBooksEstimateLineage.proposalOption(from: quickBooksEstimate.PrivateNote)?.rawValue
+                estimate.proposalIsRecommended = QuickBooksEstimateLineage.isRecommendedOption(from: quickBooksEstimate.PrivateNote)
+            }
             if estimate.siteAddress?.nilIfEmpty == nil {
                 estimate.siteAddress = quickBooksEstimate.ShipAddr?.Line1
             }
@@ -180,21 +216,32 @@ enum QuickBooksLocalSync {
         var refreshedInvoiceQuickBooksIDs: Set<String> = []
         for quickBooksInvoice in invoices {
             let customer = resolveCustomer(ref: quickBooksInvoice.CustomerRef, cacheByQBID: &customersByQBID, cacheByName: &customersByName, modelContext: modelContext)
-            let invoice = invoicesByQBID[quickBooksInvoice.Id]
+            let existingInvoice = invoicesByQBID[quickBooksInvoice.Id]
                 ?? matchingUnlinkedInvoice(for: quickBooksInvoice, customer: customer, in: existingInvoices)
-                ?? Invoice(customer: customer)
+            let invoice = existingInvoice ?? Invoice(customer: customer)
+            let isNewQuickBooksImport = existingInvoice == nil
             if invoice.modelContext == nil {
                 modelContext.insert(invoice)
             }
             invoice.quickBooksID = quickBooksInvoice.Id
-            invoice.quickBooksSyncStatus = "synced"
-            invoice.quickBooksSyncDetail = nil
             invoice.quickBooksLastSyncedAt = Date()
             invoice.customer = customer
-            invoice.amount = quickBooksInvoice.TotalAmt
-            invoice.lineItemSummary = quickBooksInvoice.DocNumber ?? "QuickBooks Invoice"
-            invoice.notes = quickBooksInvoice.PrivateNote
-            invoice.createdAt = parseQuickBooksDate(quickBooksInvoice.TxnDate) ?? invoice.createdAt
+            let taxIssue = invoice.applyQuickBooksTaxResult(
+                total: quickBooksInvoice.TotalAmt,
+                reportedTax: quickBooksInvoice.TxnTaxDetail?.TotalTax
+            )
+            invoice.quickBooksSyncStatus = taxIssue == nil ? "synced" : "needs_attention"
+            invoice.quickBooksSyncDetail = taxIssue
+            if isNewQuickBooksImport {
+                invoice.lineItemSummary = quickBooksInvoice.DocNumber ?? "QuickBooks Invoice"
+                invoice.notes = quickBooksInvoice.PrivateNote
+                invoice.createdAt = parseQuickBooksDate(quickBooksInvoice.TxnDate) ?? invoice.createdAt
+            } else if invoice.notes?.nilIfEmpty == nil {
+                invoice.notes = quickBooksInvoice.PrivateNote
+            }
+            if let importedDueDate = parseQuickBooksDate(quickBooksInvoice.DueDate) {
+                invoice.dueDate = importedDueDate
+            }
             if invoice.siteAddress?.nilIfEmpty == nil {
                 invoice.siteAddress = quickBooksInvoice.ShipAddr?.Line1
             }
@@ -364,6 +411,15 @@ enum QuickBooksLocalSync {
         guard estimate.quickBooksID?.nilIfEmpty == nil || estimate.quickBooksID == quickBooksEstimate.Id || estimate.quickBooksID == quickBooksEstimate.DocNumber else {
             return false
         }
+        if let lineageID = QuickBooksEstimateLineage.localEstimateID(from: quickBooksEstimate.PrivateNote) {
+            return estimate.id == lineageID
+        }
+        // Option sets and change orders are distinct immutable proposals. Never
+        // merge them by customer/amount/date heuristics when QBO lacks the
+        // GunnAire lineage marker.
+        if estimate.isProposalOption || estimate.isChangeOrder {
+            return false
+        }
         return sameCustomer(estimate.customer, customer) &&
             amountsMatch(estimate.amount, quickBooksEstimate.TotalAmt) &&
             documentReferenceMatches(localSummary: estimate.lineItemSummary, localNotes: estimate.notes, quickBooksDocumentNumber: quickBooksEstimate.DocNumber, localDate: estimate.createdAt, quickBooksDate: quickBooksEstimate.TxnDate)
@@ -480,11 +536,36 @@ enum QuickBooksLocalSync {
         if estimate.siteAddress?.nilIfEmpty == nil {
             estimate.siteAddress = duplicate.siteAddress
         }
+        if estimate.catalogSnapshotJSON?.nilIfEmpty == nil {
+            // A durable local snapshot is stronger operational evidence than a
+            // generic QuickBooks document number. Preserve the approved scope,
+            // price, and field notes together when consolidating a legacy pair.
+            estimate.catalogSnapshotJSON = duplicate.catalogSnapshotJSON
+            if duplicate.catalogSnapshotJSON?.nilIfEmpty != nil {
+                estimate.amount = duplicate.amount
+                estimate.lineItemSummary = duplicate.lineItemSummary
+                estimate.notes = duplicate.notes
+            }
+        }
         if estimate.notes?.nilIfEmpty == nil {
             estimate.notes = duplicate.notes
         }
         if estimate.lineItemSummary.nilIfEmpty == nil {
             estimate.lineItemSummary = duplicate.lineItemSummary
+        }
+        estimate.parentEstimateID = estimate.parentEstimateID ?? duplicate.parentEstimateID
+        estimate.changeOrderReason = estimate.changeOrderReason ?? duplicate.changeOrderReason
+        estimate.proposalGroupID = estimate.proposalGroupID ?? duplicate.proposalGroupID
+        estimate.proposalOption = estimate.proposalOption ?? duplicate.proposalOption
+        estimate.proposalIsRecommended = estimate.proposalIsRecommended || duplicate.proposalIsRecommended
+        if !estimate.hasRecordedCustomerApproval && duplicate.hasRecordedCustomerApproval {
+            estimate.status = duplicate.status
+            estimate.customerApprovedByName = duplicate.customerApprovedByName
+            estimate.customerApprovedAt = duplicate.customerApprovedAt
+            estimate.customerApprovalMethodRaw = duplicate.customerApprovalMethodRaw
+            estimate.customerApprovalReference = duplicate.customerApprovalReference
+            estimate.customerApprovalRecordedByEmail = duplicate.customerApprovalRecordedByEmail
+            estimate.customerApprovalSignatureImageBase64 = duplicate.customerApprovalSignatureImageBase64
         }
         for call in serviceCalls where call.linkedEstimateID == duplicate.id {
             call.linkedEstimateID = estimate.id
@@ -517,6 +598,9 @@ enum QuickBooksLocalSync {
         }
         if invoice.quickBooksBalanceDue == nil {
             invoice.quickBooksBalanceDue = duplicate.quickBooksBalanceDue
+        }
+        if invoice.dueDate == nil {
+            invoice.dueDate = duplicate.dueDate
         }
         invoice.status = Invoice.mostResolvedStatus(invoice.status, duplicate.status)
         invoice.customerSignatureName = invoice.customerSignatureName ?? duplicate.customerSignatureName

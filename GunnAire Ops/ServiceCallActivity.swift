@@ -28,19 +28,22 @@ final class ServiceCallActivity {
         self.occurredAt = occurredAt
     }
 
+    @discardableResult
     static func record(
         for call: ServiceCall,
         action: String,
         detail: String,
         actorEmail: String? = nil,
         in modelContext: ModelContext
-    ) {
+    ) -> ServiceCallActivity {
         let normalizedActor = actorEmail?.trimmingCharacters(in: .whitespacesAndNewlines)
-        modelContext.insert(ServiceCallActivity(
+        let activity = ServiceCallActivity(
             serviceCallID: call.id,
             action: action,
             detail: detail,
             actorEmail: normalizedActor?.isEmpty == false ? normalizedActor : nil
-        ))
+        )
+        modelContext.insert(activity)
+        return activity
     }
 }

@@ -216,8 +216,9 @@ enum CustomerIntelligence {
             return (invoice, balance)
         }
         let openBalance = openInvoiceBalances.reduce(0) { $0 + $1.balance }
-        let overdueCutoff = calendar.date(byAdding: .day, value: -7, to: now) ?? now
-        let overdueInvoices = openInvoiceBalances.filter { $0.invoice.createdAt <= overdueCutoff }
+        let overdueInvoices = openInvoiceBalances.filter {
+            Invoice.isOverdue($0.invoice, payments: customerPayments, now: now, calendar: calendar)
+        }
 
         let openEstimates = customerEstimates.filter {
             let status = $0.status.lowercased()

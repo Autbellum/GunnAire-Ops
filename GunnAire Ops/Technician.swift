@@ -6,25 +6,80 @@ import SwiftData
 enum TechnicianEquipmentQualification: String, Codable {
     case notRequired
     case qualified
+    case reviewDueSoon
     case unverified
     case reviewRequired
+    case reviewExpired
 
     var displayName: String {
         switch self {
         case .notRequired: "No equipment qualification needed"
         case .qualified: "Qualified for this equipment"
+        case .reviewDueSoon: "Qualified; review due soon"
         case .unverified: "Equipment qualification not recorded"
         case .reviewRequired: "Equipment qualification needs review"
+        case .reviewExpired: "Equipment qualification review expired"
         }
     }
 
     var dispatchRank: Int {
         switch self {
         case .qualified: 0
-        case .notRequired: 1
-        case .unverified: 2
-        case .reviewRequired: 3
+        case .reviewDueSoon: 1
+        case .notRequired: 2
+        case .unverified: 3
+        case .reviewRequired: 4
+        case .reviewExpired: 5
         }
+    }
+
+    var needsDispatchAttention: Bool {
+        switch self {
+        case .notRequired, .qualified:
+            false
+        case .reviewDueSoon, .unverified, .reviewRequired, .reviewExpired:
+            true
+        }
+    }
+
+    var assignmentNotice: String? {
+        switch self {
+        case .notRequired, .qualified:
+            nil
+        case .reviewDueSoon:
+            "qualification review due soon"
+        case .unverified:
+            "qualification unverified"
+        case .reviewRequired:
+            "review equipment"
+        case .reviewExpired:
+            "qualification review expired"
+        }
+    }
+}
+
+struct TechnicianQualificationReview: Equatable {
+    let reviewedAt: Date?
+    let reviewDueAt: Date?
+    let reviewedByEmail: String?
+
+    var isTracked: Bool {
+        reviewedAt != nil || reviewDueAt != nil || reviewedByEmail != nil
+    }
+
+    func validationMessage(asOf date: Date = Date(), calendar: Calendar = .current) -> String? {
+        guard isTracked else { return nil }
+        guard let reviewedAt, let reviewDueAt else {
+            return "Record both the qualification review date and its next review due date."
+        }
+        let today = calendar.startOfDay(for: date)
+        if calendar.startOfDay(for: reviewedAt) > today {
+            return "The qualification review date cannot be in the future."
+        }
+        if calendar.startOfDay(for: reviewDueAt) < calendar.startOfDay(for: reviewedAt) {
+            return "The next qualification review cannot be due before the recorded review."
+        }
+        return nil
     }
 }
 
@@ -70,6 +125,16 @@ struct TechnicianQuickBooksTimeMapping: Equatable {
 
 @Model
 final class Technician {
+    private struct QualificationProfile: Codable {
+        let version: Int
+        var supportedEquipmentTypeRawValues: [String]
+        var reviewedAt: Date?
+        var reviewDueAt: Date?
+        var reviewedByEmail: String?
+    }
+
+    private static let qualificationProfileVersion = 2
+
     var id: UUID = UUID()
     var name: String = ""
     var contactInfo: String?
@@ -104,12 +169,20 @@ final class Technician {
         serviceAreas: [String] = [],
         laborCostPerHour: Double? = nil,
         quickBooksTimeEntityKind: TechnicianQuickBooksTimeEntityKind? = nil,
-        quickBooksTimeEntityRef: String? = nil
+        quickBooksTimeEntityRef: String? = nil,
+        qualificationReviewedAt: Date? = nil,
+        qualificationReviewDueAt: Date? = nil,
+        qualificationReviewedByEmail: String? = nil
     ) {
         self.id = id
         self.name = name
         self.contactInfo = contactInfo
-        self.supportedEquipmentTypesJSON = Self.encodedEquipmentTypes(supportedEquipmentTypes)
+        self.supportedEquipmentTypesJSON = Self.encodedQualificationProfile(
+            supportedEquipmentTypes: supportedEquipmentTypes,
+            reviewedAt: qualificationReviewedAt,
+            reviewDueAt: qualificationReviewDueAt,
+            reviewedByEmail: qualificationReviewedByEmail
+        )
         self.qualificationNotes = qualificationNotes
         self.serviceAreasJSON = Self.encodedServiceAreas(serviceAreas)
         self.laborCostPerHour = laborCostPerHour
@@ -119,16 +192,35 @@ final class Technician {
 
     var supportedEquipmentTypes: Set<HVACEquipmentType> {
         get {
-            guard let supportedEquipmentTypesJSON,
-                  let data = supportedEquipmentTypesJSON.data(using: .utf8),
-                  let rawValues = try? JSONDecoder().decode([String].self, from: data) else {
-                return []
-            }
-            return Set(rawValues.compactMap(HVACEquipmentType.init(rawValue:)))
+            Self.decodedQualificationProfile(from: supportedEquipmentTypesJSON).supportedEquipmentTypes
         }
         set {
-            supportedEquipmentTypesJSON = Self.encodedEquipmentTypes(newValue)
+            let current = Self.decodedQualificationProfile(from: supportedEquipmentTypesJSON)
+            supportedEquipmentTypesJSON = Self.encodedQualificationProfile(
+                supportedEquipmentTypes: newValue,
+                reviewedAt: current.review.reviewedAt,
+                reviewDueAt: current.review.reviewDueAt,
+                reviewedByEmail: current.review.reviewedByEmail
+            )
         }
+    }
+
+    var qualificationReview: TechnicianQualificationReview {
+        Self.decodedQualificationProfile(from: supportedEquipmentTypesJSON).review
+    }
+
+    func updateEquipmentQualifications(
+        _ supportedEquipmentTypes: Set<HVACEquipmentType>,
+        reviewedAt: Date?,
+        reviewDueAt: Date?,
+        reviewedByEmail: String?
+    ) {
+        supportedEquipmentTypesJSON = Self.encodedQualificationProfile(
+            supportedEquipmentTypes: supportedEquipmentTypes,
+            reviewedAt: reviewedAt,
+            reviewDueAt: reviewDueAt,
+            reviewedByEmail: reviewedByEmail
+        )
     }
 
     var quickBooksTimeEntityKind: TechnicianQuickBooksTimeEntityKind? {
@@ -148,11 +240,29 @@ final class Technician {
         )
     }
 
-    func qualification(for equipmentType: HVACEquipmentType?) -> TechnicianEquipmentQualification {
+    func qualification(
+        for equipmentType: HVACEquipmentType?,
+        asOf date: Date = Date(),
+        calendar: Calendar = .current
+    ) -> TechnicianEquipmentQualification {
         guard let equipmentType else { return .notRequired }
         let supportedTypes = supportedEquipmentTypes
         guard !supportedTypes.isEmpty else { return .unverified }
-        return supportedTypes.contains(equipmentType) ? .qualified : .reviewRequired
+        guard supportedTypes.contains(equipmentType) else { return .reviewRequired }
+
+        let review = qualificationReview
+        guard review.validationMessage(asOf: date, calendar: calendar) == nil else {
+            return review.isTracked ? .reviewRequired : .qualified
+        }
+        guard let reviewDueAt = review.reviewDueAt else { return .qualified }
+
+        let today = calendar.startOfDay(for: date)
+        let dueDay = calendar.startOfDay(for: reviewDueAt)
+        if dueDay < today {
+            return .reviewExpired
+        }
+        let warningHorizon = calendar.date(byAdding: .day, value: 30, to: today) ?? today
+        return dueDay <= warningHorizon ? .reviewDueSoon : .qualified
     }
 
     var serviceAreas: [String] {
@@ -181,10 +291,59 @@ final class Technician {
         normalizedServiceAreas(input.components(separatedBy: ","))
     }
 
-    private static func encodedEquipmentTypes(_ types: Set<HVACEquipmentType>) -> String? {
-        guard !types.isEmpty,
-              let data = try? JSONEncoder().encode(types.map(\.rawValue).sorted()) else { return nil }
+    private static func encodedQualificationProfile(
+        supportedEquipmentTypes: Set<HVACEquipmentType>,
+        reviewedAt: Date?,
+        reviewDueAt: Date?,
+        reviewedByEmail: String?
+    ) -> String? {
+        let normalizedReviewer = normalizedOptionalValue(reviewedByEmail).map { $0.lowercased() }
+        guard !supportedEquipmentTypes.isEmpty || reviewedAt != nil || reviewDueAt != nil || normalizedReviewer != nil else {
+            return nil
+        }
+        let profile = QualificationProfile(
+            version: qualificationProfileVersion,
+            supportedEquipmentTypeRawValues: supportedEquipmentTypes.map(\.rawValue).sorted(),
+            reviewedAt: reviewedAt,
+            reviewDueAt: reviewDueAt,
+            reviewedByEmail: normalizedReviewer
+        )
+        guard let data = try? JSONEncoder().encode(profile) else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    private static func decodedQualificationProfile(
+        from rawValue: String?
+    ) -> (supportedEquipmentTypes: Set<HVACEquipmentType>, review: TechnicianQualificationReview) {
+        guard let rawValue,
+              let data = rawValue.data(using: .utf8) else {
+            return ([], TechnicianQualificationReview(reviewedAt: nil, reviewDueAt: nil, reviewedByEmail: nil))
+        }
+
+        if let profile = try? JSONDecoder().decode(QualificationProfile.self, from: data),
+           profile.version >= qualificationProfileVersion {
+            return (
+                Set(profile.supportedEquipmentTypeRawValues.compactMap(HVACEquipmentType.init(rawValue:))),
+                TechnicianQualificationReview(
+                    reviewedAt: profile.reviewedAt,
+                    reviewDueAt: profile.reviewDueAt,
+                    reviewedByEmail: normalizedOptionalValue(profile.reviewedByEmail)?.lowercased()
+                )
+            )
+        }
+
+        // Version-one records stored only a JSON array of supported equipment
+        // raw values. Treat them as current to avoid silently withdrawing an
+        // existing dispatch qualification; an administrator can opt in to a
+        // dated review when the profile is next maintained.
+        if let rawValues = try? JSONDecoder().decode([String].self, from: data) {
+            return (
+                Set(rawValues.compactMap(HVACEquipmentType.init(rawValue:))),
+                TechnicianQualificationReview(reviewedAt: nil, reviewDueAt: nil, reviewedByEmail: nil)
+            )
+        }
+
+        return ([], TechnicianQualificationReview(reviewedAt: nil, reviewDueAt: nil, reviewedByEmail: nil))
     }
 
     private static func encodedServiceAreas(_ areas: [String]) -> String? {
