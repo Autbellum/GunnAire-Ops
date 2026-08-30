@@ -38,6 +38,7 @@ struct AppRootView: View {
             )
         ) { _ in
             guard AppleAuthManager.shared.isAuthenticated else { return }
+            FieldPaymentHandoff.shared.end()
             AppleAuthManager.shared.signOut()
             hasAuthenticatedUser = false
         }
@@ -58,11 +59,13 @@ struct AppRootView: View {
         guard hasAuthenticatedUser else { return }
         if AppleAuthManager.shared.isAuthenticated {
             if !(await AppleAuthManager.shared.validateCredentialState()) {
+                FieldPaymentHandoff.shared.end()
                 hasAuthenticatedUser = false
             }
             return
         }
         if !GoogleAuthManager.shared.isAuthenticated {
+            FieldPaymentHandoff.shared.end()
             hasAuthenticatedUser = false
         }
     }

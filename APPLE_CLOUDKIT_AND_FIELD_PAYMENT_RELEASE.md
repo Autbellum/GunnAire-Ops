@@ -207,9 +207,12 @@ Current source `2026.08.28.13` passes the 63-test backend suite, all 511 native 
 
 ## Field iPhone payment handoff
 
-The Payments workspace can hand an unpaid invoice from the iPad to the company
-iPhone with Apple Handoff. The handoff contains only an invoice identifier; the
-receiving device resolves the current balance from its authorized local invoice.
+The Payments workspace can hand an unpaid invoice from the iPad or Mac to the
+company iPhone with Apple Handoff. The handoff contains only an invoice
+identifier; the receiving device resolves the current balance from its
+authorized local invoice. A new activity invalidates the prior one, expires
+after 30 minutes, exposes **Stop Field Handoff** from the origin, and is
+invalidated on app sign-out or credential revocation.
 It never transfers an amount, card data, customer contact details, processor
 tokens, or QuickBooks credentials. Apple Handoff and the separate-account
 server assignment both open the same dedicated contactless guide only after the
@@ -217,7 +220,10 @@ iPhone reapplies the field user's current role, invoice visibility,
 assigned-job, and unpaid-balance restrictions. A QBO-linked invoice shows the
 freshly resolved balance, its copyable provider identifier, and documented
 QuickBooks Mobile/GoPayment navigation without inventing an unsupported deep
-link. An unpublished invoice hides those unusable QuickBooks steps, explains
+link. It also exposes static HTTPS actions to Intuit's official QuickBooks
+Mobile and GoPayment App Store records so staff can open or install the supported
+payment app without sending invoice or customer data to that URL. An unpublished
+invoice hides those unusable QuickBooks steps, explains
 the publication dependency, and offers a direct verified cash/check/other
 payment fallback; a local UUID is never presented as a QuickBooks reference.
 Apple Handoff requires nearby devices signed

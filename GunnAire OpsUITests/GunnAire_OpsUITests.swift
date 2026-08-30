@@ -3634,6 +3634,13 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(quickBooksInvoiceID.exists)
         XCTAssertTrue(quickBooksInvoiceID.label.contains("QBO-UI-INVOICE-189"))
         XCTAssertTrue(app.buttons["Copy QuickBooks Invoice ID"].exists)
+        let quickBooksAppHandoff = app.descendants(matching: .any)["Open or Install QuickBooks Mobile"]
+        let goPaymentAppHandoff = app.descendants(matching: .any)["Open or Install GoPayment"]
+        for _ in 0..<3 where !quickBooksAppHandoff.exists || !goPaymentAppHandoff.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(quickBooksAppHandoff.exists)
+        XCTAssertTrue(goPaymentAppHandoff.exists)
     }
 
     @MainActor
