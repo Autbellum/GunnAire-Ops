@@ -16,6 +16,11 @@ import Vision
 @MainActor
 struct GunnAire_OpsTests {
 
+    @Test func webAuthenticationPresentationFailsClosedWithoutAWindow() {
+        #expect(!ContentViewPresentationContextProvider.canPresent(using: nil))
+        #expect(ContentViewPresentationContextProvider.unavailableMessage.contains("foreground"))
+    }
+
     private enum VendorTransactionTransportStubError: Error {
         case unexpectedPost
     }

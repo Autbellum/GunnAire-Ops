@@ -288,6 +288,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     private static let signedInEmailStorageKey = "SignedInGoogleEmail"
 
     private var activeAuthSession: ASWebAuthenticationSession?
+    private var activePresentationContext: ASWebAuthenticationPresentationContextProviding?
     private var pendingOAuthState: String?
     private var pendingCodeVerifier: String?
 
@@ -333,6 +334,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         signedInEmail = nil
         pendingOAuthState = nil
         activeAuthSession = nil
+        activePresentationContext = nil
         try? KeychainStore.remove(account: keychainAccount)
         UserDefaults.standard.removeObject(forKey: tokenStorageKey)
         UserDefaults.standard.removeObject(forKey: Self.signedInEmailStorageKey)
@@ -404,7 +406,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             url: authURL,
             callbackURLScheme: Self.callbackScheme
         ) { [weak self] callbackURL, error in
-            defer { self?.activeAuthSession = nil }
+            defer {
+                self?.activeAuthSession = nil
+                self?.activePresentationContext = nil
+            }
             if let error = error as? ASWebAuthenticationSessionError,
                error.code == .canceledLogin {
                 completion(.failure(GoogleAuthError.authenticationSessionCanceled))
@@ -418,9 +423,11 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         }
         session.presentationContextProvider = presentationContext
         session.prefersEphemeralWebBrowserSession = true
+        activePresentationContext = presentationContext
         activeAuthSession = session
         if !session.start() {
             activeAuthSession = nil
+            activePresentationContext = nil
             completion(.failure(GoogleAuthError.unknown))
         }
     }

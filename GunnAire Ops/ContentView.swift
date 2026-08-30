@@ -64,9 +64,6 @@ struct ContentView: View {
     @State private var quickBooksOAuthState: String?
     @State private var googleOAuthState: String?
     
-    // Strong reference to presentation context provider to avoid deallocation
-    private let authPresentationContextProvider = ContentViewPresentationContextProvider()
-
     private var currentUserEmail: String? {
         AppIdentity.currentEmail
     }
@@ -5308,7 +5305,14 @@ struct EditServiceCallView: View {
 extension ContentView {
     // MARK: - QuickBooks OAuth Authentication
     func authenticateQuickBooks() {
-        QuickBooksAuthAPI.shared.startSignIn(presentationContext: authPresentationContextProvider) { result in
+        guard let presentationContext = ContentViewPresentationContextProvider.makeIfAvailable() else {
+            presentAuthAlert(
+                title: "QuickBooks Sign-In Unavailable",
+                message: ContentViewPresentationContextProvider.unavailableMessage
+            )
+            return
+        }
+        QuickBooksAuthAPI.shared.startSignIn(presentationContext: presentationContext) { result in
             switch result {
             case .success:
                 QuickBooksDataAPI.shared.validateAccountingConnection { validationResult in
@@ -5341,7 +5345,14 @@ extension ContentView {
     
     // MARK: - Google OAuth Authentication
     func authenticateGoogle() {
-        GoogleAuthManager.shared.startSignIn(presentationContext: authPresentationContextProvider) { result in
+        guard let presentationContext = ContentViewPresentationContextProvider.makeIfAvailable() else {
+            presentAuthAlert(
+                title: "Google Sign-In Unavailable",
+                message: ContentViewPresentationContextProvider.unavailableMessage
+            )
+            return
+        }
+        GoogleAuthManager.shared.startSignIn(presentationContext: presentationContext) { result in
             switch result {
             case .success:
                 GoogleAuthManager.shared.validateSignedInDomain { validationResult in
@@ -5658,88 +5669,35 @@ extension ContentView {
 
 // Provide a presentation anchor for ASWebAuthenticationSession
 class ContentViewPresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "App", category: "AuthAnchor")
-    private static weak var lastResolvedAnchor: UIWindow?
-    
-    @inline(__always)
-    private static func dlog(_ message: String) {
-        #if DEBUG
-        logger.debug("\(message, privacy: .public)")
-        #endif
+    static let unavailableMessage = "GunnAire Ops does not have an active app window for sign-in. Bring the app to the foreground, then try again."
+    private let anchor: UIWindow
+
+    private init(anchor: UIWindow) {
+        self.anchor = anchor
+        super.init()
     }
 
-    private static func remember(_ window: UIWindow, reason: String) -> ASPresentationAnchor {
-        lastResolvedAnchor = window
-        dlog(reason)
-        return window
+    static func makeIfAvailable() -> ContentViewPresentationContextProvider? {
+        let foregroundScene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: {
+                $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive
+            })
+        guard let foregroundScene else { return nil }
+        let anchor = foregroundScene.windows.first(where: \.isKeyWindow)
+            ?? foregroundScene.windows.first
+            ?? UIWindow(windowScene: foregroundScene)
+        guard canPresent(using: anchor) else { return nil }
+        return ContentViewPresentationContextProvider(anchor: anchor)
     }
 
-    private static func makeEmergencyAnchor() -> UIWindow {
-        // This is a final fallback for impossible startup timing where no UIWindowScene
-        // exists yet. Use Objective-C runtime construction here to avoid the deprecated
-        // scene-less UIWindow initializer showing up as a compile-time warning.
-        if let unmanagedWindow = UIWindow.perform(NSSelectorFromString("new")),
-           let window = unmanagedWindow.takeUnretainedValue() as? UIWindow {
-            return window
-        }
-
-        for _ in 0..<5 {
-            if let lastResolvedAnchor {
-                return lastResolvedAnchor
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-        }
-
-        logger.fault("Objective-C emergency auth anchor creation failed; retrying runtime construction for auth anchor.")
-        let selector = NSSelectorFromString("new")
-        let emergencyWindow = UIWindow.perform(selector)!
-        return unsafeDowncast(emergencyWindow.takeUnretainedValue(), to: UIWindow.self)
+    static func canPresent(using anchor: UIWindow?) -> Bool {
+        guard let scene = anchor?.windowScene else { return false }
+        return scene.activationState == .foregroundActive || scene.activationState == .foregroundInactive
     }
-    
+
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        // Prefer a key window from the active window scene
-        if let windowScene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }) {
-            
-            // If there's an existing key window, return it
-            if let keyWindow = windowScene.windows.first(where: { $0.isKeyWindow }) {
-                return Self.remember(keyWindow, reason: "Returning keyWindow from foreground scene")
-            }
-            // Fallback: return the first available window in the scene
-            if let anyWindow = windowScene.windows.first {
-                return Self.remember(anyWindow, reason: "Returning first window from foreground scene")
-            }
-            // As a last resort, create a temporary window attached to the scene using the non-deprecated initializer
-            let tempWindow = UIWindow(windowScene: windowScene)
-            return Self.remember(tempWindow, reason: "Creating temp window from foreground scene via init(windowScene:)")
-        }
-
-        // If no suitable window was found above, try to create one from any foreground scene first.
-        if let fgScene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }) {
-            let tempWindow = UIWindow(windowScene: fgScene)
-            return Self.remember(tempWindow, reason: "Creating temp window from foreground scene (fallback)")
-        }
-
-        // As a broader fallback, use any available scene.
-        if let anyScene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first {
-            let tempWindow = UIWindow(windowScene: anyScene)
-            return Self.remember(tempWindow, reason: "Creating temp window from any available scene (broad fallback)")
-        }
-
-        // If no scenes exist yet, keep using the most recent valid anchor rather than
-        // creating a deprecated empty presentation anchor.
-        if let lastResolvedAnchor = Self.lastResolvedAnchor {
-            return Self.remember(lastResolvedAnchor, reason: "Reusing last resolved auth anchor")
-        }
-
-        Self.logger.fault("No UIWindowScene available for auth anchor; falling back to an emergency presentation anchor.")
-        let emergencyAnchor = Self.makeEmergencyAnchor()
-        return Self.remember(emergencyAnchor, reason: "Creating emergency auth anchor without a scene")
+        anchor
     }
 }
 

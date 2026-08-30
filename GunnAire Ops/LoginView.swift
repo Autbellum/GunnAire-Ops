@@ -14,8 +14,6 @@ struct LoginView: View {
     @State private var isAuthenticating = false
     @State private var authErrorMessage: String?
 
-    private let presentationContextProvider = ContentViewPresentationContextProvider()
-
     private var googleConfigReady: Bool {
         !Config.Google.clientID.hasPrefix("YOUR_") &&
         !Config.Google.reversedClientID.hasPrefix("YOUR_")
@@ -144,7 +142,13 @@ struct LoginView: View {
         authErrorMessage = nil
         isAuthenticating = true
 
-        googleAuth.startSignIn(presentationContext: presentationContextProvider) { result in
+        guard let presentationContext = ContentViewPresentationContextProvider.makeIfAvailable() else {
+            isAuthenticating = false
+            authErrorMessage = ContentViewPresentationContextProvider.unavailableMessage
+            return
+        }
+
+        googleAuth.startSignIn(presentationContext: presentationContext) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success:
