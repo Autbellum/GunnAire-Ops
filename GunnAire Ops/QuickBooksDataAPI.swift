@@ -992,10 +992,23 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
-    func createInvoice(_ invoice: QuickBooksInvoiceCreate, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
+    func createInvoice(
+        _ invoice: QuickBooksInvoiceCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void
+    ) {
         let body = try? JSONEncoder().encode(invoice)
+        let queryItems = requestID.map { [URLQueryItem(name: "requestid", value: $0)] } ?? []
         performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "invoice", method: "POST", body: body, contentType: "application/json") },
+            {
+                self.authorizedRequest(
+                    path: "invoice",
+                    queryItems: queryItems,
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
             decode: QuickBooksInvoiceResponse.self
         ) { result in
             completion(result.flatMap {
@@ -2496,6 +2509,64 @@ enum QuickBooksEstimateLineage {
         }
         let value = String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? nil : value
+    }
+}
+
+/// Durable identity for a local invoice while QuickBooks publication is in
+/// flight. The local UUID survives offline saves and CloudKit replication, so
+/// every device can reconcile an accepted-but-unacknowledged create before it
+/// retries. The same UUID also produces a stable Intuit `requestid` for the
+/// one-time create operation.
+enum QuickBooksInvoiceLineage {
+    private static let invoiceIDPrefix = "GunnAire Invoice ID:"
+    private static let maximumPrivateNoteLength = 4_000
+
+    static func operationMarker(for invoice: Invoice) -> String {
+        "\(invoiceIDPrefix) \(invoice.id.uuidString.uppercased())"
+    }
+
+    static func createRequestID(for invoice: Invoice) -> String {
+        "ga-invoice-\(invoice.id.uuidString.lowercased())"
+    }
+
+    static func appendingLineage(to existing: String?, for invoice: Invoice) -> String {
+        let lines = (existing ?? "")
+            .split(whereSeparator: \.isNewline)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { line in
+                !line.isEmpty &&
+                line.range(of: invoiceIDPrefix, options: [.anchored, .caseInsensitive]) == nil
+            }
+        let marker = operationMarker(for: invoice)
+        let availableExistingLength = max(maximumPrivateNoteLength - marker.count - 1, 0)
+        let retainedExisting = String(lines.joined(separator: "\n").prefix(availableExistingLength))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return retainedExisting.isEmpty ? marker : "\(retainedExisting)\n\(marker)"
+    }
+
+    static func localInvoiceID(from privateNote: String?) -> UUID? {
+        guard let line = privateNote?
+            .split(whereSeparator: \.isNewline)
+            .map({ String($0).trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: {
+                $0.range(of: invoiceIDPrefix, options: [.anchored, .caseInsensitive]) != nil
+            }) else {
+            return nil
+        }
+        let value = String(line.dropFirst(invoiceIDPrefix.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return UUID(uuidString: value)
+    }
+
+    static func matches(_ invoice: Invoice, remoteInvoice: QuickBooksInvoice) -> Bool {
+        localInvoiceID(from: remoteInvoice.PrivateNote) == invoice.id
+    }
+
+    static func matchingRemoteInvoices(
+        for invoice: Invoice,
+        in remoteInvoices: [QuickBooksInvoice]
+    ) -> [QuickBooksInvoice] {
+        remoteInvoices.filter { matches(invoice, remoteInvoice: $0) }
     }
 }
 

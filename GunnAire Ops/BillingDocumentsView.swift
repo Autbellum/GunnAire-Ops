@@ -8181,9 +8181,12 @@ GunnAire
     }
 
     private func quickBooksPrivateNote(for invoice: Invoice) -> String? {
-        BillingPriceAdjustmentAudit.quickBooksPrivateNote(
-            existing: invoice.accountingPrivateNote,
-            snapshotJSON: invoice.catalogSnapshotJSON
+        QuickBooksInvoiceLineage.appendingLineage(
+            to: BillingPriceAdjustmentAudit.quickBooksPrivateNote(
+                existing: invoice.accountingPrivateNote,
+                snapshotJSON: invoice.catalogSnapshotJSON
+            ),
+            for: invoice
         )
     }
 
@@ -8241,18 +8244,49 @@ GunnAire
             DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
             GlobalTaxCalculation: "TaxExcluded"
         )
-        liveAPI.createInvoice(payload) { apiResult in
+        liveAPI.fetchInvoices { fetchResult in
             DispatchQueue.main.async {
-                switch apiResult {
-                case .success(let quickBooksInvoice):
-                    applyQuickBooksInvoiceSync(quickBooksInvoice, to: invoice)
-                    syncLinkedServiceReportsToQuickBooks(invoice)
-                    actionMessage = invoice.needsQuickBooksAttention
-                        ? "Invoice is linked to QuickBooks, but its tax total needs review: \(invoice.quickBooksSyncDetail ?? "Refresh the invoice in QuickBooks.")"
-                        : "Invoice created and synced to QuickBooks."
+                switch fetchResult {
                 case .failure(let error):
                     markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                    actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
+                    actionMessage = "Invoice saved locally. QuickBooks reconciliation failed, so no duplicate-prone create was attempted: \(error.localizedDescription)"
+                case .success(let remoteInvoices):
+                    do {
+                        if let recovered = try QuickBooksInvoicePublicationRecovery.matchingRemoteInvoice(
+                            for: invoice,
+                            in: remoteInvoices
+                        ) {
+                            applyQuickBooksInvoiceSync(recovered, to: invoice)
+                            syncLinkedServiceReportsToQuickBooks(invoice)
+                            actionMessage = invoice.needsQuickBooksAttention
+                                ? "Existing QuickBooks invoice recovered, but its tax total needs review: \(invoice.quickBooksSyncDetail ?? "Refresh the invoice in QuickBooks.")"
+                                : "Existing QuickBooks invoice recovered without creating a duplicate."
+                            return
+                        }
+                    } catch {
+                        markQuickBooksInvoiceSyncFailure(invoice, error: error)
+                        actionMessage = error.localizedDescription
+                        return
+                    }
+
+                    liveAPI.createInvoice(
+                        payload,
+                        requestID: QuickBooksInvoiceLineage.createRequestID(for: invoice)
+                    ) { apiResult in
+                        DispatchQueue.main.async {
+                            switch apiResult {
+                            case .success(let quickBooksInvoice):
+                                applyQuickBooksInvoiceSync(quickBooksInvoice, to: invoice)
+                                syncLinkedServiceReportsToQuickBooks(invoice)
+                                actionMessage = invoice.needsQuickBooksAttention
+                                    ? "Invoice is linked to QuickBooks, but its tax total needs review: \(invoice.quickBooksSyncDetail ?? "Refresh the invoice in QuickBooks.")"
+                                    : "Invoice created and synced to QuickBooks."
+                            case .failure(let error):
+                                markQuickBooksInvoiceSyncFailure(invoice, error: error)
+                                actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -9055,6 +9089,7 @@ private struct RecordInvoicePaymentView: View {
     @Query private var serviceCalls: [ServiceCall]
     @Query private var payments: [Payment]
     @Query private var attachments: [ServiceDocumentAttachment]
+    @Query(sort: \Item.name, order: .forward) private var catalogItems: [Item]
 
     let invoice: Invoice
     let autoStartTapToPay: Bool
@@ -9410,7 +9445,8 @@ private struct RecordInvoicePaymentView: View {
                             region: nil,
                             country: "US"
                         ),
-                        note: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes
+                        note: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
+                        catalogItems: catalogItems
                     )
 
                     let resolvedCardLast4: String?
@@ -9462,7 +9498,8 @@ private struct RecordInvoicePaymentView: View {
                             accountType: achAccountType,
                             checkNumber: achCheckNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : achCheckNumber.trimmingCharacters(in: .whitespacesAndNewlines)
                         ),
-                        note: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes
+                        note: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
+                        catalogItems: catalogItems
                     )
 
                     let payment = Payment(

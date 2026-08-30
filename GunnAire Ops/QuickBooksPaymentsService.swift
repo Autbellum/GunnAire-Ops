@@ -71,9 +71,13 @@ final class QuickBooksPaymentsService {
         invoice: Invoice,
         amount: Double,
         cardInput: QuickBooksPaymentsCardInput,
-        note: String?
+        note: String?,
+        catalogItems: [Item]
     ) async throws -> QuickBooksProcessedPaymentResult {
-        let customerQBID = try await prepareInvoiceForQuickBooksPayment(invoice)
+        let customerQBID = try await prepareInvoiceForQuickBooksPayment(
+            invoice,
+            catalogItems: catalogItems
+        )
 
         let clientTransactionID = Self.chargeClientTransactionID(for: invoice, amount: amount)
         let token = try await createCardToken(cardInput)
@@ -117,9 +121,13 @@ final class QuickBooksPaymentsService {
         invoice: Invoice,
         amount: Double,
         bankInput: QuickBooksPaymentsBankAccountInput,
-        note: String?
+        note: String?,
+        catalogItems: [Item]
     ) async throws -> QuickBooksProcessedPaymentResult {
-        let customerQBID = try await prepareInvoiceForQuickBooksPayment(invoice)
+        let customerQBID = try await prepareInvoiceForQuickBooksPayment(
+            invoice,
+            catalogItems: catalogItems
+        )
 
         let clientTransactionID = Self.chargeClientTransactionID(for: invoice, amount: amount)
         let token = try await createBankAccountToken(bankInput)
@@ -319,7 +327,10 @@ final class QuickBooksPaymentsService {
         }
     }
 
-    private func prepareInvoiceForQuickBooksPayment(_ invoice: Invoice) async throws -> String {
+    private func prepareInvoiceForQuickBooksPayment(
+        _ invoice: Invoice,
+        catalogItems: [Item]
+    ) async throws -> String {
         if let blockedMessage = invoice.paymentCollectionBlockedMessage {
             throw QuickBooksPaymentsServiceError.authoritativeTaxRequired(blockedMessage)
         }
@@ -329,7 +340,11 @@ final class QuickBooksPaymentsService {
         }
 
         let customerQBID = try await ensureQuickBooksCustomer(for: invoice.customer)
-        try await ensureQuickBooksInvoice(for: invoice, customerQBID: customerQBID)
+        try await ensureQuickBooksInvoice(
+            for: invoice,
+            customerQBID: customerQBID,
+            catalogItems: catalogItems
+        )
         return customerQBID
     }
 
@@ -354,55 +369,74 @@ final class QuickBooksPaymentsService {
         return created.Id
     }
 
-    private func ensureQuickBooksInvoice(for invoice: Invoice, customerQBID: String) async throws {
+    private func ensureQuickBooksInvoice(
+        for invoice: Invoice,
+        customerQBID: String,
+        catalogItems: [Item]
+    ) async throws {
         if invoice.quickBooksID.nilIfBlank != nil {
             return
         }
 
-        guard let salesItemRef = await resolvedSalesItemRef() else {
-            throw QuickBooksPaymentsServiceError.missingSalesItemReference
+        let inputs = try await MainActor.run {
+            try QuickBooksInvoicePublicationRecovery.publicationInputs(
+                for: invoice,
+                catalogItems: catalogItems,
+                payments: []
+            )
         }
-
-        let description = Self.nilIfBlank(invoice.lineItemSummary) ?? "GunnAire service invoice"
         let payload = QuickBooksInvoiceCreate(
-            CustomerRef: QuickBooksReference(value: customerQBID, name: invoice.customer.name),
-            Line: [
-                QuickBooksLineItem(
-                    Amount: invoice.amount,
-                    DetailType: "SalesItemLineDetail",
-                    Description: description,
-                    SalesItemLineDetail: QuickBooksSalesItemLineDetail(
-                        ItemRef: QuickBooksReference(value: salesItemRef, name: nil),
-                        TaxCodeRef: QuickBooksReference(
-                            value: BillingTaxPolicy.quickBooksTaxCodeValue(isTaxable: false),
-                            name: nil
-                        )
-                    )
-                )
-            ],
-            PrivateNote: invoice.notes,
+            CustomerRef: QuickBooksReference(value: customerQBID, name: inputs.customerRef.name),
+            Line: inputs.lines,
+            PrivateNote: inputs.privateNote,
+            BillEmail: inputs.billEmail,
+            ShipAddr: inputs.shipAddress,
             DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
             GlobalTaxCalculation: "TaxExcluded"
         )
 
-        let created = try await withCheckedThrowingContinuation { continuation in
-            api.createInvoice(payload) { result in
+        let remoteInvoices = try await withCheckedThrowingContinuation { continuation in
+            api.fetchInvoices { result in
                 continuation.resume(with: result)
             }
         }
-        invoice.quickBooksID = created.Id
-        invoice.quickBooksBalanceDue = created.Balance
-        if let rawDueDate = created.DueDate,
-           let dueDate = QuickBooksDateOnly.date(from: rawDueDate) {
-            invoice.dueDate = dueDate
+
+        let recovered = try await MainActor.run {
+            try QuickBooksInvoicePublicationRecovery.matchingRemoteInvoice(
+                for: invoice,
+                in: remoteInvoices
+            )
         }
-        let taxIssue = invoice.applyQuickBooksTaxResult(
-            total: created.TotalAmt,
-            reportedTax: created.TxnTaxDetail?.TotalTax
-        )
-        invoice.quickBooksSyncStatus = taxIssue == nil ? "synced" : "needs_attention"
-        invoice.quickBooksSyncDetail = taxIssue
-        invoice.quickBooksLastSyncedAt = Date()
+
+        let confirmed: QuickBooksInvoice
+        if let recovered {
+            confirmed = recovered
+        } else {
+            confirmed = try await withCheckedThrowingContinuation { continuation in
+                api.createInvoice(
+                    payload,
+                    requestID: QuickBooksInvoiceLineage.createRequestID(for: invoice)
+                ) { result in
+                    continuation.resume(with: result)
+                }
+            }
+        }
+
+        await MainActor.run {
+            invoice.quickBooksID = confirmed.Id
+            invoice.quickBooksBalanceDue = confirmed.Balance
+            if let rawDueDate = confirmed.DueDate,
+               let dueDate = QuickBooksDateOnly.date(from: rawDueDate) {
+                invoice.dueDate = dueDate
+            }
+            let taxIssue = invoice.applyQuickBooksTaxResult(
+                total: confirmed.TotalAmt,
+                reportedTax: confirmed.TxnTaxDetail?.TotalTax
+            )
+            invoice.quickBooksSyncStatus = taxIssue == nil ? "synced" : "needs_attention"
+            invoice.quickBooksSyncDetail = taxIssue
+            invoice.quickBooksLastSyncedAt = Date()
+        }
     }
 
     private func createCardToken(_ input: QuickBooksPaymentsCardInput) async throws -> QuickBooksPaymentsTokenResponse {

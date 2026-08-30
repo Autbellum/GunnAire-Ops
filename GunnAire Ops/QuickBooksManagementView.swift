@@ -155,6 +155,7 @@ enum QuickBooksDocumentLinePublication {
 enum QuickBooksInvoicePublicationRecoveryError: LocalizedError, Equatable {
     case protectedHistory(String)
     case missingCustomerMapping
+    case ambiguousRemoteMarker
 
     var errorDescription: String? {
         switch self {
@@ -162,6 +163,8 @@ enum QuickBooksInvoicePublicationRecoveryError: LocalizedError, Equatable {
             return detail
         case .missingCustomerMapping:
             return "Publish this invoice from Job Billing first so the customer can be linked to QuickBooks."
+        case .ambiguousRemoteMarker:
+            return "More than one QuickBooks invoice has this GunnAire operation marker. Review the duplicates in QuickBooks before retrying."
         }
     }
 }
@@ -206,15 +209,32 @@ enum QuickBooksInvoicePublicationRecovery {
                 let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
                 return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
             },
-            privateNote: BillingPriceAdjustmentAudit.quickBooksPrivateNote(
-                existing: invoice.accountingPrivateNote,
-                snapshotJSON: invoice.catalogSnapshotJSON
+            privateNote: QuickBooksInvoiceLineage.appendingLineage(
+                to: BillingPriceAdjustmentAudit.quickBooksPrivateNote(
+                    existing: invoice.accountingPrivateNote,
+                    snapshotJSON: invoice.catalogSnapshotJSON
+                ),
+                for: invoice
             ),
             shipAddress: invoice.siteAddress.flatMap { address in
                 let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
                 return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
             }
         )
+    }
+
+    static func matchingRemoteInvoice(
+        for invoice: Invoice,
+        in remoteInvoices: [QuickBooksInvoice]
+    ) throws -> QuickBooksInvoice? {
+        let matches = QuickBooksInvoiceLineage.matchingRemoteInvoices(
+            for: invoice,
+            in: remoteInvoices
+        )
+        guard matches.count <= 1 else {
+            throw QuickBooksInvoicePublicationRecoveryError.ambiguousRemoteMarker
+        }
+        return matches.first
     }
 }
 
@@ -3254,7 +3274,8 @@ struct QuickBooksManagementView: View {
                         invoice: invoice,
                         amount: amount,
                         cardInput: cardInput,
-                        note: note
+                        note: note,
+                        catalogItems: localCatalogItems
                     )
                     let resolvedCardLast4 = result.charge.card?.number.flatMap { String($0.suffix(4)) }
                     await MainActor.run {
@@ -3996,9 +4017,47 @@ struct QuickBooksManagementView: View {
                 DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
                 GlobalTaxCalculation: "TaxExcluded"
             )
-            quickBooksDataAPI.createInvoice(payload) { result in
+            quickBooksDataAPI.fetchInvoices { fetchResult in
                 DispatchQueue.main.async {
-                    completeLocalInvoicePublication(result, localInvoice: invoice, wasUpdate: false)
+                    switch fetchResult {
+                    case .failure(let error):
+                        markLocalInvoicePublicationFailure(invoice, error: error)
+                        actionMessage = "QuickBooks invoice reconciliation failed, so no duplicate-prone create was attempted: \(error.localizedDescription)"
+                        activeLocalInvoicePublicationID = nil
+                    case .success(let remoteInvoices):
+                        do {
+                            if let recovered = try QuickBooksInvoicePublicationRecovery.matchingRemoteInvoice(
+                                for: invoice,
+                                in: remoteInvoices
+                            ) {
+                                completeLocalInvoicePublication(
+                                    .success(recovered),
+                                    localInvoice: invoice,
+                                    wasUpdate: false,
+                                    recoveredExisting: true
+                                )
+                                return
+                            }
+                        } catch {
+                            markLocalInvoicePublicationFailure(invoice, error: error)
+                            actionMessage = error.localizedDescription
+                            activeLocalInvoicePublicationID = nil
+                            return
+                        }
+
+                        quickBooksDataAPI.createInvoice(
+                            payload,
+                            requestID: QuickBooksInvoiceLineage.createRequestID(for: invoice)
+                        ) { result in
+                            DispatchQueue.main.async {
+                                completeLocalInvoicePublication(
+                                    result,
+                                    localInvoice: invoice,
+                                    wasUpdate: false
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -4007,7 +4066,8 @@ struct QuickBooksManagementView: View {
     private func completeLocalInvoicePublication(
         _ result: Result<QuickBooksInvoice, Error>,
         localInvoice: Invoice,
-        wasUpdate: Bool
+        wasUpdate: Bool,
+        recoveredExisting: Bool = false
     ) {
         defer { activeLocalInvoicePublicationID = nil }
         switch result {
@@ -4033,8 +4093,12 @@ struct QuickBooksManagementView: View {
                 let actor = AppIdentity.currentEmail
                 ServiceCallActivity.record(
                     for: call,
-                    action: wasUpdate ? "QuickBooks invoice republished" : "QuickBooks invoice published",
-                    detail: "QuickBooks invoice \(quickBooksInvoice.DocNumber ?? quickBooksInvoice.Id) confirmed from the local publication queue.",
+                    action: recoveredExisting
+                        ? "QuickBooks invoice link recovered"
+                        : (wasUpdate ? "QuickBooks invoice republished" : "QuickBooks invoice published"),
+                    detail: recoveredExisting
+                        ? "Recovered QuickBooks invoice \(quickBooksInvoice.DocNumber ?? quickBooksInvoice.Id) by its GunnAire operation marker without creating another transaction."
+                        : "QuickBooks invoice \(quickBooksInvoice.DocNumber ?? quickBooksInvoice.Id) confirmed from the local publication queue.",
                     actorEmail: actor,
                     in: modelContext
                 )
@@ -4049,9 +4113,11 @@ struct QuickBooksManagementView: View {
             if let taxIssue {
                 actionMessage = "QuickBooks confirmed the invoice, but its tax total needs review: \(taxIssue)"
             } else {
-                actionMessage = wasUpdate
-                    ? "Invoice line items updated and confirmed in QuickBooks."
-                    : "Invoice created and confirmed in QuickBooks."
+                actionMessage = recoveredExisting
+                    ? "Existing QuickBooks invoice recovered without creating a duplicate."
+                    : (wasUpdate
+                        ? "Invoice line items updated and confirmed in QuickBooks."
+                        : "Invoice created and confirmed in QuickBooks.")
             }
         }
     }

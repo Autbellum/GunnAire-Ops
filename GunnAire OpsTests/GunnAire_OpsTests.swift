@@ -18124,6 +18124,59 @@ struct GunnAire_OpsTests {
         #expect(repairLine.SalesItemLineDetail.UnitPrice == 125)
         #expect(repairLine.SalesItemLineDetail.TaxCodeRef?.value == "TAX")
         #expect(inputs.privateNote?.contains("Approved service-plan price") == true)
+        #expect(inputs.privateNote?.contains(QuickBooksInvoiceLineage.operationMarker(for: invoice)) == true)
+    }
+
+    @Test func quickBooksInvoiceLineageIsStableAndRecoversAcceptedCreates() throws {
+        let customer = Customer(quickBooksID: "QBO-CUSTOMER-LINEAGE", name: "Lineage Customer")
+        let invoice = Invoice(customer: customer, amount: 189)
+        let firstNote = QuickBooksInvoiceLineage.appendingLineage(
+            to: "Technician note",
+            for: invoice
+        )
+        let secondNote = QuickBooksInvoiceLineage.appendingLineage(
+            to: firstNote,
+            for: invoice
+        )
+        let marker = QuickBooksInvoiceLineage.operationMarker(for: invoice)
+
+        #expect(firstNote == secondNote)
+        #expect(firstNote.components(separatedBy: marker).count == 2)
+        #expect(QuickBooksInvoiceLineage.localInvoiceID(from: firstNote) == invoice.id)
+        #expect(QuickBooksInvoiceLineage.createRequestID(for: invoice) == QuickBooksInvoiceLineage.createRequestID(for: invoice))
+        #expect(QuickBooksInvoiceLineage.createRequestID(for: invoice).count == 47)
+        let boundedNote = QuickBooksInvoiceLineage.appendingLineage(
+            to: String(repeating: "Detailed field finding. ", count: 300),
+            for: invoice
+        )
+        #expect(boundedNote.count <= 4_000)
+        #expect(boundedNote.hasSuffix(marker))
+
+        let recovered = try JSONDecoder().decode(
+            QuickBooksInvoice.self,
+            from: Data("""
+            {
+              "Id": "QBO-INVOICE-RECOVERED",
+              "CustomerRef": { "value": "QBO-CUSTOMER-LINEAGE", "name": "Lineage Customer" },
+              "TotalAmt": 189,
+              "Balance": 189,
+              "PrivateNote": "Technician note\\n\(marker)"
+            }
+            """.utf8)
+        )
+
+        #expect(
+            try QuickBooksInvoicePublicationRecovery.matchingRemoteInvoice(
+                for: invoice,
+                in: [recovered]
+            )?.Id == "QBO-INVOICE-RECOVERED"
+        )
+        #expect(throws: QuickBooksInvoicePublicationRecoveryError.ambiguousRemoteMarker) {
+            try QuickBooksInvoicePublicationRecovery.matchingRemoteInvoice(
+                for: invoice,
+                in: [recovered, recovered]
+            )
+        }
     }
 
     @Test func quickBooksSharedLinePublicationCarriesServicedSystemWithoutChangingAccountingValues() throws {
