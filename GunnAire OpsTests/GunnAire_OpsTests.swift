@@ -843,8 +843,8 @@ struct GunnAire_OpsTests {
         #expect(configuration.cloudKitContainerIdentifier == GunnAireCloudKit.containerIdentifier)
         #expect(configuration.isStoredInMemoryOnly == false)
         #expect(configuration.url.lastPathComponent == GunnAireCloudKitSchemaBootstrap.storeFileName)
-        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 19)
-        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V19"))
+        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 20)
+        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V20"))
     }
     #endif
 
@@ -17681,6 +17681,18 @@ struct GunnAire_OpsTests {
         #expect(fleetEvent.serviceCategory == .repair)
         #expect(archivedDocument.fleetVehicleID == fleetVehicle.id)
         #expect(archivedDocument.fleetVehicleEventID == fleetEvent.id)
+
+        let businessTask = try #require(container.mainContext.fetch(FetchDescriptor<BusinessTask>()).first)
+        let businessTaskEvent = try #require(container.mainContext.fetch(FetchDescriptor<BusinessTaskEvent>()).first)
+        #expect(businessTask.customerID == customer.id)
+        #expect(businessTask.serviceLocationID == serviceLocation.id)
+        #expect(businessTask.serviceCallID == serviceCall.id)
+        #expect(businessTask.estimateID == estimate.id)
+        #expect(businessTask.completedAt != nil)
+        #expect(businessTask.cancellationOperationID != nil)
+        #expect(businessTaskEvent.taskID == businessTask.id)
+        #expect(businessTaskEvent.kind == .updated)
+        #expect(businessTaskEvent.detail.isEmpty == false)
     }
 
     @Test func approvedPricebookPublicationReconcilesUniqueQuickBooksMatchesAndRejectsAmbiguity() throws {
@@ -23823,6 +23835,242 @@ struct GunnAire_OpsTests {
         #expect(restored.detail == "Check in at the safety desk before entering the warehouse.")
         #expect(restored.createdByEmail == "dispatch@gunnaire.com")
         #expect(restored.isActive)
+    }
+
+    @Test func businessTaskLifecycleRetainsAssignmentDueDateAndAppendOnlyEvents() throws {
+        let base = Date(timeIntervalSince1970: 2_100_000_000)
+        let customerID = UUID()
+        let serviceCallID = UUID()
+        let created = try BusinessTaskPolicy.makeTask(
+            title: "  Confirm rooftop access  ",
+            taskDescription: "Call the site contact before dispatch.",
+            priority: .high,
+            assignedToEmail: "DISPATCH@GUNNAIRE.COM",
+            dueAt: base.addingTimeInterval(3_600),
+            customerID: customerID,
+            customerName: "Task Customer",
+            serviceCallID: serviceCallID,
+            serviceCallSummary: "Repair • Aug 30",
+            actorEmail: "ADMIN@GUNNAIRE.COM",
+            now: base
+        )
+        let task = created.task
+        var events = [created.event]
+        #expect(task.title == "Confirm rooftop access")
+        #expect(task.priority == .high)
+        #expect(task.assignedToEmail == "dispatch@gunnaire.com")
+        #expect(created.event.operationID == task.creationOperationID)
+        #expect(created.event.kind == .created)
+        #expect(!created.event.detail.contains("@"))
+
+        events.append(try BusinessTaskPolicy.update(
+            task,
+            title: "Confirm roof access and key",
+            taskDescription: "Call the site contact and confirm the lockbox.",
+            priority: .urgent,
+            assignedToEmail: "field@gunnaire.com",
+            dueAt: base.addingTimeInterval(7_200),
+            actorEmail: "dispatch@gunnaire.com",
+            now: base.addingTimeInterval(60)
+        ))
+        #expect(task.assignedToEmail == "field@gunnaire.com")
+        #expect(task.priority == .urgent)
+        #expect(events.last?.detail.contains("reassigned") == true)
+        #expect(events.last?.detail.contains("@") == false)
+
+        events.append(try BusinessTaskPolicy.complete(
+            task,
+            actorEmail: "field@gunnaire.com",
+            note: "Contact confirmed the key is in lockbox 204.",
+            now: base.addingTimeInterval(120)
+        ))
+        #expect(task.status == .completed)
+        #expect(task.completionNote == "Contact confirmed the key is in lockbox 204.")
+
+        events.append(try BusinessTaskPolicy.reopen(
+            task,
+            actorEmail: "dispatch@gunnaire.com",
+            reason: "Customer changed the access code.",
+            now: base.addingTimeInterval(180)
+        ))
+        #expect(task.isOpen)
+        #expect(task.completionNote == nil)
+
+        events.append(try BusinessTaskPolicy.cancel(
+            task,
+            actorEmail: "dispatch@gunnaire.com",
+            reason: "Job was cancelled by the customer.",
+            now: base.addingTimeInterval(240)
+        ))
+        #expect(task.status == .cancelled)
+        #expect(Set(events.map(\.operationID)).count == 5)
+        #expect(events.map(\.kind) == [.created, .updated, .completed, .reopened, .cancelled])
+    }
+
+    @Test func businessTaskRolesSeparateCompanyCoordinationFromAssignedWork() throws {
+        let admin = AppUser(email: "task-admin@gunnaire.com", role: .admin)
+        let dispatch = AppUser(email: "task-dispatch@gunnaire.com", role: .dispatcher)
+        let field = AppUser(email: "task-field@gunnaire.com", role: .fieldTechnician)
+        let accounting = AppUser(email: "task-accounting@gunnaire.com", role: .accounting)
+        let standard = AppUser(email: "task-standard@gunnaire.com", role: .standard)
+        let users = [admin, dispatch, field, accounting, standard]
+        let assignedJobID = UUID()
+
+        #expect(AppAccess.canCreateBusinessTask(
+            assignedToEmail: field.email,
+            serviceCallID: nil,
+            email: dispatch.email,
+            users: users
+        ))
+        #expect(AppAccess.canCreateBusinessTask(
+            assignedToEmail: field.email,
+            serviceCallID: assignedJobID,
+            email: field.email,
+            users: users,
+            visibleServiceCallIDs: [assignedJobID]
+        ))
+        #expect(!AppAccess.canCreateBusinessTask(
+            assignedToEmail: dispatch.email,
+            serviceCallID: assignedJobID,
+            email: field.email,
+            users: users,
+            visibleServiceCallIDs: [assignedJobID]
+        ))
+        #expect(!AppAccess.canCreateBusinessTask(
+            assignedToEmail: field.email,
+            serviceCallID: nil,
+            email: field.email,
+            users: users,
+            visibleServiceCallIDs: [assignedJobID]
+        ))
+        #expect(AppAccess.canCreateBusinessTask(
+            assignedToEmail: accounting.email,
+            serviceCallID: nil,
+            email: accounting.email,
+            users: users
+        ))
+
+        let fieldTask = try BusinessTaskPolicy.makeTask(
+            title: "Photograph disconnect label",
+            assignedToEmail: field.email,
+            dueAt: Date(),
+            customerID: UUID(),
+            customerName: "Role Customer",
+            serviceCallID: assignedJobID,
+            serviceCallSummary: "Service",
+            actorEmail: dispatch.email
+        ).task
+        let accountingTask = try BusinessTaskPolicy.makeTask(
+            title: "Review purchase receipt",
+            assignedToEmail: accounting.email,
+            dueAt: Date(),
+            actorEmail: standard.email
+        ).task
+
+        #expect(Set(BusinessTaskPolicy.visibleTasks(
+            from: [fieldTask, accountingTask],
+            email: admin.email,
+            users: users
+        ).map(\.id)) == [fieldTask.id, accountingTask.id])
+        #expect(BusinessTaskPolicy.visibleTasks(
+            from: [fieldTask, accountingTask],
+            email: field.email,
+            users: users,
+            visibleServiceCallIDs: [assignedJobID]
+        ).map(\.id) == [fieldTask.id])
+        #expect(BusinessTaskPolicy.visibleTasks(
+            from: [fieldTask, accountingTask],
+            email: standard.email,
+            users: users
+        ).isEmpty)
+        #expect(AppAccess.canCompleteBusinessTask(fieldTask, email: field.email, users: users))
+        #expect(!AppAccess.canCancelBusinessTask(fieldTask, email: field.email, users: users))
+        #expect(AppAccess.canCancelBusinessTask(fieldTask, email: dispatch.email, users: users))
+    }
+
+    @MainActor
+    @Test func businessTaskAndAuditEventsPersistInTheSharedCloudKitModelSchema() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(name: "Persistent Task Customer")
+        let call = ServiceCall(type: .repair, scheduledDate: Date(), customer: customer)
+        let created = try BusinessTaskPolicy.makeTask(
+            title: "Verify warranty serial",
+            taskDescription: "Compare the compressor serial with the claim.",
+            priority: .high,
+            assignedToEmail: "dispatch@gunnaire.com",
+            dueAt: Date().addingTimeInterval(3_600),
+            customerID: customer.id,
+            customerName: customer.name,
+            serviceCallID: call.id,
+            serviceCallSummary: "Repair",
+            actorEmail: "admin@gunnaire.com"
+        )
+        context.insert(customer)
+        context.insert(call)
+        context.insert(created.task)
+        context.insert(created.event)
+        try context.save()
+
+        let restoredTask = try #require(try context.fetch(FetchDescriptor<BusinessTask>()).first)
+        let restoredEvent = try #require(try context.fetch(FetchDescriptor<BusinessTaskEvent>()).first)
+        #expect(restoredTask.customerID == customer.id)
+        #expect(restoredTask.serviceCallID == call.id)
+        #expect(restoredTask.priority == .high)
+        #expect(restoredEvent.taskID == restoredTask.id)
+        #expect(restoredEvent.operationID == restoredTask.creationOperationID)
+        #expect(restoredEvent.kind == .created)
+    }
+
+    @MainActor
+    @Test func deletingCustomerExplicitlyRemovesLinkedBusinessTasksAndTheirAuditEvents() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(name: "Task Delete Customer")
+        let created = try BusinessTaskPolicy.makeTask(
+            title: "Customer-specific follow-up",
+            assignedToEmail: "dispatch@gunnaire.com",
+            dueAt: Date(),
+            customerID: customer.id,
+            customerName: customer.name,
+            actorEmail: "admin@gunnaire.com"
+        )
+        context.insert(customer)
+        context.insert(created.task)
+        context.insert(created.event)
+        try context.save()
+
+        let summary = CustomerDataMaintenance.deleteCustomer(
+            customer,
+            modelContext: context,
+            serviceCalls: [],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            contracts: [],
+            timeEntries: [],
+            documentAttachments: [],
+            equipmentProfiles: [],
+            serviceLocations: [],
+            customerCommunications: [],
+            operationalAlerts: [],
+            businessTasks: [created.task],
+            businessTaskEvents: [created.event]
+        )
+        try context.save()
+
+        #expect(summary.businessTasks == 1)
+        #expect(summary.businessTaskEvents == 1)
+        #expect(try context.fetch(FetchDescriptor<BusinessTask>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<BusinessTaskEvent>()).isEmpty)
     }
 
 }

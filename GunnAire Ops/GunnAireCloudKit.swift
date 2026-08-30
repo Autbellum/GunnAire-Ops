@@ -377,7 +377,7 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
 enum GunnAireCloudKitSchemaBootstrap {
     static let initializeArgument = "-initializeCloudKitSchema"
     static let cleanupArgument = "-cleanupCloudKitSchemaBootstrap"
-    static let schemaVersion = 19
+    static let schemaVersion = 20
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
@@ -724,6 +724,44 @@ enum GunnAireCloudKitSchemaBootstrap {
             createdAt: now,
             createdByEmail: bootstrapEmail
         )
+        let businessTask = BusinessTask(
+            creationOperationID: UUID(),
+            title: marker,
+            taskDescription: marker,
+            priority: .urgent,
+            assignedToEmail: bootstrapEmail,
+            dueAt: now,
+            customerID: customer.id,
+            customerName: customer.name,
+            serviceLocationID: serviceLocation.id,
+            serviceLocationName: serviceLocation.displayName,
+            serviceCallID: serviceCall.id,
+            serviceCallSummary: marker,
+            estimateID: estimate.id,
+            estimateSummary: marker,
+            createdAt: now,
+            createdByEmail: bootstrapEmail
+        )
+        businessTask.completedAt = now
+        businessTask.completedByEmail = bootstrapEmail
+        businessTask.completionNote = marker
+        businessTask.completionOperationID = UUID()
+        businessTask.cancelledAt = now
+        businessTask.cancelledByEmail = bootstrapEmail
+        businessTask.cancellationReason = marker
+        businessTask.cancellationOperationID = UUID()
+        let businessTaskEvent = BusinessTaskEvent(
+            operationID: UUID(),
+            taskID: businessTask.id,
+            kind: .updated,
+            occurredAt: now,
+            actorEmail: bootstrapEmail,
+            detail: marker,
+            titleSnapshot: marker,
+            assignedToEmailSnapshot: bootstrapEmail,
+            dueAtSnapshot: now,
+            priority: .urgent
+        )
 
         let models: [any PersistentModel] = [
             item,
@@ -829,6 +867,8 @@ enum GunnAireCloudKitSchemaBootstrap {
             fleetEvent,
             fieldExpenseClaim,
             operationalAlert,
+            businessTask,
+            businessTaskEvent,
         ]
 
         for model in models {
@@ -838,6 +878,12 @@ enum GunnAireCloudKitSchemaBootstrap {
     }
 
     private static func cleanup(in modelContext: ModelContext) throws {
+        for value in try modelContext.fetch(FetchDescriptor<BusinessTaskEvent>()) where value.detail == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<BusinessTask>()) where value.title == marker {
+            modelContext.delete(value)
+        }
         for value in try modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>()) where value.title == marker {
             modelContext.delete(value)
         }

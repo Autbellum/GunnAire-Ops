@@ -23,6 +23,7 @@ struct OperationsDashboardView: View {
     @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
     @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
     @Query(sort: \FleetVehicle.unitNumber, order: .forward) private var fleetVehicles: [FleetVehicle]
+    @Query(sort: \BusinessTask.dueAt, order: .forward) private var businessTasks: [BusinessTask]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
@@ -34,6 +35,7 @@ struct OperationsDashboardView: View {
     @State private var isBusinessOverviewExpanded = false
     @State private var isOperationalStatusExpanded = false
     @State private var showingFleetWorkspace = false
+    @State private var showingBusinessTasks = false
 
     private let calendar = Calendar.current
 
@@ -120,6 +122,25 @@ struct OperationsDashboardView: View {
                 }
                 return $0.unitNumber.localizedCaseInsensitiveCompare($1.unitNumber) == .orderedAscending
             }
+    }
+
+    private var visibleBusinessTasks: [BusinessTask] {
+        let visibleCallIDs = AppAccess.visibleServiceCallIDs(
+            email: currentUserEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+        return BusinessTaskPolicy.visibleTasks(
+            from: businessTasks,
+            email: currentUserEmail,
+            users: users,
+            visibleServiceCallIDs: visibleCallIDs
+        )
+    }
+
+    private var openBusinessTasks: [BusinessTask] {
+        visibleBusinessTasks.filter(\.isOpen)
     }
 
     private var todayCalls: [ServiceCall] {
@@ -249,6 +270,7 @@ struct OperationsDashboardView: View {
             quickBooksAttentionInvoices.first != nil,
             quickBooksAttentionPayments.first != nil,
             followUpCalls.first != nil,
+            openBusinessTasks.first != nil,
             fleetAttentionVehicles.first != nil,
             upcomingCalls.first != nil
         ]
@@ -414,6 +436,10 @@ struct OperationsDashboardView: View {
                 FleetWorkspaceView()
                     .tint(Color.brandGold)
             }
+            .sheet(isPresented: $showingBusinessTasks) {
+                BusinessTaskWorkspaceView()
+                    .tint(Color.brandGold)
+            }
         }
     }
 
@@ -469,6 +495,13 @@ struct OperationsDashboardView: View {
             GunnAireAppIntentRouter.store(.schedule)
         } label: {
             Label("Schedule", systemImage: "calendar.badge.clock")
+                .frame(maxWidth: .infinity)
+        }
+
+        Button {
+            showingBusinessTasks = true
+        } label: {
+            Label("Tasks", systemImage: "checklist")
                 .frame(maxWidth: .infinity)
         }
 
@@ -678,6 +711,20 @@ struct OperationsDashboardView: View {
                     ) {
                         GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
                     }
+                }
+
+                if let task = openBusinessTasks.first {
+                    priorityRow(
+                        title: task.isOverdue() ? "Overdue team task" : "Team task",
+                        subtitle: task.linkedRecordSummary ?? "Internal follow-up",
+                        value: AppAccess.inferredDisplayName(fromEmail: task.assignedToEmail),
+                        systemImage: task.priority.systemImage,
+                        tint: task.isOverdue() || task.priority == .urgent ? .red : Color.brandGold,
+                        actionTitle: "Review"
+                    ) {
+                        showingBusinessTasks = true
+                    }
+                    .accessibilityIdentifier("ReviewBusinessTask")
                 }
 
                 if let vehicle = fleetAttentionVehicles.first {

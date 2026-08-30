@@ -22,6 +22,7 @@ final class GunnAire_OpsUITests: XCTestCase {
     private let warrantyClaimID = "A1000000-0000-4000-8000-000000000037"
     private let fieldExpenseClaimID = "A1000000-0000-4000-8000-000000000041"
     private let operationalAlertID = "A1000000-0000-4000-8000-000000000042"
+    private let businessTaskID = "A1000000-0000-4000-8000-000000000043"
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
@@ -3135,6 +3136,49 @@ final class GunnAire_OpsUITests: XCTestCase {
         restoredJob.tap()
         XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Start Job"].isEnabled)
+    }
+
+    @MainActor
+    func testAdministratorCompletesAuditedCustomerJobTaskFromCommandCenter() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedBusinessTask"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Command Center"].waitForExistence(timeout: 5))
+
+        let taskQuickAction = app.buttons["Tasks"]
+        XCTAssertTrue(taskQuickAction.waitForExistence(timeout: 3))
+        taskQuickAction.tap()
+        XCTAssertTrue(app.navigationBars["Team Tasks"].waitForExistence(timeout: 3))
+
+        let taskRow = app.buttons["BusinessTask-\(businessTaskID)"]
+        XCTAssertTrue(taskRow.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(taskRow.label.localizedCaseInsensitiveContains("overdue"))
+        XCTAssertFalse(taskRow.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+        taskRow.tap()
+        XCTAssertTrue(app.navigationBars["Task Details"].waitForExistence(timeout: 3))
+
+        let completionNote = app.descendants(matching: .any)["BusinessTaskCompletionNote"]
+        XCTAssertTrue(completionNote.waitForExistence(timeout: 3))
+        completionNote.tap()
+        completionNote.typeText("Property manager confirmed the roof key and access window.")
+        let complete = app.buttons["CompleteBusinessTask"]
+        XCTAssertTrue(complete.isEnabled)
+        complete.tap()
+
+        XCTAssertTrue(app.buttons["Reopen Task"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Property manager confirmed the roof key and access window."].exists)
+        app.navigationBars["Task Details"].buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Team Tasks"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["No Open Tasks"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["BusinessTask-\(businessTaskID)"].exists)
     }
 
     @MainActor

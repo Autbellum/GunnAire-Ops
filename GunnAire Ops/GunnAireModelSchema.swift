@@ -30,6 +30,8 @@ enum GunnAireModelSchema {
             FleetVehicleEvent.self,
             FieldExpenseClaim.self,
             CustomerOperationalAlert.self,
+            BusinessTask.self,
+            BusinessTaskEvent.self,
         ])
     }
 }

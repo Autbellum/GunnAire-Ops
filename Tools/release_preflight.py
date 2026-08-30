@@ -227,6 +227,53 @@ EXPECTED_CLOUDKIT_V19_ADDITIONS = {
     },
 }
 EXPECTED_CLOUDKIT_V19_RECORD_TYPES = {"CD_CustomerOperationalAlert"}
+EXPECTED_CLOUDKIT_V20_ADDITIONS = {
+    **EXPECTED_CLOUDKIT_V19_ADDITIONS,
+    "CD_BusinessTask": {
+        "CD_assignedToEmail": _CLOUDKIT_STRING_FIELD,
+        "CD_cancellationOperationID": _CLOUDKIT_STRING_FIELD,
+        "CD_cancellationReason": _CLOUDKIT_STRING_FIELD,
+        "CD_cancelledAt": _CLOUDKIT_DATE_FIELD,
+        "CD_cancelledByEmail": _CLOUDKIT_STRING_FIELD,
+        "CD_completedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_completedByEmail": _CLOUDKIT_STRING_FIELD,
+        "CD_completionNote": _CLOUDKIT_STRING_FIELD,
+        "CD_completionOperationID": _CLOUDKIT_STRING_FIELD,
+        "CD_createdAt": _CLOUDKIT_DATE_FIELD,
+        "CD_createdByEmail": _CLOUDKIT_STRING_FIELD,
+        "CD_creationOperationID": _CLOUDKIT_STRING_FIELD,
+        "CD_customerID": _CLOUDKIT_STRING_FIELD,
+        "CD_customerName": _CLOUDKIT_STRING_FIELD,
+        "CD_dueAt": _CLOUDKIT_DATE_FIELD,
+        "CD_entityName": _CLOUDKIT_STRING_FIELD,
+        "CD_estimateID": _CLOUDKIT_STRING_FIELD,
+        "CD_estimateSummary": _CLOUDKIT_STRING_FIELD,
+        "CD_id": _CLOUDKIT_STRING_FIELD,
+        "CD_priorityRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceCallID": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceCallSummary": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceLocationID": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceLocationName": _CLOUDKIT_STRING_FIELD,
+        "CD_taskDescription": _CLOUDKIT_STRING_FIELD,
+        "CD_title": _CLOUDKIT_STRING_FIELD,
+        "CD_updatedAt": _CLOUDKIT_DATE_FIELD,
+    },
+    "CD_BusinessTaskEvent": {
+        "CD_actorEmail": _CLOUDKIT_STRING_FIELD,
+        "CD_assignedToEmailSnapshot": _CLOUDKIT_STRING_FIELD,
+        "CD_detail": _CLOUDKIT_STRING_FIELD,
+        "CD_dueAtSnapshot": _CLOUDKIT_DATE_FIELD,
+        "CD_entityName": _CLOUDKIT_STRING_FIELD,
+        "CD_id": _CLOUDKIT_STRING_FIELD,
+        "CD_kindRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_occurredAt": _CLOUDKIT_DATE_FIELD,
+        "CD_operationID": _CLOUDKIT_STRING_FIELD,
+        "CD_priorityRawSnapshot": _CLOUDKIT_STRING_FIELD,
+        "CD_taskID": _CLOUDKIT_STRING_FIELD,
+        "CD_titleSnapshot": _CLOUDKIT_STRING_FIELD,
+    },
+}
+EXPECTED_CLOUDKIT_V20_RECORD_TYPES = {"CD_BusinessTask", "CD_BusinessTaskEvent"}
 EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES = {
     "CD_AppUser",
     "CD_Customer",
@@ -1073,26 +1120,25 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         expense_types_in_prod = prod_record_types & EXPECTED_CLOUDKIT_V18_RECORD_TYPES
         alert_types_in_dev = dev_record_types & EXPECTED_CLOUDKIT_V19_RECORD_TYPES
         alert_types_in_prod = prod_record_types & EXPECTED_CLOUDKIT_V19_RECORD_TYPES
-        approved_record_type_sets = (
-            EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES,
-            EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES | EXPECTED_CLOUDKIT_V17_RECORD_TYPES,
-            EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES
-            | EXPECTED_CLOUDKIT_V17_RECORD_TYPES
-            | EXPECTED_CLOUDKIT_V18_RECORD_TYPES,
-            EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES
-            | EXPECTED_CLOUDKIT_V17_RECORD_TYPES
-            | EXPECTED_CLOUDKIT_V18_RECORD_TYPES
-            | EXPECTED_CLOUDKIT_V19_RECORD_TYPES,
-        )
-        approved_added_type_sets = (
-            set(),
+        task_types_in_dev = dev_record_types & EXPECTED_CLOUDKIT_V20_RECORD_TYPES
+        task_types_in_prod = prod_record_types & EXPECTED_CLOUDKIT_V20_RECORD_TYPES
+        additive_record_type_groups = (
             EXPECTED_CLOUDKIT_V17_RECORD_TYPES,
             EXPECTED_CLOUDKIT_V18_RECORD_TYPES,
-            EXPECTED_CLOUDKIT_V17_RECORD_TYPES | EXPECTED_CLOUDKIT_V18_RECORD_TYPES,
             EXPECTED_CLOUDKIT_V19_RECORD_TYPES,
-            EXPECTED_CLOUDKIT_V17_RECORD_TYPES | EXPECTED_CLOUDKIT_V19_RECORD_TYPES,
-            EXPECTED_CLOUDKIT_V18_RECORD_TYPES | EXPECTED_CLOUDKIT_V19_RECORD_TYPES,
-            EXPECTED_CLOUDKIT_V17_RECORD_TYPES | EXPECTED_CLOUDKIT_V18_RECORD_TYPES | EXPECTED_CLOUDKIT_V19_RECORD_TYPES,
+            EXPECTED_CLOUDKIT_V20_RECORD_TYPES,
+        )
+        approved_added_type_sets = tuple(
+            set().union(*[
+                group
+                for index, group in enumerate(additive_record_type_groups)
+                if mask & (1 << index)
+            ])
+            for mask in range(1 << len(additive_record_type_groups))
+        )
+        approved_record_type_sets = tuple(
+            EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES | additions
+            for additions in approved_added_type_sets
         )
         results.require(
             prod_record_types.issubset(dev_record_types)
@@ -1104,9 +1150,11 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
             and expense_types_in_dev in (set(), EXPECTED_CLOUDKIT_V18_RECORD_TYPES)
             and expense_types_in_prod in (set(), EXPECTED_CLOUDKIT_V18_RECORD_TYPES)
             and alert_types_in_dev in (set(), EXPECTED_CLOUDKIT_V19_RECORD_TYPES)
-            and alert_types_in_prod in (set(), EXPECTED_CLOUDKIT_V19_RECORD_TYPES),
-            "CloudKit exports retain the exact 24-type baseline and only the approved v17 fleet pair, v18 expense claim, plus v19 operational alert may be additive",
-            "CloudKit record types are not the approved 24-type baseline or approved v17/v18/v19 extensions: "
+            and alert_types_in_prod in (set(), EXPECTED_CLOUDKIT_V19_RECORD_TYPES)
+            and task_types_in_dev in (set(), EXPECTED_CLOUDKIT_V20_RECORD_TYPES)
+            and task_types_in_prod in (set(), EXPECTED_CLOUDKIT_V20_RECORD_TYPES),
+            "CloudKit exports retain the exact 24-type baseline and only the approved v17 fleet, v18 expense, v19 alert, and v20 task extensions may be additive",
+            "CloudKit record types are not the approved 24-type baseline or approved v17/v18/v19/v20 extensions: "
             f"development={sorted(dev_record_types)} production={sorted(prod_record_types)}",
         )
         actual_additions: dict[str, dict[str, tuple[str, ...]]] = {}
@@ -1129,22 +1177,22 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
             "Development changes remove or alter no Production CloudKit fields",
             f"Development removes or alters Production fields: {changed_or_removed}",
         )
-        malformed_existing_v19_fields: list[str] = []
-        for record_name, expected_fields in EXPECTED_CLOUDKIT_V19_ADDITIONS.items():
+        malformed_existing_v20_fields: list[str] = []
+        for record_name, expected_fields in EXPECTED_CLOUDKIT_V20_ADDITIONS.items():
             production_fields = prod.get(record_name, {})
             for field_name, expected_definition in expected_fields.items():
                 if (
                     field_name in production_fields
                     and production_fields[field_name] != expected_definition
                 ):
-                    malformed_existing_v19_fields.append(
+                    malformed_existing_v20_fields.append(
                         f"{record_name}.{field_name}"
                     )
         results.require(
-            not malformed_existing_v19_fields,
-            "Existing Production fields through v19 match their approved definitions",
-            "CloudKit Production contains malformed approved fields through v19: "
-            f"{malformed_existing_v19_fields}",
+            not malformed_existing_v20_fields,
+            "Existing Production fields through v20 match their approved definitions",
+            "CloudKit Production contains malformed approved fields through v20: "
+            f"{malformed_existing_v20_fields}",
         )
 
         def expected_remaining(
@@ -1171,10 +1219,13 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 if records.get(record_name, {}).get(field_name) != expected_definition
             ]
 
+        expected_remaining_v20_additions = expected_remaining(EXPECTED_CLOUDKIT_V20_ADDITIONS)
         expected_remaining_v19_additions = expected_remaining(EXPECTED_CLOUDKIT_V19_ADDITIONS)
         expected_remaining_v18_additions = expected_remaining(EXPECTED_CLOUDKIT_V18_ADDITIONS)
         expected_remaining_v17_additions = expected_remaining(EXPECTED_CLOUDKIT_V17_ADDITIONS)
         expected_remaining_v16_additions = expected_remaining(EXPECTED_CLOUDKIT_V16_ADDITIONS)
+        dev_missing_v20 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V20_ADDITIONS)
+        prod_missing_v20 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V20_ADDITIONS)
         dev_missing_v19 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V19_ADDITIONS)
         prod_missing_v19 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V19_ADDITIONS)
         dev_missing_v18 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V18_ADDITIONS)
@@ -1185,6 +1236,16 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         prod_missing_v16 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V16_ADDITIONS)
 
         if (
+            not dev_missing_v20
+            and (
+                not prod_missing_v20
+                or actual_additions == expected_remaining_v20_additions
+            )
+        ):
+            results.pass_(
+                "CloudKit Development contains exactly the approved additive v20 team task and audit-event records plus the cumulative v19 schema relative to Production"
+            )
+        elif (
             not dev_missing_v19
             and (
                 not prod_missing_v19
@@ -1193,6 +1254,9 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         ):
             results.pass_(
                 "CloudKit Development contains exactly the approved additive v19 customer operational alert record and cumulative v18 schema relative to Production"
+            )
+            results.warn(
+                "CloudKit source v20 team task records are not staged in Development; run the signed v20 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v18
@@ -1205,7 +1269,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 "CloudKit Development contains exactly the approved additive v18 expense record, receipt linkage, and cumulative fleet schema relative to Production"
             )
             results.warn(
-                "CloudKit source v19 operational alert records are not staged in Development; run the signed v19 bootstrap before promotion review"
+                "CloudKit source v19 operational alert and v20 task records are not staged in Development; run the signed v20 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v17
@@ -1218,7 +1282,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 "CloudKit Development contains exactly the approved additive v17 fleet records and document linkage relative to Production"
             )
             results.warn(
-                "CloudKit source v18 expense and v19 operational alert records are not staged in Development; run the signed v19 bootstrap before promotion review"
+                "CloudKit source v18 expense, v19 operational alert, and v20 task records are not staged in Development; run the signed v20 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v16
@@ -1229,40 +1293,40 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         ):
             results.pass_("CloudKit exports exactly satisfy the approved v16 schema")
             results.warn(
-                "CloudKit source v17 fleet, v18 expense, and v19 operational alert records are not staged in Development; run the signed v19 bootstrap before promotion review"
+                "CloudKit source v17 fleet, v18 expense, v19 operational alert, and v20 task records are not staged in Development; run the signed v20 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V13_ADDITIONS:
             results.pass_(
                 "CloudKit Development v13 delta is exactly six additive tax fields on Estimate and Invoice"
             )
             results.warn(
-                "CloudKit source additions through v19 are not staged in Development; run the signed v19 bootstrap before promotion review"
+                "CloudKit source additions through v20 are not staged in Development; run the signed v20 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V14_ADDITIONS:
             results.pass_(
                 "CloudKit Development v14 cumulative delta is exactly six tax fields plus Invoice.dueDate"
             )
             results.warn(
-                "CloudKit source additions through v19 are not staged in Development; run the signed v19 bootstrap before promotion review"
+                "CloudKit source additions through v20 are not staged in Development; run the signed v20 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V15_ADDITIONS:
             results.pass_(
                 "CloudKit Development v15 cumulative delta is exactly the approved tax, due-date, inventory continuity, Item continuity, and service-package fields"
             )
             results.warn(
-                "CloudKit source additions through v19 are not staged in Development; run the signed v19 bootstrap before promotion review"
+                "CloudKit source additions through v20 are not staged in Development; run the signed v20 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V16_ADDITIONS:
             results.pass_(
                 "CloudKit Development v16 cumulative delta is exactly the approved tax, due-date, inventory continuity, Item continuity, service-package, document-linkage, and Google Drive fields"
             )
             results.warn(
-                "CloudKit source v17 fleet, v18 expense, and v19 operational alert records are not staged in Development; run the signed v19 bootstrap before promotion review"
+                "CloudKit source v17 fleet, v18 expense, v19 operational alert, and v20 task records are not staged in Development; run the signed v20 bootstrap before promotion review"
             )
         else:
             results.fail(
-                "Unexpected CloudKit v13/v14/v15/v16/v17/v18/v19 delta: "
-                f"{actual_additions}; missing Development v19 fields: {dev_missing_v19}"
+                "Unexpected CloudKit v13/v14/v15/v16/v17/v18/v19/v20 delta: "
+                f"{actual_additions}; missing Development v20 fields: {dev_missing_v20}"
             )
         results.pass_(f"Development export SHA-256 is {sha256(development)}")
         results.pass_(f"Production export SHA-256 is {sha256(production)}")
@@ -1381,7 +1445,7 @@ def main() -> int:
             results,
         )
     else:
-        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15/v16/v17/v18/v19 Production delta was not rechecked")
+        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15/v16/v17/v18/v19/v20 Production delta was not rechecked")
 
     if args.online:
         check_online(backend_version, results)

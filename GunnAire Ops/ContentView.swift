@@ -726,6 +726,7 @@ struct ServiceCallDetailView: View {
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \FieldExpenseClaim.expenseDate, order: .reverse) private var fieldExpenseClaims: [FieldExpenseClaim]
     @Query(sort: \CustomerOperationalAlert.createdAt, order: .reverse) private var operationalAlerts: [CustomerOperationalAlert]
+    @Query(sort: \BusinessTask.dueAt, order: .forward) private var businessTasks: [BusinessTask]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
     @AppStorage("requireWorkPerformedLogForCloseout") private var requireWorkPerformedLogForCloseout = true
@@ -748,6 +749,7 @@ struct ServiceCallDetailView: View {
     @State private var showingFieldExpenseClaim = false
     @State private var showingWorkPerformedLog = false
     @State private var showingCustomerWorkSummary = false
+    @State private var showingBusinessTasks = false
     @State private var expandedWorkLogHistory = false
     @State private var activeServiceTextDraft: CustomerServiceTextDraft?
     @State private var customerTextStatus: String?
@@ -777,6 +779,25 @@ struct ServiceCallDetailView: View {
             serviceLocationID: call.serviceLocationID,
             in: operationalAlerts
         )
+    }
+
+    private var visibleCallBusinessTasks: [BusinessTask] {
+        let visibleCallIDs = AppAccess.visibleServiceCallIDs(
+            email: currentActivityActor,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+        return BusinessTaskPolicy.visibleTasks(
+            from: businessTasks,
+            email: currentActivityActor,
+            users: users,
+            visibleServiceCallIDs: visibleCallIDs
+        ).filter { $0.serviceCallID == call.id }
+    }
+
+    private var openCallBusinessTasks: [BusinessTask] {
+        visibleCallBusinessTasks.filter(\.isOpen)
     }
 
     private var callActivity: [ServiceCallActivity] {
@@ -2028,6 +2049,26 @@ GunnAire
                             alerts: activeOperationalAlerts,
                             accessibilityIdentifier: "ServiceCallOperationalAlerts"
                         )
+                        if openCallBusinessTasks.isEmpty {
+                            GroupBox("Team Tasks") {
+                                HStack {
+                                    Label("No open tasks for this job", systemImage: "checkmark.circle")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button("Manage") { showingBusinessTasks = true }
+                                        .buttonStyle(.bordered)
+                                        .accessibilityIdentifier("OpenServiceCallBusinessTasks")
+                                }
+                            }
+                        } else {
+                            BusinessTaskInlineSummary(
+                                tasks: visibleCallBusinessTasks,
+                                accessibilityIdentifier: "ServiceCallBusinessTasks"
+                            ) {
+                                showingBusinessTasks = true
+                            }
+                        }
                         Group {
                         if call.status == .cancelled {
                             if let cancelledAt = call.cancelledAt {
@@ -3209,6 +3250,13 @@ GunnAire
                 existingSummary: currentCustomerWorkSummary,
                 workLogCount: workPerformedEntries.count,
                 onSave: saveCustomerWorkSummary
+            )
+            .tint(Color.brandGold)
+        }
+        .sheet(isPresented: $showingBusinessTasks) {
+            BusinessTaskWorkspaceView(
+                initialCustomerID: call.customer.id,
+                initialServiceCallID: call.id
             )
             .tint(Color.brandGold)
         }

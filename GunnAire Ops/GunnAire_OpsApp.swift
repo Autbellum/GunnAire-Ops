@@ -156,6 +156,8 @@ private enum GunnAireUITestFixtures {
     private static let fleetEventID = UUID(uuidString: "A1000000-0000-4000-8000-000000000040")!
     private static let fieldExpenseClaimID = UUID(uuidString: "A1000000-0000-4000-8000-000000000041")!
     private static let operationalAlertID = UUID(uuidString: "A1000000-0000-4000-8000-000000000042")!
+    private static let businessTaskID = UUID(uuidString: "A1000000-0000-4000-8000-000000000043")!
+    private static let businessTaskOperationID = UUID(uuidString: "A1000000-0000-4000-8000-000000000044")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -192,6 +194,7 @@ private enum GunnAireUITestFixtures {
         let isFleetFixture = arguments.contains("-uiTestSeedFleetReadiness")
         let isFieldExpenseFixture = arguments.contains("-uiTestSeedFieldExpenseReview")
         let isOperationalAlertFixture = arguments.contains("-uiTestSeedOperationalAlert")
+        let isBusinessTaskFixture = arguments.contains("-uiTestSeedBusinessTask")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
         for user in appUsers where
@@ -305,6 +308,14 @@ private enum GunnAireUITestFixtures {
         let operationalAlerts = try context.fetch(FetchDescriptor<CustomerOperationalAlert>())
         for alert in operationalAlerts where alert.id == operationalAlertID {
             context.delete(alert)
+        }
+        let businessTaskEvents = try context.fetch(FetchDescriptor<BusinessTaskEvent>())
+        for event in businessTaskEvents where event.taskID == businessTaskID {
+            context.delete(event)
+        }
+        let businessTasks = try context.fetch(FetchDescriptor<BusinessTask>())
+        for task in businessTasks where task.id == businessTaskID {
+            context.delete(task)
         }
         let customers = try context.fetch(FetchDescriptor<Customer>())
         for customer in customers where customer.id == customerID {
@@ -747,6 +758,27 @@ private enum GunnAireUITestFixtures {
                 detail: "Administrator review is required before dispatching or starting another visit.",
                 createdByEmail: AppAccess.primaryAdminEmail
             ))
+        }
+        if isBusinessTaskFixture {
+            let createdTask = try BusinessTaskPolicy.makeTask(
+                title: "Confirm roof access before dispatch",
+                taskDescription: "Call the property manager and record the approved access plan.",
+                priority: .urgent,
+                assignedToEmail: AppAccess.primaryAdminEmail,
+                dueAt: Date().addingTimeInterval(-3_600),
+                customerID: customer.id,
+                customerName: customer.name,
+                serviceLocationID: serviceLocation.id,
+                serviceLocationName: serviceLocation.displayName,
+                serviceCallID: call.id,
+                serviceCallSummary: "\(call.type.displayName) • \(call.scheduledDate.formatted(date: .abbreviated, time: .omitted))",
+                actorEmail: AppAccess.primaryAdminEmail,
+                creationOperationID: businessTaskOperationID
+            )
+            createdTask.task.id = businessTaskID
+            createdTask.event.taskID = businessTaskID
+            context.insert(createdTask.task)
+            context.insert(createdTask.event)
         }
         if isWarrantyClaimFixture {
             let evidence = ServiceDocumentAttachment(
