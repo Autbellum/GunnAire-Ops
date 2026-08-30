@@ -985,6 +985,78 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testFieldTechnicianScheduleShowsOnlyAuthorizedAdjacentTravel() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedScheduleAuthorization",
+            "-uiTestSeedTechnicianRoute"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        if !schedule.waitForExistence(timeout: 2) {
+            let sidebarButton = app.buttons["GunnAire Ops"]
+            XCTAssertTrue(sidebarButton.waitForExistence(timeout: 3))
+            sidebarButton.tap()
+        }
+        XCTAssertTrue(schedule.waitForExistence(timeout: 3))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        XCTAssertFalse(app.buttons["DispatchWeekBoard"].exists)
+        XCTAssertFalse(app.buttons["AddServiceCall"].exists)
+        XCTAssertFalse(app.staticTexts["Unassigned confidential dispatch job"].exists)
+        XCTAssertFalse(app.buttons["OpenServiceCall-\(unassignedScheduleServiceCallID)"].exists)
+
+        let routeDisclosure = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] 'Travel between appointments'")
+        ).firstMatch
+        for _ in 0..<8 where !routeDisclosure.exists {
+            XCTAssertFalse(app.staticTexts["Unassigned confidential dispatch job"].exists)
+            app.swipeUp()
+        }
+        XCTAssertTrue(routeDisclosure.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(routeDisclosure.label.localizedCaseInsensitiveContains("travel between appointments"), routeDisclosure.label)
+        XCTAssertTrue(routeDisclosure.label.localizedCaseInsensitiveContains("2 scheduled legs"), routeDisclosure.label)
+        XCTAssertFalse(routeDisclosure.label.localizedCaseInsensitiveContains("@gunnaire.com"), routeDisclosure.label)
+        routeDisclosure.tap()
+
+        let authorizedRouteTitle = app.staticTexts["Comfort Care maintenance → Follow-up airflow repair"]
+        XCTAssertTrue(authorizedRouteTitle.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["30m appointment overlap"].exists)
+        XCTAssertFalse(authorizedRouteTitle.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        let routeLegID = "A1000000-0000-4000-8000-000000000012-A1000000-0000-4000-8000-000000000048"
+        let estimateRoute = app.buttons["FieldTechnicianRouteEstimate-\(routeLegID)"]
+        for _ in 0..<4 where !estimateRoute.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(estimateRoute.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.buttons["FieldTechnicianRouteOpenMaps-\(routeLegID)"].exists)
+        XCTAssertFalse(app.buttons["DispatchTechnicianRouteEstimate-\(routeLegID)"].exists)
+        XCTAssertFalse(app.staticTexts["Unassigned confidential dispatch job"].exists)
+        XCTAssertFalse(app.buttons["OpenServiceCall-\(unassignedScheduleServiceCallID)"].exists)
+
+        let routeFooter = app.staticTexts.matching(
+            NSPredicate(
+                format: "label == %@",
+                "Optional Apple Maps estimates require a connection and account for expected traffic. They are informational only and never change appointments, capacity, or promised arrival windows."
+            )
+        ).firstMatch
+        XCTAssertTrue(routeFooter.exists)
+
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "Field technician authorized day with compact adjacent travel"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+    }
+
+    @MainActor
     func testFieldJobDirectionsStayVisibleFromScheduleToJobDetails() throws {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = XCUIApplication()

@@ -22,6 +22,16 @@ and schema status as of 2026-08-30.
   capabilities. The route estimate uses only staff-entered service addresses,
   requests no device location, and adds no location usage description. Those
   unrelated portal capabilities remain off deliberately.
+- Exact build `1.0 (2026083013)` is retained as a development-signed iOS
+  Release archive and universal arm64/x86_64 Mac Catalyst Release app under
+  `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30`. Strict
+  signature verification confirms Apple login, CloudKit, Push Notifications,
+  and Associated Domains in both products; app/dSYM UUIDs match every slice,
+  and read-only online preflight passes **64 checks, 3 expected warnings, and
+  0 failures**. The expected warnings are development signing on iOS and Mac
+  plus the host-only optional Metal search path. An Apple Distribution private
+  key, separate Mac distribution signing, signed representative device
+  acceptance, and App Store upload remain external release gates.
 - Production remains schema v15 across 24 record types in retained export
   `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
   `f81de36537620a10fe34fde22883a94dc6f5b00deea6fec08004160c0aae7594`.

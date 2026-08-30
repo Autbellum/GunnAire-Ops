@@ -210,6 +210,45 @@ struct GunnAire_OpsTests {
         #expect(missingLeg.destinationTitle == "Repair")
     }
 
+    @Test func technicianTravelLegsExcludeCancelledWorkWithoutBreakingRemainingAdjacency() throws {
+        let start = Date(timeIntervalSince1970: 2_500_000)
+        let customer = Customer(name: "Cancellation Route Customer")
+        let first = ServiceCall(
+            eventTitle: "Active diagnostic",
+            siteAddress: "100 Active Way",
+            type: .service,
+            scheduledDate: start,
+            duration: 60 * 60,
+            customer: customer
+        )
+        let cancelled = ServiceCall(
+            eventTitle: "Cancelled repair",
+            siteAddress: "200 Cancelled Road",
+            type: .repair,
+            scheduledDate: start.addingTimeInterval(90 * 60),
+            customer: customer,
+            status: .cancelled
+        )
+        let final = ServiceCall(
+            eventTitle: "Active maintenance",
+            siteAddress: "300 Final Avenue",
+            type: .maintenance,
+            scheduledDate: start.addingTimeInterval(3 * 60 * 60),
+            customer: customer
+        )
+
+        let legs = TechnicianRoutePolicy.appointmentTravelLegs(from: [final, cancelled, first])
+        let leg = try #require(legs.first)
+
+        #expect(legs.count == 1)
+        #expect(leg.originCallID == first.id)
+        #expect(leg.destinationCallID == final.id)
+        #expect(leg.originTitle == "Active diagnostic")
+        #expect(leg.destinationTitle == "Active maintenance")
+        #expect(leg.scheduledGapMinutes == 120)
+        #expect(leg.readiness == .ready)
+    }
+
     @Test func workPerformedLogValidationNormalizesFieldTextAndRejectsUnsafeContent() throws {
         let normalized = try ServiceWorkLogPolicy.validatedContent(
             "  Replaced failed capacitor.  \r\n Verified cooling operation.  "

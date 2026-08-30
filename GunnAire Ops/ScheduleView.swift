@@ -246,6 +246,10 @@ struct ScheduleView: View {
         return AppAccess.canManageDispatch(email: email, users: users)
     }
 
+    private var isFieldTechnician: Bool {
+        AppAccess.activeRole(email: AppIdentity.currentEmail, users: users) == .fieldTechnician
+    }
+
     private var canCollectFieldPayments: Bool {
         let email = AppIdentity.currentEmail
         return AppAccess.canCollectFieldPayments(email: email, users: users)
@@ -294,6 +298,23 @@ struct ScheduleView: View {
                             if selectedDayCalls.isEmpty {
                                 emptyDayState
                             } else {
+                                if isFieldTechnician, selectedDayCalls.count > 1 {
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        TechnicianTravelDisclosure(
+                                            calls: selectedDayCalls,
+                                            accessibilityPrefix: "Field"
+                                        )
+                                        Text(TechnicianTravelDisclosure.footerText)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .padding(14)
+                                    .background(
+                                        .ultraThinMaterial,
+                                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    )
+                                }
+
                                 LazyVStack(spacing: 10) {
                                     if canManageDispatch {
                                         ForEach(selectedDayCalls) { call in
@@ -3526,122 +3547,62 @@ private struct DispatchTechnicianCapacityDetailView: View {
     }
 }
 
-private enum DispatchRouteEstimateState: Equatable {
+private enum TechnicianRouteEstimateState: Equatable {
     case idle
     case loading
     case estimate(AppleMapsTravelEstimate)
     case failed
 }
 
-private struct DispatchTechnicianDayScheduleView: View {
-    let day: Date
-    let capacitySnapshot: DispatchTechnicianCapacitySnapshot
-    let scheduleSnapshot: DispatchTechnicianDayScheduleSnapshot
-    let serviceCalls: [ServiceCall]
+/// Compact route awareness shared by dispatch and the signed-in field
+/// technician. Callers must pass only the appointments already authorized for
+/// that surface; this view never queries broader schedule data itself.
+private struct TechnicianTravelDisclosure: View {
+    static let footerText = "Optional Apple Maps estimates require a connection and account for expected traffic. They are informational only and never change appointments, capacity, or promised arrival windows."
 
-    @State private var editingCall: ServiceCall?
-    @State private var routeDisclosureExpanded = false
-    @State private var routeEstimateStates: [String: DispatchRouteEstimateState] = [:]
-    @State private var activeRouteLegID: String?
-    @State private var activeRouteEstimator: AppleMapsTravelEstimator?
+    let calls: [ServiceCall]
+    let accessibilityPrefix: String
 
-    private var availabilityEntries: [DispatchTechnicianDayScheduleEntry] {
-        scheduleSnapshot.entries.filter { $0.kind != .appointment }
-    }
+    @State private var isExpanded = false
+    @State private var estimateStates: [String: TechnicianRouteEstimateState] = [:]
+    @State private var activeLegID: String?
+    @State private var activeEstimator: AppleMapsTravelEstimator?
 
     private var routeLegs: [TechnicianRouteLegSnapshot] {
-        TechnicianRoutePolicy.appointmentTravelLegs(
-            from: scheduleSnapshot.appointments.compactMap(serviceCall(for:))
-        )
+        TechnicianRoutePolicy.appointmentTravelLegs(from: calls)
     }
 
     var body: some View {
-        List {
-            Section("Capacity") {
-                capacitySummary
+        DisclosureGroup(isExpanded: $isExpanded) {
+            ForEach(routeLegs) { leg in
+                routeLegRow(leg)
+                if leg.id != routeLegs.last?.id {
+                    Divider()
+                }
             }
-
-            Section("Appointments") {
-                if scheduleSnapshot.appointments.isEmpty {
-                    Label("No assigned appointments", systemImage: "calendar.badge.checkmark")
+        } label: {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Travel between appointments")
+                        .font(.headline)
+                    Text("\(routeLegs.count) scheduled \(routeLegs.count == 1 ? "leg" : "legs")")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                } else {
-                    ForEach(scheduleSnapshot.appointments) { entry in
-                        if let call = serviceCall(for: entry) {
-                            Button {
-                                editingCall = call
-                            } label: {
-                                appointmentRow(entry)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("DispatchTechnicianDayJob-\(call.id.uuidString)")
-                        } else {
-                            appointmentRow(entry)
-                        }
-                    }
                 }
+            } icon: {
+                Image(systemName: "car")
+                    .foregroundStyle(Color.brandGold)
             }
-
-            if !routeLegs.isEmpty {
-                Section {
-                    DisclosureGroup(isExpanded: $routeDisclosureExpanded) {
-                        ForEach(routeLegs) { leg in
-                            routeLegRow(leg)
-                            if leg.id != routeLegs.last?.id {
-                                Divider()
-                            }
-                        }
-                    } label: {
-                        Label {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Travel between appointments")
-                                    .font(.headline)
-                                Text("\(routeLegs.count) scheduled \(routeLegs.count == 1 ? "leg" : "legs")")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        } icon: {
-                            Image(systemName: "car")
-                                .foregroundStyle(Color.brandGold)
-                        }
-                        .accessibilityHint("Expands optional Apple Maps estimates between adjacent appointments.")
-                    }
-                } footer: {
-                    Text("Optional Apple Maps estimates require a connection and account for expected traffic. They are informational only and never change appointments, capacity, or promised arrival windows.")
-                }
-            }
-
-            Section {
-                if availabilityEntries.isEmpty {
-                    Label("No hours or unavailable periods", systemImage: "calendar.badge.exclamationmark")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(availabilityEntries) { entry in
-                        availabilityRow(entry)
-                    }
-                }
-            } header: {
-                Text("Hours & availability")
-            } footer: {
-                Text("Read-only from synchronized schedule records already on this device. Private availability notes are hidden, and the schedule remains available without a route estimate.")
-            }
+            .accessibilityHint("Expands optional Apple Maps estimates between adjacent appointments.")
         }
-        .listStyle(.insetGrouped)
-        .navigationTitle("Technician Day")
-        .navigationSubtitle("\(displayName(scheduleSnapshot.technicianName)) • \(day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))")
-        .fullScreenCover(item: $editingCall) { call in
-            EditServiceCallView(call: call)
-                .tint(Color.brandGold)
-        }
-        .onChange(of: routeDisclosureExpanded) { _, isExpanded in
-            if !isExpanded {
-                cancelActiveRouteEstimate()
+        .onChange(of: isExpanded) { _, expanded in
+            if !expanded {
+                cancelActiveEstimate()
             }
         }
         .onDisappear {
-            cancelActiveRouteEstimate()
+            cancelActiveEstimate()
         }
-        .accessibilityIdentifier("DispatchTechnicianDaySchedule")
     }
 
     private func routeLegRow(_ leg: TechnicianRouteLegSnapshot) -> some View {
@@ -3668,13 +3629,13 @@ private struct DispatchTechnicianDayScheduleView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         case .missingOriginAddress:
-            missingRouteAddressLabel("Add the first appointment's service address to estimate this drive.")
+            missingAddressLabel("Add the first appointment's service address to estimate this drive.")
         case .missingDestinationAddress:
-            missingRouteAddressLabel("Add the next appointment's service address to estimate this drive.")
+            missingAddressLabel("Add the next appointment's service address to estimate this drive.")
         case .missingBothAddresses:
-            missingRouteAddressLabel("Add both service addresses to estimate this drive.")
+            missingAddressLabel("Add both service addresses to estimate this drive.")
         case .ready:
-            switch routeEstimateStates[leg.id] ?? .idle {
+            switch estimateStates[leg.id] ?? .idle {
             case .idle:
                 routeActions(for: leg, estimateButtonTitle: "Estimate drive")
             case .loading:
@@ -3686,11 +3647,11 @@ private struct DispatchTechnicianDayScheduleView: View {
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 8)
                     Button("Cancel") {
-                        cancelActiveRouteEstimate()
+                        cancelActiveEstimate()
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .accessibilityIdentifier("DispatchTechnicianRouteCancel-\(leg.id)")
+                    .accessibilityIdentifier("\(accessibilityPrefix)TechnicianRouteCancel-\(leg.id)")
                 }
             case let .estimate(estimate):
                 VStack(alignment: .leading, spacing: 6) {
@@ -3715,7 +3676,7 @@ private struct DispatchTechnicianDayScheduleView: View {
         }
     }
 
-    private func missingRouteAddressLabel(_ message: String) -> some View {
+    private func missingAddressLabel(_ message: String) -> some View {
         Label(message, systemImage: "mappin.slash")
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -3727,14 +3688,14 @@ private struct DispatchTechnicianDayScheduleView: View {
     ) -> some View {
         HStack(spacing: 8) {
             Button {
-                requestRouteEstimate(for: leg)
+                requestEstimate(for: leg)
             } label: {
                 Label(estimateButtonTitle, systemImage: "clock.arrow.circlepath")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
             .tint(Color.brandGold)
-            .accessibilityIdentifier("DispatchTechnicianRouteEstimate-\(leg.id)")
+            .accessibilityIdentifier("\(accessibilityPrefix)TechnicianRouteEstimate-\(leg.id)")
             .accessibilityHint("Requests one traffic-aware estimate from Apple Maps. This does not change the schedule.")
 
             if let routeURL = AppleMapsDirections.routeURL(
@@ -3746,51 +3707,51 @@ private struct DispatchTechnicianDayScheduleView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .accessibilityIdentifier("DispatchTechnicianRouteOpenMaps-\(leg.id)")
+                .accessibilityIdentifier("\(accessibilityPrefix)TechnicianRouteOpenMaps-\(leg.id)")
                 .accessibilityHint("Opens driving directions between these two service addresses.")
             }
         }
     }
 
-    private func requestRouteEstimate(for leg: TechnicianRouteLegSnapshot) {
+    private func requestEstimate(for leg: TechnicianRouteLegSnapshot) {
         guard leg.readiness == .ready,
               let originAddress = leg.originAddress,
               let destinationAddress = leg.destinationAddress else { return }
 
-        if let activeRouteLegID, activeRouteLegID != leg.id {
-            routeEstimateStates[activeRouteLegID] = .idle
+        if let activeLegID, activeLegID != leg.id {
+            estimateStates[activeLegID] = .idle
         }
-        activeRouteEstimator?.cancel()
+        activeEstimator?.cancel()
 
         let estimator = AppleMapsTravelEstimator()
-        activeRouteEstimator = estimator
-        activeRouteLegID = leg.id
-        routeEstimateStates[leg.id] = .loading
+        activeEstimator = estimator
+        activeLegID = leg.id
+        estimateStates[leg.id] = .loading
 
         estimator.estimate(
             originAddress: originAddress,
             destinationAddress: destinationAddress,
             plannedDepartureDate: leg.plannedDepartureDate
         ) { result in
-            guard activeRouteLegID == leg.id, activeRouteEstimator === estimator else { return }
+            guard activeLegID == leg.id, activeEstimator === estimator else { return }
             switch result {
             case let .success(estimate):
-                routeEstimateStates[leg.id] = .estimate(estimate)
+                estimateStates[leg.id] = .estimate(estimate)
             case .failure:
-                routeEstimateStates[leg.id] = .failed
+                estimateStates[leg.id] = .failed
             }
-            activeRouteLegID = nil
-            activeRouteEstimator = nil
+            activeLegID = nil
+            activeEstimator = nil
         }
     }
 
-    private func cancelActiveRouteEstimate() {
-        activeRouteEstimator?.cancel()
-        if let activeRouteLegID {
-            routeEstimateStates[activeRouteLegID] = .idle
+    private func cancelActiveEstimate() {
+        activeEstimator?.cancel()
+        if let activeLegID {
+            estimateStates[activeLegID] = .idle
         }
-        activeRouteLegID = nil
-        activeRouteEstimator = nil
+        activeLegID = nil
+        activeEstimator = nil
     }
 
     private func scheduledGapDescription(_ minutes: Int) -> String {
@@ -3838,6 +3799,99 @@ private struct DispatchTechnicianDayScheduleView: View {
     ) -> Color {
         let travelMinutes = max(Int(ceil(estimate.expectedTravelTime / 60)), 1)
         return scheduledGapMinutes >= travelMinutes ? .secondary : .orange
+    }
+
+    private func compactDuration(_ minutes: Int) -> String {
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        var parts: [String] = []
+        if hours > 0 {
+            parts.append("\(hours)h")
+        }
+        if remainder > 0 || parts.isEmpty {
+            parts.append("\(remainder)m")
+        }
+        return parts.joined(separator: " ")
+    }
+}
+
+private struct DispatchTechnicianDayScheduleView: View {
+    let day: Date
+    let capacitySnapshot: DispatchTechnicianCapacitySnapshot
+    let scheduleSnapshot: DispatchTechnicianDayScheduleSnapshot
+    let serviceCalls: [ServiceCall]
+
+    @State private var editingCall: ServiceCall?
+
+    private var availabilityEntries: [DispatchTechnicianDayScheduleEntry] {
+        scheduleSnapshot.entries.filter { $0.kind != .appointment }
+    }
+
+    private var routeCalls: [ServiceCall] {
+        scheduleSnapshot.appointments.compactMap(serviceCall(for:))
+    }
+
+    var body: some View {
+        List {
+            Section("Capacity") {
+                capacitySummary
+            }
+
+            Section("Appointments") {
+                if scheduleSnapshot.appointments.isEmpty {
+                    Label("No assigned appointments", systemImage: "calendar.badge.checkmark")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(scheduleSnapshot.appointments) { entry in
+                        if let call = serviceCall(for: entry) {
+                            Button {
+                                editingCall = call
+                            } label: {
+                                appointmentRow(entry)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("DispatchTechnicianDayJob-\(call.id.uuidString)")
+                        } else {
+                            appointmentRow(entry)
+                        }
+                    }
+                }
+            }
+
+            if routeCalls.count > 1 {
+                Section {
+                    TechnicianTravelDisclosure(
+                        calls: routeCalls,
+                        accessibilityPrefix: "Dispatch"
+                    )
+                } footer: {
+                    Text(TechnicianTravelDisclosure.footerText)
+                }
+            }
+
+            Section {
+                if availabilityEntries.isEmpty {
+                    Label("No hours or unavailable periods", systemImage: "calendar.badge.exclamationmark")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(availabilityEntries) { entry in
+                        availabilityRow(entry)
+                    }
+                }
+            } header: {
+                Text("Hours & availability")
+            } footer: {
+                Text("Read-only from synchronized schedule records already on this device. Private availability notes are hidden, and the schedule remains available without a route estimate.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Technician Day")
+        .navigationSubtitle("\(displayName(scheduleSnapshot.technicianName)) • \(day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))")
+        .fullScreenCover(item: $editingCall) { call in
+            EditServiceCallView(call: call)
+                .tint(Color.brandGold)
+        }
+        .accessibilityIdentifier("DispatchTechnicianDaySchedule")
     }
 
     private var capacitySummary: some View {

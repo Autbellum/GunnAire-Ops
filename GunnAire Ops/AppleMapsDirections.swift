@@ -116,16 +116,19 @@ enum TechnicianRoutePolicy {
     }
 
     /// Builds one informational route leg for every pair of adjacent
-    /// appointments. A missing-address appointment is intentionally retained
-    /// instead of being skipped, so the result can never imply a different
-    /// dispatch order.
+    /// active or historical appointments. Cancelled work is not a scheduled
+    /// stop. A missing-address appointment is intentionally retained instead
+    /// of being skipped, so the result can never imply a different dispatch
+    /// order.
     static func appointmentTravelLegs(from calls: [ServiceCall]) -> [TechnicianRouteLegSnapshot] {
-        let orderedCalls = calls.sorted { lhs, rhs in
-            if lhs.scheduledDate != rhs.scheduledDate {
-                return lhs.scheduledDate < rhs.scheduledDate
+        let orderedCalls = calls
+            .filter { $0.status != .cancelled }
+            .sorted { lhs, rhs in
+                if lhs.scheduledDate != rhs.scheduledDate {
+                    return lhs.scheduledDate < rhs.scheduledDate
+                }
+                return lhs.id.uuidString < rhs.id.uuidString
             }
-            return lhs.id.uuidString < rhs.id.uuidString
-        }
         guard orderedCalls.count > 1 else { return [] }
 
         return zip(orderedCalls, orderedCalls.dropFirst()).map { origin, destination in
