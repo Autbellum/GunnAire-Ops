@@ -25,6 +25,24 @@ final class GunnAire_OpsUITests: XCTestCase {
     private let businessTaskID = "A1000000-0000-4000-8000-000000000043"
     private let timeOffRequestID = "A1000000-0000-4000-8000-000000000045"
 
+    private func dispatchCapacityIdentifier(for date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "DispatchCapacityDate-%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
+    }
+
+    private func startOfDispatchWeek(containing date: Date) -> Date {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: date)
+        let weekday = calendar.component(.weekday, from: day)
+        let offsetFromMonday = (weekday + 5) % 7
+        return calendar.date(byAdding: .day, value: -offsetFromMonday, to: day) ?? day
+    }
+
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
 
@@ -1235,11 +1253,23 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Today"].exists)
         XCTAssertTrue(app.buttons["Done"].exists)
 
-        let todayWeekday = Calendar.current.component(.weekday, from: Date())
-        let capacity = app.descendants(matching: .any)["DispatchCapacityWeekday-\(todayWeekday)"]
+        let capacity = app.descendants(matching: .any)[dispatchCapacityIdentifier(for: Date())]
         XCTAssertTrue(capacity.waitForExistence(timeout: 3), app.debugDescription)
         XCTAssertTrue(capacity.label.localizedCaseInsensitiveContains("capacity"))
         XCTAssertFalse(capacity.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        capacity.tap()
+        XCTAssertTrue(app.navigationBars["Team Capacity"].waitForExistence(timeout: 3), app.debugDescription)
+        let technicianCapacity = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH 'DispatchTechnicianCapacity-'")
+        ).firstMatch
+        XCTAssertTrue(technicianCapacity.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("UI Test Technician"))
+        XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("hours not configured"))
+        XCTAssertFalse(technicianCapacity.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+        XCTAssertTrue(app.staticTexts["Regular hours are reduced by unavailable time. On-call remains separate, and travel time is not estimated."].exists)
+        app.buttons["DispatchCapacityDetailDone"].tap()
+        XCTAssertTrue(app.navigationBars["Dispatch Week"].waitForExistence(timeout: 3))
 
         let seededJob = app.descendants(matching: .any)["DispatchJobCard-A1000000-0000-4000-8000-000000000002"]
         XCTAssertTrue(seededJob.waitForExistence(timeout: 3))
@@ -3302,12 +3332,38 @@ final class GunnAire_OpsUITests: XCTestCase {
         let nextWeek = app.buttons["Next week"]
         XCTAssertTrue(nextWeek.exists)
         nextWeek.tap()
-        let mondayCapacity = app.descendants(matching: .any)["DispatchCapacityWeekday-2"]
+        let nextMonday = Calendar.current.date(
+            byAdding: .day,
+            value: 7,
+            to: startOfDispatchWeek(containing: Date())
+        ) ?? Date()
+        let mondayCapacity = app.descendants(matching: .any)[dispatchCapacityIdentifier(for: nextMonday)]
         XCTAssertTrue(mondayCapacity.waitForExistence(timeout: 3), app.debugDescription)
         XCTAssertTrue(mondayCapacity.label.localizedCaseInsensitiveContains("9 hours open"))
         XCTAssertTrue(mondayCapacity.label.localizedCaseInsensitiveContains("9 hours staffed"))
         XCTAssertTrue(mondayCapacity.label.localizedCaseInsensitiveContains("0 minutes booked"))
         XCTAssertFalse(mondayCapacity.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        mondayCapacity.tap()
+        XCTAssertTrue(app.navigationBars["Team Capacity"].waitForExistence(timeout: 3), app.debugDescription)
+        let technicianCapacity = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH 'DispatchTechnicianCapacity-' AND label CONTAINS[c] '9 hours staffed'"
+            )
+        ).firstMatch
+        XCTAssertTrue(technicianCapacity.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("9 hours staffed"), technicianCapacity.label)
+        XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("0 minutes booked"), technicianCapacity.label)
+        XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("9 hours open"), technicianCapacity.label)
+        XCTAssertFalse(technicianCapacity.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        let detailEvidence = XCTAttachment(screenshot: app.screenshot())
+        detailEvidence.name = "Progressive technician capacity detail without account email"
+        detailEvidence.lifetime = .keepAlways
+        add(detailEvidence)
+
+        app.buttons["DispatchCapacityDetailDone"].tap()
+        XCTAssertTrue(app.navigationBars["Dispatch Week"].waitForExistence(timeout: 3))
 
         let capacityEvidence = XCTAttachment(screenshot: app.screenshot())
         capacityEvidence.name = "Weekly dispatch capacity from recurring technician hours"

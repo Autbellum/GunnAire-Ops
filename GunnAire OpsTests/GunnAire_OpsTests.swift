@@ -2400,6 +2400,30 @@ struct GunnAire_OpsTests {
         #expect(snapshot.unassignedJobCount == 1)
         #expect(snapshot.unassignedMinutes == 90)
         #expect(snapshot.status == .overbooked)
+
+        let technicianSnapshots = DispatchCapacityPolicy.technicianSnapshots(
+            for: monday,
+            technicians: [technician],
+            serviceCalls: calls,
+            availabilityBlocks: [firstBlock, secondBlock],
+            workShifts: regular + onCall,
+            calendar: calendar
+        )
+        let technicianSnapshot = try #require(technicianSnapshots.first)
+        #expect(technicianSnapshots.count == 1)
+        #expect(technicianSnapshot.technicianID == technician.id)
+        #expect(technicianSnapshot.technicianName == "Capacity Tech")
+        #expect(technicianSnapshot.isConfigured)
+        #expect(technicianSnapshot.staffedRegularMinutes == 450)
+        #expect(technicianSnapshot.bookedMinutes == 300)
+        #expect(technicianSnapshot.openRegularMinutes == 270)
+        #expect(technicianSnapshot.overbookedMinutes == 60)
+        #expect(technicianSnapshot.onCallCapacityMinutes == 120)
+        #expect(technicianSnapshot.openOnCallMinutes == 60)
+        #expect(technicianSnapshot.unavailableMinutes == 90)
+        #expect(technicianSnapshot.assignedBookingCount == 3)
+        #expect(technicianSnapshot.status == .overbooked)
+        #expect(technicianSnapshot.regularUtilization == snapshot.regularUtilization)
     }
 
     @Test func dispatchCapacityKeepsUnconfiguredAssignmentsAndUnassignedDemandVisible() throws {
@@ -2472,6 +2496,28 @@ struct GunnAire_OpsTests {
         #expect(snapshot.unassignedJobCount == 1)
         #expect(snapshot.unassignedMinutes == 60)
         #expect(snapshot.status == .tight)
+
+        let technicianSnapshots = DispatchCapacityPolicy.technicianSnapshots(
+            for: monday,
+            technicians: [configured, unconfigured],
+            serviceCalls: [assignedWithoutHours, cancelled, unassigned, completedUnassigned],
+            availabilityBlocks: [],
+            workShifts: shifts,
+            calendar: calendar
+        )
+        let configuredSnapshot = try #require(technicianSnapshots.first { $0.technicianID == configured.id })
+        let unconfiguredSnapshot = try #require(technicianSnapshots.first { $0.technicianID == unconfigured.id })
+        #expect(technicianSnapshots.count == 2)
+        #expect(configuredSnapshot.isConfigured)
+        #expect(configuredSnapshot.staffedRegularMinutes == 120)
+        #expect(configuredSnapshot.bookedMinutes == 0)
+        #expect(configuredSnapshot.openRegularMinutes == 120)
+        #expect(configuredSnapshot.status == .available)
+        #expect(!unconfiguredSnapshot.isConfigured)
+        #expect(unconfiguredSnapshot.bookedMinutes == 120)
+        #expect(unconfiguredSnapshot.overbookedMinutes == 120)
+        #expect(unconfiguredSnapshot.assignedBookingCount == 1)
+        #expect(unconfiguredSnapshot.status == .unconfigured)
     }
 
     @Test func dispatchCapacityCountsEveryCrewMemberAndFlagsWorkOutsideRegularHours() throws {
