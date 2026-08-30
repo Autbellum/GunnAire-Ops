@@ -88,6 +88,7 @@ class BackendReadinessTests(unittest.TestCase):
                     default_sales_item_ref, default_sales_item_name, default_sales_item_type,
                     default_income_account_ref, default_income_account_name, default_income_account_type,
                     default_expense_account_ref, default_expense_account_name, default_expense_account_type,
+                    default_ap_account_ref, default_ap_account_name, default_ap_account_type,
                     default_bank_account_ref, default_bank_account_name, default_bank_account_type,
                     default_credit_card_account_ref, default_credit_card_account_name,
                     default_credit_card_account_type, updated_at, updated_by
@@ -96,6 +97,7 @@ class BackendReadinessTests(unittest.TestCase):
                     '101', 'HVAC Service', 'Service',
                     '201', 'Service Income', 'Income',
                     '301', 'Cost of Goods Sold', 'Cost of Goods Sold',
+                    '351', 'Accounts Payable', 'Accounts Payable',
                     '401', 'Operating Checking', 'Bank',
                     '501', 'Company Credit Card', 'Credit Card', ?, 'admin@gunnaire.com'
                 )
@@ -147,6 +149,27 @@ class BackendReadinessTests(unittest.TestCase):
         statuses = {component["id"]: component["status"] for component in snapshot["components"]}
         self.assertEqual(statuses["quickbooks"], "attention")
         self.assertEqual(statuses["backup"], "attention")
+
+    def test_migrated_empty_accounts_payable_mapping_fails_readiness_closed(self) -> None:
+        now = datetime(2026, 8, 26, 20, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.readiness_configuration(root):
+                self.seed_ready_state(root, now)
+                with backend.db() as connection:
+                    connection.execute(
+                        """
+                        UPDATE qbo_accounting_config
+                        SET default_ap_account_ref = '',
+                            default_ap_account_name = '',
+                            default_ap_account_type = ''
+                        WHERE realm_id = 'realm-123' AND environment = 'production'
+                        """
+                    )
+                component = backend.quickbooks_accounting_configuration_readiness_component()
+
+        self.assertEqual(component["status"], "attention")
+        self.assertIn("Accounts Payable", component["detail"])
 
     def test_push_readiness_surfaces_missing_http2_provider_dependency_as_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

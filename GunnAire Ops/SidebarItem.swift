@@ -18,3 +18,22 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     
     var id: String { rawValue }
 }
+
+/// Keeps the split-view detail anchored to a workspace the current business
+/// role can still open. Role records can change through CloudKit while the app
+/// is active, so selection recovery cannot be limited to initial appearance.
+enum SidebarNavigationPolicy {
+    static func resolvedSelection(
+        _ currentSelection: SidebarItem?,
+        visibleItems: [SidebarItem]
+    ) -> SidebarItem? {
+        guard !visibleItems.isEmpty else { return nil }
+        if let currentSelection, visibleItems.contains(currentSelection) {
+            return currentSelection
+        }
+        if visibleItems.contains(.commandCenter) {
+            return .commandCenter
+        }
+        return visibleItems.first
+    }
+}

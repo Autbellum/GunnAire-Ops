@@ -1,5 +1,12 @@
 import Foundation
 
+struct CloudKitContinuityNotice: Equatable, Sendable {
+    let title: String
+    let systemImage: String
+    let statusDetail: String
+    let recoveryDetail: String
+}
+
 /// Describes the current storage boundary so staff do not mistake integration
 /// status for full cross-device operational replication.
 enum OperationalDataContinuity {
@@ -24,5 +31,46 @@ enum OperationalDataContinuity {
 
     static var offlineRecoveryDetail: String {
         "Field work is retained locally while offline. Reopen this device to finish or retry work; CloudKit merges the saved changes when it returns online. Confirm shared-file upload status before relying on another device."
+    }
+
+    /// Ready devices stay visually quiet. A compact notice appears only when
+    /// staff need to understand that saved field work has not yet been proven
+    /// available on another company device.
+    static func cloudKitNotice(
+        for readiness: GunnAireCloudKit.AccountReadiness
+    ) -> CloudKitContinuityNotice? {
+        cloudKitNotice(for: readiness, mirroringState: CloudKitMirroringState())
+    }
+
+    static func cloudKitNotice(
+        for readiness: GunnAireCloudKit.AccountReadiness,
+        mirroringState: CloudKitMirroringState
+    ) -> CloudKitContinuityNotice? {
+        let title: String
+        switch readiness {
+        case .available:
+            if let failure = mirroringState.attentionFailure {
+                return CloudKitContinuityNotice(
+                    title: failure.title,
+                    systemImage: "externaldrive.badge.exclamationmark",
+                    statusDetail: failure.statusDetail,
+                    recoveryDetail: failure.recoveryDetail
+                )
+            }
+            return nil
+        case .unavailable:
+            title = "Cloud sync unavailable"
+        case .restricted:
+            title = "Cloud sync restricted"
+        case .couldNotDetermine:
+            title = "Cloud sync not verified"
+        }
+
+        return CloudKitContinuityNotice(
+            title: title,
+            systemImage: "externaldrive.badge.exclamationmark",
+            statusDetail: readiness.userFacingDetail,
+            recoveryDetail: offlineRecoveryDetail
+        )
     }
 }

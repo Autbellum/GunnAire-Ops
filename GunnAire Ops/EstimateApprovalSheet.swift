@@ -39,7 +39,9 @@ struct EstimateApprovalSheet: View {
     }
 
     private var canApprove: Bool {
-        guard !trimmedName.isEmpty, confirmedReview else { return false }
+        guard estimate.customerApprovalBlockedMessage == nil,
+              !trimmedName.isEmpty,
+              confirmedReview else { return false }
         return method.requiresSignature ? hasSignature : !trimmedReference.isEmpty
     }
 
@@ -48,7 +50,18 @@ struct EstimateApprovalSheet: View {
             Form {
                 Section(estimate.proposalLabel) {
                     LabeledContent("Customer", value: estimate.customer.name)
+                    if estimate.hasTaxableLines {
+                        LabeledContent("Subtotal", value: estimate.subtotalAmount.formatted(.currency(code: "USD")))
+                        LabeledContent("Sales Tax", value: estimate.salesTaxAmount.formatted(.currency(code: "USD")))
+                    }
                     LabeledContent("Total", value: estimate.amount.formatted(.currency(code: "USD")))
+                    if let blockedMessage = estimate.customerApprovalBlockedMessage {
+                        Label(estimate.taxCalculationStatus.displayName, systemImage: "building.columns")
+                            .foregroundStyle(Color.orange)
+                        Text(blockedMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     if estimate.isChangeOrder {
                         Text("This approval applies only to this revised change order. The original approval stays on the original estimate.")
                             .font(.caption)

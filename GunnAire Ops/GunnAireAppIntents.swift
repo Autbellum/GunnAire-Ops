@@ -118,10 +118,140 @@ enum GunnAireAppRoute: String, CaseIterable {
     }
 }
 
+/// App Intents can resolve entities before GunnAire Ops presents its normal
+/// sidebar. Keep Siri, Shortcuts, Spotlight, and saved shortcut parameters on
+/// the same authenticated role and record boundary as the visible app UI.
+/// A provider session is required in addition to a local role row so stale
+/// shared-device defaults cannot enumerate company records after sign-out.
+enum GunnAireAppIntentAccessPolicy {
+    static func canOpen(
+        _ route: GunnAireAppRoute,
+        email: String?,
+        users: [AppUser],
+        hasAuthenticatedProvider: Bool
+    ) -> Bool {
+        guard hasAuthenticatedProvider else { return false }
+        return AppAccess.canAccessSidebarItem(
+            route.sidebarItem,
+            email: email,
+            users: users
+        )
+    }
+
+    static func visibleCustomerIDs(
+        email: String?,
+        users: [AppUser],
+        customers: [Customer],
+        hasAuthenticatedProvider: Bool
+    ) -> Set<UUID> {
+        guard canOpen(
+            .customers,
+            email: email,
+            users: users,
+            hasAuthenticatedProvider: hasAuthenticatedProvider
+        ) else { return [] }
+        return Set(customers.map(\.id))
+    }
+
+    static func visibleServiceCallIDs(
+        email: String?,
+        users: [AppUser],
+        serviceCalls: [ServiceCall],
+        technicians: [Technician],
+        hasAuthenticatedProvider: Bool
+    ) -> Set<UUID> {
+        guard hasAuthenticatedProvider else { return [] }
+        let canOpenJobs = canOpen(
+            .schedule,
+            email: email,
+            users: users,
+            hasAuthenticatedProvider: true
+        ) || canOpen(
+            .documentation,
+            email: email,
+            users: users,
+            hasAuthenticatedProvider: true
+        )
+        guard canOpenJobs else { return [] }
+        return AppAccess.visibleServiceCallIDs(
+            email: email,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+    }
+
+    static func visibleInvoiceIDs(
+        email: String?,
+        users: [AppUser],
+        serviceCalls: [ServiceCall],
+        invoices: [Invoice],
+        technicians: [Technician],
+        hasAuthenticatedProvider: Bool
+    ) -> Set<UUID> {
+        guard hasAuthenticatedProvider else { return [] }
+        let canOpenBilling = canOpen(
+            .invoices,
+            email: email,
+            users: users,
+            hasAuthenticatedProvider: true
+        ) || canOpen(
+            .payments,
+            email: email,
+            users: users,
+            hasAuthenticatedProvider: true
+        )
+        guard canOpenBilling else { return [] }
+        return AppAccess.visibleFieldPaymentInvoiceIDs(
+            email: email,
+            users: users,
+            serviceCalls: serviceCalls,
+            invoices: invoices,
+            technicians: technicians
+        )
+    }
+}
+
 enum GunnAireMailWorkflow: String, Codable, Sendable {
     case general
     case estimateFollowUp
     case paymentReminder
+    case appointmentConfirmation
+    case technicianEnRoute
+    case technicianArrival
+    case workInProgress
+    case serviceFollowUp
+    case maintenanceVisitReminder
+    case maintenanceRenewal
+    case postJobReview
+    case receipt
+    case customerDocument
+
+    var displayName: String {
+        switch self {
+        case .general: "General email"
+        case .estimateFollowUp: "Estimate follow-up"
+        case .paymentReminder: "Payment reminder"
+        case .appointmentConfirmation: "Appointment confirmation"
+        case .technicianEnRoute: "On-my-way update"
+        case .technicianArrival: "Arrival update"
+        case .workInProgress: "Work-in-progress update"
+        case .serviceFollowUp: "Service follow-up"
+        case .maintenanceVisitReminder: "Maintenance reminder"
+        case .maintenanceRenewal: "Agreement renewal"
+        case .postJobReview: "Review request"
+        case .receipt: "Payment receipt"
+        case .customerDocument: "Customer document"
+        }
+    }
+
+    var templateVersion: String {
+        "\(rawValue)-v1"
+    }
+
+    var requiresMarketingConsent: Bool {
+        self == .postJobReview
+    }
 }
 
 enum GunnAireAppIntentRouter {
@@ -153,6 +283,8 @@ enum GunnAireAppIntentRouter {
         case .payments:
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingInvoiceID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingOpenPaymentCollection")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingContactlessPaymentGuide")
+            clearDeferredPaymentCollectionRoute()
         case .mail:
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailTo")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailSubject")
@@ -162,8 +294,11 @@ enum GunnAireAppIntentRouter {
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailServiceCallID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailInvoiceID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailEstimateID")
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailMaintenanceContractID")
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailWorkflow")
-        case .commandCenter, .timeClock, .estimates, .invoicesEstimates, .reports, .receiptsBills, .sync, .quickBooks:
+        case .quickBooks:
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingQuickBooksWorkspace")
+        case .commandCenter, .timeClock, .estimates, .invoicesEstimates, .reports, .receiptsBills, .sync:
             break
         }
     }
@@ -178,6 +313,10 @@ enum GunnAireAppIntentRouter {
             "GunnAirePendingServiceCallID",
             "GunnAirePendingInvoiceID",
             "GunnAirePendingOpenPaymentCollection",
+            "GunnAirePendingContactlessPaymentGuide",
+            "GunnAireDeferredFieldCollectionInvoiceID",
+            "GunnAireDeferredFieldCollectionOwner",
+            "GunnAireDeferredContactlessPaymentGuide",
             "GunnAirePendingMailTo",
             "GunnAirePendingMailSubject",
             "GunnAirePendingMailBody",
@@ -186,11 +325,25 @@ enum GunnAireAppIntentRouter {
             "GunnAirePendingMailServiceCallID",
             "GunnAirePendingMailInvoiceID",
             "GunnAirePendingMailEstimateID",
-            "GunnAirePendingMailWorkflow"
+            "GunnAirePendingMailMaintenanceContractID",
+            "GunnAirePendingMailWorkflow",
+            "GunnAirePendingQuickBooksWorkspace"
         ]
         for key in keys {
             UserDefaults.standard.removeObject(forKey: key)
         }
+    }
+
+    nonisolated static func storeQuickBooksRoute(workspace: QuickBooksManagementWorkspace) {
+        UserDefaults.standard.set(workspace.rawValue, forKey: "GunnAirePendingQuickBooksWorkspace")
+        store(.quickBooks)
+    }
+
+    nonisolated static func consumePendingQuickBooksWorkspace() -> QuickBooksManagementWorkspace? {
+        let key = "GunnAirePendingQuickBooksWorkspace"
+        guard let rawValue = UserDefaults.standard.string(forKey: key) else { return nil }
+        UserDefaults.standard.removeObject(forKey: key)
+        return QuickBooksManagementWorkspace(rawValue: rawValue)
     }
 
     nonisolated static func storeCustomerRoute(_ id: UUID) {
@@ -240,9 +393,13 @@ enum GunnAireAppIntentRouter {
         return id
     }
 
-    nonisolated static func storePaymentCollectionRoute(_ id: UUID) {
+    nonisolated static func storePaymentCollectionRoute(
+        _ id: UUID,
+        prefersContactlessGuide: Bool = false
+    ) {
         UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingInvoiceID")
         UserDefaults.standard.set(true, forKey: "GunnAirePendingOpenPaymentCollection")
+        UserDefaults.standard.set(prefersContactlessGuide, forKey: "GunnAirePendingContactlessPaymentGuide")
         store(.payments)
     }
 
@@ -257,6 +414,58 @@ enum GunnAireAppIntentRouter {
         return id
     }
 
+    nonisolated static func consumePendingContactlessPaymentGuidePreference() -> Bool {
+        let prefersContactlessGuide = UserDefaults.standard.bool(forKey: "GunnAirePendingContactlessPaymentGuide")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingContactlessPaymentGuide")
+        return prefersContactlessGuide
+    }
+
+    /// Retains a collection handoff while CloudKit delivers the authorized
+    /// invoice graph. The owner binding prevents a shared device from exposing
+    /// the deferred invoice identifier after an account change.
+    nonisolated static func storeDeferredPaymentCollectionRoute(
+        _ id: UUID,
+        ownerEmail: String?,
+        prefersContactlessGuide: Bool = false
+    ) {
+        let owner = normalizedRouteOwner(ownerEmail)
+        guard !owner.isEmpty else {
+            clearDeferredPaymentCollectionRoute()
+            return
+        }
+        UserDefaults.standard.set(id.uuidString, forKey: "GunnAireDeferredFieldCollectionInvoiceID")
+        UserDefaults.standard.set(owner, forKey: "GunnAireDeferredFieldCollectionOwner")
+        UserDefaults.standard.set(prefersContactlessGuide, forKey: "GunnAireDeferredContactlessPaymentGuide")
+    }
+
+    nonisolated static func deferredPaymentCollectionID(ownerEmail: String?) -> UUID? {
+        let requestedOwner = normalizedRouteOwner(ownerEmail)
+        guard !requestedOwner.isEmpty,
+              let storedOwner = UserDefaults.standard.string(forKey: "GunnAireDeferredFieldCollectionOwner"),
+              storedOwner == requestedOwner,
+              let rawValue = UserDefaults.standard.string(forKey: "GunnAireDeferredFieldCollectionInvoiceID"),
+              let id = UUID(uuidString: rawValue) else {
+            clearDeferredPaymentCollectionRoute()
+            return nil
+        }
+        return id
+    }
+
+    nonisolated static func deferredPaymentCollectionPrefersContactlessGuide(ownerEmail: String?) -> Bool {
+        guard deferredPaymentCollectionID(ownerEmail: ownerEmail) != nil else { return false }
+        return UserDefaults.standard.bool(forKey: "GunnAireDeferredContactlessPaymentGuide")
+    }
+
+    nonisolated static func clearDeferredPaymentCollectionRoute() {
+        UserDefaults.standard.removeObject(forKey: "GunnAireDeferredFieldCollectionInvoiceID")
+        UserDefaults.standard.removeObject(forKey: "GunnAireDeferredFieldCollectionOwner")
+        UserDefaults.standard.removeObject(forKey: "GunnAireDeferredContactlessPaymentGuide")
+    }
+
+    nonisolated private static func normalizedRouteOwner(_ email: String?) -> String {
+        email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    }
+
     nonisolated static func storeMailDraftRoute(
         to: String,
         subject: String,
@@ -266,6 +475,7 @@ enum GunnAireAppIntentRouter {
         serviceCallID: UUID? = nil,
         invoiceID: UUID? = nil,
         estimateID: UUID? = nil,
+        maintenanceContractID: UUID? = nil,
         workflow: GunnAireMailWorkflow = .general
     ) {
         UserDefaults.standard.set(to, forKey: "GunnAirePendingMailTo")
@@ -276,11 +486,12 @@ enum GunnAireAppIntentRouter {
         UserDefaults.standard.set(serviceCallID?.uuidString, forKey: "GunnAirePendingMailServiceCallID")
         UserDefaults.standard.set(invoiceID?.uuidString, forKey: "GunnAirePendingMailInvoiceID")
         UserDefaults.standard.set(estimateID?.uuidString, forKey: "GunnAirePendingMailEstimateID")
+        UserDefaults.standard.set(maintenanceContractID?.uuidString, forKey: "GunnAirePendingMailMaintenanceContractID")
         UserDefaults.standard.set(workflow.rawValue, forKey: "GunnAirePendingMailWorkflow")
         store(.mail)
     }
 
-    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String, attachmentPaths: [String], customerID: UUID?, serviceCallID: UUID?, invoiceID: UUID?, estimateID: UUID?, workflow: GunnAireMailWorkflow)? {
+    nonisolated static func consumePendingMailDraft() -> (to: String, subject: String, body: String, attachmentPaths: [String], customerID: UUID?, serviceCallID: UUID?, invoiceID: UUID?, estimateID: UUID?, maintenanceContractID: UUID?, workflow: GunnAireMailWorkflow)? {
         guard let to = UserDefaults.standard.string(forKey: "GunnAirePendingMailTo"),
               let subject = UserDefaults.standard.string(forKey: "GunnAirePendingMailSubject"),
               let body = UserDefaults.standard.string(forKey: "GunnAirePendingMailBody") else {
@@ -291,6 +502,7 @@ enum GunnAireAppIntentRouter {
         let serviceCallID = UserDefaults.standard.string(forKey: "GunnAirePendingMailServiceCallID").flatMap(UUID.init(uuidString:))
         let invoiceID = UserDefaults.standard.string(forKey: "GunnAirePendingMailInvoiceID").flatMap(UUID.init(uuidString:))
         let estimateID = UserDefaults.standard.string(forKey: "GunnAirePendingMailEstimateID").flatMap(UUID.init(uuidString:))
+        let maintenanceContractID = UserDefaults.standard.string(forKey: "GunnAirePendingMailMaintenanceContractID").flatMap(UUID.init(uuidString:))
         let workflow = UserDefaults.standard.string(forKey: "GunnAirePendingMailWorkflow")
             .flatMap(GunnAireMailWorkflow.init(rawValue:)) ?? .general
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailTo")
@@ -301,8 +513,9 @@ enum GunnAireAppIntentRouter {
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailServiceCallID")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailInvoiceID")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailEstimateID")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailMaintenanceContractID")
         UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailWorkflow")
-        return (to, subject, body, attachmentPaths, customerID, serviceCallID, invoiceID, estimateID, workflow)
+        return (to, subject, body, attachmentPaths, customerID, serviceCallID, invoiceID, estimateID, maintenanceContractID, workflow)
     }
 }
 
@@ -314,12 +527,63 @@ private enum GunnAireIntentStore {
         configurations: [GunnAireCloudKit.modelConfiguration(for: schema)]
     )
 
+    private struct AccessSnapshot {
+        let email: String?
+        let users: [AppUser]
+        let technicians: [Technician]
+        let hasAuthenticatedProvider: Bool
+    }
+
+    @MainActor
+    private static func accessSnapshot() throws -> AccessSnapshot {
+        guard let container else {
+            return AccessSnapshot(
+                email: nil,
+                users: [],
+                technicians: [],
+                hasAuthenticatedProvider: false
+            )
+        }
+        let context = ModelContext(container)
+        let users = try context.fetch(
+            FetchDescriptor<AppUser>(sortBy: [SortDescriptor(\.email, order: .forward)])
+        )
+        let technicians = try context.fetch(
+            FetchDescriptor<Technician>(sortBy: [SortDescriptor(\.name, order: .forward)])
+        )
+        return AccessSnapshot(
+            email: AppIdentity.currentEmail,
+            users: users,
+            technicians: technicians,
+            hasAuthenticatedProvider: AppIdentity.hasAuthenticatedProvider
+        )
+    }
+
+    @MainActor
+    static func canOpen(_ route: GunnAireAppRoute) throws -> Bool {
+        let access = try accessSnapshot()
+        return GunnAireAppIntentAccessPolicy.canOpen(
+            route,
+            email: access.email,
+            users: access.users,
+            hasAuthenticatedProvider: access.hasAuthenticatedProvider
+        )
+    }
+
     @MainActor
     static func customers() throws -> [Customer] {
         guard let container else { return [] }
         let context = ModelContext(container)
         let descriptor = FetchDescriptor<Customer>(sortBy: [SortDescriptor(\.name, order: .forward)])
-        return try context.fetch(descriptor)
+        let customers = try context.fetch(descriptor)
+        let access = try accessSnapshot()
+        let visibleIDs = GunnAireAppIntentAccessPolicy.visibleCustomerIDs(
+            email: access.email,
+            users: access.users,
+            customers: customers,
+            hasAuthenticatedProvider: access.hasAuthenticatedProvider
+        )
+        return customers.filter { visibleIDs.contains($0.id) }
     }
 
     @MainActor
@@ -327,7 +591,16 @@ private enum GunnAireIntentStore {
         guard let container else { return [] }
         let context = ModelContext(container)
         let descriptor = FetchDescriptor<ServiceCall>(sortBy: [SortDescriptor(\.scheduledDate, order: .forward)])
-        return try context.fetch(descriptor)
+        let calls = try context.fetch(descriptor)
+        let access = try accessSnapshot()
+        let visibleIDs = GunnAireAppIntentAccessPolicy.visibleServiceCallIDs(
+            email: access.email,
+            users: access.users,
+            serviceCalls: calls,
+            technicians: access.technicians,
+            hasAuthenticatedProvider: access.hasAuthenticatedProvider
+        )
+        return calls.filter { visibleIDs.contains($0.id) }
     }
 
     @MainActor
@@ -335,15 +608,54 @@ private enum GunnAireIntentStore {
         guard let container else { return [] }
         let context = ModelContext(container)
         let descriptor = FetchDescriptor<Invoice>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
-        return try context.fetch(descriptor)
+        let invoices = try context.fetch(descriptor)
+        let calls = try context.fetch(FetchDescriptor<ServiceCall>())
+        let access = try accessSnapshot()
+        let visibleIDs = GunnAireAppIntentAccessPolicy.visibleInvoiceIDs(
+            email: access.email,
+            users: access.users,
+            serviceCalls: calls,
+            invoices: invoices,
+            technicians: access.technicians,
+            hasAuthenticatedProvider: access.hasAuthenticatedProvider
+        )
+        return invoices.filter { visibleIDs.contains($0.id) }
     }
 
     @MainActor
     static func payments() throws -> [Payment] {
         guard let container else { return [] }
+        let access = try accessSnapshot()
+        let canReviewBilling = GunnAireAppIntentAccessPolicy.canOpen(
+            .payments,
+            email: access.email,
+            users: access.users,
+            hasAuthenticatedProvider: access.hasAuthenticatedProvider
+        ) || GunnAireAppIntentAccessPolicy.canOpen(
+            .invoices,
+            email: access.email,
+            users: access.users,
+            hasAuthenticatedProvider: access.hasAuthenticatedProvider
+        )
+        guard canReviewBilling else { return [] }
         let context = ModelContext(container)
         let descriptor = FetchDescriptor<Payment>(sortBy: [SortDescriptor(\.date, order: .reverse)])
         return try context.fetch(descriptor)
+    }
+
+    @MainActor
+    static func canOpenCustomerRecord(_ id: UUID) throws -> Bool {
+        try customers().contains { $0.id == id }
+    }
+
+    @MainActor
+    static func canOpenServiceCall(_ id: UUID) throws -> Bool {
+        try serviceCalls().contains { $0.id == id }
+    }
+
+    @MainActor
+    static func canOpenInvoice(_ id: UUID) throws -> Bool {
+        try invoices().contains { $0.id == id }
     }
 
     @MainActor
@@ -401,15 +713,16 @@ private enum GunnAireIntentStore {
     @MainActor
     static func nextOverdueInvoice() throws -> Invoice? {
         let now = Date()
-        let overdueThreshold = Calendar.current.date(byAdding: .day, value: -7, to: now) ?? now
         let invoices = try invoices()
         let payments = try payments()
         return invoices
-            .filter { outstandingBalance(for: $0, payments: payments) > 0 && $0.createdAt <= overdueThreshold }
+            .filter { Invoice.isOverdue($0, payments: payments, now: now) }
             .sorted { lhs, rhs in
                 let lhsBalance = outstandingBalance(for: lhs, payments: payments)
                 let rhsBalance = outstandingBalance(for: rhs, payments: payments)
-                if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+                let lhsDueDate = lhs.effectiveDueDate()
+                let rhsDueDate = rhs.effectiveDueDate()
+                if lhsDueDate != rhsDueDate { return lhsDueDate < rhsDueDate }
                 return lhsBalance > rhsBalance
             }
             .first
@@ -625,6 +938,9 @@ struct OpenScheduleIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.schedule) else {
+            return .result(dialog: "Schedule is not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.schedule)
         return .result(dialog: "Opening the schedule dashboard.")
     }
@@ -636,6 +952,9 @@ struct OpenCommandCenterIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.commandCenter) else {
+            return .result(dialog: "Sign in with an authorized GunnAire business account to open Command Center.")
+        }
         GunnAireAppIntentRouter.store(.commandCenter)
         return .result(dialog: "Opening the command center.")
     }
@@ -647,6 +966,9 @@ struct OpenTimeClockIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.timeClock) else {
+            return .result(dialog: "Time Clock is not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.timeClock)
         return .result(dialog: "Opening the time clock.")
     }
@@ -658,6 +980,9 @@ struct OpenCustomersIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.customers) else {
+            return .result(dialog: "Customer records are not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.customers)
         return .result(dialog: "Opening customers.")
     }
@@ -669,6 +994,9 @@ struct OpenMailIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.mail) else {
+            return .result(dialog: "Mail is not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.mail)
         return .result(dialog: "Opening mail.")
     }
@@ -680,6 +1008,9 @@ struct OpenInvoicesEstimatesIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.invoicesEstimates) else {
+            return .result(dialog: "Invoices are not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.invoicesEstimates)
         return .result(dialog: "Opening invoices and estimates.")
     }
@@ -691,6 +1022,9 @@ struct OpenEstimatesIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.estimates) else {
+            return .result(dialog: "Estimates are not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.estimates)
         return .result(dialog: "Opening estimates.")
     }
@@ -702,6 +1036,9 @@ struct OpenInvoicesIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.invoices) else {
+            return .result(dialog: "Invoices are not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.invoices)
         return .result(dialog: "Opening invoices.")
     }
@@ -713,6 +1050,9 @@ struct OpenPaymentsIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.payments) else {
+            return .result(dialog: "Payments are not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.payments)
         return .result(dialog: "Opening payments.")
     }
@@ -724,6 +1064,9 @@ struct OpenBusinessReportsIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.reports) else {
+            return .result(dialog: "Business Reports are not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.reports)
         return .result(dialog: "Opening business reports.")
     }
@@ -735,6 +1078,9 @@ struct OpenReceiptsBillsIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.receiptsBills) else {
+            return .result(dialog: "Receipts and Bills are not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.receiptsBills)
         return .result(dialog: "Opening receipts and bills.")
     }
@@ -746,6 +1092,9 @@ struct OpenDocumentationIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.documentation) else {
+            return .result(dialog: "Documentation is not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.documentation)
         return .result(dialog: "Opening documentation.")
     }
@@ -757,6 +1106,9 @@ struct OpenSyncIntegrationsIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.sync) else {
+            return .result(dialog: "Sync and Integrations is not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.sync)
         return .result(dialog: "Opening sync and integrations.")
     }
@@ -768,6 +1120,9 @@ struct OpenQuickBooksManagementIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.quickBooks) else {
+            return .result(dialog: "QuickBooks Management is not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.store(.quickBooks)
         return .result(dialog: "Opening QuickBooks management.")
     }
@@ -785,6 +1140,9 @@ struct OpenCustomerRecordIntent: AppIntent {
     var customer: GunnAireCustomerEntity
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpenCustomerRecord(customer.id) else {
+            return .result(dialog: "That customer record is not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.storeCustomerRoute(customer.id)
         return .result(dialog: "Opening \(customer.name).")
     }
@@ -802,6 +1160,9 @@ struct OpenJobDocumentationIntent: AppIntent {
     var serviceCall: GunnAireServiceCallEntity
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpenServiceCall(serviceCall.id) else {
+            return .result(dialog: "That job is not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.storeDocumentationRoute(serviceCall.id)
         return .result(dialog: "Opening documentation for \(serviceCall.customerName).")
     }
@@ -819,6 +1180,9 @@ struct OpenScheduleJobIntent: AppIntent {
     var serviceCall: GunnAireServiceCallEntity
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpenServiceCall(serviceCall.id) else {
+            return .result(dialog: "That job is not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.storeScheduleCallRoute(serviceCall.id)
         return .result(dialog: "Opening the schedule for \(serviceCall.customerName).")
     }
@@ -830,6 +1194,9 @@ struct OpenNextScheduledJobIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.schedule) else {
+            return .result(dialog: "Schedule is not available to the signed-in business account.")
+        }
         guard let call = try await GunnAireIntentStore.nextScheduledServiceCall() else {
             return .result(dialog: "There are no upcoming scheduled jobs right now.")
         }
@@ -850,6 +1217,9 @@ struct CollectInvoicePaymentIntent: AppIntent {
     var invoice: GunnAireInvoiceEntity
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpenInvoice(invoice.id) else {
+            return .result(dialog: "That invoice is not available to the signed-in business account.")
+        }
         GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
         return .result(dialog: "Opening payment collection for \(invoice.customerName).")
     }
@@ -861,6 +1231,9 @@ struct OpenNextJobDocumentationIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.documentation) else {
+            return .result(dialog: "Documentation is not available to the signed-in business account.")
+        }
         guard let call = try await GunnAireIntentStore.nextActionableServiceCall() else {
             return .result(dialog: "There are no actionable jobs right now.")
         }
@@ -875,6 +1248,9 @@ struct CollectNextOutstandingInvoiceIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.payments) else {
+            return .result(dialog: "Payments are not available to the signed-in business account.")
+        }
         guard let invoice = try await GunnAireIntentStore.nextCollectibleInvoice() else {
             return .result(dialog: "There are no collectible invoices right now.")
         }
@@ -889,6 +1265,9 @@ struct CollectNextOverdueInvoiceIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.payments) else {
+            return .result(dialog: "Payments are not available to the signed-in business account.")
+        }
         guard let invoice = try await GunnAireIntentStore.nextOverdueInvoice() else {
             return .result(dialog: "There are no overdue invoices right now.")
         }
@@ -903,6 +1282,9 @@ struct OpenNextCustomerRecordIntent: AppIntent {
     static let openAppWhenRun = true
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard try await GunnAireIntentStore.canOpen(.customers) else {
+            return .result(dialog: "Customer records are not available to the signed-in business account.")
+        }
         guard let customer = try await GunnAireIntentStore.nextCustomerNeedingAttention() else {
             return .result(dialog: "There are no customers available right now.")
         }

@@ -5,9 +5,11 @@ import AVKit
 
 struct SettingsView: View {
     @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var cloudKitEventMonitor: GunnAireCloudKitEventMonitor
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
+    @ObservedObject private var staffNotifications = StaffPushNotificationManager.shared
 
     @Binding var isQuickBooksAuthenticated: Bool
     @Binding var isGoogleAuthenticated: Bool
@@ -61,9 +63,9 @@ struct SettingsView: View {
     @AppStorage("enablePricebook") private var enablePricebook = true
     @AppStorage("enableGoodBetterBestEstimates") private var enableGoodBetterBestEstimates = true
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
+    @AppStorage("defaultInvoicePaymentTerms") private var defaultInvoicePaymentTermsRawValue = InvoicePaymentTerms.dueOnReceipt.rawValue
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
     @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
-    @AppStorage("enableFinancing") private var enableFinancing = false
     @AppStorage("enablePhotoDocumentation") private var enablePhotoDocumentation = true
     @AppStorage("enableOfflineMode") private var enableOfflineMode = false
     @AppStorage("enableReportingDashboard") private var enableReportingDashboard = true
@@ -72,11 +74,32 @@ struct SettingsView: View {
     @AppStorage("enableCustomerPortal") private var enableCustomerPortal = false
 
     private var currentUserEmail: String? {
-        googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        AppIdentity.currentEmail
     }
 
     private var isAdminUser: Bool {
         AppAccess.isAdmin(email: currentUserEmail, users: users)
+    }
+
+    private var currentUserRole: AppUserRole? {
+        AppAccess.activeRole(email: currentUserEmail, users: users)
+    }
+
+    private var currentRoleAccessSummary: String {
+        switch currentUserRole {
+        case .standard:
+            return "Standard access includes the command center, time clock, schedule, customer review, and onsite documentation."
+        case .fieldTechnician:
+            return "Field Technician access is limited to assigned jobs, field documentation, job materials, invoices, collections, and receipt capture."
+        case .dispatcher:
+            return "Dispatcher access includes scheduling, customer records, estimates, mail, and service coordination without accounting administration."
+        case .accounting:
+            return "Accounting access includes customer review, invoices, payments, reports, receipts, and team-time approval without dispatch or integration administration."
+        case .admin:
+            return "Administrator access includes company configuration, shared-user management, integrations, and QuickBooks controls."
+        case nil:
+            return "This account does not currently have one active, unambiguous business role. Ask an administrator to refresh access."
+        }
     }
 
     private var quickBooksTimeMappedTechnicianCount: Int {
@@ -85,6 +108,10 @@ struct SettingsView: View {
 
     private var quickBooksTimeMappingsReady: Bool {
         !technicians.isEmpty && quickBooksTimeMappedTechnicianCount == technicians.count
+    }
+
+    private var onsitePaymentConfigurationReady: Bool {
+        !enableOnsitePayments || OnsitePaymentManager.shared.processorReady()
     }
 
     private var splashLaunchBehaviorDescription: String {
@@ -104,7 +131,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(currentUserEmail ?? "Signed in")
                                 .font(.headline)
-                            Text(isAdminUser ? "Administrator" : "Standard User")
+                            Text(currentUserRole?.rawValue ?? "Access Pending")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -135,10 +162,13 @@ struct SettingsView: View {
                             readinessRow(title: "Users and roles", isComplete: !users.isEmpty)
                             readinessRow(title: "QuickBooks connected", isComplete: isQuickBooksAuthenticated)
                             readinessRow(title: "Google admin account connected", isComplete: isGoogleAuthenticated)
-                            readinessRow(title: "CloudKit on this device", isComplete: cloudKitReadiness.isReady)
+                            readinessRow(
+                                title: "CloudKit on this device",
+                                isComplete: cloudKitReadiness.isReady && !cloudKitEventMonitor.state.needsAttention
+                            )
                             readinessRow(title: "Pricebook enabled", isComplete: enablePricebook)
                             readinessRow(title: "Technician workflow configured", isComplete: requireTechnicianClockIn && requireJobCompletionChecklist)
-                            readinessRow(title: "Payments configured", isComplete: !enableOnsitePayments || isQuickBooksAuthenticated)
+                            readinessRow(title: "Payments configured", isComplete: onsitePaymentConfigurationReady)
                         }
 
                         Section("App Loading Video") {
@@ -257,6 +287,7 @@ struct SettingsView: View {
                             Button("Manage Field Form Templates") {
                                 showingFieldFormTemplates = true
                             }
+                            .accessibilityIdentifier("ManageFieldFormTemplates")
                             settingsToggle("Photo & Document Capture", systemImage: "camera", isOn: $enablePhotoDocumentation)
                             featureStatus("Reporting Dashboard", systemImage: "chart.bar", detail: "Included in Command Center")
                         }
@@ -281,12 +312,31 @@ struct SettingsView: View {
                             settingsToggle("Require Customer Signature", systemImage: "signature", isOn: $requireCustomerSignature)
                             featureStatus("Customer Appointment Notifications", systemImage: "bell", detail: "Requires a connected messaging provider")
                             featureStatus("Offline Field Mode", systemImage: "wifi.slash", detail: OperationalDataContinuity.offlineRecoveryDetail)
-                            featureStatus("Cross-Device Operations", systemImage: cloudKitReadiness.isReady ? "externaldrive.badge.checkmark" : "externaldrive.badge.exclamationmark", detail: "CloudKit: \(cloudKitReadiness.statusTitle). \(cloudKitReadiness.userFacingDetail) \(OperationalDataContinuity.currentStatusDetail)")
+                            featureStatus(
+                                "Cross-Device Operations",
+                                systemImage: cloudKitReadiness.isReady && !cloudKitEventMonitor.state.needsAttention
+                                    ? "externaldrive.badge.checkmark"
+                                    : "externaldrive.badge.exclamationmark",
+                                detail: "CloudKit account: \(cloudKitReadiness.statusTitle). \(cloudKitReadiness.userFacingDetail) \(cloudKitEventMonitor.state.operatorStatusDetail) \(OperationalDataContinuity.currentStatusDetail)"
+                            )
                         }
 
                         Section("Sales & Payments") {
+                            Picker("Default Invoice Terms", selection: $defaultInvoicePaymentTermsRawValue) {
+                                ForEach(InvoicePaymentTerms.allCases.filter { $0 != .custom }) { terms in
+                                    Text(terms.displayName).tag(terms.rawValue)
+                                }
+                            }
+                            .accessibilityIdentifier("DefaultInvoicePaymentTerms")
+                            Text("Each invoice can override this setting. The selected due date is shared with QuickBooks and every overdue workflow.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             settingsToggle("On-Site Payment Processing", systemImage: "creditcard", isOn: $enableOnsitePayments)
-                            featureStatus("Customer Financing", systemImage: "dollarsign.circle", detail: "Requires an approved financing provider")
+                            featureStatus(
+                                "Customer Financing",
+                                systemImage: "dollarsign.circle",
+                                detail: "Configured on the authenticated backend. When an approved provider is ready, eligible estimates offer a provider-hosted application without storing applicant or credit data in GunnAire Ops."
+                            )
                             settingsToggle("Marketing Campaigns", systemImage: "megaphone", isOn: $enableMarketingCampaigns)
                             if enableMarketingCampaigns {
                                 TextField("Review request URL", text: $customerReviewURL)
@@ -301,7 +351,7 @@ struct SettingsView: View {
 
                             if enableOnsitePayments {
                                 if OnsitePaymentManager.shared.tapToPayAvailableInCurrentBuild {
-                                    Picker("Tap to Pay Processor", selection: $onsitePaymentProcessor) {
+                                    Picker("Tap to Pay on iPhone Processor", selection: $onsitePaymentProcessor) {
                                         ForEach(OnsitePaymentManager.shared.availableProcessors()) { processor in
                                             Text(processor.displayName).tag(processor.rawValue)
                                         }
@@ -309,12 +359,12 @@ struct SettingsView: View {
                                     Toggle("Processor Ready on This Device", isOn: $onsitePaymentProcessorReady)
                                     let selectedProcessor = OnsitePaymentProcessor(rawValue: onsitePaymentProcessor) ?? .none
                                     Text(selectedProcessor == .none
-                                         ? "Choose the live processor for Tap to Pay."
+                                         ? "Choose the live processor for Tap to Pay on iPhone."
                                          : OnsitePaymentManager.shared.processorStatusDetail())
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 } else {
-                                    Text("Card and check payments can be recorded in GunnAire Ops. For contactless payment, hand off to a field iPhone and use QuickBooks Mobile or GoPayment; Intuit provides Tap to Pay in those apps rather than an embedded custom-app flow.")
+                                    Text("Card and check payments can be recorded in GunnAire Ops. For contactless payment, hand off to a field iPhone and use QuickBooks Mobile or GoPayment; Intuit provides Tap to Pay on iPhone in those apps rather than an embedded custom-app flow.")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }
@@ -407,9 +457,79 @@ struct SettingsView: View {
                 } else {
                     Section("Account") {
                         Text(currentUserEmail ?? "Signed in")
-                        Text("Standard users can use non-financial operations, schedule, customers, and onsite documentation. Field Technicians can also view assigned invoices, collect payments, and upload receipts. Admin controls and sync settings are managed by office leadership.")
+                        Text(currentRoleAccessSummary)
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Staff Notifications") {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Label("Assignment Alerts", systemImage: staffNotifications.statusSystemImage)
+                        Spacer()
+                        if staffNotifications.isProcessing {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(staffNotifications.statusTitle)
+                            .foregroundColor(staffNotifications.isReady ? .green : .secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("StaffNotificationsStatus")
+
+                    Text(staffNotifications.statusDetail)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if staffNotifications.isDenied {
+                        HStack {
+                            Button("Open Apple Notification Settings") {
+                                staffNotifications.openAppleNotificationSettings()
+                            }
+                            .accessibilityIdentifier("OpenStaffNotificationSettings")
+
+                            if staffNotifications.isEnabledForDisplay {
+                                Button("Turn Off", role: .destructive) {
+                                    Task { await staffNotifications.disableForCurrentAccount() }
+                                }
+                                .disabled(staffNotifications.isProcessing)
+                                .accessibilityIdentifier("DisableStaffNotifications")
+                            }
+                        }
+                    } else if staffNotifications.hasPendingServerDeactivation {
+                        Button("Retry Server Removal") {
+                            Task { await staffNotifications.retry() }
+                        }
+                        .disabled(staffNotifications.isProcessing)
+                        .accessibilityIdentifier("RetryStaffNotificationRemoval")
+                    } else if staffNotifications.isReady {
+                        Button("Turn Off Staff Alerts", role: .destructive) {
+                            Task { await staffNotifications.disableForCurrentAccount() }
+                        }
+                        .disabled(staffNotifications.isProcessing)
+                        .accessibilityIdentifier("DisableStaffNotifications")
+                    } else if staffNotifications.isEnabledForDisplay {
+                        HStack {
+                            Button("Retry") {
+                                Task { await staffNotifications.retry() }
+                            }
+                            .disabled(staffNotifications.isProcessing)
+                            .accessibilityIdentifier("RetryStaffNotifications")
+
+                            Button("Turn Off", role: .destructive) {
+                                Task { await staffNotifications.disableForCurrentAccount() }
+                            }
+                            .disabled(staffNotifications.isProcessing)
+                            .accessibilityIdentifier("DisableStaffNotifications")
+                        }
+                    } else {
+                        Button("Enable Staff Alerts") {
+                            Task { await staffNotifications.enableForCurrentAccount() }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(staffNotifications.isProcessing)
+                        .accessibilityIdentifier("EnableStaffNotifications")
                     }
                 }
 
@@ -621,7 +741,7 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Readiness verifies persistent data placement, database and document writes, business authentication, encrypted QuickBooks authorization, and recent backup evidence.")
+                    Text("Readiness verifies persistent data placement, database and document writes, business authentication, the HTTPS customer portal, encrypted QuickBooks authorization, and recent backup evidence.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1123,4 +1243,5 @@ private struct LabelTextField: View {
         signOutOfApp: {},
         dismiss: {}
     )
+    .environmentObject(GunnAireCloudKitEventMonitor(isEnabled: false))
 }

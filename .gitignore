@@ -52,6 +52,10 @@ Config/Local.xcconfig
 *.sqlite3-shm
 *.sqlite3-wal
 
+# Generated local QA previews (source assets remain under AppStoreAssets)
+/output/
+/tmp/
+
 # Xcode user data
 *.xcuserdatad/
 *.xcuserstate

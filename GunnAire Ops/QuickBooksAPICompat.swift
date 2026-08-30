@@ -29,8 +29,16 @@ final class QuickBooksAPI: ObservableObject {
         data.fetchItems(completion: completion)
     }
 
+    func fetchItem(id: String, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {
+        data.fetchItem(id: id, completion: completion)
+    }
+
     func createItem(_ item: QuickBooksItemCreate, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {
         data.createItem(item, completion: completion)
+    }
+
+    func updateItem(_ item: QuickBooksItemUpdate, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {
+        data.updateItem(item, completion: completion)
     }
 
     func fetchEstimates(completion: @escaping (Result<[QuickBooksEstimate], Error>) -> Void) {
@@ -61,8 +69,16 @@ final class QuickBooksAPI: ObservableObject {
         data.fetchBills(completion: completion)
     }
     
-    func createBill(_ bill: QuickBooksBillCreate, completion: @escaping (Result<QuickBooksBill, Error>) -> Void) {
-        data.createBill(bill, completion: completion)
+    func createBill(_ bill: QuickBooksBillCreate, requestID: String? = nil, completion: @escaping (Result<QuickBooksBill, Error>) -> Void) {
+        data.createBill(bill, requestID: requestID, completion: completion)
+    }
+
+    func fetchVendorCredits(completion: @escaping (Result<[QuickBooksVendorCredit], Error>) -> Void) {
+        data.fetchVendorCredits(completion: completion)
+    }
+
+    func createVendorCredit(_ vendorCredit: QuickBooksVendorCreditCreate, requestID: String? = nil, completion: @escaping (Result<QuickBooksVendorCredit, Error>) -> Void) {
+        data.createVendorCredit(vendorCredit, requestID: requestID, completion: completion)
     }
 
     func fetchPurchases(completion: @escaping (Result<[QuickBooksPurchase], Error>) -> Void) {

@@ -1,5 +1,5 @@
 // Shared, safe defaults for GunnAire Ops.
-// Put real OAuth secrets and production account references in ignored Config/Local.xcconfig.
+// Put machine-local OAuth values in ignored Config/Local.xcconfig.
 // NOTE: URLs in .xcconfig files escape // as /$()/ because // starts a comment in xcconfig syntax.
 
 // OAuth client IDs and redirect URIs are public identifiers, not secrets.
@@ -9,10 +9,6 @@ QB_CLIENT_ID = ABCHxXFCYpnkZSYq3BemmzGhVQ4tm63jDIvo6UxjQMeHgO8jmF
 QB_REDIRECT_URI = https:/$()/gunnaire.com/wp-json/ga/v1/qbo/oauth/callback
 QB_CALLBACK_SCHEME = gunnaireops
 QB_ENVIRONMENT = production
-QB_DEFAULT_ITEM_REF = your_default_item_ref
-QB_DEFAULT_INCOME_ACCOUNT_REF = your_income_account_ref
-QB_DEFAULT_EXPENSE_ACCOUNT_REF = your_expense_account_ref
-QB_DEFAULT_PAYMENT_ACCOUNT_REF = your_payment_account_ref
 QB_ENABLE_PAYMENTS_SCOPE = true
 QB_TIME_ACTIVITY_SYNC_ENABLED = true
 QB_TIME_ACTIVITY_ITEM_REF =
@@ -29,8 +25,10 @@ GOOGLE_ALLOWED_HOSTED_DOMAIN = gunnaire.com
 
 GUNNAIRE_BACKEND_BASE_URL = https:/$()/gunnaire-api.onrender.com
 GUNNAIRE_BACKEND_API_TOKEN =
-// Use google-id-token behind HTTPS in production. api-token is legacy LAN/development only.
-GUNNAIRE_BACKEND_AUTH_MODE = api-token
+// Normal Debug and Release builds use the same backend-verified Google/Apple
+// business identity boundary. Legacy api-token mode is available only through
+// an explicit machine-local override for an isolated development LAN.
+GUNNAIRE_BACKEND_AUTH_MODE = google-id-token
 // The app target's Release configuration explicitly clears Local.xcconfig's backend
 // overrides, so a production HTTPS endpoint must be supplied by the release build environment.
 

@@ -83,6 +83,12 @@ final class QuickBooksPaymentsService {
             note: note,
             clientTransactionID: clientTransactionID
         )
+        try QuickBooksPaymentsResponsePolicy.validateCharge(
+            authorized,
+            expectedAmount: amount,
+            expectedClientTransactionID: clientTransactionID,
+            kind: .capturedCard
+        )
         let charge = authorized
 
         let accountingPayment = await syncAccountingPayment(
@@ -124,6 +130,12 @@ final class QuickBooksPaymentsService {
             clientTransactionID: clientTransactionID,
             checkNumber: bankInput.checkNumber
         )
+        try QuickBooksPaymentsResponsePolicy.validateCharge(
+            charge,
+            expectedAmount: amount,
+            expectedClientTransactionID: clientTransactionID,
+            kind: .submittedBank
+        )
 
         let accountingPayment = await syncAccountingPayment(
             invoice: invoice,
@@ -154,7 +166,7 @@ final class QuickBooksPaymentsService {
         guard let customerQBID = payment.invoice.customer.quickBooksID, !customerQBID.isEmpty else {
             throw QuickBooksPaymentsServiceError.customerNotSynced
         }
-        guard let salesItemRef = resolvedSalesItemRef else {
+        guard let salesItemRef = await resolvedSalesItemRef() else {
             throw QuickBooksPaymentsServiceError.missingSalesItemReference
         }
 
@@ -164,6 +176,11 @@ final class QuickBooksPaymentsService {
             amount: amount,
             note: note,
             clientTransactionID: clientTransactionID
+        )
+        try QuickBooksPaymentsResponsePolicy.validateRefund(
+            refund,
+            expectedAmount: amount,
+            expectedClientTransactionID: clientTransactionID
         )
         let refundReceipt = await syncRefundReceipt(
             payment: payment,
@@ -248,7 +265,7 @@ final class QuickBooksPaymentsService {
         guard let refundID = refundPayment.quickBooksChargeID.nilIfBlank else {
             throw QuickBooksPaymentsServiceError.chargeNotSynced
         }
-        guard let salesItemRef = resolvedSalesItemRef else {
+        guard let salesItemRef = await resolvedSalesItemRef() else {
             throw QuickBooksPaymentsServiceError.missingSalesItemReference
         }
 
@@ -283,13 +300,30 @@ final class QuickBooksPaymentsService {
         }
     }
 
-    private var resolvedSalesItemRef: String? {
-        guard Config.QuickBooks.hasExplicitDefaultSalesItemRef else { return nil }
-        let trimmed = Config.QuickBooks.defaultSalesItemRef.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+    private func resolvedSalesItemRef() async -> String? {
+        let realmID = api.realmID
+        let store = await MainActor.run { QuickBooksAccountingConfigurationStore.shared }
+        await store.refresh(
+            realmID: realmID,
+            environment: Config.QuickBooks.environment
+        )
+        return await MainActor.run {
+            let configuration = store.configuration.flatMap { candidate in
+                candidate.matches(realmID: realmID, environment: Config.QuickBooks.environment)
+                    ? candidate
+                    : nil
+            }
+            return QuickBooksItemAccountResolver.defaultSalesItemRef(
+                configuration: configuration
+            )?.value
+        }
     }
 
     private func prepareInvoiceForQuickBooksPayment(_ invoice: Invoice) async throws -> String {
+        if let blockedMessage = invoice.paymentCollectionBlockedMessage {
+            throw QuickBooksPaymentsServiceError.authoritativeTaxRequired(blockedMessage)
+        }
+
         guard await api.refreshSessionIfPossible() else {
             throw QuickBooksPaymentsServiceError.quickBooksSessionExpired
         }
@@ -325,7 +359,7 @@ final class QuickBooksPaymentsService {
             return
         }
 
-        guard let salesItemRef = resolvedSalesItemRef else {
+        guard let salesItemRef = await resolvedSalesItemRef() else {
             throw QuickBooksPaymentsServiceError.missingSalesItemReference
         }
 
@@ -338,11 +372,17 @@ final class QuickBooksPaymentsService {
                     DetailType: "SalesItemLineDetail",
                     Description: description,
                     SalesItemLineDetail: QuickBooksSalesItemLineDetail(
-                        ItemRef: QuickBooksReference(value: salesItemRef, name: nil)
+                        ItemRef: QuickBooksReference(value: salesItemRef, name: nil),
+                        TaxCodeRef: QuickBooksReference(
+                            value: BillingTaxPolicy.quickBooksTaxCodeValue(isTaxable: false),
+                            name: nil
+                        )
                     )
                 )
             ],
-            PrivateNote: invoice.notes
+            PrivateNote: invoice.notes,
+            DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
+            GlobalTaxCalculation: "TaxExcluded"
         )
 
         let created = try await withCheckedThrowingContinuation { continuation in
@@ -351,6 +391,18 @@ final class QuickBooksPaymentsService {
             }
         }
         invoice.quickBooksID = created.Id
+        invoice.quickBooksBalanceDue = created.Balance
+        if let rawDueDate = created.DueDate,
+           let dueDate = QuickBooksDateOnly.date(from: rawDueDate) {
+            invoice.dueDate = dueDate
+        }
+        let taxIssue = invoice.applyQuickBooksTaxResult(
+            total: created.TotalAmt,
+            reportedTax: created.TxnTaxDetail?.TotalTax
+        )
+        invoice.quickBooksSyncStatus = taxIssue == nil ? "synced" : "needs_attention"
+        invoice.quickBooksSyncDetail = taxIssue
+        invoice.quickBooksLastSyncedAt = Date()
     }
 
     private func createCardToken(_ input: QuickBooksPaymentsCardInput) async throws -> QuickBooksPaymentsTokenResponse {
@@ -756,6 +808,8 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
     case quickBooksSessionExpired
     case invalidPaymentInput
     case invalidBankAccountInput
+    case authoritativeTaxRequired(String)
+    case unconfirmedProcessorResponse(String)
 
     var errorDescription: String? {
         switch self {
@@ -764,7 +818,7 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
         case .chargeNotSynced:
             return "This payment does not have a QuickBooks Payments charge ID to refund."
         case .missingSalesItemReference:
-            return "Set QB_DEFAULT_ITEM_REF to a valid QuickBooks Item.Id before creating QuickBooks invoices, payments, or refund receipts."
+            return "Ask an administrator to open QuickBooks Management → Overview → Accounting Mappings and choose the default sales item before creating QuickBooks invoices, payments, or refund receipts."
         case .invalidRetryTarget:
             return "This QuickBooks sync retry target is not valid for the requested recovery action."
         case .invoiceNotSyncedToQuickBooks:
@@ -775,7 +829,134 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
             return "Enter a valid card number, expiration date, and CVC before sending payment details to QuickBooks Payments."
         case .invalidBankAccountInput:
             return "Enter valid ACH details before sending bank-account details to QuickBooks Payments: holder name up to 64 characters, account number 4-17 digits, routing number 9 digits, and phone number exactly 10 digits."
+        case .authoritativeTaxRequired(let detail):
+            return detail
+        case .unconfirmedProcessorResponse(let detail):
+            return "QuickBooks Payments did not return enough matching evidence to confirm this transaction. \(detail) Do not retry until the transaction is reconciled in QuickBooks."
         }
+    }
+}
+
+enum QuickBooksPaymentsResponsePolicy {
+    enum ChargeKind {
+        case capturedCard
+        case submittedBank
+    }
+
+    private static let failureStatuses: Set<String> = [
+        "cancelled", "canceled", "declined", "error", "failed", "failure",
+        "rejected", "unknown", "voided"
+    ]
+    private static let capturedCardStatuses: Set<String> = [
+        "captured", "completed", "paid", "settled", "succeeded"
+    ]
+    private static let submittedBankStatuses: Set<String> = [
+        "authorized", "captured", "completed", "paid", "pending", "processing",
+        "settled", "submitted", "succeeded"
+    ]
+    private static let acceptedRefundStatuses: Set<String> = [
+        "completed", "pending", "processing", "refunded", "settled", "submitted", "succeeded"
+    ]
+
+    static func validateCharge(
+        _ response: QuickBooksPaymentsChargeResponse,
+        expectedAmount: Double,
+        expectedClientTransactionID: String,
+        kind: ChargeKind
+    ) throws {
+        try validateIdentifier(response.id, operation: "charge")
+        try validateAmount(response.amount, expected: expectedAmount, operation: "charge")
+        try validateClientTransactionID(
+            response.resolvedClientTransID,
+            expected: expectedClientTransactionID,
+            operation: "charge"
+        )
+        if let currency = normalized(response.currency), currency != "usd" {
+            throw QuickBooksPaymentsServiceError.unconfirmedProcessorResponse(
+                "The charge currency was \(currency.uppercased()) instead of USD."
+            )
+        }
+
+        let status = normalized(response.status)
+        if let status, failureStatuses.contains(status) {
+            throw QuickBooksPaymentsServiceError.unconfirmedProcessorResponse(
+                "The processor reported charge status \(status.uppercased())."
+            )
+        }
+
+        let accepted: Bool
+        switch kind {
+        case .capturedCard:
+            accepted = response.capture == true || status.map(capturedCardStatuses.contains) == true
+        case .submittedBank:
+            accepted = response.capture == true || status.map(submittedBankStatuses.contains) == true
+        }
+        guard accepted else {
+            throw QuickBooksPaymentsServiceError.unconfirmedProcessorResponse(
+                "The response did not confirm a captured card charge or an accepted bank submission."
+            )
+        }
+    }
+
+    static func validateRefund(
+        _ response: QuickBooksPaymentsRefundResponse,
+        expectedAmount: Double,
+        expectedClientTransactionID: String
+    ) throws {
+        try validateIdentifier(response.id, operation: "refund")
+        try validateAmount(response.amount, expected: expectedAmount, operation: "refund")
+        try validateClientTransactionID(
+            response.resolvedClientTransID,
+            expected: expectedClientTransactionID,
+            operation: "refund"
+        )
+
+        guard let status = normalized(response.status),
+              !failureStatuses.contains(status),
+              acceptedRefundStatuses.contains(status) else {
+            let detail = normalized(response.status)?.uppercased() ?? "MISSING"
+            throw QuickBooksPaymentsServiceError.unconfirmedProcessorResponse(
+                "The processor reported refund status \(detail)."
+            )
+        }
+    }
+
+    private static func validateIdentifier(_ raw: String, operation: String) throws {
+        guard normalized(raw) != nil else {
+            throw QuickBooksPaymentsServiceError.unconfirmedProcessorResponse(
+                "The \(operation) response did not include a provider transaction ID."
+            )
+        }
+    }
+
+    private static func validateAmount(_ raw: String?, expected: Double, operation: String) throws {
+        guard let raw = normalized(raw),
+              let received = Double(raw),
+              received.isFinite,
+              abs(received - expected) < 0.005 else {
+            throw QuickBooksPaymentsServiceError.unconfirmedProcessorResponse(
+                "The \(operation) amount was missing or did not match \(String(format: "%.2f", expected))."
+            )
+        }
+    }
+
+    private static func validateClientTransactionID(
+        _ returned: String?,
+        expected: String,
+        operation: String
+    ) throws {
+        guard let returned = normalized(returned) else { return }
+        guard returned == expected else {
+            throw QuickBooksPaymentsServiceError.unconfirmedProcessorResponse(
+                "The \(operation) response belonged to a different client transaction."
+            )
+        }
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value.lowercased()
     }
 }
 

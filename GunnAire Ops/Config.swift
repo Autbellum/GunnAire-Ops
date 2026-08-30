@@ -27,8 +27,11 @@ struct Config {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
 
-        static var usesGoogleIDToken: Bool { authMode == "google-id-token" }
-        static var hasSupportedAuthMode: Bool { authMode == "api-token" || usesGoogleIDToken }
+        /// The deployed backend keeps its historical `google-id-token` mode
+        /// name for configuration compatibility. In that mode it accepts either
+        /// a verified Google ID token or a backend-issued Apple app session.
+        static var usesBusinessIdentity: Bool { authMode == "google-id-token" }
+        static var hasSupportedAuthMode: Bool { authMode == "api-token" || usesBusinessIdentity }
 
         static var normalizedBaseURL: String {
             baseURL
@@ -44,14 +47,14 @@ struct Config {
             !normalizedBaseURL.isEmpty &&
             URL(string: normalizedBaseURL) != nil &&
             hasSupportedAuthMode &&
-            (usesGoogleIDToken ||
+            (usesBusinessIdentity ||
                 (!apiToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !apiToken.contains("$(")))
         }
 
         /// Production accounting access must not rely on the legacy shared-token
         /// backend mode, which is only appropriate for a controlled development LAN.
         static var isProductionReady: Bool {
-            isConfigured && usesGoogleIDToken && usesHTTPS
+            isConfigured && usesBusinessIdentity && usesHTTPS
         }
 
         static var displayHost: String {
@@ -79,26 +82,6 @@ struct Config {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         static let environment = configuredEnvironment == "sandbox" ? "sandbox" : "production"
-
-        // Required QBO references. These must be IDs from the same connected company / realm.
-        static let defaultSalesItemRef = Config.value("QB_DEFAULT_ITEM_REF", fallback: "")
-        static let defaultIncomeAccountRef = Config.value("QB_DEFAULT_INCOME_ACCOUNT_REF", fallback: "")
-        static let defaultExpenseAccountRef = Config.value("QB_DEFAULT_EXPENSE_ACCOUNT_REF", fallback: "")
-        static let defaultPaymentAccountRef = Config.value("QB_DEFAULT_PAYMENT_ACCOUNT_REF", fallback: "")
-        private static func looksExplicitQuickBooksValue(_ key: String) -> Bool {
-            guard let value = Config.optionalValue(key) else { return false }
-            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard !normalized.isEmpty else { return false }
-            guard !normalized.contains("$(") else { return false }
-            guard !normalized.hasPrefix("your_") && !normalized.hasPrefix("your-") else { return false }
-            guard !normalized.hasPrefix("placeholder") && !normalized.contains("placeholder") else { return false }
-            return true
-        }
-
-        static let hasExplicitDefaultSalesItemRef = looksExplicitQuickBooksValue("QB_DEFAULT_ITEM_REF")
-        static let hasExplicitDefaultIncomeAccountRef = looksExplicitQuickBooksValue("QB_DEFAULT_INCOME_ACCOUNT_REF")
-        static let hasExplicitDefaultExpenseAccountRef = looksExplicitQuickBooksValue("QB_DEFAULT_EXPENSE_ACCOUNT_REF")
-        static let hasExplicitDefaultPaymentAccountRef = looksExplicitQuickBooksValue("QB_DEFAULT_PAYMENT_ACCOUNT_REF")
 
         // Enable only when the app is approved for QuickBooks Payments and users reconnect after scope changes.
         static let enablePaymentsScope = Config.value("QB_ENABLE_PAYMENTS_SCOPE", fallback: "false").lowercased() != "false"
@@ -152,7 +135,7 @@ struct Config {
                 warnings.append("Production QuickBooks redirect URIs must be HTTPS and must exactly match the Intuit Developer Portal entry.")
             }
             if isProduction && !Backend.isProductionReady {
-                warnings.append("Production QuickBooks requires an HTTPS backend using Google ID-token authorization. The shared API-token backend mode is development-only.")
+                warnings.append("Production QuickBooks requires an HTTPS backend using verified GunnAire business identity. The shared API-token backend mode is development-only.")
             }
             if configuredEnvironment != "production" && configuredEnvironment != "sandbox" {
                 warnings.append("QB_ENVIRONMENT was '\(configuredEnvironment)'. The app is using production; set it to production or sandbox explicitly.")

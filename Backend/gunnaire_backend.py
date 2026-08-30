@@ -33,7 +33,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.29.14"
+SERVICE_VERSION = "2026.08.30.15"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -121,6 +121,7 @@ QBO_EXPENSE_ACCOUNT_TYPES = {
     "other expense": "Other Expense",
     "cost of goods sold": "Cost of Goods Sold",
 }
+QBO_AP_ACCOUNT_TYPES = {"accounts payable": "Accounts Payable"}
 SUPPLIER_CONNECTOR_IDEMPOTENCY_PATTERN = re.compile(r"[A-Za-z0-9._:-]{16,128}")
 SUPPLIER_CONNECTOR_CONTRACT_VERSION = 1
 SUPPLIER_CONNECTOR_MAX_REQUEST_BYTES = min(
@@ -1027,6 +1028,11 @@ def validate_qbo_accounting_configuration(payload: dict[str, object]) -> dict[st
         "defaultExpenseAccountType": qbo_configuration_type(
             payload, "defaultExpenseAccountType", QBO_EXPENSE_ACCOUNT_TYPES
         ),
+        "defaultAPAccountRef": qbo_configuration_reference(payload, "defaultAPAccountRef"),
+        "defaultAPAccountName": qbo_configuration_text(payload, "defaultAPAccountName"),
+        "defaultAPAccountType": qbo_configuration_type(
+            payload, "defaultAPAccountType", QBO_AP_ACCOUNT_TYPES
+        ),
         "defaultBankAccountRef": qbo_configuration_reference(payload, "defaultBankAccountRef"),
         "defaultBankAccountName": qbo_configuration_text(payload, "defaultBankAccountName"),
         "defaultBankAccountType": qbo_configuration_type(
@@ -1481,7 +1487,16 @@ def quickbooks_accounting_configuration_readiness_component() -> dict[str, str]:
             "quickbooks-accounting-config",
             "QuickBooks Accounting Mappings",
             "attention",
-            "Choose the default sales item, income, expense, bank, and credit-card accounts in GunnAire Ops.",
+            "Choose the default sales item, income, expense, Accounts Payable, bank, and credit-card accounts in GunnAire Ops.",
+        )
+    try:
+        validate_qbo_accounting_configuration(qbo_accounting_configuration_record(row))
+    except ValueError:
+        return readiness_component(
+            "quickbooks-accounting-config",
+            "QuickBooks Accounting Mappings",
+            "attention",
+            "Reopen Accounting Mappings and save every required provider-typed account, including Accounts Payable, for this QuickBooks company.",
         )
     return readiness_component(
         "quickbooks-accounting-config",
@@ -2010,6 +2025,9 @@ def initialize_database() -> None:
                 default_expense_account_ref TEXT NOT NULL,
                 default_expense_account_name TEXT NOT NULL,
                 default_expense_account_type TEXT NOT NULL,
+                default_ap_account_ref TEXT NOT NULL,
+                default_ap_account_name TEXT NOT NULL,
+                default_ap_account_type TEXT NOT NULL,
                 default_bank_account_ref TEXT NOT NULL,
                 default_bank_account_name TEXT NOT NULL,
                 default_bank_account_type TEXT NOT NULL,
@@ -2022,6 +2040,9 @@ def initialize_database() -> None:
             )
             """
         )
+        ensure_column(connection, "qbo_accounting_config", "default_ap_account_ref", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(connection, "qbo_accounting_config", "default_ap_account_name", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(connection, "qbo_accounting_config", "default_ap_account_type", "TEXT NOT NULL DEFAULT ''")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS qbo_webhook_events (
@@ -2783,6 +2804,9 @@ def qbo_accounting_configuration_record(row: sqlite3.Row) -> dict[str, object]:
         "defaultExpenseAccountRef": row["default_expense_account_ref"],
         "defaultExpenseAccountName": row["default_expense_account_name"],
         "defaultExpenseAccountType": row["default_expense_account_type"],
+        "defaultAPAccountRef": row["default_ap_account_ref"],
+        "defaultAPAccountName": row["default_ap_account_name"],
+        "defaultAPAccountType": row["default_ap_account_type"],
         "defaultBankAccountRef": row["default_bank_account_ref"],
         "defaultBankAccountName": row["default_bank_account_name"],
         "defaultBankAccountType": row["default_bank_account_type"],
@@ -4016,7 +4040,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             validated = validate_qbo_accounting_configuration(payload)
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
             self.write_json(
-                {"error": "Choose valid QuickBooks sales, income, expense, bank, and credit-card mappings"},
+                {"error": "Choose valid QuickBooks sales, income, expense, Accounts Payable, bank, and credit-card mappings"},
                 status=HTTPStatus.BAD_REQUEST,
             )
             return
@@ -4033,10 +4057,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     default_sales_item_ref, default_sales_item_name, default_sales_item_type,
                     default_income_account_ref, default_income_account_name, default_income_account_type,
                     default_expense_account_ref, default_expense_account_name, default_expense_account_type,
+                    default_ap_account_ref, default_ap_account_name, default_ap_account_type,
                     default_bank_account_ref, default_bank_account_name, default_bank_account_type,
                     default_credit_card_account_ref, default_credit_card_account_name, default_credit_card_account_type,
                     updated_at, updated_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(realm_id, environment) DO UPDATE SET
                     default_sales_item_ref = excluded.default_sales_item_ref,
                     default_sales_item_name = excluded.default_sales_item_name,
@@ -4047,6 +4072,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     default_expense_account_ref = excluded.default_expense_account_ref,
                     default_expense_account_name = excluded.default_expense_account_name,
                     default_expense_account_type = excluded.default_expense_account_type,
+                    default_ap_account_ref = excluded.default_ap_account_ref,
+                    default_ap_account_name = excluded.default_ap_account_name,
+                    default_ap_account_type = excluded.default_ap_account_type,
                     default_bank_account_ref = excluded.default_bank_account_ref,
                     default_bank_account_name = excluded.default_bank_account_name,
                     default_bank_account_type = excluded.default_bank_account_type,
@@ -4068,6 +4096,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     validated["defaultExpenseAccountRef"],
                     validated["defaultExpenseAccountName"],
                     validated["defaultExpenseAccountType"],
+                    validated["defaultAPAccountRef"],
+                    validated["defaultAPAccountName"],
+                    validated["defaultAPAccountType"],
                     validated["defaultBankAccountRef"],
                     validated["defaultBankAccountName"],
                     validated["defaultBankAccountType"],

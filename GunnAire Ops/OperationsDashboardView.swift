@@ -13,9 +13,14 @@ struct OperationsDashboardView: View {
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
+    @Query(sort: \FieldFormTemplate.createdAt, order: .forward) private var fieldFormTemplates: [FieldFormTemplate]
+    @Query(sort: \FieldFormResponse.completedAt, order: .reverse) private var fieldFormResponses: [FieldFormResponse]
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
+    @Query(sort: \InventoryMovement.createdAt, order: .reverse) private var inventoryMovements: [InventoryMovement]
+    @Query(sort: \ProjectMilestone.plannedDate, order: .forward) private var projectMilestones: [ProjectMilestone]
     @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
+    @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
@@ -29,7 +34,37 @@ struct OperationsDashboardView: View {
     private let calendar = Calendar.current
 
     private var currentUserEmail: String? {
-        googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        AppIdentity.currentEmail
+    }
+
+    /// CloudKit may hydrate relationship records after their owning records.
+    /// Keep the command center available while those links converge instead of
+    /// dereferencing the models' intentionally optional-at-rest relationships.
+    private var dashboardServiceCalls: [ServiceCall] {
+        serviceCalls.filter { $0.customer != nil }
+    }
+
+    private var dashboardContracts: [RecurringMaintenanceContract] {
+        recurringContracts.filter { $0.customer != nil }
+    }
+
+    private var dashboardEstimates: [Estimate] {
+        estimates.filter { $0.customer != nil }
+    }
+
+    private var dashboardInvoices: [Invoice] {
+        invoices.filter { $0.customer != nil }
+    }
+
+    private var dashboardPayments: [Payment] {
+        payments.filter { payment in
+            guard let invoice = payment.invoice else { return false }
+            return invoice.customer != nil
+        }
+    }
+
+    private var dashboardCommunications: [CustomerCommunication] {
+        customerCommunications.filter { $0.customer != nil }
     }
 
     private var assignableTechnicians: [Technician] {
@@ -49,7 +84,7 @@ struct OperationsDashboardView: View {
     }
 
     private var todayCalls: [ServiceCall] {
-        serviceCalls
+        dashboardServiceCalls
             .filter { calendar.isDate($0.scheduledDate, inSameDayAs: Date()) && $0.status != .cancelled }
             .sorted { $0.scheduledDate < $1.scheduledDate }
     }
@@ -57,13 +92,13 @@ struct OperationsDashboardView: View {
     private var upcomingCalls: [ServiceCall] {
         let now = Date()
         let sevenDaysAhead = calendar.date(byAdding: .day, value: 7, to: now) ?? now
-        return serviceCalls
+        return dashboardServiceCalls
             .filter { $0.status != .cancelled && $0.scheduledDate >= now && $0.scheduledDate <= sevenDaysAhead }
             .sorted { $0.scheduledDate < $1.scheduledDate }
     }
 
     private var inProgressCalls: [ServiceCall] {
-        serviceCalls
+        dashboardServiceCalls
             .filter { $0.status == .inProgress || $0.documentationStartedAt != nil && $0.documentationCompletedAt == nil }
             .sorted { $0.scheduledDate < $1.scheduledDate }
     }
@@ -80,13 +115,13 @@ struct OperationsDashboardView: View {
     }
 
     private var readyToBillCalls: [ServiceCall] {
-        serviceCalls
+        dashboardServiceCalls
             .filter(\.isReadyToCreateBillingDocument)
             .sorted { $0.scheduledDate > $1.scheduledDate }
     }
 
     private var followUpCalls: [ServiceCall] {
-        serviceCalls
+        dashboardServiceCalls
             .filter { $0.followUpRequired || ($0.type == .estimate && $0.linkedInvoiceID == nil) }
             .sorted {
                 let lhsDate = $0.followUpDueDate ?? $0.scheduledDate
@@ -96,13 +131,13 @@ struct OperationsDashboardView: View {
     }
 
     private var maintenanceAlerts: [RecurringMaintenanceContract] {
-        recurringContracts
+        dashboardContracts
             .filter { $0.active && ($0.isOverdue || $0.isUpcoming || $0.needsReminder) }
             .sorted { $0.nextDate < $1.nextDate }
     }
 
     private var acceptedEstimateCalls: [ServiceCall] {
-        serviceCalls
+        dashboardServiceCalls
             .filter { call in
                 guard let estimate = estimate(for: call) else { return false }
                 return estimate.status.caseInsensitiveCompare("accepted") == .orderedSame && call.linkedInvoiceID == nil
@@ -111,26 +146,25 @@ struct OperationsDashboardView: View {
     }
 
     private var openInvoices: [Invoice] {
-        invoices
+        dashboardInvoices
             .filter { outstandingBalance(for: $0) > 0 }
             .sorted { outstandingBalance(for: $0) > outstandingBalance(for: $1) }
     }
 
     private var overdueInvoices: [Invoice] {
-        let cutoff = calendar.date(byAdding: .day, value: -7, to: Date()) ?? Date()
         return openInvoices
-            .filter { $0.createdAt <= cutoff }
-            .sorted { $0.createdAt < $1.createdAt }
+            .filter { Invoice.isOverdue($0, payments: dashboardPayments) }
+            .sorted { $0.effectiveDueDate(calendar: calendar) < $1.effectiveDueDate(calendar: calendar) }
     }
 
     private var quickBooksAttentionPayments: [Payment] {
-        payments
+        dashboardPayments
             .filter(\.needsQuickBooksAttention)
             .sorted { $0.date > $1.date }
     }
 
     private var quickBooksAttentionInvoices: [Invoice] {
-        QuickBooksInvoicePublicationRecovery.queuedInvoices(from: invoices)
+        QuickBooksInvoicePublicationRecovery.queuedInvoices(from: dashboardInvoices)
     }
 
     private var quickBooksAttentionCount: Int {
@@ -142,13 +176,13 @@ struct OperationsDashboardView: View {
     }
 
     private var monthInvoiceTotal: Double {
-        invoices
+        dashboardInvoices
             .filter { calendar.isDate($0.createdAt, equalTo: Date(), toGranularity: .month) }
             .reduce(0) { $0 + $1.amount }
     }
 
     private var monthPaymentsCollected: Double {
-        payments
+        dashboardPayments
             .filter { calendar.isDate($0.date, equalTo: Date(), toGranularity: .month) }
             .reduce(0) { $0 + $1.amount }
     }
@@ -158,7 +192,7 @@ struct OperationsDashboardView: View {
     }
 
     private var estimatePipelineTotal: Double {
-        estimates
+        dashboardEstimates
             .filter { estimate in
                 let status = estimate.status.lowercased()
                 return status != "rejected" && status != "invoiced"
@@ -185,7 +219,7 @@ struct OperationsDashboardView: View {
     private var dispatchWindowCalls: [ServiceCall] {
         let startOfToday = calendar.startOfDay(for: Date())
         let dispatchWindowEnd = calendar.date(byAdding: .day, value: 3, to: startOfToday) ?? Date()
-        return serviceCalls
+        return dashboardServiceCalls
             .filter {
                 $0.status != .cancelled &&
                 $0.status != .completed &&
@@ -218,13 +252,14 @@ struct OperationsDashboardView: View {
     private var suiteSnapshot: BusinessSuiteSnapshot {
         BusinessSuiteIntelligence.snapshot(
             customers: customers,
-            serviceCalls: serviceCalls,
+            serviceCalls: dashboardServiceCalls,
             technicians: technicians,
-            contracts: recurringContracts,
-            estimates: estimates,
-            invoices: invoices,
-            payments: payments,
+            contracts: dashboardContracts,
+            estimates: dashboardEstimates,
+            invoices: dashboardInvoices,
+            payments: dashboardPayments,
             attachments: attachments,
+            communications: dashboardCommunications,
             timeEntries: timeEntries,
             items: items,
             vendors: vendors,
@@ -239,11 +274,11 @@ struct OperationsDashboardView: View {
     private var accountSnapshots: [CustomerIntelligenceSnapshot] {
         CustomerIntelligence.snapshots(
             customers: customers,
-            serviceCalls: serviceCalls,
-            invoices: invoices,
-            estimates: estimates,
-            payments: payments,
-            contracts: recurringContracts,
+            serviceCalls: dashboardServiceCalls,
+            invoices: dashboardInvoices,
+            estimates: dashboardEstimates,
+            payments: dashboardPayments,
+            contracts: dashboardContracts,
             now: Date(),
             calendar: calendar
         )
@@ -326,10 +361,10 @@ struct OperationsDashboardView: View {
             .sheet(isPresented: $showingCommandPalette) {
                 OperationsCommandPalette(
                     customers: customers,
-                    serviceCalls: serviceCalls,
-                    invoices: invoices,
-                    estimates: estimates,
-                    payments: payments,
+                    serviceCalls: dashboardServiceCalls,
+                    invoices: dashboardInvoices,
+                    estimates: dashboardEstimates,
+                    payments: dashboardPayments,
                     canViewFinancials: canViewFinancials,
                     canCollectFieldPayments: canCollectFieldPayments
                 )
@@ -440,7 +475,7 @@ struct OperationsDashboardView: View {
             metricCard(
                 title: "Agreements",
                 value: "\(maintenanceAlerts.count)",
-                detail: "\(recurringContracts.filter(\.active).count) active",
+                detail: "\(dashboardContracts.filter(\.active).count) active",
                 systemImage: "repeat.circle",
                 tint: maintenanceAlerts.isEmpty ? Color.brandGold : .orange
             )
@@ -571,7 +606,7 @@ struct OperationsDashboardView: View {
                         tint: invoice.needsQuickBooksAttention ? .red : .orange,
                         actionTitle: "Review"
                     ) {
-                        GunnAireAppIntentRouter.store(.quickBooks)
+                        GunnAireAppIntentRouter.storeQuickBooksRoute(workspace: .sales)
                     }
                 }
 
@@ -1334,30 +1369,30 @@ struct OperationsDashboardView: View {
     }
 
     private var invoicesThisMonthCount: Int {
-        invoices.filter { calendar.isDate($0.createdAt, equalTo: Date(), toGranularity: .month) }.count
+        dashboardInvoices.filter { calendar.isDate($0.createdAt, equalTo: Date(), toGranularity: .month) }.count
     }
 
     private var paymentsThisMonthCount: Int {
-        payments.filter { calendar.isDate($0.date, equalTo: Date(), toGranularity: .month) }.count
+        dashboardPayments.filter { calendar.isDate($0.date, equalTo: Date(), toGranularity: .month) }.count
     }
 
     private var openEstimateCount: Int {
-        estimates.filter {
+        dashboardEstimates.filter {
             let status = $0.status.lowercased()
             return status != "rejected" && status != "invoiced"
         }.count
     }
 
     private var linkedCalendarJobCount: Int {
-        serviceCalls.filter { $0.googleEventID?.isEmpty == false }.count
+        dashboardServiceCalls.filter { $0.googleEventID?.isEmpty == false }.count
     }
 
     private var linkedInvoiceCount: Int {
-        invoices.filter { $0.quickBooksID?.isEmpty == false }.count
+        dashboardInvoices.filter { $0.quickBooksID?.isEmpty == false }.count
     }
 
     private var linkedEstimateCount: Int {
-        estimates.filter { $0.quickBooksID?.isEmpty == false }.count
+        dashboardEstimates.filter { $0.quickBooksID?.isEmpty == false }.count
     }
 
     private var onsitePaymentsStatus: String {
@@ -1400,25 +1435,29 @@ struct OperationsDashboardView: View {
     }
 
     private func outstandingBalance(for invoice: Invoice) -> Double {
-        Invoice.outstandingBalance(for: invoice, payments: payments)
+        Invoice.outstandingBalance(for: invoice, payments: dashboardPayments)
     }
 
     private func estimate(for call: ServiceCall) -> Estimate? {
         guard let estimateID = call.linkedEstimateID else { return nil }
-        return estimates.first { $0.id == estimateID }
+        return dashboardEstimates.first { $0.id == estimateID }
     }
 
     private func invoice(for call: ServiceCall) -> Invoice? {
         guard let invoiceID = call.linkedInvoiceID else { return nil }
-        return invoices.first { $0.id == invoiceID }
+        return dashboardInvoices.first { $0.id == invoiceID }
     }
 
     private func dispatchIconName(for call: ServiceCall) -> String {
         switch call.type {
         case .service:
             return "wrench.adjustable"
+        case .repair:
+            return "wrench.and.screwdriver"
         case .estimate:
             return "doc.text.magnifyingglass"
+        case .replacement:
+            return "shippingbox.and.arrow.backward"
         case .install:
             return "hammer"
         case .maintenance:
@@ -1471,7 +1510,7 @@ struct OperationsDashboardView: View {
         }
         if let invoice = invoice(for: call) {
             let readiness = closeoutReadiness(for: call, invoice: invoice)
-            if !readiness.isReady, let missing = readiness.missingItems.first {
+            if !readiness.isReady, let missing = readiness.missingActionItems.first {
                 reasons.append(missing)
             }
         }
@@ -1485,11 +1524,22 @@ struct OperationsDashboardView: View {
     private func closeoutReadiness(for call: ServiceCall, invoice: Invoice?) -> JobCloseoutReadiness {
         call.closeoutReadiness(
             invoice: invoice,
-            payments: payments.filter { payment in
+            payments: dashboardPayments.filter { payment in
                 guard let invoice else { return false }
                 return payment.invoice.id == invoice.id
             },
-            attachments: attachments.filter { $0.serviceCallID == call.id }
+            attachments: attachments.filter { $0.serviceCallID == call.id },
+            fieldFormTemplates: fieldFormTemplates,
+            fieldFormResponses: fieldFormResponses,
+            timeEntries: timeEntries,
+            materialReadiness: JobMaterialCloseoutPolicy.summary(
+                for: call,
+                invoice: invoice,
+                estimates: dashboardEstimates,
+                projectMilestones: projectMilestones,
+                items: items,
+                movements: inventoryMovements
+            )
         )
     }
 
@@ -1515,9 +1565,7 @@ struct OperationsDashboardView: View {
     private func assignmentTitle(for call: ServiceCall, technician: Technician) -> String {
         let technicianLabel = AppAccess.scheduleLabel(for: technician)
         let qualification = technician.qualification(for: call.equipmentType)
-        let qualificationSuffix = qualification == .qualified || qualification == .notRequired
-            ? ""
-            : " • \(qualification == .reviewRequired ? "review equipment" : "qualification unverified")"
+        let qualificationSuffix = qualification.assignmentNotice.map { " • \($0)" } ?? ""
         let areaMatch = technician.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
         let areaSuffix = areaMatch == .covered ? "" : " • \(areaMatch.dispatchDetail.lowercased())"
         guard let nextStart = nextAvailableStart(for: technician, proposedStart: call.scheduledDate, duration: call.duration),
@@ -1619,7 +1667,7 @@ struct OperationsDashboardView: View {
             technicianID: technician.id,
             proposedStart: proposedStart,
             duration: duration,
-            serviceCalls: serviceCalls,
+            serviceCalls: dashboardServiceCalls,
             availabilityBlocks: technicianAvailabilityBlocks
         )
     }
@@ -1743,12 +1791,16 @@ struct OperationsDashboardView: View {
             GunnAireAppIntentRouter.store(.sync)
         case .quickBooks:
             GunnAireAppIntentRouter.store(.quickBooks)
+        case .quickBooksSales:
+            GunnAireAppIntentRouter.storeQuickBooksRoute(workspace: .sales)
         case .estimates:
             GunnAireAppIntentRouter.store(.estimates)
         case .invoices:
             GunnAireAppIntentRouter.store(.invoices)
         case .timeClock:
             GunnAireAppIntentRouter.store(.timeClock)
+        case .mail:
+            GunnAireAppIntentRouter.store(.mail)
         }
     }
 

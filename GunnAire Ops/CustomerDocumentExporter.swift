@@ -3,11 +3,14 @@ import UIKit
 
 enum CustomerDocumentExportError: LocalizedError {
     case documentsDirectoryUnavailable
+    case authoritativeTaxRequired(String)
 
     var errorDescription: String? {
         switch self {
         case .documentsDirectoryUnavailable:
             return "The app documents folder is unavailable."
+        case .authoritativeTaxRequired(let message):
+            return message
         }
     }
 }
@@ -79,6 +82,10 @@ enum CustomerDocumentExporter {
         attachments: [ServiceDocumentAttachment] = [],
         equipmentProfiles: [CustomerEquipment] = [],
         serviceCalls: [ServiceCall] = [],
+        fieldFormTemplates: [FieldFormTemplate] = [],
+        fieldFormResponses: [FieldFormResponse] = [],
+        timeEntries: [TimeEntry] = [],
+        materialReadiness: JobMaterialCloseoutSummary = .notApplicable,
         includeFinancials: Bool = true
     ) throws -> URL {
         let scopedAttachments = onsiteReportAttachments(
@@ -101,6 +108,10 @@ enum CustomerDocumentExporter {
             attachments: scopedAttachments,
             equipmentProfiles: equipmentProfiles,
             serviceCalls: serviceCalls,
+            fieldFormTemplates: fieldFormTemplates,
+            fieldFormResponses: fieldFormResponses,
+            timeEntries: timeEntries,
+            materialReadiness: materialReadiness,
             includeFinancials: includeFinancials
         )
         return try renderPDF(
@@ -114,6 +125,45 @@ enum CustomerDocumentExporter {
         )
     }
 
+    static func exportFieldFormResponse(
+        _ response: FieldFormResponse,
+        serviceCall: ServiceCall,
+        template: FieldFormTemplate?
+    ) throws -> URL {
+        let answerRows = response.answerRows(resolving: template)
+        let fileName = makeFileName(
+            prefix: "GunnAire-Field-Form",
+            customerName: serviceCall.customer.name,
+            descriptor: "\(response.templateTitle)-\(shortID(response.id))"
+        )
+        let sections = [
+            DocumentSection(
+                title: "Completion",
+                rows: [
+                    row("Form", response.templateTitle),
+                    row("Job ID", shortID(serviceCall.id)),
+                    row("Work Type", serviceCall.type.displayName),
+                    row("Scheduled", formattedDateTime(serviceCall.scheduledDate)),
+                    row("Service Address", serviceCall.siteAddress ?? serviceCall.customer.address),
+                    row("Completed", formattedDateTime(response.completedAt)),
+                    row("Completed By", response.completedByEmail)
+                ]
+            ),
+            DocumentSection(
+                title: "Responses",
+                rows: answerRows.map { answer in
+                    row(answer.required ? "\(answer.label) (Required)" : answer.label, answer.displayAnswer)
+                }
+            )
+        ]
+        return try renderPDF(
+            title: "Completed Field Form",
+            customer: serviceCall.customer,
+            sections: sections,
+            fileName: fileName
+        )
+    }
+
     static func exportEstimate(
         _ estimate: Estimate,
         serviceCall: ServiceCall?,
@@ -121,6 +171,9 @@ enum CustomerDocumentExporter {
         equipmentProfiles: [CustomerEquipment] = [],
         serviceCalls: [ServiceCall] = []
     ) throws -> URL {
+        if let blockedMessage = estimate.customerApprovalBlockedMessage {
+            throw CustomerDocumentExportError.authoritativeTaxRequired(blockedMessage)
+        }
         let fileName = makeFileName(prefix: "GunnAire-Estimate", customerName: estimate.customer.name)
         let sections = estimateSections(
             estimate: estimate,
@@ -145,6 +198,94 @@ enum CustomerDocumentExporter {
         )
     }
 
+    static func exportMaintenanceAgreement(
+        _ contract: RecurringMaintenanceContract,
+        equipmentProfiles: [CustomerEquipment] = []
+    ) throws -> URL {
+        let lifecycle = contract.lifecycle
+        let coveredNames = equipmentProfiles
+            .filter { contract.coveredEquipmentIDs.contains($0.id) }
+            .map(\.displayName)
+            .sorted()
+        let fileName = makeFileName(
+            prefix: "GunnAire-Maintenance-Agreement",
+            customerName: contract.customer.name,
+            descriptor: "Agreement-\(shortID(contract.id))"
+        )
+
+        var approvalRows = [
+            row("Agreement Status", contract.lifecycleStatusDisplayName),
+            row("Customer", contract.customer.name),
+            row("Approval Date", (lifecycle?.approvedAt).map { formattedDateTime($0) }),
+            row("Approved By", lifecycle?.approvedByName),
+            row("Approval Method", contract.approvalMethod?.displayName),
+            row("Approval Reference", lifecycle?.approvalReference),
+            row("Recorded By", lifecycle?.approvalRecordedByEmail)
+        ]
+        if contract.isLegacyAgreement {
+            approvalRows.append(row("Historical Record", "Agreement predates in-app approval tracking"))
+        }
+
+        let sections = [
+            DocumentSection(
+                title: "Agreement Summary",
+                rows: [
+                    row("Agreement ID", shortID(contract.id)),
+                    row("Plan", contract.displayName),
+                    row("Visit Cadence", contract.schedulePattern),
+                    row("Next Visit", formattedDate(contract.nextDate)),
+                    row("Term Ends", contract.termEndsOn.map { formattedDate($0) }),
+                    row("Auto-renew", yesNo(contract.autoRenews)),
+                    row("Renews Agreement", (lifecycle?.renewalOfContractID).map { shortID($0) }),
+                    row("Pending Renewal", (lifecycle?.pendingRenewalContractID).map { shortID($0) }),
+                    row("Renewed By Agreement", (lifecycle?.supersededByContractID).map { shortID($0) }),
+                    row("Covered Equipment", coveredNames.isEmpty ? "Not specified" : coveredNames.joined(separator: ", "))
+                ]
+            ),
+            DocumentSection(
+                title: "Services & Pricing",
+                rows: [
+                    row("Agreement Price", contract.agreementPrice.map { currency($0) }),
+                    row("Billing Interval", contract.billingInterval.displayName),
+                    row(
+                        "First Billing",
+                        contract.billingInterval == .perVisit
+                            ? "After each completed maintenance visit"
+                            : contract.billingAnchorDate.map { formattedDate($0) }
+                    ),
+                    row("Member Visit Price", contract.pricePerVisit.map { currency($0) }),
+                    row("Member Discount", contract.memberDiscountPercent.map { "\($0.formatted(.number.precision(.fractionLength(0...2))))%" }),
+                    row("Included Visits Per Term", contract.includedVisitsPerTerm.map(String.init)),
+                    row("Renewal Reminder", "\(contract.renewalReminderDays) days before term end"),
+                    row("Terms", contract.termsSummary)
+                ]
+            ),
+            DocumentSection(title: "Customer Approval", rows: approvalRows),
+            DocumentSection(
+                title: "Offer Audit",
+                rows: [
+                    row("Created", lifecycle.map { formattedDateTime($0.createdAt) }),
+                    row("Created By", lifecycle?.createdByEmail),
+                    row("Offered", (lifecycle?.offeredAt).map { formattedDateTime($0) }),
+                    row("Offered By", lifecycle?.offeredByEmail),
+                    row("Renewal Started", (lifecycle?.renewalStartedAt).map { formattedDateTime($0) }),
+                    row("Renewal Started By", lifecycle?.renewalStartedByEmail),
+                    row("Renewed", (lifecycle?.renewedAt).map { formattedDateTime($0) }),
+                    row("Renewed By", lifecycle?.renewedByEmail),
+                    row("Source Job", (lifecycle?.sourceServiceCallID).map { shortID($0) })
+                ]
+            )
+        ]
+
+        return try renderPDF(
+            title: "Maintenance Agreement",
+            customer: contract.customer,
+            sections: sections,
+            approvalSignatureImageBase64: contract.approvalSignatureImageBase64,
+            fileName: fileName
+        )
+    }
+
     static func exportInvoice(
         _ invoice: Invoice,
         serviceCall: ServiceCall?,
@@ -153,6 +294,9 @@ enum CustomerDocumentExporter {
         equipmentProfiles: [CustomerEquipment] = [],
         serviceCalls: [ServiceCall] = []
     ) throws -> URL {
+        if let blockedMessage = invoice.paymentCollectionBlockedMessage {
+            throw CustomerDocumentExportError.authoritativeTaxRequired(blockedMessage)
+        }
         let paid = isInvoicePaid(invoice, payments: payments)
         let workPrefix = invoice.workType.displayName.replacingOccurrences(of: " ", with: "-")
         let fileName = makeFileName(prefix: paid ? "GunnAire-Paid-\(workPrefix)-Invoice" : "GunnAire-\(workPrefix)-Invoice", customerName: invoice.customer.name)
@@ -205,6 +349,10 @@ enum CustomerDocumentExporter {
         attachments: [ServiceDocumentAttachment],
         equipmentProfiles: [CustomerEquipment],
         serviceCalls: [ServiceCall],
+        fieldFormTemplates: [FieldFormTemplate],
+        fieldFormResponses: [FieldFormResponse],
+        timeEntries: [TimeEntry],
+        materialReadiness: JobMaterialCloseoutSummary,
         includeFinancials: Bool = true
     ) -> [DocumentSection] {
         var sections: [DocumentSection] = [
@@ -218,7 +366,11 @@ enum CustomerDocumentExporter {
                 for: serviceCall,
                 invoice: invoice,
                 payments: payments,
-                attachments: attachments
+                attachments: attachments,
+                fieldFormTemplates: fieldFormTemplates,
+                fieldFormResponses: fieldFormResponses,
+                timeEntries: timeEntries,
+                materialReadiness: materialReadiness
             ),
             DocumentSection(
                 title: "Equipment",
@@ -256,6 +408,10 @@ enum CustomerDocumentExporter {
         }
 
         sections.append(contentsOf: technicalReportSections(for: serviceCall))
+        sections.append(contentsOf: fieldFormSections(
+            for: serviceCall,
+            responses: fieldFormResponses
+        ))
         sections.append(contentsOf: photoEvidenceSections(
             for: attachments,
             serviceCall: serviceCall,
@@ -289,6 +445,25 @@ enum CustomerDocumentExporter {
         return sections
     }
 
+    private static func fieldFormSections(
+        for serviceCall: ServiceCall,
+        responses: [FieldFormResponse]
+    ) -> [DocumentSection] {
+        responses
+            .filter { $0.serviceCallID == serviceCall.id }
+            .sorted { $0.completedAt < $1.completedAt }
+            .map { response in
+                var rows = [
+                    row("Completed", formattedDateTime(response.completedAt)),
+                    row("Completed By", response.completedByEmail)
+                ]
+                rows.append(contentsOf: response.answerRows(resolving: nil).map { answer in
+                    row(answer.required ? "\(answer.label) (Required)" : answer.label, answer.displayAnswer)
+                })
+                return DocumentSection(title: "Field Form — \(response.templateTitle)", rows: rows)
+            }
+    }
+
     static func equipmentHistoryRows(
         serviceCall: ServiceCall,
         equipmentProfiles: [CustomerEquipment],
@@ -306,6 +481,9 @@ enum CustomerDocumentExporter {
         var rows: [(label: String, value: String)] = [
             ("Equipment Profile", equipment.displayName)
         ]
+        if let lifecycleSummary = equipment.lifecycleSnapshot(now: serviceCall.scheduledDate).summary {
+            rows.append(("Equipment Lifecycle", lifecycleSummary))
+        }
         if let history = equipment.serviceHistorySummary(in: relatedCalls, now: serviceCall.scheduledDate) {
             rows.append(("Service History", history))
         }
@@ -479,12 +657,20 @@ enum CustomerDocumentExporter {
         for serviceCall: ServiceCall,
         invoice: Invoice?,
         payments: [Payment],
-        attachments: [ServiceDocumentAttachment]
+        attachments: [ServiceDocumentAttachment],
+        fieldFormTemplates: [FieldFormTemplate] = [],
+        fieldFormResponses: [FieldFormResponse] = [],
+        timeEntries: [TimeEntry] = [],
+        materialReadiness: JobMaterialCloseoutSummary = .notApplicable
     ) -> [(label: String, value: String)] {
         let readiness = serviceCall.closeoutReadiness(
             invoice: invoice,
             payments: payments,
-            attachments: attachments
+            attachments: attachments,
+            fieldFormTemplates: fieldFormTemplates,
+            fieldFormResponses: fieldFormResponses,
+            timeEntries: timeEntries,
+            materialReadiness: materialReadiness
         )
         var rows: [(label: String, value: String)] = [
             ("Status", readiness.statusLabel),
@@ -500,7 +686,11 @@ enum CustomerDocumentExporter {
         for serviceCall: ServiceCall,
         invoice: Invoice?,
         payments: [Payment],
-        attachments: [ServiceDocumentAttachment]
+        attachments: [ServiceDocumentAttachment],
+        fieldFormTemplates: [FieldFormTemplate],
+        fieldFormResponses: [FieldFormResponse],
+        timeEntries: [TimeEntry],
+        materialReadiness: JobMaterialCloseoutSummary
     ) -> DocumentSection {
         DocumentSection(
             title: "Closeout Readiness",
@@ -508,7 +698,11 @@ enum CustomerDocumentExporter {
                 for: serviceCall,
                 invoice: invoice,
                 payments: payments,
-                attachments: attachments
+                attachments: attachments,
+                fieldFormTemplates: fieldFormTemplates,
+                fieldFormResponses: fieldFormResponses,
+                timeEntries: timeEntries,
+                materialReadiness: materialReadiness
             ).map { row($0.label, $0.value) }
         )
     }
@@ -716,7 +910,7 @@ enum CustomerDocumentExporter {
         switch attachment.kind {
         case .beforePhoto, .afterPhoto, .diagnosticPhoto, .equipmentDataPlatePhoto, .customerDocument, .other:
             return true
-        case .serviceReport, .customerProfilePhoto, .invoiceSupport, .estimateSupport, .receipt:
+        case .warrantyEvidence, .serviceReport, .customerProfilePhoto, .maintenanceAgreement, .invoiceSupport, .estimateSupport, .receipt:
             return false
         }
     }
@@ -890,6 +1084,19 @@ enum CustomerDocumentExporter {
             ("Notes", estimate.notes ?? ""),
             ("Total", currency(estimate.amount))
         ]
+        if estimate.hasTaxableLines,
+           let totalIndex = rows.firstIndex(where: { $0.0 == "Total" }) {
+            rows.insert(contentsOf: [
+                ("Subtotal", currency(estimate.subtotalAmount)),
+                ("Sales Tax", currency(estimate.salesTaxAmount)),
+                ("Tax Status", estimate.taxCalculationStatus.displayName)
+            ], at: totalIndex)
+        }
+        if let adjustments = BillingPriceAdjustmentAudit.customerDocumentSummary(
+            snapshotJSON: estimate.catalogSnapshotJSON
+        ), let itemsIndex = rows.firstIndex(where: { $0.0 == "Items" }) {
+            rows.insert(("Discounts / Adjustments", adjustments), at: itemsIndex + 1)
+        }
         if estimate.isProposalOption {
             rows.insert(
                 ("Proposal Option", estimate.proposalOptionDisplayDetail),
@@ -981,6 +1188,8 @@ enum CustomerDocumentExporter {
         let status = Invoice.resolvedStatus(for: invoice, payments: payments)
         var rows = [
             ("Created", formattedDateTime(invoice.createdAt)),
+            ("Payment Terms", invoice.paymentTermsDisplayName),
+            ("Due Date", formattedDate(invoice.effectiveDueDate())),
             ("Work Type", invoice.workType.displayName),
             ("Status", status.capitalized),
             ("QuickBooks ID", invoice.quickBooksID ?? ""),
@@ -990,8 +1199,33 @@ enum CustomerDocumentExporter {
             ("Payments", currency(paidTotal)),
             ("Balance Due", currency(balance))
         ]
+        if invoice.hasTaxableLines,
+           let totalIndex = rows.firstIndex(where: { $0.0 == "Invoice Total" }) {
+            rows.insert(contentsOf: [
+                ("Subtotal", currency(invoice.subtotalAmount)),
+                ("Sales Tax", currency(invoice.salesTaxAmount)),
+                ("Tax Status", invoice.taxCalculationStatus.displayName)
+            ], at: totalIndex)
+        }
+        if let adjustments = BillingPriceAdjustmentAudit.customerDocumentSummary(
+            snapshotJSON: invoice.catalogSnapshotJSON
+        ), let itemsIndex = rows.firstIndex(where: { $0.0 == "Items" }) {
+            rows.insert(("Discounts / Adjustments", adjustments), at: itemsIndex + 1)
+        }
         if let siteAddress = normalizedValue(invoice.siteAddress) {
             rows.insert(("Service Address", siteAddress), at: 2)
+        }
+        if let projectTitle = invoice.projectBillingDisplayTitle {
+            rows.insert(("Billing Stage", projectTitle), at: 2)
+        }
+        if let milestoneTitle = normalizedValue(invoice.projectMilestoneTitle) {
+            rows.insert(("Project Milestone", milestoneTitle), at: 3)
+        }
+        if let percent = invoice.projectBillingPercent {
+            rows.insert(("Contract Progress Billed", "\(percent.formatted(.number.precision(.fractionLength(0...2))))%"), at: 4)
+        }
+        if let contractAmount = invoice.projectContractAmount {
+            rows.insert(("Approved Contract", currency(contractAmount)), at: 5)
         }
         if let documentationStatus {
             rows.append(("Documentation Status", documentationStatus.statusLabel))
@@ -1287,17 +1521,28 @@ enum CustomerDocumentExporter {
 
         for row in section.rows where !row.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let labelWidth: CGFloat = 138
-            let labelRect = CGRect(x: margin, y: y + 2, width: labelWidth, height: 20)
-            row.label.draw(in: labelRect, withAttributes: [
-                .font: UIFont.systemFont(ofSize: 10, weight: .semibold),
-                .foregroundColor: UIColor.darkGray
-            ])
-
             let valueX = margin + labelWidth + 14
             let valueWidth = contentWidth - labelWidth - 14
-            let valueHeight = measuredHeight(row.value, width: valueWidth, font: .systemFont(ofSize: 11))
-            drawWrapped(row.value, in: CGRect(x: valueX, y: y, width: valueWidth, height: valueHeight), font: .systemFont(ofSize: 11), color: .black)
-            y += max(22, valueHeight + 8)
+            let labelFont = UIFont.systemFont(ofSize: 10, weight: .semibold)
+            let valueFont = UIFont.systemFont(ofSize: 11)
+            let labelHeight = measuredHeight(row.label, width: labelWidth, font: labelFont)
+            let valueHeight = measuredHeight(row.value, width: valueWidth, font: valueFont)
+            let rowHeight = max(22, max(labelHeight, valueHeight) + 8)
+            let textHeight = rowHeight - 4
+
+            if y + rowHeight > bounds.height - 70 {
+                drawFooter(in: bounds)
+                y = startPage(context: context, bounds: bounds, title: title, customer: customer)
+            }
+
+            drawWrapped(
+                row.label,
+                in: CGRect(x: margin, y: y + 2, width: labelWidth, height: textHeight),
+                font: labelFont,
+                color: .darkGray
+            )
+            drawWrapped(row.value, in: CGRect(x: valueX, y: y, width: valueWidth, height: textHeight), font: valueFont, color: .black)
+            y += rowHeight
 
             if y > bounds.height - 80 {
                 drawFooter(in: bounds)

@@ -1,6 +1,273 @@
 import Foundation
 import SwiftData
 
+enum EquipmentLifecycleAttention: Equatable, Sendable {
+    case none
+    case warrantyExpiringSoon
+    case warrantyExpired
+    case invalidDates
+}
+
+struct EquipmentLifecycleSnapshot: Equatable, Sendable {
+    let ageSummary: String?
+    let warrantySummary: String?
+    let attention: EquipmentLifecycleAttention
+    let validationMessage: String?
+
+    var summary: String? {
+        if validationMessage != nil {
+            return "Review equipment dates"
+        }
+        let parts = [ageSummary, warrantySummary].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
+    }
+}
+
+enum EquipmentLifecyclePolicy {
+    static let warrantyWarningDays = 90
+
+    static func snapshot(
+        installDate: Date?,
+        warrantyExpiration: Date?,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> EquipmentLifecycleSnapshot {
+        let today = calendar.startOfDay(for: now)
+        let installDay = installDate.map { calendar.startOfDay(for: $0) }
+        let warrantyDay = warrantyExpiration.map { calendar.startOfDay(for: $0) }
+
+        if let installDay, installDay > today {
+            return EquipmentLifecycleSnapshot(
+                ageSummary: nil,
+                warrantySummary: nil,
+                attention: .invalidDates,
+                validationMessage: "Install date cannot be in the future."
+            )
+        }
+        if let installDay, let warrantyDay, warrantyDay < installDay {
+            return EquipmentLifecycleSnapshot(
+                ageSummary: installationAgeSummary(from: installDay, to: today, calendar: calendar),
+                warrantySummary: nil,
+                attention: .invalidDates,
+                validationMessage: "Warranty expiration cannot be before the install date."
+            )
+        }
+
+        let ageSummary = installDay.map {
+            installationAgeSummary(from: $0, to: today, calendar: calendar)
+        }
+        guard let warrantyDay else {
+            return EquipmentLifecycleSnapshot(
+                ageSummary: ageSummary,
+                warrantySummary: nil,
+                attention: .none,
+                validationMessage: nil
+            )
+        }
+
+        let formattedWarrantyDate = warrantyDay.formatted(date: .abbreviated, time: .omitted)
+        let remainingDays = calendar.dateComponents([.day], from: today, to: warrantyDay).day ?? 0
+        if remainingDays < 0 {
+            return EquipmentLifecycleSnapshot(
+                ageSummary: ageSummary,
+                warrantySummary: "Warranty expired \(formattedWarrantyDate)",
+                attention: .warrantyExpired,
+                validationMessage: nil
+            )
+        }
+        if remainingDays <= warrantyWarningDays {
+            return EquipmentLifecycleSnapshot(
+                ageSummary: ageSummary,
+                warrantySummary: "Warranty expires soon: \(formattedWarrantyDate)",
+                attention: .warrantyExpiringSoon,
+                validationMessage: nil
+            )
+        }
+        return EquipmentLifecycleSnapshot(
+            ageSummary: ageSummary,
+            warrantySummary: "Warranty active through \(formattedWarrantyDate)",
+            attention: .none,
+            validationMessage: nil
+        )
+    }
+
+    private static func installationAgeSummary(from installDay: Date, to today: Date, calendar: Calendar) -> String {
+        let components = calendar.dateComponents([.year, .month, .day], from: installDay, to: today)
+        if let years = components.year, years > 0 {
+            return "Installed \(years) year\(years == 1 ? "" : "s") ago"
+        }
+        if let months = components.month, months > 0 {
+            return "Installed \(months) month\(months == 1 ? "" : "s") ago"
+        }
+        let days = max(components.day ?? 0, 0)
+        if days == 0 {
+            return "Installed today"
+        }
+        return "Installed \(days) day\(days == 1 ? "" : "s") ago"
+    }
+}
+
+enum EquipmentServicePlanningAttention: Equatable, Sendable {
+    case none
+    case followUp
+    case repeatedService
+    case replacementEvaluation
+}
+
+struct EquipmentServicePlanningSnapshot: Equatable, Sendable {
+    let attention: EquipmentServicePlanningAttention
+    let title: String?
+    let summary: String?
+    let guidance: String?
+    let ageYears: Int?
+    let evaluationAgeYears: Int?
+    let recentServiceVisitCount: Int
+    let recentCorrectiveVisitCount: Int
+    let openFollowUpCount: Int
+    let overdueFollowUpCount: Int
+    let hasUnresolvedServiceConcerns: Bool
+
+    var needsAttention: Bool {
+        attention != .none && title != nil && summary != nil
+    }
+}
+
+enum EquipmentServicePlanningPolicy {
+    static let recentHistoryDays = 365
+    static let repeatedServiceVisitCount = 3
+
+    static func snapshot(
+        equipmentType: HVACEquipmentType?,
+        installDate: Date?,
+        serviceCalls: [ServiceCall],
+        hasUnresolvedServiceConcerns: Bool,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> EquipmentServicePlanningSnapshot {
+        let today = calendar.startOfDay(for: now)
+        let historyStart = calendar.date(byAdding: .day, value: -recentHistoryDays, to: today)
+            ?? today.addingTimeInterval(-Double(recentHistoryDays) * 86_400)
+        let completedCalls = serviceCalls.filter { call in
+            call.scheduledDate >= historyStart &&
+                call.scheduledDate <= now &&
+                (call.status == .completed || call.status == .invoiced)
+        }
+        let recentServiceCalls = completedCalls.filter { $0.type == .service }
+        let correctiveCalls = recentServiceCalls.filter { call in
+            call.visitDisposition == .callback ||
+                call.visitDisposition == .warranty ||
+                call.originatingServiceCallID != nil ||
+                call.correctiveWorkReason != nil
+        }
+        let openFollowUps = serviceCalls.filter { call in
+            guard call.status != .cancelled,
+                  call.followUpRequired,
+                  let action = call.followUpAction?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !action.isEmpty else {
+                return false
+            }
+            return true
+        }
+        let overdueFollowUpCount = openFollowUps.filter { call in
+            guard let dueDate = call.followUpDueDate else { return false }
+            return calendar.startOfDay(for: dueDate) < today
+        }.count
+        let evaluationAgeYears = replacementEvaluationAgeYears(for: equipmentType)
+        let ageYears = equipmentAgeYears(installDate: installDate, now: now, calendar: calendar)
+        let reachedEvaluationAge = ageYears.flatMap { age in
+            evaluationAgeYears.map { age >= $0 }
+        } ?? false
+        let hasRepeatedService = recentServiceCalls.count >= repeatedServiceVisitCount
+        let hasCorrectivePattern = correctiveCalls.count >= 2
+        let repairAndReplacementReview = reachedEvaluationAge &&
+            (recentServiceCalls.count >= 2 || !correctiveCalls.isEmpty)
+
+        let attention: EquipmentServicePlanningAttention
+        let title: String?
+        if repairAndReplacementReview {
+            attention = .replacementEvaluation
+            title = "Repair vs. replacement review"
+        } else if reachedEvaluationAge {
+            attention = .replacementEvaluation
+            title = "Plan equipment evaluation"
+        } else if hasRepeatedService || hasCorrectivePattern {
+            attention = .repeatedService
+            title = "Review repeat service history"
+        } else if !correctiveCalls.isEmpty {
+            attention = .repeatedService
+            title = "Review corrective work"
+        } else if overdueFollowUpCount > 0 {
+            attention = .followUp
+            title = "Service follow-up overdue"
+        } else if !openFollowUps.isEmpty || hasUnresolvedServiceConcerns {
+            attention = .followUp
+            title = hasUnresolvedServiceConcerns ? "Service concern needs review" : "Service follow-up open"
+        } else {
+            attention = .none
+            title = nil
+        }
+
+        var summaryParts: [String] = []
+        if reachedEvaluationAge, let ageYears, let evaluationAgeYears {
+            summaryParts.append("\(ageYears) years old (evaluate at \(evaluationAgeYears))")
+        }
+        if !recentServiceCalls.isEmpty {
+            summaryParts.append("\(recentServiceCalls.count) service visit\(recentServiceCalls.count == 1 ? "" : "s") in the past 12 months")
+        }
+        if !correctiveCalls.isEmpty {
+            summaryParts.append("\(correctiveCalls.count) callback/warranty visit\(correctiveCalls.count == 1 ? "" : "s")")
+        }
+        if !openFollowUps.isEmpty {
+            let overdueSuffix = overdueFollowUpCount > 0 ? ", \(overdueFollowUpCount) overdue" : ""
+            summaryParts.append("\(openFollowUps.count) open follow-up\(openFollowUps.count == 1 ? "" : "s")\(overdueSuffix)")
+        }
+        if hasUnresolvedServiceConcerns {
+            summaryParts.append("open diagnostic concerns")
+        }
+
+        return EquipmentServicePlanningSnapshot(
+            attention: attention,
+            title: title,
+            summary: title == nil ? nil : summaryParts.joined(separator: " • "),
+            guidance: title == nil
+                ? nil
+                : "Planning cue only—confirm the current diagnosis, repair cost, efficiency, warranty coverage, and customer priorities before presenting options.",
+            ageYears: ageYears,
+            evaluationAgeYears: evaluationAgeYears,
+            recentServiceVisitCount: recentServiceCalls.count,
+            recentCorrectiveVisitCount: correctiveCalls.count,
+            openFollowUpCount: openFollowUps.count,
+            overdueFollowUpCount: overdueFollowUpCount,
+            hasUnresolvedServiceConcerns: hasUnresolvedServiceConcerns
+        )
+    }
+
+    static func replacementEvaluationAgeYears(for equipmentType: HVACEquipmentType?) -> Int? {
+        switch equipmentType {
+        case .splitSystemAC, .heatPump, .airHandler, .packageUnit, .miniSplit:
+            10
+        case .gasFurnace, .boiler:
+            15
+        case .waterHeater:
+            10
+        case .ventilation, .iaqAccessory, .other, .none:
+            nil
+        }
+    }
+
+    private static func equipmentAgeYears(
+        installDate: Date?,
+        now: Date,
+        calendar: Calendar
+    ) -> Int? {
+        guard let installDate else { return nil }
+        let installDay = calendar.startOfDay(for: installDate)
+        let today = calendar.startOfDay(for: now)
+        guard installDay <= today else { return nil }
+        return max(calendar.dateComponents([.year], from: installDay, to: today).year ?? 0, 0)
+    }
+}
+
 @Model
 final class CustomerEquipment {
     var id: UUID = UUID()
@@ -82,6 +349,18 @@ final class CustomerEquipment {
         return details.isEmpty ? name : "\(name) - \(details)"
     }
 
+    func lifecycleSnapshot(
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> EquipmentLifecycleSnapshot {
+        EquipmentLifecyclePolicy.snapshot(
+            installDate: installDate,
+            warrantyExpiration: warrantyExpiration,
+            now: now,
+            calendar: calendar
+        )
+    }
+
     func apply(to serviceCall: ServiceCall) {
         serviceCall.customerEquipmentID = id
         serviceCall.serviceLocationID = serviceLocationID
@@ -99,12 +378,8 @@ final class CustomerEquipment {
     }
 
     var technicalBaselineReadings: [String: String] {
-        guard let technicalBaselineReadingsJSON,
-              let data = technicalBaselineReadingsJSON.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode([String: String].self, from: data) else {
-            return [:]
-        }
-        return decoded
+        EquipmentOperationalEvidenceEnvelope.decode(from: technicalBaselineReadingsJSON)
+            .technicalBaselines
     }
 
     @discardableResult
@@ -146,12 +421,7 @@ final class CustomerEquipment {
         }
 
         baselines = baselines.filter { allowedKeys.contains($0.key) }
-        if baselines.isEmpty {
-            technicalBaselineReadingsJSON = nil
-        } else if let data = try? JSONEncoder().encode(baselines),
-                  let encoded = String(data: data, encoding: .utf8) {
-            technicalBaselineReadingsJSON = encoded
-        }
+        replaceTechnicalBaselines(baselines)
         return updatedCount
     }
 
@@ -183,6 +453,25 @@ final class CustomerEquipment {
         serviceCalls
             .filter { matches($0) }
             .sorted { $0.scheduledDate > $1.scheduledDate }
+    }
+
+    func servicePlanningSnapshot(
+        in serviceCalls: [ServiceCall],
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> EquipmentServicePlanningSnapshot {
+        let matchingCalls = matchingServiceCalls(in: serviceCalls)
+        return EquipmentServicePlanningPolicy.snapshot(
+            equipmentType: equipmentType,
+            installDate: installDate,
+            serviceCalls: matchingCalls,
+            hasUnresolvedServiceConcerns: unresolvedServiceConcernSummary(
+                in: matchingCalls,
+                now: now
+            ) != nil,
+            now: now,
+            calendar: calendar
+        )
     }
 
     func serviceHistorySummary(in serviceCalls: [ServiceCall], now: Date = Date()) -> String? {
@@ -456,5 +745,14 @@ final class CustomerEquipment {
     private func normalized(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+}
+
+extension ServiceCall {
+    var equipmentLifecycleSnapshot: EquipmentLifecycleSnapshot {
+        EquipmentLifecyclePolicy.snapshot(
+            installDate: equipmentInstallDate,
+            warrantyExpiration: equipmentWarrantyExpiration
+        )
     }
 }

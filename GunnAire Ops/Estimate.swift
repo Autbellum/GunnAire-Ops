@@ -84,6 +84,9 @@ final class Estimate {
     var lineItemSummary: String = ""
     var catalogSnapshotJSON: String?
     var amount: Double = 0
+    var salesTaxAmount: Double = 0
+    var taxCalculationStatusRawValue: String?
+    var taxCalculatedAt: Date?
     var status: String = "pending" // pending, accepted, rejected, invoiced, etc.
     var customerApprovedByName: String?
     var customerApprovedAt: Date?
@@ -111,6 +114,9 @@ final class Estimate {
         lineItemSummary: String = "",
         catalogSnapshotJSON: String? = nil,
         amount: Double = 0,
+        salesTaxAmount: Double = 0,
+        taxCalculationStatus: BillingTaxCalculationStatus? = nil,
+        taxCalculatedAt: Date? = nil,
         status: String = "pending",
         customerApprovedByName: String? = nil,
         customerApprovedAt: Date? = nil,
@@ -136,6 +142,9 @@ final class Estimate {
         self.lineItemSummary = lineItemSummary
         self.catalogSnapshotJSON = catalogSnapshotJSON
         self.amount = amount
+        self.salesTaxAmount = max(salesTaxAmount, 0)
+        self.taxCalculationStatusRawValue = taxCalculationStatus?.rawValue
+        self.taxCalculatedAt = taxCalculatedAt
         self.status = status
         self.customerApprovedByName = customerApprovedByName
         self.customerApprovedAt = customerApprovedAt
@@ -149,6 +158,54 @@ final class Estimate {
 
     var catalogLineSnapshots: [CatalogLineItemSnapshot] {
         CatalogLineItemSnapshot.decoded(from: catalogSnapshotJSON)
+    }
+
+    var subtotalAmount: Double {
+        if hasTaxableLines,
+           let snapshotSubtotal = BillingTaxPolicy.snapshotSubtotal(catalogSnapshotJSON) {
+            return snapshotSubtotal
+        }
+        return max(amount - salesTaxAmount, 0)
+    }
+
+    var hasTaxableLines: Bool {
+        BillingTaxPolicy.hasTaxableLines(catalogSnapshotJSON)
+    }
+
+    var taxCalculationStatus: BillingTaxCalculationStatus {
+        BillingTaxPolicy.resolvedStatus(
+            storedRawValue: taxCalculationStatusRawValue,
+            snapshotJSON: catalogSnapshotJSON,
+            quickBooksID: quickBooksID
+        )
+    }
+
+    var customerApprovalBlockedMessage: String? {
+        BillingTaxPolicy.customerCommitmentBlockedMessage(
+            status: taxCalculationStatus,
+            documentName: "estimate"
+        )
+    }
+
+    @discardableResult
+    func applyQuickBooksTaxResult(
+        total: Double,
+        reportedTax: Double?,
+        at date: Date = Date()
+    ) -> String? {
+        let reconciliation = BillingTaxPolicy.reconcile(
+            snapshotJSON: catalogSnapshotJSON,
+            quickBooksTotal: total,
+            reportedTax: reportedTax
+        )
+        taxCalculationStatusRawValue = reconciliation.status.rawValue
+        taxCalculatedAt = date
+        guard reconciliation.attentionDetail == nil else {
+            return reconciliation.attentionDetail
+        }
+        amount = reconciliation.total
+        salesTaxAmount = reconciliation.salesTax
+        return reconciliation.attentionDetail
     }
 
     var hasRecordedCustomerApproval: Bool {
@@ -199,6 +256,10 @@ final class Estimate {
         return proposalOptionKind?.displayName ?? "Estimate"
     }
 
+    var proposalIsFinalized: Bool {
+        hasRecordedCustomerApproval || ["accepted", "invoiced"].contains(status.lowercased())
+    }
+
     @discardableResult
     func recordCustomerApproval(
         by name: String,
@@ -209,6 +270,7 @@ final class Estimate {
         at date: Date = Date()
     ) -> Bool {
         if hasRecordedCustomerApproval { return true }
+        guard customerApprovalBlockedMessage == nil else { return false }
 
         let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedName.isEmpty else { return false }
@@ -250,6 +312,16 @@ final class Estimate {
     }
 
     private static func displayDedupeKey(for estimate: Estimate) -> String {
+        if let proposalGroupID = estimate.proposalGroupID,
+           let proposalOption = estimate.proposalOptionKind,
+           proposalOption != .standalone {
+            return "proposal:\(proposalGroupID.uuidString.lowercased()):\(proposalOption.rawValue)"
+        }
+        if estimate.parentEstimateID != nil {
+            // Change orders are immutable revisions. Equal totals on the same
+            // job are not evidence that two revisions are duplicates.
+            return "change-order:\(estimate.id.uuidString.lowercased())"
+        }
         if let serviceCallID = estimate.serviceCallID {
             return "call:\(serviceCallID.uuidString.lowercased()):\(String(format: "%.2f", estimate.amount))"
         }
@@ -269,5 +341,118 @@ final class Estimate {
             return rhsHasQuickBooks ? rhs : lhs
         }
         return rhs.createdAt > lhs.createdAt ? rhs : lhs
+    }
+}
+
+enum EstimateProposalPolicy {
+    static func options(for estimate: Estimate, in estimates: [Estimate]) -> [Estimate] {
+        guard let groupID = estimate.proposalGroupID else { return [estimate] }
+        return estimates
+            .filter { $0.proposalGroupID == groupID }
+            .sorted {
+                let lhsRank = $0.proposalOptionKind?.comparisonRank ?? .max
+                let rhsRank = $1.proposalOptionKind?.comparisonRank ?? .max
+                if lhsRank != rhsRank { return lhsRank < rhsRank }
+                return $0.createdAt < $1.createdAt
+            }
+    }
+
+    static func creationIssue(
+        groupID: UUID,
+        option: EstimateProposalOption,
+        customerID: UUID,
+        serviceCallID: UUID?,
+        serviceLocationID: UUID?,
+        in estimates: [Estimate]
+    ) -> String? {
+        guard option != .standalone else { return nil }
+        let group = estimates.filter { $0.proposalGroupID == groupID }
+        guard !group.isEmpty else { return nil }
+
+        if group.contains(where: { $0.proposalOptionKind == option }) {
+            return "This proposal set already contains a \(option.displayName) option. Resume that option or end the set before starting another."
+        }
+        if group.contains(where: { $0.customer?.id != customerID }) {
+            return "A proposal set cannot mix customers. End the current set before creating this estimate."
+        }
+        if group.contains(where: { $0.serviceCallID != serviceCallID }) {
+            return "A proposal set cannot span different jobs. End the current set before creating this estimate."
+        }
+        if group.contains(where: { $0.serviceLocationID != serviceLocationID }) {
+            return "All proposal options must use the same service property. End the current set before changing the property."
+        }
+        if group.contains(where: \.proposalIsFinalized) {
+            return "This proposal set is already approved or invoiced. Create a change order instead of adding another option."
+        }
+        if group.count >= 3 {
+            return "Good, Better, and Best are already present. End this proposal set before creating another estimate."
+        }
+        return nil
+    }
+
+    static func selectionIssue(for estimate: Estimate, in estimates: [Estimate]) -> String? {
+        guard estimate.isProposalOption else { return nil }
+        let finalized = options(for: estimate, in: estimates).filter(\.proposalIsFinalized)
+        if finalized.count > 1 {
+            return "Proposal conflict: more than one option is finalized. An administrator must reconcile the approval evidence before billing or scheduling."
+        }
+        if let finalizedOption = finalized.first, finalizedOption.id != estimate.id {
+            return "\(finalizedOption.proposalOptionDisplayName) is already approved. Create a change order to revise the selected scope."
+        }
+        return nil
+    }
+
+    @discardableResult
+    static func select(_ estimate: Estimate, in estimates: [Estimate]) -> Bool {
+        guard selectionIssue(for: estimate, in: estimates) == nil else { return false }
+        guard estimate.isProposalOption else { return true }
+
+        for option in options(for: estimate, in: estimates) {
+            if option.id == estimate.id {
+                if ["not-selected", "rejected"].contains(option.status.lowercased()) {
+                    option.status = "pending"
+                }
+            } else if !option.proposalIsFinalized {
+                option.status = "not-selected"
+            }
+        }
+        return true
+    }
+
+    @discardableResult
+    static func recordApproval(
+        for estimate: Estimate,
+        in estimates: [Estimate],
+        customerName: String,
+        method: EstimateApprovalMethod,
+        reference: String?,
+        signatureImageBase64: String?,
+        recordedByEmail: String?
+    ) -> Bool {
+        guard select(estimate, in: estimates) else { return false }
+        guard estimate.recordCustomerApproval(
+            by: customerName,
+            method: method,
+            reference: reference,
+            signatureImageBase64: signatureImageBase64,
+            recordedByEmail: recordedByEmail
+        ) else {
+            return false
+        }
+
+        if estimate.isProposalOption {
+            for option in options(for: estimate, in: estimates)
+                where option.id != estimate.id && !option.proposalIsFinalized {
+                option.status = "not-selected"
+            }
+        }
+        return true
+    }
+
+    static func enforceSingleRecommendation(for estimate: Estimate, in estimates: [Estimate]) {
+        guard estimate.isProposalOption, estimate.proposalIsRecommended else { return }
+        for option in options(for: estimate, in: estimates) where option.id != estimate.id {
+            option.proposalIsRecommended = false
+        }
     }
 }

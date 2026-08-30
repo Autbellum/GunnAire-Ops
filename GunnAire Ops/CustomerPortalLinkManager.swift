@@ -24,39 +24,46 @@ struct CustomerPortalLinkManagerView: View {
                         description: Text("New links appear here after an administrator creates them from a job."))
                 } else {
                     List {
-                        ForEach(links) { link in
-                            VStack(alignment: .leading, spacing: 5) {
-                                HStack(alignment: .firstTextBaseline) {
-                                    Text(link.customerName)
-                                        .font(.headline)
-                                    Spacer()
-                                    Text(statusText(for: link))
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(statusColor(for: link))
-                                }
-                                Text(link.title)
-                                    .font(.subheadline)
-                                if let appointmentSummary = link.appointmentSummary, !appointmentSummary.isEmpty {
-                                    Text(appointmentSummary)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if let invoiceReference = link.invoiceReference, !invoiceReference.isEmpty {
-                                    Text("Invoice \(invoiceReference)")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Text("Created by \(link.createdBy) • expires \(dateText(link.expiresAt))")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                if isActive(link) {
-                                    Button("Revoke Link", role: .destructive) {
-                                        pendingRevocation = link
+                        Section {
+                            ForEach(links) { link in
+                                VStack(alignment: .leading, spacing: 5) {
+                                    HStack(alignment: .firstTextBaseline) {
+                                        Text(link.customerName)
+                                            .font(.headline)
+                                        Spacer()
+                                        Text(statusText(for: link))
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(statusColor(for: link))
                                     }
-                                    .font(.caption.weight(.semibold))
+                                    Text(link.title)
+                                        .font(.subheadline)
+                                    if let appointmentSummary = link.appointmentSummary, !appointmentSummary.isEmpty {
+                                        Text(appointmentSummary)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    if let invoiceReference = link.invoiceReference, !invoiceReference.isEmpty {
+                                        Text("Invoice \(invoiceReference)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Label(openStatusText(for: link), systemImage: openStatusSymbol(for: link))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Text("Created by \(link.createdBy) • expires \(dateText(link.expiresAt))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    if isActive(link) {
+                                        Button("Revoke Link", role: .destructive) {
+                                            pendingRevocation = link
+                                        }
+                                        .font(.caption.weight(.semibold))
+                                    }
                                 }
+                                .padding(.vertical, 3)
                             }
-                            .padding(.vertical, 3)
+                        } footer: {
+                            Text("Open counts may include mail or security previews and are not proof that the customer read the update.")
                         }
                     }
                 }
@@ -115,6 +122,18 @@ struct CustomerPortalLinkManagerView: View {
     private func statusColor(for link: BackendCustomerPortalLinkRecord) -> Color {
         if link.revokedAt != nil { return .red }
         return isActive(link) ? .green : .orange
+    }
+
+    private func openStatusText(for link: BackendCustomerPortalLinkRecord) -> String {
+        let count = max(link.openedCount ?? 0, 0)
+        guard count > 0 else { return "Not opened" }
+        let countText = count == 1 ? "Opened once" : "Opened \(count) times"
+        guard let lastOpenedAt = link.lastOpenedAt, !lastOpenedAt.isEmpty else { return countText }
+        return "\(countText) • last \(dateText(lastOpenedAt))"
+    }
+
+    private func openStatusSymbol(for link: BackendCustomerPortalLinkRecord) -> String {
+        max(link.openedCount ?? 0, 0) > 0 ? "eye" : "eye.slash"
     }
 
     private func dateText(_ value: String) -> String {

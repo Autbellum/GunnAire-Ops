@@ -5,7 +5,9 @@ import SwiftData
 
 enum ServiceCallType: String, Codable, CaseIterable {
     case service
+    case repair
     case estimate
+    case replacement
     case install
     case maintenance
     case meeting
@@ -17,8 +19,12 @@ enum ServiceCallType: String, Codable, CaseIterable {
         switch self {
         case .service:
             return "Service"
+        case .repair:
+            return "Repair"
         case .estimate:
             return "Estimate"
+        case .replacement:
+            return "Replacement"
         case .install:
             return "Install"
         case .maintenance:
@@ -908,6 +914,20 @@ struct HVACServiceActionGroup: Identifiable, Hashable {
     var id: String { title }
 }
 
+enum JobCloseoutDestination: String, Equatable {
+    case work
+    case files
+    case billing
+    case invoiceCloseout
+    case timeClock
+}
+
+struct JobCloseoutNextAction: Equatable {
+    let requirement: String
+    let label: String
+    let destination: JobCloseoutDestination
+}
+
 struct JobCloseoutReadiness: Equatable {
     let requiredItems: [String]
     let missingItems: [String]
@@ -932,6 +952,19 @@ struct JobCloseoutReadiness: Equatable {
         missingItems.first
     }
 
+    var missingActionItems: [String] {
+        missingItems.map(Self.actionLabel(for:))
+    }
+
+    var nextAction: JobCloseoutNextAction? {
+        guard let requirement = primaryMissingItem else { return nil }
+        return JobCloseoutNextAction(
+            requirement: requirement,
+            label: Self.actionLabel(for: requirement),
+            destination: Self.destination(for: requirement)
+        )
+    }
+
     func missingSummary(limit: Int = 3) -> String {
         guard !missingItems.isEmpty else {
             return statusLabel
@@ -942,12 +975,82 @@ struct JobCloseoutReadiness: Equatable {
         return remainder > 0 ? "\(summary) +\(remainder) more" : summary
     }
 
+    func missingActionSummary(limit: Int = 3) -> String {
+        guard !missingActionItems.isEmpty else {
+            return statusLabel
+        }
+        let visibleItems = missingActionItems.prefix(max(1, limit))
+        let remainder = missingActionItems.count - visibleItems.count
+        let summary = visibleItems.joined(separator: ", ")
+        return remainder > 0 ? "\(summary) +\(remainder) more" : summary
+    }
+
     var statusLabel: String {
         isReady ? "Ready for closeout" : "Needs closeout details"
     }
 
     var summary: String {
         "\(completedCount)/\(totalCount) complete"
+    }
+
+    nonisolated private static func actionLabel(for requirement: String) -> String {
+        if requirement.hasPrefix("Field form: ") {
+            let title = requirement.dropFirst("Field form: ".count)
+            return "Complete \(title) form"
+        }
+        switch requirement {
+        case "Work completed":
+            return "Mark work complete"
+        case "Technical report complete":
+            return "Complete technical report"
+        case "Job time stopped":
+            return "Clock out of this job"
+        case "Onsite report generated":
+            return "Generate onsite report"
+        case "Before photo captured":
+            return "Capture before photo"
+        case "After photo captured":
+            return "Capture after photo"
+        case "Invoice created":
+            return "Create invoice"
+        case "Material use recorded":
+            return "Record or reconcile job materials"
+        case "Invoice finalized":
+            return "Finalize invoice"
+        case "Customer invoice PDF generated":
+            return "Generate customer invoice PDF"
+        case "Customer signed":
+            return "Capture customer signature"
+        case "Payment resolved":
+            return "Collect or resolve payment"
+        case "QuickBooks invoice synced":
+            return "Sync invoice to QuickBooks"
+        case "QuickBooks attachments synced":
+            return "Sync attachments to QuickBooks"
+        case "QuickBooks attachment sync failed":
+            return "Retry QuickBooks attachment sync"
+        default:
+            return requirement
+        }
+    }
+
+    nonisolated private static func destination(for requirement: String) -> JobCloseoutDestination {
+        if requirement.hasPrefix("Field form: ") {
+            return .work
+        }
+        switch requirement {
+        case "Work completed", "Technical report complete":
+            return .work
+        case "Job time stopped":
+            return .timeClock
+        case "Onsite report generated", "Before photo captured", "After photo captured",
+             "QuickBooks attachments synced", "QuickBooks attachment sync failed":
+            return .files
+        case "Invoice finalized", "Customer signed", "Payment resolved":
+            return .invoiceCloseout
+        default:
+            return .billing
+        }
     }
 }
 
@@ -2620,7 +2723,7 @@ final class ServiceCall {
 
     var requiresTechnicalServiceReportCompletion: Bool {
         switch type {
-        case .service, .install, .maintenance:
+        case .service, .repair, .replacement, .install, .maintenance:
             return true
         case .estimate, .meeting, .reminder, .siteVisit, .other:
             return false
@@ -2685,19 +2788,39 @@ final class ServiceCall {
     func closeoutReadiness(
         invoice: Invoice?,
         payments: [Payment],
-        attachments: [ServiceDocumentAttachment]
+        attachments: [ServiceDocumentAttachment],
+        fieldFormTemplates: [FieldFormTemplate] = [],
+        fieldFormResponses: [FieldFormResponse] = [],
+        timeEntries: [TimeEntry]? = nil,
+        materialReadiness: JobMaterialCloseoutSummary = .notApplicable
     ) -> JobCloseoutReadiness {
+        let fieldForms = FieldFormCloseoutPolicy.readiness(
+            serviceCallID: id,
+            serviceType: type,
+            templates: fieldFormTemplates,
+            responses: fieldFormResponses
+        )
         var requiredItems = [
             "Work completed",
-            "Technical report complete",
-            "Onsite report generated"
+            "Technical report complete"
         ]
+        requiredItems.append(contentsOf: fieldForms.requirements.map(\.closeoutItem))
+        let jobTimeEntries = (timeEntries ?? self.timeEntries).filter {
+            $0.serviceCall?.id == id && $0.activity == .job
+        }
+        if !jobTimeEntries.isEmpty {
+            requiredItems.append("Job time stopped")
+        }
+        requiredItems.append("Onsite report generated")
         if requiresFieldPhotoEvidence {
             requiredItems.append("Before photo captured")
             requiredItems.append("After photo captured")
         }
         if type != .estimate {
             requiredItems.append("Invoice created")
+        }
+        if materialReadiness.isApplicable {
+            requiredItems.append("Material use recorded")
         }
         if let invoice {
             requiredItems.append("Invoice finalized")
@@ -2716,6 +2839,10 @@ final class ServiceCall {
         }
         if !canCompleteDocumentation {
             missing.append("Technical report complete")
+        }
+        missing.append(contentsOf: fieldForms.missingRequirements.map(\.closeoutItem))
+        if jobTimeEntries.contains(where: \.isOpen) {
+            missing.append("Job time stopped")
         }
         let hasGeneratedReport = attachments.contains {
             guard $0.serviceCallID == id,
@@ -2740,6 +2867,9 @@ final class ServiceCall {
         }
         if type != .estimate && invoice == nil {
             missing.append("Invoice created")
+        }
+        if !materialReadiness.isReady {
+            missing.append("Material use recorded")
         }
         if let invoice {
             if invoice.finalizedAt == nil {
@@ -2900,7 +3030,7 @@ final class ServiceCall {
 
     private var requiresFieldPhotoEvidence: Bool {
         switch type {
-        case .service, .install, .maintenance:
+        case .service, .repair, .replacement, .install, .maintenance:
             return true
         case .estimate, .meeting, .reminder, .siteVisit, .other:
             return false
@@ -2944,11 +3074,11 @@ final class ServiceCall {
 
     private var workflowChecklistValues: [Bool] {
         switch type {
-        case .service:
+        case .service, .repair:
             return [diagnosticsCaptured, recommendedWorkSummary != nil, safetyChecklistComplete]
         case .estimate:
             return [quoteReviewedWithCustomer, recommendedWorkSummary != nil, followUpRequired]
-        case .install:
+        case .replacement, .install:
             return [equipmentVerifiedChecklist, startupChecklistComplete, safetyChecklistComplete]
         case .maintenance:
             return [maintenanceChecklistComplete, safetyChecklistComplete, customerNotified]

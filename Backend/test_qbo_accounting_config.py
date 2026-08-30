@@ -29,6 +29,9 @@ class QuickBooksAccountingConfigurationTests(unittest.TestCase):
             "defaultExpenseAccountRef": "80",
             "defaultExpenseAccountName": "HVAC Materials",
             "defaultExpenseAccountType": "Cost of Goods Sold",
+            "defaultAPAccountRef": "33",
+            "defaultAPAccountName": "Accounts Payable",
+            "defaultAPAccountType": "Accounts Payable",
             "defaultBankAccountRef": "35",
             "defaultBankAccountName": "Operating Checking",
             "defaultBankAccountType": "Bank",
@@ -82,6 +85,7 @@ class QuickBooksAccountingConfigurationTests(unittest.TestCase):
                         "default_sales_item_ref",
                         "default_income_account_ref",
                         "default_expense_account_ref",
+                        "default_ap_account_ref",
                         "default_bank_account_ref",
                         "default_credit_card_account_ref",
                         "updated_at",
@@ -94,6 +98,48 @@ class QuickBooksAccountingConfigurationTests(unittest.TestCase):
                 invalid["defaultCreditCardAccountType"] = "Bank"
                 with self.assertRaises(ValueError):
                     backend.validate_qbo_accounting_configuration(invalid)
+
+    def test_existing_accounting_configuration_schema_gains_accounts_payable_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(backend, "DB_PATH", Path(directory) / "backend.sqlite3"):
+                with backend.db() as connection:
+                    connection.execute(
+                        """
+                        CREATE TABLE qbo_accounting_config (
+                            realm_id TEXT NOT NULL,
+                            environment TEXT NOT NULL,
+                            default_sales_item_ref TEXT NOT NULL,
+                            default_sales_item_name TEXT NOT NULL,
+                            default_sales_item_type TEXT NOT NULL,
+                            default_income_account_ref TEXT NOT NULL,
+                            default_income_account_name TEXT NOT NULL,
+                            default_income_account_type TEXT NOT NULL,
+                            default_expense_account_ref TEXT NOT NULL,
+                            default_expense_account_name TEXT NOT NULL,
+                            default_expense_account_type TEXT NOT NULL,
+                            default_bank_account_ref TEXT NOT NULL,
+                            default_bank_account_name TEXT NOT NULL,
+                            default_bank_account_type TEXT NOT NULL,
+                            default_credit_card_account_ref TEXT NOT NULL,
+                            default_credit_card_account_name TEXT NOT NULL,
+                            default_credit_card_account_type TEXT NOT NULL,
+                            updated_at TEXT NOT NULL,
+                            updated_by TEXT NOT NULL,
+                            PRIMARY KEY(realm_id, environment)
+                        )
+                        """
+                    )
+                backend.initialize_database()
+                with backend.db() as connection:
+                    columns = {row["name"] for row in connection.execute("PRAGMA table_info(qbo_accounting_config)")}
+                self.assertTrue(
+                    {
+                        "default_ap_account_ref",
+                        "default_ap_account_name",
+                        "default_ap_account_type",
+                    }
+                    <= columns
+                )
 
     def test_admin_can_store_and_read_realm_bound_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -130,6 +176,7 @@ class QuickBooksAccountingConfigurationTests(unittest.TestCase):
                     self.assertEqual(stored["realmID"], self.realm_id)
                     self.assertEqual(stored["environment"], "production")
                     self.assertEqual(stored["configuration"]["defaultBankAccountRef"], "35")
+                    self.assertEqual(stored["configuration"]["defaultAPAccountRef"], "33")
                     self.assertEqual(stored["configuration"]["defaultCreditCardAccountRef"], "36")
                     self.assertNotIn("refreshToken", json.dumps(stored))
 

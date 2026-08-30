@@ -212,7 +212,7 @@ struct CustomersView: View {
     @State private var isSyncingCustomers = false
 
     private var currentEmail: String? {
-        GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        AppIdentity.currentEmail
     }
 
     private var filteredCustomers: [Customer] {
@@ -446,8 +446,19 @@ struct CustomersView: View {
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                 applyPendingIntentCustomerIfNeeded()
             }
-            .sheet(item: $selectedCustomer) { customer in
-                CustomerEditorView(customer: customer)
+            .navigationDestination(
+                isPresented: Binding(
+                    get: { selectedCustomer != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            selectedCustomer = nil
+                        }
+                    }
+                )
+            ) {
+                if let selectedCustomer {
+                    CustomerEditorView(customer: selectedCustomer)
+                }
             }
         }
     }
@@ -749,6 +760,7 @@ struct SyncIntegrationsView: View {
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
     @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
+    @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
     @State private var availableCalendars: [GoogleCalendar] = []
@@ -767,7 +779,7 @@ struct SyncIntegrationsView: View {
 
     private var canViewFinancials: Bool {
         AppAccess.isAdmin(
-            email: googleAuth.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
+            email: AppIdentity.currentEmail,
             users: users
         )
     }
@@ -782,6 +794,7 @@ struct SyncIntegrationsView: View {
             invoices: invoices,
             payments: payments,
             attachments: documentAttachments,
+            communications: customerCommunications,
             timeEntries: timeEntries,
             items: items,
             vendors: vendors,
@@ -796,6 +809,23 @@ struct SyncIntegrationsView: View {
 
     private var attentionWorkstreams: [BusinessSuiteWorkstream] {
         suiteSnapshot.workstreams.filter { $0.severity != .stable }
+    }
+
+    private var syncAttentionSummary: BusinessSuiteSyncAttentionSummary {
+        BusinessSuiteIntelligence.syncAttentionSummary(
+            serviceCalls: serviceCalls,
+            estimates: estimates,
+            invoices: invoices,
+            payments: payments,
+            attachments: documentAttachments,
+            communications: customerCommunications,
+            timeEntries: timeEntries,
+            items: items,
+            googleConnected: googleAuth.isAuthenticated,
+            quickBooksConnected: quickBooksConnected,
+            now: Date(),
+            calendar: calendar
+        )
     }
 
     private var availableCalendarIDs: Set<String> {
@@ -874,7 +904,20 @@ struct SyncIntegrationsView: View {
                     HStack {
                         suiteMetric("\(suiteSnapshot.openWorkCount)", label: "open work")
                         suiteMetric(suiteSnapshot.openReceivablesTotal.formatted(.currency(code: "USD")), label: "receivables")
-                        suiteMetric("\(suiteSnapshot.syncAttentionCount)", label: "sync gaps")
+                        suiteMetric("\(suiteSnapshot.syncAttentionCount)", label: "items to review")
+                    }
+
+                    if syncAttentionSummary.total > 0 {
+                        DisclosureGroup {
+                            syncRecoveryRows
+                        } label: {
+                            Label(
+                                "Review \(syncAttentionSummary.total) sync item\(syncAttentionSummary.total == 1 ? "" : "s")",
+                                systemImage: "arrow.triangle.2.circlepath.circle"
+                            )
+                            .font(.subheadline.weight(.semibold))
+                            .accessibilityIdentifier("SyncRecoveryDisclosure")
+                        }
                     }
 
                     if attentionWorkstreams.isEmpty {
@@ -1076,7 +1119,10 @@ struct SyncIntegrationsView: View {
                 }
             }
             .sheet(item: $selectedTechnician) { technician in
-                TechnicianEditorView(technician: technician)
+                TechnicianEditorView(
+                    technician: technician,
+                    reviewerEmail: AppIdentity.currentEmail ?? ""
+                )
             }
         }
     }
@@ -1104,6 +1150,118 @@ struct SyncIntegrationsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var syncRecoveryRows: some View {
+        if syncAttentionSummary.paymentCount > 0 {
+            syncRecoveryRow(
+                title: "Payment records",
+                detail: "Review failed company-queue or QuickBooks reconciliation.",
+                count: syncAttentionSummary.paymentCount,
+                systemImage: "creditcard.trianglebadge.exclamationmark",
+                identifier: "SyncRecoveryPayments",
+                destination: .payments
+            )
+        }
+        if syncAttentionSummary.calendarCount > 0 {
+            syncRecoveryRow(
+                title: "Calendar assignments",
+                detail: "Review scheduled jobs with missing or stale calendar links.",
+                count: syncAttentionSummary.calendarCount,
+                systemImage: "calendar.badge.exclamationmark",
+                identifier: "SyncRecoveryCalendar",
+                destination: .schedule(nil)
+            )
+        }
+        if syncAttentionSummary.quickBooksDocumentCount > 0 {
+            syncRecoveryRow(
+                title: "QuickBooks documents",
+                detail: "Retry invoices, estimates, or attachments without a confirmed sync.",
+                count: syncAttentionSummary.quickBooksDocumentCount,
+                systemImage: "doc.badge.ellipsis",
+                identifier: "SyncRecoveryQuickBooksDocuments",
+                destination: .quickBooksSales
+            )
+        }
+        if syncAttentionSummary.pricebookCount > 0 {
+            syncRecoveryRow(
+                title: "Pricebook items",
+                detail: "Approve or retry field-created and unsynced catalog items.",
+                count: syncAttentionSummary.pricebookCount,
+                systemImage: "tag.circle",
+                identifier: "SyncRecoveryPricebook",
+                destination: .quickBooksSales
+            )
+        }
+        if syncAttentionSummary.timeEntryCount > 0 {
+            syncRecoveryRow(
+                title: "Technician time",
+                detail: "Review submitted time or retry approved QuickBooks TimeActivity records.",
+                count: syncAttentionSummary.timeEntryCount,
+                systemImage: "clock.badge.exclamationmark",
+                identifier: "SyncRecoveryTime",
+                destination: .timeClock
+            )
+        }
+        if syncAttentionSummary.sharedFileCount > 0 {
+            syncRecoveryRow(
+                title: "Company files",
+                detail: "Retry field files that are still local to one device.",
+                count: syncAttentionSummary.sharedFileCount,
+                systemImage: "doc.badge.arrow.up",
+                identifier: "SyncRecoveryFiles",
+                destination: .documentation(nil)
+            )
+        }
+        if syncAttentionSummary.communicationCount > 0 {
+            syncRecoveryRow(
+                title: "Customer communications",
+                detail: "Open Mail while the server is available to retry durable delivery history.",
+                count: syncAttentionSummary.communicationCount,
+                systemImage: "envelope.badge",
+                identifier: "SyncRecoveryCommunications",
+                destination: .mail
+            )
+        }
+    }
+
+    private func syncRecoveryRow(
+        title: String,
+        detail: String,
+        count: Int,
+        systemImage: String,
+        identifier: String,
+        destination: BusinessSuiteDestination
+    ) -> some View {
+        Button {
+            perform(destination)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .foregroundColor(.orange)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Text("\(count)")
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.12), in: Capsule())
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
+        .accessibilityLabel("\(title), \(count) item\(count == 1 ? "" : "s")")
+        .accessibilityHint(detail)
     }
 
     private func suiteTint(for score: Int) -> Color {
@@ -1160,12 +1318,16 @@ struct SyncIntegrationsView: View {
             GunnAireAppIntentRouter.store(.sync)
         case .quickBooks:
             GunnAireAppIntentRouter.store(.quickBooks)
+        case .quickBooksSales:
+            GunnAireAppIntentRouter.storeQuickBooksRoute(workspace: .sales)
         case .estimates:
             GunnAireAppIntentRouter.store(.estimates)
         case .invoices:
             GunnAireAppIntentRouter.store(.invoices)
         case .timeClock:
             GunnAireAppIntentRouter.store(.timeClock)
+        case .mail:
+            GunnAireAppIntentRouter.store(.mail)
         }
     }
 
@@ -1237,6 +1399,12 @@ struct OnsiteDocumentationView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
+    @Query(sort: \FieldFormTemplate.createdAt, order: .forward) private var fieldFormTemplates: [FieldFormTemplate]
+    @Query(sort: \FieldFormResponse.completedAt, order: .reverse) private var fieldFormResponses: [FieldFormResponse]
+    @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
+    @Query(sort: \Item.name, order: .forward) private var items: [Item]
+    @Query(sort: \InventoryMovement.createdAt, order: .reverse) private var inventoryMovements: [InventoryMovement]
+    @Query(sort: \ProjectMilestone.plannedDate, order: .forward) private var projectMilestones: [ProjectMilestone]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
@@ -1250,7 +1418,7 @@ struct OnsiteDocumentationView: View {
     }
 
     private var currentUserEmail: String? {
-        GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        AppIdentity.currentEmail
     }
 
     private var canViewFinancials: Bool {
@@ -1348,7 +1516,18 @@ struct OnsiteDocumentationView: View {
         call.closeoutReadiness(
             invoice: invoice,
             payments: payments(for: invoice),
-            attachments: attachments(for: call)
+            attachments: attachments(for: call),
+            fieldFormTemplates: fieldFormTemplates,
+            fieldFormResponses: fieldFormResponses,
+            timeEntries: timeEntries,
+            materialReadiness: JobMaterialCloseoutPolicy.summary(
+                for: call,
+                invoice: invoice,
+                estimates: estimates,
+                projectMilestones: projectMilestones,
+                items: items,
+                movements: inventoryMovements
+            )
         )
     }
 
@@ -1357,7 +1536,7 @@ struct OnsiteDocumentationView: View {
         if readiness.isReady {
             return readiness.statusLabel
         }
-        return readiness.missingSummary(limit: 3)
+        return readiness.missingActionSummary(limit: 3)
     }
 
     private func billingDocumentationSummary(for call: ServiceCall) -> String? {
@@ -1373,7 +1552,7 @@ struct OnsiteDocumentationView: View {
         switch call.type {
         case .estimate:
             return hasDocumentation ? "Continue Estimate" : "Start Estimate"
-        case .install, .maintenance, .service, .meeting, .reminder, .siteVisit, .other:
+        case .install, .replacement, .maintenance, .repair, .service, .meeting, .reminder, .siteVisit, .other:
             if call.linkedInvoiceID != nil {
                 return "Continue Invoice"
             }
@@ -1633,6 +1812,17 @@ struct OnsiteDocumentationView: View {
                 attachments: reportEvidenceAttachments(for: call),
                 equipmentProfiles: equipmentProfiles,
                 serviceCalls: serviceCalls,
+                fieldFormTemplates: fieldFormTemplates,
+                fieldFormResponses: fieldFormResponses.filter { $0.serviceCallID == call.id },
+                timeEntries: timeEntries,
+                materialReadiness: JobMaterialCloseoutPolicy.summary(
+                    for: call,
+                    invoice: linkedInvoice,
+                    estimates: estimates,
+                    projectMilestones: projectMilestones,
+                    items: items,
+                    movements: inventoryMovements
+                ),
                 includeFinancials: canIncludeFinancialsInOnsiteReports
             )
             generatedCustomerDocumentURL = url
@@ -1954,6 +2144,7 @@ private struct CustomerEditorView: View {
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
     @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
+    @Query(sort: \Item.name, order: .forward) private var items: [Item]
 
     let customer: Customer
 
@@ -1965,17 +2156,15 @@ private struct CustomerEditorView: View {
     @State private var allowsServiceText: Bool
     @State private var allowsMarketing: Bool
     @State private var preferredContactMethod: CustomerContactMethod
-    @State private var newContractName: String = ""
-    @State private var newContractPattern: String = ""
-    @State private var newContractDate: Date = Date()
-    @State private var includesContractTerm = false
-    @State private var newContractTermEnd = Calendar.current.date(byAdding: .year, value: 1, to: Date()) ?? Date()
-    @State private var newContractPricePerVisit = ""
-    @State private var newContractIncludedVisits = 2
-    @State private var newContractCoveredEquipmentIDs: Set<UUID> = []
+    @State private var showingMaintenanceAgreementOffer = false
+    @State private var maintenanceAgreementPendingRenewal: RecurringMaintenanceContract?
+    @State private var selectedMaintenanceAgreementForApproval: RecurringMaintenanceContract?
+    @State private var maintenanceAgreementPendingCancellation: RecurringMaintenanceContract?
+    @State private var maintenanceAgreementCancellationReason = ""
     @State private var customerActionMessage: String?
     @State private var isSyncingCustomer = false
     @State private var showingDeleteConfirmation = false
+    @State private var equipmentPendingDeletion: CustomerEquipment?
     @State private var showingCustomerFileImporter = false
     @State private var showingCustomerCamera = false
     @State private var customerAttachmentKind: ServiceDocumentAttachmentKind = .customerDocument
@@ -1990,6 +2179,7 @@ private struct CustomerEditorView: View {
     @State private var isLoadingSharedCustomerDocuments = false
     @State private var downloadingSharedDocumentID: String?
     @State private var editingEquipmentID: UUID?
+    @State private var isEquipmentEditorPresented = false
     @State private var newEquipmentType: HVACEquipmentType = .splitSystemAC
     @State private var newEquipmentName = ""
     @State private var newEquipmentManufacturer = ""
@@ -1998,6 +2188,14 @@ private struct CustomerEditorView: View {
     @State private var newEquipmentLocation = ""
     @State private var newEquipmentFilterSize = ""
     @State private var newEquipmentNotes = ""
+    @State private var equipmentLookupText = ""
+    @State private var equipmentLookupMessage: String?
+    @State private var locatedEquipmentID: UUID?
+    @State private var showingEquipmentScanner = false
+    @State private var showingEquipmentNameplateCapture = false
+    @State private var equipmentAssetLabel: CustomerEquipment?
+    @State private var warrantyClaimsEquipment: CustomerEquipment?
+    @State private var expandedEquipmentEvidenceIDs: Set<UUID> = []
     @State private var includeNewEquipmentInstallDate = false
     @State private var newEquipmentInstallDate = Date()
     @State private var includeNewEquipmentWarranty = false
@@ -2066,6 +2264,10 @@ private struct CustomerEditorView: View {
         customerLevelFilteredAttachments.filter { $0.kind.customerProfileGroupTitle == "Receipts & Bills" }
     }
 
+    private var maintenanceAgreementDocumentAttachments: [ServiceDocumentAttachment] {
+        customerLevelFilteredAttachments.filter { $0.kind.customerProfileGroupTitle == "Maintenance Agreements" }
+    }
+
     private var generalCustomerAttachments: [ServiceDocumentAttachment] {
         customerLevelFilteredAttachments.filter { attachment in
             attachment.kind.customerProfileGroupTitle == "Customer Files"
@@ -2090,6 +2292,18 @@ private struct CustomerEditorView: View {
 
     private var customerEquipmentProfiles: [CustomerEquipment] {
         equipmentProfiles.filter { $0.customer?.id == customer.id }
+    }
+
+    private var orderedCustomerEquipmentProfiles: [CustomerEquipment] {
+        customerEquipmentProfiles.sorted { lhs, rhs in
+            let lhsIsLocated = lhs.id == locatedEquipmentID
+            let rhsIsLocated = rhs.id == locatedEquipmentID
+            if lhsIsLocated != rhsIsLocated { return lhsIsLocated }
+            if lhs.isActive != rhs.isActive { return lhs.isActive }
+            let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
     }
 
     private var customerServiceLocations: [CustomerServiceLocation] {
@@ -2182,13 +2396,13 @@ private struct CustomerEditorView: View {
 
     private var canViewFinancials: Bool {
         AppAccess.canViewBillingFinancialDetails(
-            email: GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail"),
+            email: AppIdentity.currentEmail,
             users: users
         )
     }
 
     private var currentEmail: String? {
-        GoogleAuthManager.shared.signedInEmail ?? UserDefaults.standard.string(forKey: "SignedInGoogleEmail")
+        AppIdentity.currentEmail
     }
 
     private var canEditCustomerRecords: Bool {
@@ -2260,8 +2474,7 @@ private struct CustomerEditorView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
+        Form {
                 Section("Customer Workspace") {
                     Picker("Workspace", selection: $selectedWorkspace) {
                         ForEach(CustomerProfileWorkspace.allCases) { workspace in
@@ -2503,157 +2716,109 @@ private struct CustomerEditorView: View {
                 }
 
                 Section("Equipment Profiles") {
+                    ViewThatFits(in: .horizontal) {
+                        HStack {
+                            equipmentLookupField
+                            equipmentLookupActions
+                        }
+                        VStack(alignment: .leading, spacing: 8) {
+                            equipmentLookupField
+                            equipmentLookupActions
+                        }
+                    }
+
+                    if let equipmentLookupMessage {
+                        Text(equipmentLookupMessage)
+                            .font(.caption)
+                            .foregroundStyle(locatedEquipmentID == nil ? .orange : .secondary)
+                            .accessibilityIdentifier("EquipmentLookupMessage")
+                    }
+
                     if customerEquipmentProfiles.isEmpty {
                         Text("No equipment profiles saved for this customer.")
                             .foregroundColor(.secondary)
                     } else {
-                        ForEach(customerEquipmentProfiles) { equipment in
-                            VStack(alignment: .leading, spacing: 4) {
-                                if let equipmentPhoto = ServiceDocumentAttachment.primaryEquipmentPhoto(
-                                    for: equipment,
-                                    in: visibleCustomerAttachments,
-                                    serviceCalls: customerServiceCalls
-                                ) {
-                                    customerAttachmentThumbnail(for: equipmentPhoto)
-                                }
-                                HStack {
-                                    Text(equipment.name)
-                                        .font(.headline)
-                                    Spacer()
-                                    Text(equipment.isActive ? "Active" : "Inactive")
-                                        .font(.caption)
-                                        .foregroundColor(equipment.isActive ? .green : .secondary)
-                                }
-                                Text(equipment.displayName)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                if let location = equipment.location, !location.isEmpty {
-                                    Text("Equipment area: \(location)")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                if let serviceLocation = CustomerServiceLocationPolicy.location(
-                                    id: equipment.serviceLocationID,
-                                    customerID: customer.id,
-                                    in: serviceLocations,
-                                    includeInactive: true
-                                ) {
-                                    Text("Property: \(serviceLocation.displayName)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if let warranty = equipment.warrantyExpiration {
-                                    Text("Warranty: \(warranty.formatted(date: .abbreviated, time: .omitted))")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                if let history = equipment.serviceHistorySummary(in: customerServiceCalls) {
-                                    Text(history)
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                if let followUp = equipment.openFollowUpSummary(in: customerServiceCalls) {
-                                    Text("Follow-up: \(followUp)")
-                                        .font(.caption2)
-                                        .foregroundColor(followUp.localizedCaseInsensitiveContains("overdue") ? .red : .orange)
-                                        .lineLimit(3)
-                                }
-                                if let concerns = equipment.unresolvedServiceConcernSummary(in: customerServiceCalls) {
-                                    Text("Open concerns: \(concerns)")
-                                        .font(.caption2)
-                                        .foregroundColor(.orange)
-                                        .lineLimit(3)
-                                }
-                                if let readings = equipment.latestTechnicalReadingsSummary(in: customerServiceCalls) {
-                                    Text("Last readings: \(readings)")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(3)
-                                }
-                                if let trends = equipment.recentTechnicalTrendSummary(in: customerServiceCalls) {
-                                    Text("Reading trends: \(trends)")
-                                        .font(.caption2)
-                                        .foregroundColor(.orange)
-                                        .lineLimit(3)
-                                }
-                                if let fileSummary = equipmentFileSummary(for: equipment) {
-                                    Text("Files: \(fileSummary)")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(2)
-                                }
-                                if canEditCustomerRecords {
-                                HStack {
-                                    Button("Edit") {
-                                        beginEditingEquipment(equipment)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .accessibilityIdentifier("EditEquipment-\(equipment.id.uuidString)")
-
-                                    Button(equipment.isActive ? "Deactivate" : "Reactivate") {
-                                        equipment.isActive.toggle()
-                                        try? modelContext.save()
-                                    }
-                                    .buttonStyle(.bordered)
-
-                                    Button(role: .destructive) {
-                                        removeEquipmentProfile(equipment)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                    .buttonStyle(.bordered)
-                                }
-                                }
-                            }
-                            .padding(.vertical, 3)
+                        ForEach(orderedCustomerEquipmentProfiles) { equipment in
+                            equipmentProfileRow(for: equipment)
                         }
                     }
 
                     if canEditCustomerRecords {
-                    if !activeCustomerServiceLocations.isEmpty {
-                        Picker("Service Location", selection: $selectedEquipmentServiceLocationID) {
-                            Text("No linked location").tag(UUID?.none)
-                            ForEach(activeCustomerServiceLocations) { location in
-                                Text(location.displayName).tag(UUID?.some(location.id))
+                        if !isEquipmentEditorPresented {
+                            Button {
+                                beginAddingEquipment()
+                            } label: {
+                                Label("Add Equipment", systemImage: "plus.circle")
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("StartAddEquipmentProfile")
+                        } else {
+                            Divider()
+
+                            Label(
+                                editingEquipmentID == nil ? "New Equipment" : "Edit Equipment",
+                                systemImage: "wrench.and.screwdriver"
+                            )
+                            .font(.headline)
+                            .accessibilityIdentifier("EquipmentProfileEditor")
+
+                            if !activeCustomerServiceLocations.isEmpty {
+                                Picker("Service Location", selection: $selectedEquipmentServiceLocationID) {
+                                    Text("No linked location").tag(UUID?.none)
+                                    ForEach(activeCustomerServiceLocations) { location in
+                                        Text(location.displayName).tag(UUID?.some(location.id))
+                                    }
+                                }
+                            }
+                            Picker("Type", selection: $newEquipmentType) {
+                                ForEach(HVACEquipmentType.allCases) { type in
+                                    Text(type.displayName).tag(type)
+                                }
+                            }
+                            TextField("Equipment Name", text: $newEquipmentName)
+                            Button {
+                                showingEquipmentNameplateCapture = true
+                            } label: {
+                                Label("Read Equipment Data Plate", systemImage: "text.viewfinder")
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("ReadCustomerEquipmentNameplate")
+                            Text("Use an iPad or iPhone camera, import an image on Mac, or enter plate text. Review the values before they are copied here.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            TextField("Manufacturer", text: $newEquipmentManufacturer)
+                            TextField("Model", text: $newEquipmentModel)
+                            TextField("Serial Number", text: $newEquipmentSerial)
+                            TextField("Location", text: $newEquipmentLocation)
+                            TextField("Filter Size", text: $newEquipmentFilterSize)
+                            TextField("Equipment Notes", text: $newEquipmentNotes, axis: .vertical)
+                                .lineLimit(2...4)
+                            Toggle("Track Install Date", isOn: $includeNewEquipmentInstallDate)
+                            if includeNewEquipmentInstallDate {
+                                DatePicker("Install Date", selection: $newEquipmentInstallDate, displayedComponents: .date)
+                            }
+                            Toggle("Track Warranty Expiration", isOn: $includeNewEquipmentWarranty)
+                            if includeNewEquipmentWarranty {
+                                DatePicker("Warranty Expiration", selection: $newEquipmentWarranty, displayedComponents: .date)
+                            }
+                            if let validationMessage = newEquipmentLifecycleSnapshot.validationMessage {
+                                Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                                    .accessibilityIdentifier("EquipmentDateValidationMessage")
+                            }
+
+                            ViewThatFits(in: .horizontal) {
+                                HStack {
+                                    saveEquipmentButton
+                                    cancelEquipmentButton
+                                }
+                                VStack(alignment: .leading, spacing: 8) {
+                                    saveEquipmentButton
+                                    cancelEquipmentButton
+                                }
                             }
                         }
-                    }
-                    Picker("Type", selection: $newEquipmentType) {
-                        ForEach(HVACEquipmentType.allCases) { type in
-                            Text(type.displayName).tag(type)
-                        }
-                    }
-                    TextField("Equipment Name", text: $newEquipmentName)
-                    TextField("Manufacturer", text: $newEquipmentManufacturer)
-                    TextField("Model", text: $newEquipmentModel)
-                    TextField("Serial Number", text: $newEquipmentSerial)
-                    TextField("Location", text: $newEquipmentLocation)
-                    TextField("Filter Size", text: $newEquipmentFilterSize)
-                    TextField("Equipment Notes", text: $newEquipmentNotes, axis: .vertical)
-                        .lineLimit(2...4)
-                    Toggle("Track Install Date", isOn: $includeNewEquipmentInstallDate)
-                    if includeNewEquipmentInstallDate {
-                        DatePicker("Install Date", selection: $newEquipmentInstallDate, displayedComponents: .date)
-                    }
-                    Toggle("Track Warranty Expiration", isOn: $includeNewEquipmentWarranty)
-                    if includeNewEquipmentWarranty {
-                        DatePicker("Warranty Expiration", selection: $newEquipmentWarranty, displayedComponents: .date)
-                    }
-                    Button {
-                        addCustomerEquipmentProfile()
-                    } label: {
-                        Label(editingEquipmentID == nil ? "Add Equipment Profile" : "Update Equipment Profile", systemImage: "wrench.and.screwdriver")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.brandGold)
-                    .foregroundStyle(Color.primaryBlack)
-                    .disabled(newEquipmentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    if editingEquipmentID != nil {
-                        Button("Cancel Equipment Edit") {
-                            resetEquipmentEditor()
-                        }
-                        .buttonStyle(.bordered)
-                    }
                     }
                 }
                 }
@@ -2666,6 +2831,7 @@ private struct CustomerEditorView: View {
                         Text(ServiceDocumentAttachmentKind.customerDocument.label).tag(ServiceDocumentAttachmentKind.customerDocument)
                         Text(ServiceDocumentAttachmentKind.diagnosticPhoto.label).tag(ServiceDocumentAttachmentKind.diagnosticPhoto)
                         Text(ServiceDocumentAttachmentKind.equipmentDataPlatePhoto.label).tag(ServiceDocumentAttachmentKind.equipmentDataPlatePhoto)
+                        Text(ServiceDocumentAttachmentKind.warrantyEvidence.label).tag(ServiceDocumentAttachmentKind.warrantyEvidence)
                         if canViewFinancials {
                             Text(ServiceDocumentAttachmentKind.receipt.label).tag(ServiceDocumentAttachmentKind.receipt)
                         }
@@ -2725,6 +2891,7 @@ private struct CustomerEditorView: View {
                             customerEquipmentAttachmentHistory()
                             customerAttachmentGroup("Service Reports", attachments: generatedServiceReportAttachments)
                             if canViewFinancials {
+                                customerAttachmentGroup("Maintenance Agreements", attachments: maintenanceAgreementDocumentAttachments)
                                 customerAttachmentGroup("Estimate Documents", attachments: estimateDocumentAttachments)
                                 customerAttachmentGroup("Invoice Documents", attachments: invoiceDocumentAttachments)
                                 customerAttachmentGroup("Receipts & Bills", attachments: receiptDocumentAttachments)
@@ -2805,120 +2972,37 @@ private struct CustomerEditorView: View {
 
                 if selectedWorkspace == .systems {
                 Section("Service Agreements") {
+                    Text("Draft and pending agreements never create recurring work. Customer approval activates scheduling and produces a signed agreement PDF in Files.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("MaintenanceAgreementLifecycleGuidance")
+
                     if customer.recurringContracts.isEmpty {
                         Text("No service agreements on file.")
                             .foregroundColor(.secondary)
                     } else {
                         ForEach(customer.recurringContracts.sorted(by: { $0.nextDate < $1.nextDate })) { contract in
-                            let agreementVisits = customer.serviceCalls.filter { $0.maintenanceAgreementID == contract.id }
-                            let completedVisitCount = agreementVisits.filter { $0.status == .completed || $0.status == .invoiced }.count
-                            let openVisitCount = agreementVisits.filter { $0.status == .scheduled || $0.status == .inProgress }.count
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text(contract.displayName)
-                                        .font(.headline)
-                                    Spacer()
-                                    Text(contract.isExpired ? "Expired" : (contract.active ? "Active" : "Inactive"))
-                                        .font(.caption)
-                                        .foregroundColor(contract.isExpired ? .orange : (contract.active ? .green : .secondary))
-                                }
-                                Text(contract.schedulePattern)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                if !agreementVisits.isEmpty {
-                                    Text("Visit history: \(completedVisitCount) completed • \(openVisitCount) scheduled")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                Text("Next visit: \(contract.nextDate.formatted(date: .abbreviated, time: .omitted))")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                if let termEndsOn = contract.termEndsOn {
-                                    Text("Term ends: \(termEndsOn.formatted(date: .abbreviated, time: .omitted))")
-                                        .font(.caption2)
-                                        .foregroundColor(contract.needsRenewalAttention || contract.isExpired ? .orange : .secondary)
-                                }
-                                if let pricePerVisit = contract.pricePerVisit {
-                                    Text("Member visit price: \(pricePerVisit, format: .currency(code: "USD"))")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                if let includedVisits = contract.includedVisitsPerTerm {
-                                    Text("Included visits per term: \(includedVisits)")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                let coveredEquipment = customerEquipmentProfiles.filter { contract.coveredEquipmentIDs.contains($0.id) }
-                                if !coveredEquipment.isEmpty {
-                                    Text("Covered: \(coveredEquipment.map(\.displayName).joined(separator: ", "))")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(2)
-                                }
-                                Text("Reminder: \(contract.reminderDate.formatted(date: .abbreviated, time: .omitted))")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                Toggle("Active", isOn: Binding(
-                                    get: { contract.active },
-                                    set: { contract.active = $0 }
-                                ))
-                                .disabled(!canEditCustomerRecords)
-                            }
-                            .padding(.vertical, 2)
+                            maintenanceAgreementRow(for: contract)
                         }
                     }
 
                     if canEditCustomerRecords {
-                    DisclosureGroup("Add Service Agreement") {
-                        TextField("Plan Name (optional)", text: $newContractName)
-                        TextField("Schedule Pattern", text: $newContractPattern)
-                        DatePicker("Next Visit", selection: $newContractDate, displayedComponents: .date)
-                        Toggle("Set Agreement Term", isOn: $includesContractTerm)
-                        if includesContractTerm {
-                            DatePicker("Term Ends", selection: $newContractTermEnd, displayedComponents: .date)
+                        Button {
+                            showingMaintenanceAgreementOffer = true
+                        } label: {
+                            Label("Create Service Agreement", systemImage: "doc.badge.plus")
                         }
-                        TextField("Member Visit Price (optional)", text: $newContractPricePerVisit)
-                            .keyboardType(.decimalPad)
-                        Stepper("Included Visits Per Term: \(newContractIncludedVisits)", value: $newContractIncludedVisits, in: 1...12)
-                        if !customerEquipmentProfiles.isEmpty {
-                            Text("Covered Equipment")
-                                .font(.subheadline.weight(.semibold))
-                            ForEach(customerEquipmentProfiles) { equipment in
-                                Toggle(equipment.displayName, isOn: Binding(
-                                    get: { newContractCoveredEquipmentIDs.contains(equipment.id) },
-                                    set: { isCovered in
-                                        if isCovered {
-                                            newContractCoveredEquipmentIDs.insert(equipment.id)
-                                        } else {
-                                            newContractCoveredEquipmentIDs.remove(equipment.id)
-                                        }
-                                    }
-                                ))
-                            }
-                        }
-                        Button("Add Service Agreement") {
-                            let contract = RecurringMaintenanceContract(
-                                customer: customer,
-                                planName: newContractName.nilIfBlank,
-                                schedulePattern: newContractPattern.trimmingCharacters(in: .whitespacesAndNewlines),
-                                nextDate: newContractDate,
-                                active: true,
-                                termEndsOn: includesContractTerm ? newContractTermEnd : nil,
-                                pricePerVisit: Double(newContractPricePerVisit),
-                                includedVisitsPerTerm: newContractIncludedVisits,
-                                coveredEquipmentIDs: newContractCoveredEquipmentIDs
-                            )
-                            modelContext.insert(contract)
-                            newContractName = ""
-                            newContractPattern = ""
-                            newContractDate = Date()
-                            includesContractTerm = false
-                            newContractPricePerVisit = ""
-                            newContractIncludedVisits = 2
-                            newContractCoveredEquipmentIDs = []
-                        }
-                        .disabled(newContractPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.brandGold)
+                        .foregroundStyle(Color.primaryBlack)
+                        .accessibilityIdentifier("CreateMaintenanceAgreementButton")
                     }
+
+                    if let customerActionMessage,
+                       customerActionMessage.localizedCaseInsensitiveContains("agreement") {
+                        Text(customerActionMessage)
+                            .font(.caption)
+                            .foregroundStyle(customerActionMessage.localizedCaseInsensitiveContains("failed") ? .orange : .secondary)
                     }
                 }
 
@@ -3026,10 +3110,108 @@ private struct CustomerEditorView: View {
             } message: {
                 Text("This removes this customer, local jobs, estimates, invoices, payments, service agreements, files, and delivery records tied to the customer. QuickBooks and retained company-server audit records are not deleted.")
             }
+            .confirmationDialog(
+                equipmentPendingDeletion.map { "Delete \($0.name)?" } ?? "Delete equipment profile?",
+                isPresented: Binding(
+                    get: { equipmentPendingDeletion != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            equipmentPendingDeletion = nil
+                        }
+                    }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let equipmentPendingDeletion {
+                    Button("Delete Equipment Profile", role: .destructive) {
+                        removeEquipmentProfile(equipmentPendingDeletion)
+                        self.equipmentPendingDeletion = nil
+                    }
+                    .accessibilityIdentifier("ConfirmDeleteEquipment")
+                }
+                Button("Cancel", role: .cancel) {
+                    equipmentPendingDeletion = nil
+                }
+            } message: {
+                Text("This removes the installed-system profile from this customer. Linked job history and files remain preserved under the customer, but the equipment profile cannot be restored.")
+            }
             .sheet(isPresented: $showingCustomerCamera) {
                 CustomerAttachmentCameraPicker(sourceType: .camera) { image in
                     handleCapturedCustomerImage(image)
                 }
+            }
+            .fullScreenCover(isPresented: $showingEquipmentScanner) {
+                EquipmentBarcodeScannerSheet { payload in
+                    equipmentLookupText = payload
+                    resolveEquipmentLookup(payload)
+                }
+            }
+            .sheet(isPresented: $showingEquipmentNameplateCapture) {
+                EquipmentNameplateCaptureSheet { draft in
+                    applyEquipmentNameplateDraft(draft)
+                }
+            }
+            .sheet(item: $equipmentAssetLabel) { equipment in
+                EquipmentAssetLabelSheet(
+                    content: EquipmentAssetLabelContent(
+                        equipmentID: equipment.id,
+                        systemName: equipment.name,
+                        equipmentSummary: equipment.displayName,
+                        serialNumber: equipment.serialNumber,
+                        location: equipment.location
+                    )
+                )
+            }
+            .sheet(item: $warrantyClaimsEquipment) { equipment in
+                EquipmentWarrantyClaimsSheet(equipment: equipment)
+                    .tint(Color.brandGold)
+            }
+            .sheet(isPresented: $showingMaintenanceAgreementOffer) {
+                MaintenanceAgreementOfferSheet(
+                    customer: customer,
+                    equipmentProfiles: customerEquipmentProfiles,
+                    billingItems: items
+                ) { submission in
+                    createMaintenanceAgreement(submission)
+                }
+            }
+            .sheet(item: $maintenanceAgreementPendingRenewal) { source in
+                MaintenanceAgreementOfferSheet(
+                    customer: customer,
+                    equipmentProfiles: customerEquipmentProfiles,
+                    billingItems: items,
+                    renewalSource: source
+                ) { submission in
+                    createMaintenanceAgreement(submission, renewing: source)
+                }
+            }
+            .sheet(item: $selectedMaintenanceAgreementForApproval) { agreement in
+                MaintenanceAgreementApprovalSheet(agreement: agreement) { approval in
+                    approveMaintenanceAgreement(agreement, approval: approval)
+                }
+            }
+            .alert(
+                "Cancel Service Agreement",
+                isPresented: Binding(
+                    get: { maintenanceAgreementPendingCancellation != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            maintenanceAgreementPendingCancellation = nil
+                            maintenanceAgreementCancellationReason = ""
+                        }
+                    }
+                )
+            ) {
+                TextField("Cancellation reason", text: $maintenanceAgreementCancellationReason)
+                Button("Cancel Agreement", role: .destructive) {
+                    if let agreement = maintenanceAgreementPendingCancellation {
+                        cancelMaintenanceAgreement(agreement)
+                    }
+                    maintenanceAgreementPendingCancellation = nil
+                }
+                Button("Keep Agreement", role: .cancel) {}
+            } message: {
+                Text("This stops future agreement visits without deleting the customer, visit history, or approval evidence.")
             }
             .fileImporter(
                 isPresented: $showingCustomerFileImporter,
@@ -3044,7 +3226,6 @@ private struct CustomerEditorView: View {
                         .tint(Color.brandGold)
                 }
             }
-        }
         .tint(Color.brandGold)
     }
 
@@ -3061,6 +3242,807 @@ private struct CustomerEditorView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func equipmentProfileRow(for equipment: CustomerEquipment) -> some View {
+        let isLocated = locatedEquipmentID == equipment.id
+
+        VStack(alignment: .leading, spacing: 4) {
+            if let equipmentPhoto = ServiceDocumentAttachment.primaryEquipmentPhoto(
+                for: equipment,
+                in: visibleCustomerAttachments,
+                serviceCalls: customerServiceCalls
+            ) {
+                customerAttachmentThumbnail(for: equipmentPhoto)
+            }
+            HStack {
+                Text(equipment.name)
+                    .font(.headline)
+                if isLocated {
+                    Label("Found", systemImage: "viewfinder.circle.fill")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Color.brandGold)
+                }
+                Spacer()
+                Text(equipment.isActive ? "Active" : "Inactive")
+                    .font(.caption)
+                    .foregroundColor(equipment.isActive ? .green : .secondary)
+            }
+            Text(equipment.displayName)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if let location = equipment.location, !location.isEmpty {
+                Text("Equipment area: \(location)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            if let serviceLocation = CustomerServiceLocationPolicy.location(
+                id: equipment.serviceLocationID,
+                customerID: customer.id,
+                in: serviceLocations,
+                includeInactive: true
+            ) {
+                Text("Property: \(serviceLocation.displayName)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            let lifecycle = equipment.lifecycleSnapshot()
+            if let lifecycleSummary = lifecycle.summary {
+                Text(lifecycleSummary)
+                    .font(.caption2)
+                    .foregroundColor(
+                        lifecycle.attention == .invalidDates
+                            ? .red
+                            : lifecycle.attention == .none ? .secondary : .orange
+                    )
+                    .accessibilityIdentifier("EquipmentLifecycle-\(equipment.id.uuidString)")
+            }
+            let planning = equipment.servicePlanningSnapshot(in: customerServiceCalls)
+            if planning.needsAttention,
+               let planningTitle = planning.title,
+               let planningSummary = planning.summary {
+                let planningTint: Color = switch planning.attention {
+                case .none: .secondary
+                case .followUp: planning.overdueFollowUpCount > 0 ? .red : .orange
+                case .repeatedService, .replacementEvaluation: .orange
+                }
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(planningTitle)
+                            .font(.caption.weight(.semibold))
+                        Text(planningSummary)
+                            .font(.caption2)
+                        Text("Planning cue—not an automatic replacement recommendation.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: planning.attention == .replacementEvaluation ? "arrow.triangle.2.circlepath" : "wrench.adjustable")
+                }
+                .foregroundStyle(planningTint)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(planningTint.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(planningTitle). \(planningSummary). Planning cue only; confirm before presenting options.")
+                .accessibilityIdentifier("EquipmentServicePlanning-\(equipment.id.uuidString)")
+            }
+
+            if let warrantySummary = equipment.warrantyClaimAttentionSummary {
+                Button {
+                    warrantyClaimsEquipment = equipment
+                } label: {
+                    HStack(spacing: 8) {
+                        Label(warrantySummary, systemImage: "checkmark.shield")
+                            .font(.caption.weight(.semibold))
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .accessibilityHidden(true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.orange)
+                .padding(8)
+                .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .accessibilityIdentifier("OpenEquipmentWarrantyClaims-\(equipment.id.uuidString)")
+            }
+
+            let history = equipment.serviceHistorySummary(in: customerServiceCalls)
+            let followUp = equipment.openFollowUpSummary(in: customerServiceCalls)
+            let concerns = equipment.unresolvedServiceConcernSummary(in: customerServiceCalls)
+            let readings = equipment.latestTechnicalReadingsSummary(in: customerServiceCalls)
+            let trends = equipment.recentTechnicalTrendSummary(in: customerServiceCalls)
+            let fileSummary = equipmentFileSummary(for: equipment)
+            if history != nil || followUp != nil || concerns != nil || readings != nil || trends != nil || fileSummary != nil {
+                let isEvidenceExpanded = expandedEquipmentEvidenceIDs.contains(equipment.id)
+                VStack(alignment: .leading, spacing: 5) {
+                    Button {
+                        if isEvidenceExpanded {
+                            expandedEquipmentEvidenceIDs.remove(equipment.id)
+                        } else {
+                            expandedEquipmentEvidenceIDs.insert(equipment.id)
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Service evidence")
+                                    .font(.caption.weight(.semibold))
+                                if let history {
+                                    Text(history)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: isEvidenceExpanded ? "chevron.down" : "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Service evidence. \(history ?? "No recorded visits"). \(isEvidenceExpanded ? "Collapse" : "Expand")")
+                    .accessibilityIdentifier("EquipmentServiceEvidence-\(equipment.id.uuidString)")
+
+                    if isEvidenceExpanded {
+                        VStack(alignment: .leading, spacing: 5) {
+                            if let history {
+                                Text("Recorded visits: \(history)")
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("EquipmentServiceHistoryDetails-\(equipment.id.uuidString)")
+                            }
+                            if let followUp {
+                                Text("Follow-up: \(followUp)")
+                                    .foregroundStyle(followUp.localizedCaseInsensitiveContains("overdue") ? .red : .orange)
+                            }
+                            if let concerns {
+                                Text("Open concerns: \(concerns)")
+                                    .foregroundStyle(.orange)
+                            }
+                            if let readings {
+                                Text("Last readings: \(readings)")
+                                    .foregroundStyle(.secondary)
+                            }
+                            if let trends {
+                                Text("Reading trends: \(trends)")
+                                    .foregroundStyle(.orange)
+                            }
+                            if let fileSummary {
+                                Text("Files: \(fileSummary)")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .font(.caption2)
+                        .lineLimit(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("EquipmentServiceEvidenceDetails-\(equipment.id.uuidString)")
+                    }
+                }
+            }
+            if canEditCustomerRecords {
+                equipmentActions(for: equipment)
+            }
+        }
+        .padding(isLocated ? 10 : 0)
+        .padding(.vertical, 3)
+        .background(
+            isLocated ? Color.brandGold.opacity(0.12) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+        .overlay {
+            if isLocated {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.brandGold.opacity(0.7), lineWidth: 1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func maintenanceAgreementRow(for contract: RecurringMaintenanceContract) -> some View {
+        let agreementVisits = customer.serviceCalls.filter { $0.maintenanceAgreementID == contract.id }
+        let completedVisitCount = agreementVisits.filter { [.completed, .invoiced].contains($0.status) }.count
+        let openVisitCount = agreementVisits.filter { [.scheduled, .inProgress].contains($0.status) }.count
+        let coveredEquipment = customerEquipmentProfiles.filter { contract.coveredEquipmentIDs.contains($0.id) }
+
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(contract.displayName)
+                    .font(.headline)
+                Spacer()
+                Text(contract.lifecycleStatusDisplayName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(maintenanceAgreementStatusColor(contract))
+            }
+            Text(contract.schedulePattern)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if !agreementVisits.isEmpty {
+                Text("Visit history: \(completedVisitCount) completed • \(openVisitCount) scheduled")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            Text("Next visit: \(contract.nextDate.formatted(date: .abbreviated, time: .omitted))")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if let termEndsOn = contract.termEndsOn {
+                Text("Term ends: \(termEndsOn.formatted(date: .abbreviated, time: .omitted))")
+                    .font(.caption2)
+                    .foregroundColor(contract.needsRenewalAttention || contract.isExpired ? .orange : .secondary)
+            }
+            if let pricePerVisit = contract.pricePerVisit {
+                Text("Member visit price: \(pricePerVisit, format: .currency(code: "USD"))")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            if let agreementPrice = contract.agreementPrice {
+                Text("Agreement price: \(agreementPrice, format: .currency(code: "USD")) • \(contract.billingInterval.displayName)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                if contract.requiresBillingConfiguration {
+                    Label("Billing setup required in Invoices", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                } else if contract.billingInterval == .perVisit {
+                    Text("Billing releases after each completed agreement visit • \(contract.billingEvents.count) issued")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if let billingAnchorDate = contract.billingAnchorDate {
+                    Text("First billing: \(billingAnchorDate.formatted(date: .abbreviated, time: .omitted)) • \(contract.billingEvents.count) issued")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if let discount = contract.memberDiscountPercent {
+                Text("Member repair discount: \(discount.formatted(.number.precision(.fractionLength(0...2))))%")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            if let includedVisits = contract.includedVisitsPerTerm {
+                Text("Included visits per term: \(includedVisits)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            if !coveredEquipment.isEmpty {
+                Text("Covered: \(coveredEquipment.map(\.displayName).joined(separator: ", "))")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+            }
+            Text("Reminder: \(contract.reminderDate.formatted(date: .abbreviated, time: .omitted))")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
+            maintenanceAgreementLifecycle(for: contract)
+            maintenanceAgreementActions(for: contract)
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func maintenanceAgreementLifecycle(for contract: RecurringMaintenanceContract) -> some View {
+        if let lifecycle = contract.lifecycle {
+            if let offeredAt = lifecycle.offeredAt {
+                Text("Offered \(offeredAt.formatted(date: .abbreviated, time: .shortened)) by \(lifecycle.offeredByEmail ?? "unknown account")")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let approvedAt = lifecycle.approvedAt,
+               let approvedBy = lifecycle.approvedByName {
+                Text("Approved by \(approvedBy) • \(approvedAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+            }
+            if lifecycle.renewalOfContractID != nil {
+                Text("Renewal of a prior service agreement")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if lifecycle.pendingRenewalContractID != nil {
+                Label("Renewal draft started — current coverage remains active", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+            if let renewedAt = lifecycle.renewedAt {
+                Text("Renewed \(renewedAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let terms = lifecycle.termsSummary {
+                DisclosureGroup("Agreement Terms") {
+                    Text(terms)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            Label("Historical agreement — approval predates in-app evidence", systemImage: "clock.arrow.circlepath")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func maintenanceAgreementActions(for contract: RecurringMaintenanceContract) -> some View {
+        if canEditCustomerRecords {
+            HStack {
+                if [.draft, .declined].contains(contract.lifecycleStatus) {
+                    Button("Mark Pending") {
+                        markMaintenanceAgreementPending(contract)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if [.draft, .pendingApproval, .declined].contains(contract.lifecycleStatus) {
+                    Button("Record Approval") {
+                        selectedMaintenanceAgreementForApproval = contract
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.brandGold)
+                    .foregroundStyle(Color.primaryBlack)
+                    .accessibilityIdentifier("RecordMaintenanceAgreementApprovalButton")
+                }
+
+                if contract.lifecycleStatus == .active && !contract.isExpired {
+                    Button("Cancel Agreement", role: .destructive) {
+                        maintenanceAgreementCancellationReason = ""
+                        maintenanceAgreementPendingCancellation = contract
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if contract.lifecycleStatus == .active,
+                   contract.termEndsOn != nil,
+                   (contract.needsRenewalAttention || contract.isExpired),
+                   contract.lifecycle?.pendingRenewalContractID == nil {
+                    Button("Renew Agreement") {
+                        maintenanceAgreementPendingRenewal = contract
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("RenewMaintenanceAgreementButton")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func equipmentActions(for equipment: CustomerEquipment) -> some View {
+        equipmentCompactActions(for: equipment)
+            .controlSize(.small)
+    }
+
+    private func equipmentCompactActions(for equipment: CustomerEquipment) -> some View {
+        HStack(spacing: 8) {
+            equipmentEditAction(for: equipment)
+            equipmentAssetLabelAction(for: equipment)
+
+            Menu {
+                Button {
+                    warrantyClaimsEquipment = equipment
+                } label: {
+                    Label("Warranty Claims", systemImage: "checkmark.shield")
+                }
+                .accessibilityIdentifier("EquipmentWarranty-\(equipment.id.uuidString)")
+
+                Divider()
+
+                Button {
+                    toggleEquipmentStatus(equipment)
+                } label: {
+                    Label(
+                        equipment.isActive ? "Deactivate Equipment" : "Reactivate Equipment",
+                        systemImage: equipment.isActive ? "pause.circle" : "play.circle"
+                    )
+                }
+                .accessibilityIdentifier("EquipmentStatus-\(equipment.id.uuidString)")
+
+                Divider()
+
+                Button(role: .destructive) {
+                    equipmentPendingDeletion = equipment
+                } label: {
+                    Label("Delete Equipment", systemImage: "trash")
+                }
+                .accessibilityIdentifier("DeleteEquipment-\(equipment.id.uuidString)")
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("EquipmentActionsMenu-\(equipment.id.uuidString)")
+            .accessibilityLabel("More actions for \(equipment.name)")
+        }
+    }
+
+    private func equipmentEditAction(for equipment: CustomerEquipment) -> some View {
+        Button("Edit") {
+            beginEditingEquipment(equipment)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityIdentifier("EditEquipment-\(equipment.id.uuidString)")
+    }
+
+    private func equipmentAssetLabelAction(for equipment: CustomerEquipment) -> some View {
+        Button {
+            equipmentAssetLabel = equipment
+        } label: {
+            Label("QR Label", systemImage: "qrcode")
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityIdentifier("EquipmentAssetLabel-\(equipment.id.uuidString)")
+    }
+
+    private var newEquipmentLifecycleSnapshot: EquipmentLifecycleSnapshot {
+        EquipmentLifecyclePolicy.snapshot(
+            installDate: includeNewEquipmentInstallDate ? newEquipmentInstallDate : nil,
+            warrantyExpiration: includeNewEquipmentWarranty ? newEquipmentWarranty : nil
+        )
+    }
+
+    private var saveEquipmentButton: some View {
+        Button {
+            addCustomerEquipmentProfile()
+        } label: {
+            Label(
+                editingEquipmentID == nil ? "Add Equipment Profile" : "Update Equipment Profile",
+                systemImage: "checkmark.circle"
+            )
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(Color.brandGold)
+        .foregroundStyle(Color.primaryBlack)
+        .disabled(
+            newEquipmentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                newEquipmentLifecycleSnapshot.validationMessage != nil
+        )
+    }
+
+    private var cancelEquipmentButton: some View {
+        Button("Cancel") {
+            resetEquipmentEditor()
+        }
+        .buttonStyle(.bordered)
+        .accessibilityIdentifier("CancelEquipmentProfileEdit")
+    }
+
+    private func toggleEquipmentStatus(_ equipment: CustomerEquipment) {
+        equipment.isActive.toggle()
+        try? modelContext.save()
+    }
+
+    private var equipmentLookupField: some View {
+        TextField("Serial number or equipment QR", text: $equipmentLookupText)
+            .textInputAutocapitalization(.characters)
+            .autocorrectionDisabled()
+            .submitLabel(.search)
+            .onSubmit { resolveEquipmentLookup(equipmentLookupText) }
+            .accessibilityIdentifier("EquipmentLookupField")
+    }
+
+    private var equipmentLookupActions: some View {
+        HStack(spacing: 8) {
+            Button {
+                resolveEquipmentLookup(equipmentLookupText)
+            } label: {
+                Label("Find", systemImage: "magnifyingglass")
+            }
+            .buttonStyle(.bordered)
+            .disabled(equipmentLookupText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityIdentifier("FindEquipmentButton")
+
+            if EquipmentBarcodeScannerAvailability.isSupported {
+                Button {
+                    showingEquipmentScanner = true
+                } label: {
+                    Label("Scan", systemImage: "barcode.viewfinder")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("ScanEquipmentButton")
+            }
+
+            if locatedEquipmentID != nil || equipmentLookupMessage != nil {
+                Button("Clear") {
+                    equipmentLookupText = ""
+                    equipmentLookupMessage = nil
+                    locatedEquipmentID = nil
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private func resolveEquipmentLookup(_ rawValue: String) {
+        let candidates = equipmentProfiles.map {
+            EquipmentCodeCandidate(
+                id: $0.id,
+                customerID: $0.customer?.id,
+                serialNumber: $0.serialNumber
+            )
+        }
+
+        switch EquipmentCodeLookup.resolve(rawValue, customerID: customer.id, candidates: candidates) {
+        case .matched(let equipmentID):
+            guard let equipment = customerEquipmentProfiles.first(where: { $0.id == equipmentID }) else {
+                locatedEquipmentID = nil
+                equipmentLookupMessage = "That equipment record is not available in this customer workspace."
+                return
+            }
+            locatedEquipmentID = equipment.id
+            equipmentLookupMessage = "Found \(equipment.displayName). It is shown first below."
+        case .ambiguous(let serial, let equipmentIDs):
+            locatedEquipmentID = nil
+            equipmentLookupMessage = "\(equipmentIDs.count) systems use \(serial). Compare their model and location details, then correct the duplicate serial before relying on a scan."
+        case .outsideCustomer:
+            locatedEquipmentID = nil
+            equipmentLookupMessage = "That code does not belong to this customer. Open the correct customer record before continuing."
+        case .notFound:
+            locatedEquipmentID = nil
+            equipmentLookupMessage = "No system on this customer matches that code. Confirm the serial or add the equipment profile."
+        case .empty:
+            locatedEquipmentID = nil
+            equipmentLookupMessage = "Enter a serial number or scan a code."
+        }
+    }
+
+    private func maintenanceAgreementStatusColor(_ agreement: RecurringMaintenanceContract) -> Color {
+        if agreement.lifecycleStatus == .active && agreement.isExpired { return .orange }
+        switch agreement.lifecycleStatus {
+        case .draft: return .secondary
+        case .pendingApproval: return .orange
+        case .active: return .green
+        case .renewed: return .secondary
+        case .declined, .cancelled: return .red
+        }
+    }
+
+    private func createMaintenanceAgreement(
+        _ submission: MaintenanceAgreementOfferSubmission,
+        renewing source: RecurringMaintenanceContract? = nil
+    ) {
+        guard canEditCustomerRecords else {
+            customerActionMessage = "This account can review service agreements but cannot create them."
+            return
+        }
+
+        let agreement = RecurringMaintenanceContract(
+            customer: customer,
+            planName: submission.planName,
+            schedulePattern: submission.schedulePattern,
+            nextDate: submission.nextDate,
+            active: false,
+            termEndsOn: submission.termEndsOn,
+            pricePerVisit: submission.pricePerVisit,
+            includedVisitsPerTerm: submission.includedVisitsPerTerm,
+            coveredEquipmentIDs: submission.coveredEquipmentIDs
+        )
+        agreement.configureDraft(
+            agreementPrice: submission.agreementPrice,
+            billingInterval: submission.billingInterval,
+            billingCatalogItemID: submission.billingCatalogItemID,
+            billingAnchorDate: submission.billingAnchorDate,
+            memberDiscountPercent: submission.memberDiscountPercent,
+            autoRenews: submission.autoRenews,
+            termsSummary: submission.termsSummary,
+            createdByEmail: currentEmail,
+            sourceServiceCallID: nil,
+            renewalOfContractID: source?.id
+        )
+
+        let sourceLifecycleJSON = source?.lifecycleJSON
+        let sourceActive = source?.active
+        var insertedAgreement = false
+        do {
+            if let approval = submission.approval {
+                agreement.markPendingApproval(offeredByEmail: currentEmail)
+                try agreement.recordCustomerApproval(
+                    customerName: approval.customerName,
+                    method: approval.method,
+                    reference: approval.reference,
+                    signatureImageBase64: approval.signatureImageBase64,
+                    recordedByEmail: currentEmail
+                )
+            }
+            if let source {
+                try source.beginRenewal(with: agreement.id, byEmail: currentEmail)
+                if submission.approval != nil {
+                    try source.markRenewed(by: agreement.id, byEmail: currentEmail)
+                }
+            }
+            modelContext.insert(agreement)
+            insertedAgreement = true
+            try modelContext.save()
+            generateMaintenanceAgreementDocument(agreement)
+            if let source {
+                generateMaintenanceAgreementDocument(source)
+                customerActionMessage = submission.approval == nil
+                    ? "Saved renewal draft for \(source.displayName); current coverage remains active until approval."
+                    : "Renewed \(source.displayName) with customer approval evidence."
+            } else {
+                customerActionMessage = submission.approval == nil
+                    ? "Saved draft service agreement for \(customer.name)."
+                    : "Activated service agreement for \(customer.name) with customer approval evidence."
+            }
+        } catch {
+            if let source {
+                source.lifecycleJSON = sourceLifecycleJSON
+                source.active = sourceActive ?? source.active
+            }
+            if insertedAgreement {
+                modelContext.delete(agreement)
+            }
+            customerActionMessage = "Service agreement save failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func markMaintenanceAgreementPending(_ agreement: RecurringMaintenanceContract) {
+        guard canEditCustomerRecords else { return }
+        agreement.markPendingApproval(offeredByEmail: currentEmail)
+        do {
+            try modelContext.save()
+            generateMaintenanceAgreementDocument(agreement)
+            customerActionMessage = "Marked \(agreement.displayName) pending customer approval."
+        } catch {
+            customerActionMessage = "Service agreement update failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func approveMaintenanceAgreement(
+        _ agreement: RecurringMaintenanceContract,
+        approval: MaintenanceAgreementApprovalSubmission
+    ) {
+        guard canEditCustomerRecords else { return }
+        let agreementLifecycleJSON = agreement.lifecycleJSON
+        let agreementActive = agreement.active
+        var source: RecurringMaintenanceContract?
+        var sourceLifecycleJSON: String?
+        var sourceActive: Bool?
+        do {
+            source = try renewalSource(for: agreement)
+            if let source {
+                sourceLifecycleJSON = source.lifecycleJSON
+                sourceActive = source.active
+                try source.validateRenewalCompletion(by: agreement.id)
+            }
+            if agreement.lifecycleStatus != .pendingApproval {
+                agreement.markPendingApproval(offeredByEmail: currentEmail)
+            }
+            try agreement.recordCustomerApproval(
+                customerName: approval.customerName,
+                method: approval.method,
+                reference: approval.reference,
+                signatureImageBase64: approval.signatureImageBase64,
+                recordedByEmail: currentEmail
+            )
+            try source?.markRenewed(by: agreement.id, byEmail: currentEmail)
+            try modelContext.save()
+            generateMaintenanceAgreementDocument(agreement)
+            if let source {
+                generateMaintenanceAgreementDocument(source)
+                customerActionMessage = "Renewed \(source.displayName) with customer approval evidence."
+            } else {
+                customerActionMessage = "Activated \(agreement.displayName) with customer approval evidence."
+            }
+        } catch {
+            agreement.lifecycleJSON = agreementLifecycleJSON
+            agreement.active = agreementActive
+            if let source {
+                source.lifecycleJSON = sourceLifecycleJSON
+                source.active = sourceActive ?? source.active
+            }
+            customerActionMessage = "Service agreement approval failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func cancelMaintenanceAgreement(_ agreement: RecurringMaintenanceContract) {
+        guard canEditCustomerRecords else { return }
+        let agreementLifecycleJSON = agreement.lifecycleJSON
+        let agreementActive = agreement.active
+        var source: RecurringMaintenanceContract?
+        var sourceLifecycleJSON: String?
+        var sourceActive: Bool?
+        do {
+            source = try renewalSource(for: agreement)
+            if let source {
+                sourceLifecycleJSON = source.lifecycleJSON
+                sourceActive = source.active
+                _ = source.clearPendingRenewal(successorID: agreement.id)
+            }
+            agreement.cancel(byEmail: currentEmail, reason: maintenanceAgreementCancellationReason)
+            try modelContext.save()
+            generateMaintenanceAgreementDocument(agreement)
+            if let source {
+                generateMaintenanceAgreementDocument(source)
+                customerActionMessage = "Cancelled the renewal draft; \(source.displayName) remains active."
+            } else {
+                customerActionMessage = "Cancelled \(agreement.displayName) without deleting its visit or approval history."
+            }
+        } catch {
+            agreement.lifecycleJSON = agreementLifecycleJSON
+            agreement.active = agreementActive
+            if let source {
+                source.lifecycleJSON = sourceLifecycleJSON
+                source.active = sourceActive ?? source.active
+            }
+            customerActionMessage = "Service agreement cancellation failed: \(error.localizedDescription)"
+        }
+        maintenanceAgreementCancellationReason = ""
+    }
+
+    private func renewalSource(
+        for agreement: RecurringMaintenanceContract
+    ) throws -> RecurringMaintenanceContract? {
+        guard let sourceID = agreement.lifecycle?.renewalOfContractID else { return nil }
+        guard let source = recurringContracts.first(where: {
+            $0.id == sourceID && $0.customer.id == customer.id
+        }) else {
+            throw MaintenanceAgreementLifecycleError.renewalSourceUnavailable
+        }
+        return source
+    }
+
+    private func generateMaintenanceAgreementDocument(_ agreement: RecurringMaintenanceContract) {
+        do {
+            let url = try CustomerDocumentExporter.exportMaintenanceAgreement(
+                agreement,
+                equipmentProfiles: customerEquipmentProfiles
+            )
+            let data = try Data(contentsOf: url)
+            let attachment = ServiceDocumentAttachment(
+                customer: customer,
+                serviceCallID: agreement.lifecycle?.sourceServiceCallID,
+                maintenanceContractID: agreement.id,
+                kind: .maintenanceAgreement,
+                displayName: url.lastPathComponent,
+                caption: "Generated \(agreement.lifecycleStatusDisplayName.lowercased()) maintenance agreement PDF",
+                localFilePath: url.path,
+                contentType: "application/pdf",
+                fileSizeBytes: data.count,
+                sharedCompanySyncStatus: GunnAireBackendService.isConfigured ? "needs_attention" : nil,
+                sharedCompanySyncDetail: GunnAireBackendService.isConfigured
+                    ? "Waiting for shared company storage upload."
+                    : "Shared company storage is not configured for this build."
+            )
+            modelContext.insert(attachment)
+            agreement.linkGeneratedDocument(attachment.id)
+            try modelContext.save()
+            syncMaintenanceAgreementDocumentIfPossible(attachment, data: data)
+        } catch {
+            customerActionMessage = "Agreement saved, but its PDF could not be generated: \(error.localizedDescription)"
+        }
+    }
+
+    private func syncMaintenanceAgreementDocumentIfPossible(
+        _ attachment: ServiceDocumentAttachment,
+        data: Data
+    ) {
+        guard GunnAireBackendService.isConfigured else { return }
+        Task {
+            do {
+                let response = try await GunnAireBackendService.uploadDocument(
+                    data: data,
+                    filename: attachment.displayName,
+                    contentType: attachment.contentType,
+                    kind: attachment.kindRaw,
+                    serviceCallID: attachment.serviceCallID,
+                    maintenanceContractID: attachment.maintenanceContractID,
+                    customerEquipmentID: nil,
+                    customerName: customer.name
+                )
+                attachment.markSharedCompanyStored(id: response.id)
+                try? modelContext.save()
+            } catch {
+                attachment.markSharedCompanyUploadFailed(error.localizedDescription)
+                try? modelContext.save()
+                customerActionMessage = "Agreement saved locally. Company storage upload failed: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func recentCustomerJobRow(for call: ServiceCall) -> some View {
@@ -3142,14 +4124,18 @@ private struct CustomerEditorView: View {
         let linkedInvoice = communication.invoiceID.flatMap { id in invoices.first { $0.id == id } }
         let linkedEstimate = communication.estimateID.flatMap { id in estimates.first { $0.id == id } }
         let linkedCall = communication.serviceCallID.flatMap { id in customerServiceCalls.first { $0.id == id } }
+        let wasSent = communication.normalizedDeliveryStatus == "sent"
 
         return VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
-                Label(communication.deliveryStatus.capitalized, systemImage: communication.deliveryStatus == "sent" ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                Label(communication.deliveryStatus.capitalized, systemImage: wasSent ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.caption.weight(.semibold))
-                    .foregroundColor(communication.deliveryStatus == "sent" ? .green : .orange)
+                    .foregroundColor(wasSent ? .green : .orange)
+                Text(communication.workflow.displayName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Spacer()
-                Text(communication.createdAt.formatted(date: .abbreviated, time: .shortened))
+                Text((communication.deliveredAt ?? communication.createdAt).formatted(date: .abbreviated, time: .shortened))
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -3159,6 +4145,22 @@ private struct CustomerEditorView: View {
             Text("To: \(communication.recipient)")
                 .font(.caption)
                 .foregroundColor(.secondary)
+            if let actorEmail = communication.actorEmail {
+                Text("By \(actorEmail) • \(communication.templateVersion)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let providerStatusDetail = communication.providerStatusDetail, !wasSent {
+                Text(providerStatusDetail)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+            }
+            if communication.needsSharedCompanySync, GunnAireBackendService.isConfigured {
+                Label("Company history sync will retry", systemImage: "arrow.clockwise.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
             if let providerMessageID = communication.providerMessageID, !providerMessageID.isEmpty {
                 Text("Gmail ID: \(providerMessageID)")
                     .font(.caption2.monospaced())
@@ -3734,6 +4736,10 @@ private struct CustomerEditorView: View {
         }
         let trimmedName = newEquipmentName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
+        if let validationMessage = newEquipmentLifecycleSnapshot.validationMessage {
+            customerActionMessage = validationMessage
+            return
+        }
         let equipment: CustomerEquipment
         if let editingEquipmentID,
            let existing = equipmentProfiles.first(where: { $0.id == editingEquipmentID && $0.customer?.id == customer.id }) {
@@ -3763,7 +4769,14 @@ private struct CustomerEditorView: View {
         customerActionMessage = "\(action) equipment profile for \(customer.name)."
     }
 
+    private func beginAddingEquipment() {
+        resetEquipmentEditor()
+        isEquipmentEditorPresented = true
+        customerActionMessage = "Add the installed-system details, then save the equipment profile."
+    }
+
     private func beginEditingEquipment(_ equipment: CustomerEquipment) {
+        isEquipmentEditorPresented = true
         editingEquipmentID = equipment.id
         newEquipmentType = equipment.equipmentType ?? .splitSystemAC
         newEquipmentName = equipment.name
@@ -3791,7 +4804,18 @@ private struct CustomerEditorView: View {
         customerActionMessage = "Editing \(equipment.name)."
     }
 
+    private func applyEquipmentNameplateDraft(_ draft: EquipmentNameplateDraft) {
+        let manufacturer = draft.manufacturer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = draft.modelNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        let serial = draft.serialNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !manufacturer.isEmpty { newEquipmentManufacturer = manufacturer }
+        if !model.isEmpty { newEquipmentModel = model }
+        if !serial.isEmpty { newEquipmentSerial = serial }
+        customerActionMessage = "Applied \(draft.suggestedValueCount) reviewed data-plate value\(draft.suggestedValueCount == 1 ? "" : "s") to the equipment editor. Save the profile when the remaining details are correct."
+    }
+
     private func resetEquipmentEditor() {
+        isEquipmentEditorPresented = false
         editingEquipmentID = nil
         newEquipmentType = .splitSystemAC
         newEquipmentName = ""
@@ -3969,17 +4993,32 @@ private struct TechnicianEditorView: View {
     @State private var calendarEmail: String
     @State private var supportedEquipmentTypes: Set<HVACEquipmentType>
     @State private var qualificationNotes: String
+    @State private var tracksQualificationReview: Bool
+    @State private var qualificationReviewedAt: Date
+    @State private var qualificationReviewDueAt: Date
+    @State private var qualificationReviewedByEmail: String
     @State private var serviceAreas: String
     @State private var laborCostPerHour: String
     @State private var quickBooksTimeEntityKind: TechnicianQuickBooksTimeEntityKind
     @State private var quickBooksTimeEntityRef: String
 
-    init(technician: Technician) {
+    private let reviewerEmail: String
+
+    init(technician: Technician, reviewerEmail: String) {
+        let review = technician.qualificationReview
+        let today = Calendar.current.startOfDay(for: Date())
         self.technician = technician
+        self.reviewerEmail = AppAccess.normalizedEmail(reviewerEmail)
         _name = State(initialValue: technician.name)
         _calendarEmail = State(initialValue: technician.contactInfo ?? "")
         _supportedEquipmentTypes = State(initialValue: technician.supportedEquipmentTypes)
         _qualificationNotes = State(initialValue: technician.qualificationNotes ?? "")
+        _tracksQualificationReview = State(initialValue: review.isTracked)
+        _qualificationReviewedAt = State(initialValue: review.reviewedAt ?? today)
+        _qualificationReviewDueAt = State(
+            initialValue: review.reviewDueAt ?? Calendar.current.date(byAdding: .year, value: 1, to: today) ?? today
+        )
+        _qualificationReviewedByEmail = State(initialValue: review.reviewedByEmail ?? AppAccess.normalizedEmail(reviewerEmail))
         _serviceAreas = State(initialValue: technician.serviceAreas.joined(separator: ", "))
         _laborCostPerHour = State(initialValue: technician.laborCostPerHour.map { String(format: "%.2f", $0) } ?? "")
         _quickBooksTimeEntityKind = State(initialValue: technician.quickBooksTimeEntityKind ?? .employee)
@@ -4031,6 +5070,49 @@ private struct TechnicianEditorView: View {
                     }
                     TextField("Qualification notes", text: $qualificationNotes, axis: .vertical)
                         .lineLimit(2...4)
+
+                    DisclosureGroup {
+                        Toggle("Track qualification review", isOn: $tracksQualificationReview)
+                            .accessibilityIdentifier("QualificationReviewToggle")
+                        if tracksQualificationReview {
+                            DatePicker(
+                                "Reviewed",
+                                selection: $qualificationReviewedAt,
+                                displayedComponents: .date
+                            )
+                            .accessibilityIdentifier("QualificationReviewedAt")
+                            DatePicker(
+                                "Review due",
+                                selection: $qualificationReviewDueAt,
+                                displayedComponents: .date
+                            )
+                            .accessibilityIdentifier("QualificationReviewDueAt")
+                            if !qualificationReviewedByEmail.isEmpty {
+                                LabeledContent("Reviewed by", value: qualificationReviewedByEmail)
+                                    .font(.caption)
+                            }
+                            Text("This records when the equipment selections were reviewed. It does not replace licensing or manufacturer certification.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Optional review dates prevent an old equipment-skill profile from silently ranking as current in Dispatch.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Qualification Review")
+                            Text(qualificationReviewStatus)
+                                .font(.caption)
+                                .foregroundStyle(qualificationReviewNeedsAttention ? .orange : .secondary)
+                                .accessibilityIdentifier("QualificationReviewStatus")
+                        }
+                    }
+                    .onChange(of: tracksQualificationReview) { _, isTracked in
+                        if isTracked && qualificationReviewedByEmail.isEmpty {
+                            qualificationReviewedByEmail = reviewerEmail
+                        }
+                    }
                 }
                 Section("Dispatch Service Areas") {
                     TextField("Cities, ZIP codes, or territories", text: $serviceAreas, axis: .vertical)
@@ -4049,7 +5131,12 @@ private struct TechnicianEditorView: View {
                     Button("Save") {
                         technician.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
                         technician.contactInfo = AppAccess.normalizedEmail(calendarEmail).nilIfBlank
-                        technician.supportedEquipmentTypes = supportedEquipmentTypes
+                        technician.updateEquipmentQualifications(
+                            supportedEquipmentTypes,
+                            reviewedAt: tracksQualificationReview ? qualificationReviewedAt : nil,
+                            reviewDueAt: tracksQualificationReview ? qualificationReviewDueAt : nil,
+                            reviewedByEmail: tracksQualificationReview ? qualificationReviewedByEmail : nil
+                        )
                         technician.qualificationNotes = qualificationNotes.nilIfBlank
                         technician.serviceAreas = Technician.serviceAreas(from: serviceAreas)
                         technician.laborCostPerHour = Double(laborCostPerHour.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -4058,10 +5145,56 @@ private struct TechnicianEditorView: View {
                         technician.quickBooksTimeEntityRef = timeEntityRef.isEmpty ? nil : timeEntityRef
                         dismiss()
                     }
-                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        qualificationReviewValidationMessage != nil
+                    )
                 }
             }
         }
         .tint(Color.brandGold)
+    }
+
+    private var draftQualificationReview: TechnicianQualificationReview {
+        TechnicianQualificationReview(
+            reviewedAt: tracksQualificationReview ? qualificationReviewedAt : nil,
+            reviewDueAt: tracksQualificationReview ? qualificationReviewDueAt : nil,
+            reviewedByEmail: tracksQualificationReview ? qualificationReviewedByEmail : nil
+        )
+    }
+
+    private var qualificationReviewValidationMessage: String? {
+        guard tracksQualificationReview else { return nil }
+        guard !supportedEquipmentTypes.isEmpty else {
+            return "Select at least one equipment qualification before tracking its review."
+        }
+        return draftQualificationReview.validationMessage()
+    }
+
+    private var qualificationReviewStatus: String {
+        if let qualificationReviewValidationMessage {
+            return qualificationReviewValidationMessage
+        }
+        guard tracksQualificationReview else {
+            return supportedEquipmentTypes.isEmpty ? "Not configured" : "Review dates not tracked"
+        }
+        let today = Calendar.current.startOfDay(for: Date())
+        let due = Calendar.current.startOfDay(for: qualificationReviewDueAt)
+        if due < today {
+            return "Expired \(qualificationReviewDueAt.formatted(date: .abbreviated, time: .omitted))"
+        }
+        let warningHorizon = Calendar.current.date(byAdding: .day, value: 30, to: today) ?? today
+        if due <= warningHorizon {
+            return "Due soon · \(qualificationReviewDueAt.formatted(date: .abbreviated, time: .omitted))"
+        }
+        return "Current through \(qualificationReviewDueAt.formatted(date: .abbreviated, time: .omitted))"
+    }
+
+    private var qualificationReviewNeedsAttention: Bool {
+        if qualificationReviewValidationMessage != nil { return true }
+        guard tracksQualificationReview else { return false }
+        let today = Calendar.current.startOfDay(for: Date())
+        let warningHorizon = Calendar.current.date(byAdding: .day, value: 30, to: today) ?? today
+        return Calendar.current.startOfDay(for: qualificationReviewDueAt) <= warningHorizon
     }
 }

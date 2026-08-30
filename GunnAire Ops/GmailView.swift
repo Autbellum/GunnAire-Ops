@@ -8,6 +8,7 @@ struct GmailView: View {
     @Query private var estimates: [Estimate]
     @Query private var invoices: [Invoice]
     @Query private var serviceCalls: [ServiceCall]
+    @Query private var recurringContracts: [RecurringMaintenanceContract]
 
     @State private var messages: [GmailMessageDetail] = []
     @State private var isLoading = false
@@ -18,6 +19,10 @@ struct GmailView: View {
     @State private var composeDraft: GmailDraft?
     @State private var didConsumePendingDraft = false
 
+    private var canUseGoogleIntegration: Bool {
+        googleAuth.canUseCurrentBusinessIdentity
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -25,6 +30,12 @@ struct GmailView: View {
                     if !googleAuth.isAuthenticated {
                         Text("Connect Google in Settings before using Mail.")
                             .foregroundColor(.secondary)
+                    } else if !canUseGoogleIntegration {
+                        Label(
+                            "The connected Google account does not match this GunnAire login. Disconnect Google in Settings, then connect the matching business account.",
+                            systemImage: "person.crop.circle.badge.xmark"
+                        )
+                        .foregroundStyle(.orange)
                     } else if isLoading {
                         ProgressView("Loading mail...")
                     } else if messages.isEmpty {
@@ -86,7 +97,7 @@ struct GmailView: View {
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
-                    .disabled(isLoading || !googleAuth.isAuthenticated)
+                    .disabled(isLoading || !canUseGoogleIntegration)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -94,11 +105,11 @@ struct GmailView: View {
                     } label: {
                         Label("Compose", systemImage: "square.and.pencil")
                     }
-                    .disabled(!googleAuth.isAuthenticated)
+                    .disabled(!canUseGoogleIntegration)
                 }
             }
             .onAppear {
-                if googleAuth.isAuthenticated && messages.isEmpty {
+                if canUseGoogleIntegration && messages.isEmpty {
                     loadMessages()
                 }
                 applyPendingDraftIfNeeded()
@@ -133,8 +144,10 @@ struct GmailView: View {
     }
 
     private func loadMessages() {
-        guard googleAuth.isAuthenticated else {
-            statusMessage = "Connect Google in Settings first."
+        guard canUseGoogleIntegration else {
+            statusMessage = googleAuth.isAuthenticated
+                ? GoogleAuthError.businessAccountMismatch.localizedDescription
+                : "Connect Google in Settings first."
             return
         }
 
@@ -156,11 +169,61 @@ struct GmailView: View {
     }
 
     private func sendMessage(to: String, subject: String, body: String, threadID: String?, attachments: [GmailAttachment], auditDraft: GmailDraft?) {
+        guard canUseGoogleIntegration else {
+            statusMessage = GoogleAuthError.businessAccountMismatch.localizedDescription
+            return
+        }
         let recipient = AppAccess.normalizedEmail(to)
         let linkedCustomer = auditDraft?.customerID.flatMap { customerID in
             customers.first { $0.id == customerID }
         } ?? customers.first { AppAccess.normalizedEmail($0.email) == recipient }
-        if let linkedCustomer, !linkedCustomer.allowsTransactionalEmail {
+        if let auditDraft {
+            guard let linkedCustomer else {
+                statusMessage = "Email was not sent because its customer record is no longer available. Open the record and draft it again."
+                return
+            }
+            let expectedRecipient = AppAccess.normalizedEmail(linkedCustomer.email)
+            guard !expectedRecipient.isEmpty, recipient == expectedRecipient else {
+                statusMessage = "Email was not sent because the recipient no longer matches the linked customer. Return to the customer or job and draft it again."
+                return
+            }
+            guard CustomerCommunicationWorkflow.contextIsValid(
+                workflow: auditDraft.workflow,
+                customerID: auditDraft.customerID,
+                serviceCallID: auditDraft.serviceCallID,
+                invoiceID: auditDraft.invoiceID,
+                estimateID: auditDraft.estimateID,
+                maintenanceContractID: auditDraft.maintenanceContractID,
+                estimates: estimates,
+                invoices: invoices,
+                serviceCalls: serviceCalls,
+                recurringContracts: recurringContracts
+            ) else {
+                statusMessage = "Email was not sent because the linked job, agreement, estimate, or invoice changed. Return to that record and draft it again."
+                return
+            }
+            let consentAllowed = auditDraft.workflow.requiresMarketingConsent
+                ? linkedCustomer.allowsMarketing
+                : linkedCustomer.allowsTransactionalEmail
+            if !consentAllowed {
+                recordCustomerCommunicationAttempt(
+                    from: auditDraft,
+                    customer: linkedCustomer,
+                    to: to,
+                    subject: subject,
+                    attachments: attachments,
+                    deliveryStatus: "suppressed",
+                    providerMessageID: nil,
+                    providerStatusDetail: auditDraft.workflow.requiresMarketingConsent
+                        ? "Marketing preference is off."
+                        : "Transactional email preference is off."
+                )
+                statusMessage = auditDraft.workflow.requiresMarketingConsent
+                    ? "Email was not sent because \(linkedCustomer.name)'s marketing preference is off."
+                    : "Email was not sent because \(linkedCustomer.name)'s service and billing email preference is off. Update Contact Preferences before sending."
+                return
+            }
+        } else if let linkedCustomer, !linkedCustomer.allowsTransactionalEmail {
             statusMessage = "Email was not sent because \(linkedCustomer.name)'s service and billing email preference is off. Update Contact Preferences in the customer record before sending."
             return
         }
@@ -169,18 +232,37 @@ struct GmailView: View {
             DispatchQueue.main.async {
                 switch result {
                 case .success(let sentMessage):
-                    if let auditDraft {
-                        recordSentCustomerCommunication(
+                    if let auditDraft,
+                       let customerID = auditDraft.customerID,
+                       let linkedCustomer = customers.first(where: { $0.id == customerID }) {
+                        recordCustomerCommunicationAttempt(
                             from: auditDraft,
+                            customer: linkedCustomer,
                             to: to,
                             subject: subject,
                             attachments: attachments,
-                            providerMessageID: sentMessage.id
+                            deliveryStatus: "sent",
+                            providerMessageID: sentMessage.id,
+                            providerStatusDetail: nil
                         )
                     }
                     statusMessage = "Message sent."
                     loadMessages()
                 case .failure(let error):
+                    if let auditDraft,
+                       let customerID = auditDraft.customerID,
+                       let linkedCustomer = customers.first(where: { $0.id == customerID }) {
+                        recordCustomerCommunicationAttempt(
+                            from: auditDraft,
+                            customer: linkedCustomer,
+                            to: to,
+                            subject: subject,
+                            attachments: attachments,
+                            deliveryStatus: "failed",
+                            providerMessageID: nil,
+                            providerStatusDetail: error.localizedDescription
+                        )
+                    }
                     statusMessage = "Send failed: \(error.localizedDescription)"
                 }
             }
@@ -201,51 +283,66 @@ struct GmailView: View {
             serviceCallID: draft.serviceCallID,
             invoiceID: draft.invoiceID,
             estimateID: draft.estimateID,
+            maintenanceContractID: draft.maintenanceContractID,
             workflow: draft.workflow
         )
     }
 
-    private func recordSentCustomerCommunication(
+    private func recordCustomerCommunicationAttempt(
         from draft: GmailDraft,
+        customer: Customer,
         to: String,
         subject: String,
         attachments: [GmailAttachment],
-        providerMessageID: String
+        deliveryStatus: String,
+        providerMessageID: String?,
+        providerStatusDetail: String?
     ) {
-        guard let customerID = draft.customerID,
-              let customer = customers.first(where: { $0.id == customerID }) else { return }
+        let now = Date()
         let communication = CustomerCommunication(
             customer: customer,
             serviceCallID: draft.serviceCallID,
             invoiceID: draft.invoiceID,
             estimateID: draft.estimateID,
+            maintenanceContractID: draft.maintenanceContractID,
             recipient: to,
             subject: subject,
-            deliveryStatus: "sent",
+            deliveryStatus: deliveryStatus,
+            workflow: draft.workflow,
+            actorEmail: googleAuth.signedInEmail,
+            consentSnapshot: CustomerCommunicationConsentSnapshot(customer: customer),
+            providerStatusDetail: providerStatusDetail,
+            deliveredAt: deliveryStatus == "sent" ? now : nil,
             attachmentFileNames: attachments.map(\.fileName),
-            providerMessageID: providerMessageID
+            providerMessageID: providerMessageID,
+            createdAt: now
         )
         modelContext.insert(communication)
-        CustomerCommunicationWorkflow.applyConfirmedSend(
-            workflow: draft.workflow,
-            customerID: draft.customerID,
-            serviceCallID: draft.serviceCallID,
-            invoiceID: draft.invoiceID,
-            estimateID: draft.estimateID,
-            estimates: estimates,
-            invoices: invoices,
-            serviceCalls: serviceCalls,
-            actorEmail: googleAuth.signedInEmail,
-            in: modelContext
-        )
+        if deliveryStatus == "sent" {
+            CustomerCommunicationWorkflow.applyConfirmedSend(
+                workflow: draft.workflow,
+                customerID: draft.customerID,
+                serviceCallID: draft.serviceCallID,
+                invoiceID: draft.invoiceID,
+                estimateID: draft.estimateID,
+                maintenanceContractID: draft.maintenanceContractID,
+                estimates: estimates,
+                invoices: invoices,
+                serviceCalls: serviceCalls,
+                recurringContracts: recurringContracts,
+                now: now,
+                actorEmail: googleAuth.signedInEmail,
+                in: modelContext
+            )
+        }
         try? modelContext.save()
         guard GunnAireBackendService.isConfigured else { return }
         Task {
             do {
                 let remote = try await GunnAireBackendService.uploadCustomerCommunication(communication)
-                communication.backendCommunicationID = remote.id
+                communication.markSharedCompanySynced(id: remote.id)
             } catch {
-                communication.backendSyncError = error.localizedDescription
+                communication.markSharedCompanySyncFailed(error.localizedDescription)
             }
             try? modelContext.save()
         }
@@ -595,6 +692,7 @@ private struct GmailDraft: Identifiable {
     let serviceCallID: UUID?
     let invoiceID: UUID?
     let estimateID: UUID?
+    let maintenanceContractID: UUID?
     let workflow: GunnAireMailWorkflow
 
     init(
@@ -607,6 +705,7 @@ private struct GmailDraft: Identifiable {
         serviceCallID: UUID? = nil,
         invoiceID: UUID? = nil,
         estimateID: UUID? = nil,
+        maintenanceContractID: UUID? = nil,
         workflow: GunnAireMailWorkflow = .general
     ) {
         self.to = to
@@ -618,6 +717,7 @@ private struct GmailDraft: Identifiable {
         self.serviceCallID = serviceCallID
         self.invoiceID = invoiceID
         self.estimateID = estimateID
+        self.maintenanceContractID = maintenanceContractID
         self.workflow = workflow
     }
 }

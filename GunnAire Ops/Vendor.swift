@@ -43,6 +43,97 @@ enum SupplierConnectorKind: String, Codable, CaseIterable, Identifiable {
     var requiresSupplierOnboarding: Bool { self != .genericCatalog }
 }
 
+struct SupplierConnectorReadiness: Codable, Identifiable, Equatable {
+    let contractVersion: Int
+    let kind: SupplierConnectorKind
+    let displayName: String
+    let provider: String
+    let status: String
+    let detail: String
+    let capabilities: [String]
+    let canSubmitOrders: Bool
+    let onboardingURL: String?
+
+    var id: SupplierConnectorKind { kind }
+
+    var isReady: Bool {
+        canSubmitOrders && status.caseInsensitiveCompare("ready") == .orderedSame
+    }
+
+    var statusLabel: String {
+        switch status {
+        case "ready": "Ready"
+        case "onboardingRequired": "Onboarding required"
+        case "partnerGated": "Partner approval required"
+        case "adapterRequired": "Server adapter required"
+        default: "Unavailable"
+        }
+    }
+}
+
+enum SupplierConnectorSelectionPolicy {
+    static func orderableConnectors(
+        from connectors: [SupplierConnectorReadiness]
+    ) -> [SupplierConnectorReadiness] {
+        connectors
+            .filter(\.isReady)
+            .sorted { lhs, rhs in
+                if lhs.provider != rhs.provider { return lhs.provider < rhs.provider }
+                return lhs.displayName < rhs.displayName
+            }
+    }
+
+    static func preferredConnectorKind(
+        for vendorName: String,
+        from connectors: [SupplierConnectorReadiness]
+    ) -> SupplierConnectorKind? {
+        orderableConnectors(for: vendorName, from: connectors).first?.kind
+    }
+
+    static func orderableConnectors(
+        for vendorName: String,
+        from connectors: [SupplierConnectorReadiness]
+    ) -> [SupplierConnectorReadiness] {
+        let normalizedVendor = vendorName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let ready = orderableConnectors(from: connectors)
+        if normalizedVendor.contains("johnstone") {
+            return ready.filter { connector in
+                connector.kind == .johnstoneDirectConnect || connector.kind == .johnstonePunchOut
+            }
+        }
+        if normalizedVendor.contains("lennox") {
+            return ready.filter { $0.kind == .lennoxPartner }
+        }
+        let providerMatches = ready.filter {
+            normalizedVendor.contains($0.provider.lowercased()) ||
+                $0.provider.lowercased().contains(normalizedVendor)
+        }
+        return providerMatches.isEmpty
+            ? ready.filter { $0.kind == .genericCatalog }
+            : providerMatches
+    }
+}
+
+struct SupplierConnectorOrderAcceptance: Equatable {
+    let contractVersion: Int
+    let purchaseOrderID: UUID
+    let purchaseOrderNumber: String
+    let connectorKind: SupplierConnectorKind
+    let externalOrderID: String
+    let reference: String
+    let supplierLocation: String?
+    let confirmedUnitCost: Double
+    let confirmedShippingCost: Double
+    let currencyCode: String
+    let confirmedByEmail: String
+    let confirmedAt: Date
+    let priceAvailabilityCheckedAt: Date
+    let idempotencyKey: String
+    let replayed: Bool
+}
+
 struct SupplierCatalogQuery: Codable, Equatable {
     let searchTerm: String
     let branchID: String?

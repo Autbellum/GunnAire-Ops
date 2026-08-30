@@ -12,6 +12,13 @@ struct GoogleOAuthTokens: Codable {
     let expiration: Date
 }
 
+struct GunnAireGoogleApplicationSession: Codable, Equatable {
+    let token: String
+    let expiresAt: String
+    let email: String
+    let googleUserIdentifier: String
+}
+
 struct GoogleUserProfile: Codable {
     let sub: String
     let email: String?
@@ -220,6 +227,14 @@ struct GmailThreadResponse: Codable {
     let messages: [GmailMessageDetail]
 }
 
+enum GoogleAccountLinkPolicy {
+    static func canUseIntegration(primaryBusinessEmail: String?, googleEmail: String?) -> Bool {
+        let primary = AppAccess.normalizedEmail(primaryBusinessEmail)
+        let google = AppAccess.normalizedEmail(googleEmail)
+        return !primary.isEmpty && primary == google
+    }
+}
+
 final class GoogleAuthManager: NSObject, ObservableObject {
     static let shared = GoogleAuthManager()
     static var callbackScheme: String {
@@ -243,6 +258,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     @Published private(set) var idToken: String?
     @Published private(set) var tokenExpiry: Date?
     @Published private(set) var signedInEmail: String?
+    @Published private(set) var applicationSessionToken: String?
 
     private static let signedInEmailStorageKey = "SignedInGoogleEmail"
 
@@ -252,13 +268,27 @@ final class GoogleAuthManager: NSObject, ObservableObject {
 
     private let tokenStorageKey = "GoogleOAuthTokens"
     private let keychainAccount = "GoogleOAuthTokens"
+    private let applicationSessionKeychainAccount = "GunnAireGoogleApplicationSession"
 
     private override init() {
         super.init()
         loadTokens()
+        loadApplicationSession()
+    }
+
+    var canUseCurrentBusinessIdentity: Bool {
+        isAuthenticated && GoogleAccountLinkPolicy.canUseIntegration(
+            primaryBusinessEmail: AppIdentity.currentEmail,
+            googleEmail: signedInEmail
+        )
+    }
+
+    private var businessAccountLinkError: GoogleAuthError? {
+        canUseCurrentBusinessIdentity ? nil : .businessAccountMismatch
     }
 
     func signOut() {
+        let tokenToRevoke = applicationSessionToken
         isAuthenticated = false
         accessToken = nil
         refreshToken = nil
@@ -270,6 +300,46 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         try? KeychainStore.remove(account: keychainAccount)
         UserDefaults.standard.removeObject(forKey: tokenStorageKey)
         UserDefaults.standard.removeObject(forKey: Self.signedInEmailStorageKey)
+        clearApplicationSession()
+        if let tokenToRevoke, !tokenToRevoke.isEmpty {
+            Task {
+                try? await GunnAireBackendService.revokeApplicationSession(tokenToRevoke)
+            }
+        }
+    }
+
+    @MainActor
+    func establishBusinessApplicationSession(
+        for profile: GoogleUserProfile
+    ) async throws -> BackendAppUserRecord {
+        guard let identityToken = idToken, !identityToken.isEmpty else {
+            throw GoogleAuthError.missingIdentityToken
+        }
+        let response = try await GunnAireBackendService.exchangeGoogleIdentity(
+            identityToken: identityToken
+        )
+        let profileEmail = AppAccess.normalizedEmail(profile.email)
+        let responseEmail = AppAccess.normalizedEmail(response.user.email)
+        guard response.providerSubject == profile.sub,
+              !profileEmail.isEmpty,
+              profileEmail == responseEmail else {
+            try? await GunnAireBackendService.revokeApplicationSession(response.sessionToken)
+            throw GoogleAuthError.businessSessionMismatch
+        }
+        let session = GunnAireGoogleApplicationSession(
+            token: response.sessionToken,
+            expiresAt: response.expiresAt,
+            email: responseEmail,
+            googleUserIdentifier: profile.sub
+        )
+        do {
+            try KeychainStore.saveCodable(session, account: applicationSessionKeychainAccount)
+        } catch {
+            try? await GunnAireBackendService.revokeApplicationSession(response.sessionToken)
+            throw GoogleAuthError.sessionStorageFailed
+        }
+        applicationSessionToken = session.token
+        return response.user
     }
 
     func startSignIn(presentationContext: ASWebAuthenticationPresentationContextProviding, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -528,6 +598,14 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                         return
                     }
                     self.rememberSignedInEmail(profile.email)
+                    guard GoogleAccountLinkPolicy.canUseIntegration(
+                        primaryBusinessEmail: AppIdentity.currentEmail,
+                        googleEmail: profile.email
+                    ) else {
+                        self.signOut()
+                        completion(.failure(GoogleAuthError.businessAccountMismatch))
+                        return
+                    }
                     completion(.success(profile))
                 case .failure(let error):
                     completion(.failure(error))
@@ -537,6 +615,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func fetchCalendars(completion: @escaping (Result<[GoogleCalendar], Error>) -> Void) {
+        if let businessAccountLinkError {
+            completion(.failure(businessAccountLinkError))
+            return
+        }
         authorizedGET("https://www.googleapis.com/calendar/v3/users/me/calendarList") { (result: Result<GoogleCalendarListResponse, Error>) in
             switch result {
             case .success(let response): completion(.success(response.items))
@@ -546,6 +628,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func fetchCalendarEvents(calendarID: String, timeMin: Date? = nil, timeMax: Date? = nil, completion: @escaping (Result<[GoogleCalendarEvent], Error>) -> Void) {
+        if let businessAccountLinkError {
+            completion(.failure(businessAccountLinkError))
+            return
+        }
         var components = URLComponents(string: "https://www.googleapis.com/calendar/v3/calendars/\(calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID)/events")
         var queryItems = [
             URLQueryItem(name: "singleEvents", value: "true"),
@@ -573,6 +659,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func fetchCalendarEvent(calendarID: String = "primary", eventID: String, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
+        if let businessAccountLinkError {
+            completion(.failure(businessAccountLinkError))
+            return
+        }
         let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
         let encodedEventID = eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID
         guard let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events/\(encodedEventID)") else {
@@ -583,6 +673,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func createCalendarEvent(calendarID: String = "primary", event: GoogleWritableCalendarEvent, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
+        if let businessAccountLinkError {
+            completion(.failure(businessAccountLinkError))
+            return
+        }
         let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
         guard let url = URL(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events") else {
             completion(.failure(GoogleAuthError.invalidEndpoint))
@@ -597,6 +691,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func patchCalendarEvent(calendarID: String = "primary", eventID: String, patch: GoogleCalendarEventPatch, completion: @escaping (Result<GoogleCalendarEvent, Error>) -> Void) {
+        if let businessAccountLinkError {
+            completion(.failure(businessAccountLinkError))
+            return
+        }
         let encodedPatch: Data
         do {
             encodedPatch = try JSONEncoder().encode(patch)
@@ -619,6 +717,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func deleteCalendarEvent(calendarID: String = "primary", eventID: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        if let businessAccountLinkError {
+            completion(.failure(businessAccountLinkError))
+            return
+        }
         let encodedCalendarID = calendarID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? calendarID
         let encodedEventID = eventID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? eventID
         var components = URLComponents(string: "https://www.googleapis.com/calendar/v3/calendars/\(encodedCalendarID)/events/\(encodedEventID)")
@@ -631,6 +733,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func fetchGmailMessages(maxResults: Int = 25, query: String? = nil, completion: @escaping (Result<[GmailMessageDetail], Error>) -> Void) {
+        if let businessAccountLinkError {
+            completion(.failure(businessAccountLinkError))
+            return
+        }
         var components = URLComponents(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages")
         var queryItems = [URLQueryItem(name: "maxResults", value: String(maxResults))]
         if let query, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -654,12 +760,20 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func fetchGmailMessage(id: String, completion: @escaping (Result<GmailMessageDetail, Error>) -> Void) {
+        if let businessAccountLinkError {
+            completion(.failure(businessAccountLinkError))
+            return
+        }
         let escapedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)?format=full"
         authorizedGET(url, completion: completion)
     }
 
     func fetchGmailThread(id: String, completion: @escaping (Result<[GmailMessageDetail], Error>) -> Void) {
+        if let businessAccountLinkError {
+            completion(.failure(businessAccountLinkError))
+            return
+        }
         let escapedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let url = "https://gmail.googleapis.com/gmail/v1/users/me/threads/\(escapedID)?format=full"
         authorizedGET(url) { (result: Result<GmailThreadResponse, Error>) in
@@ -680,6 +794,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         attachments: [GmailAttachment] = [],
         completion: @escaping (Result<GmailMessageReference, Error>) -> Void
     ) {
+        if let businessAccountLinkError {
+            completion(.failure(businessAccountLinkError))
+            return
+        }
         let message = Self.makeGmailRawMessage(
             to: to,
             subject: subject,
@@ -989,6 +1107,29 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         applyTokens(stored)
     }
 
+    private func loadApplicationSession() {
+        guard let stored = try? KeychainStore.loadCodable(
+            GunnAireGoogleApplicationSession.self,
+            account: applicationSessionKeychainAccount
+        ), Self.isFutureApplicationSession(stored.expiresAt) else {
+            clearApplicationSession()
+            return
+        }
+        applicationSessionToken = stored.token
+    }
+
+    private func clearApplicationSession() {
+        applicationSessionToken = nil
+        try? KeychainStore.remove(account: applicationSessionKeychainAccount)
+    }
+
+    private static func isFutureApplicationSession(_ value: String) -> Bool {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let parsed = formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        return parsed.map { $0 > Date() } ?? false
+    }
+
     private func storeTokens(_ tokens: GoogleOAuthTokens) {
         try? KeychainStore.saveCodable(tokens, account: keychainAccount)
         if let encoded = try? JSONEncoder().encode(tokens) {
@@ -1115,6 +1256,10 @@ enum GoogleAuthError: Error, LocalizedError {
     case http(statusCode: Int)
     case providerError(String, String?)
     case domainNotAllowed(String)
+    case businessAccountMismatch
+    case missingIdentityToken
+    case businessSessionMismatch
+    case sessionStorageFailed
     case unsafeCalendarPatch(String)
     case unknown
 
@@ -1136,6 +1281,10 @@ enum GoogleAuthError: Error, LocalizedError {
         case .http(let statusCode): return "Google request failed (HTTP \(statusCode))."
         case .providerError(let code, let description): return "Google OAuth/API error: \(code)\(description.map { " - \($0)" } ?? "")"
         case .domainNotAllowed(let domain): return "Access is restricted to \(domain) Google accounts."
+        case .businessAccountMismatch: return "The connected Google account must match your signed-in GunnAire business email. Disconnect Google, then reconnect the matching account."
+        case .missingIdentityToken: return "Google did not return a business identity token. Sign in with Google again."
+        case .businessSessionMismatch: return "Google returned an identity that did not match the verified GunnAire business session."
+        case .sessionStorageFailed: return "The verified Google business session could not be secured on this device."
         case .unsafeCalendarPatch(let keys): return "Blocked unsafe Google Calendar update that would overwrite event details: \(keys)."
         case .unknown: return "An unknown error occurred."
         }

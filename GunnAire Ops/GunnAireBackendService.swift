@@ -14,6 +14,15 @@ struct BackendSessionRecord: Codable {
     let user: BackendAppUserRecord
 }
 
+struct BackendApplicationSessionResponse: Codable {
+    let sessionToken: String
+    let expiresAt: String
+    let providerSubject: String
+    let user: BackendAppUserRecord
+}
+
+typealias BackendAppleSessionResponse = BackendApplicationSessionResponse
+
 struct BackendDocumentUploadResponse: Codable {
     let id: String
     let filename: String
@@ -29,11 +38,42 @@ struct BackendDocumentRecord: Codable, Identifiable {
     let serviceCallID: String?
     let invoiceID: String?
     let estimateID: String?
+    let maintenanceContractID: String?
     let customerEquipmentID: String?
     let equipmentName: String?
     let customerName: String?
     let storedPath: String?
     let createdAt: String?
+
+    init(
+        id: String,
+        filename: String,
+        contentType: String,
+        kind: String,
+        serviceCallID: String?,
+        invoiceID: String?,
+        estimateID: String?,
+        maintenanceContractID: String? = nil,
+        customerEquipmentID: String?,
+        equipmentName: String?,
+        customerName: String?,
+        storedPath: String?,
+        createdAt: String?
+    ) {
+        self.id = id
+        self.filename = filename
+        self.contentType = contentType
+        self.kind = kind
+        self.serviceCallID = serviceCallID
+        self.invoiceID = invoiceID
+        self.estimateID = estimateID
+        self.maintenanceContractID = maintenanceContractID
+        self.customerEquipmentID = customerEquipmentID
+        self.equipmentName = equipmentName
+        self.customerName = customerName
+        self.storedPath = storedPath
+        self.createdAt = createdAt
+    }
 
     var serviceCallUUID: UUID? {
         serviceCallID.flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
@@ -45,6 +85,10 @@ struct BackendDocumentRecord: Codable, Identifiable {
 
     var estimateUUID: UUID? {
         estimateID.flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
+    var maintenanceContractUUID: UUID? {
+        maintenanceContractID.flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
     var customerEquipmentUUID: UUID? {
@@ -148,11 +192,20 @@ struct BackendFieldPaymentAssignmentRecord: Codable, Identifiable {
 /// pending assignment is announced once, so technicians are not interrupted
 /// repeatedly while still receiving every collection task assigned to them.
 enum FieldPaymentAssignmentPromptQueue {
+    static let announcedIDsDefaultsKey = "GunnAireAnnouncedFieldPaymentAssignmentIDs"
+
     static func nextUnannouncedPendingAssignment(
         from assignments: [BackendFieldPaymentAssignmentRecord],
         announcedIDs: Set<String>
     ) -> BackendFieldPaymentAssignmentRecord? {
-        assignments.first { $0.status == "pending" && !announcedIDs.contains($0.id) }
+        assignments
+            .filter { $0.status == "pending" && !announcedIDs.contains($0.id) }
+            .min { lhs, rhs in
+                if lhs.createdAt != rhs.createdAt {
+                    return lhs.createdAt < rhs.createdAt
+                }
+                return lhs.id < rhs.id
+            }
     }
 
     static func recordingAnnouncement(
@@ -166,6 +219,35 @@ enum FieldPaymentAssignmentPromptQueue {
     }
 }
 
+enum FieldCollectionInvoiceRouteDecision: Equatable {
+    case waitingForAuthorizedInvoice
+    case waitingForAuthoritativeTotal(String)
+    case collect
+    case alreadySettled
+}
+
+/// Keeps a backend assignment route durable while CloudKit finishes delivering
+/// the authorized operational graph. A missing invoice is never treated as
+/// authorization; the route opens only after the ordinary field-visibility
+/// filter supplies the invoice locally.
+enum FieldCollectionInvoiceRouteResolver {
+    static func decision(
+        invoiceID: UUID,
+        visibleInvoices: [Invoice],
+        payments: [Payment]
+    ) -> FieldCollectionInvoiceRouteDecision {
+        guard let invoice = visibleInvoices.first(where: { $0.id == invoiceID }) else {
+            return .waitingForAuthorizedInvoice
+        }
+        if let blockedMessage = invoice.paymentCollectionBlockedMessage {
+            return .waitingForAuthoritativeTotal(blockedMessage)
+        }
+        return Invoice.outstandingBalance(for: invoice, payments: payments) > 0.005
+            ? .collect
+            : .alreadySettled
+    }
+}
+
 struct BackendCustomerCommunicationRecord: Codable, Identifiable {
     let id: String
     let customerName: String
@@ -173,11 +255,18 @@ struct BackendCustomerCommunicationRecord: Codable, Identifiable {
     let serviceCallID: String?
     let invoiceID: String?
     let estimateID: String?
+    let maintenanceContractID: String?
     let channel: String
     let direction: String
     let recipient: String
     let subject: String
     let deliveryStatus: String
+    let workflow: String?
+    let templateVersion: String?
+    let actorEmail: String?
+    let consentSnapshot: CustomerCommunicationConsentSnapshot?
+    let providerStatusDetail: String?
+    let deliveredAt: String?
     let attachmentFileNames: [String]
     let providerMessageID: String?
     let occurredAt: String
@@ -193,6 +282,7 @@ struct BackendServiceRequestRecord: Codable, Identifiable {
     let requestedServiceType: String
     let urgency: String
     let summary: String
+    let source: String?
     let preferredDate: String?
     let createdAt: String
 }
@@ -229,6 +319,28 @@ struct BackendReadinessSnapshot: Codable, Equatable {
 
     var isReady: Bool { status.caseInsensitiveCompare("ready") == .orderedSame }
     var attentionCount: Int { components.filter { !$0.isReady }.count }
+}
+
+struct BackendStaffPushDeviceRecord: Codable, Equatable {
+    let installationID: String
+    let platform: String
+    let environment: String
+    let bundleID: String
+    let appVersion: String?
+    let appBuild: String?
+    let registeredAt: String
+    let updatedAt: String
+    let isActive: Bool
+}
+
+struct BackendStaffPushRegistrationResponse: Codable, Equatable {
+    let registered: Bool
+    let device: BackendStaffPushDeviceRecord?
+}
+
+struct BackendStaffPushDeactivationResponse: Codable, Equatable {
+    let installationID: String
+    let deactivated: Bool
 }
 
 /// Non-sensitive QuickBooks change metadata received by the backend's signed
@@ -272,6 +384,8 @@ struct BackendCustomerPortalLinkRecord: Codable, Identifiable {
     let balanceDue: Double?
     let expiresAt: String
     let revokedAt: String?
+    let openedCount: Int?
+    let lastOpenedAt: String?
     let createdAt: String
     let createdBy: String
 }
@@ -281,7 +395,7 @@ enum GunnAireBackendError: LocalizedError {
     case invalidURL(String)
     case invalidResponse
     case server(statusCode: Int, message: String)
-    case missingGoogleIdentityToken
+    case missingBusinessIdentity
     case invalidPaymentMethod(String)
 
     var errorDescription: String? {
@@ -294,8 +408,8 @@ enum GunnAireBackendError: LocalizedError {
             return "The GunnAire backend returned an invalid response."
         case .server(let statusCode, let message):
             return "The GunnAire backend returned HTTP \(statusCode): \(message)"
-        case .missingGoogleIdentityToken:
-            return "Sign in with Google again before accessing the shared business server."
+        case .missingBusinessIdentity:
+            return "Sign in with Apple or Google again before accessing the shared business server."
         case .invalidPaymentMethod(let method):
             return "The payment method \(method) cannot be uploaded to the shared company queue."
         }
@@ -303,6 +417,22 @@ enum GunnAireBackendError: LocalizedError {
 }
 
 enum GunnAireBackendService {
+    private struct AppleIdentityPayload: Codable {
+        let identityToken: String
+        let nonce: String
+    }
+    private struct GoogleIdentityPayload: Codable {
+        let identityToken: String
+    }
+    private struct StaffPushDevicePayload: Codable {
+        let installationID: String
+        let deviceToken: String
+        let platform: String
+        let environment: String
+        let bundleID: String
+        let appVersion: String
+        let appBuild: String
+    }
     private struct QuickBooksCodePayload: Codable {
         let code: String
         let realmID: String
@@ -311,6 +441,31 @@ enum GunnAireBackendService {
     private struct QuickBooksRefreshPayload: Codable {
         let realmID: String
         let environment: String
+    }
+    private struct QuickBooksAccountingConfigurationPayload: Codable {
+        let defaultSalesItemRef: String
+        let defaultSalesItemName: String
+        let defaultSalesItemType: String
+        let defaultIncomeAccountRef: String
+        let defaultIncomeAccountName: String
+        let defaultIncomeAccountType: String
+        let defaultExpenseAccountRef: String
+        let defaultExpenseAccountName: String
+        let defaultExpenseAccountType: String
+        let defaultAPAccountRef: String
+        let defaultAPAccountName: String
+        let defaultAPAccountType: String
+        let defaultBankAccountRef: String
+        let defaultBankAccountName: String
+        let defaultBankAccountType: String
+        let defaultCreditCardAccountRef: String
+        let defaultCreditCardAccountName: String
+        let defaultCreditCardAccountType: String
+    }
+    private struct QuickBooksAccountingConfigurationResponse: Codable {
+        let realmID: String
+        let environment: String
+        let configuration: BackendQuickBooksAccountingConfiguration?
     }
     private struct QuickBooksTokenResponse: Codable {
         let accessToken: String
@@ -352,6 +507,55 @@ enum GunnAireBackendService {
         let events: [BackendQuickBooksWebhookEvent]
     }
 
+    private struct SupplierConnectorsResponse: Codable {
+        let connectors: [SupplierConnectorReadiness]
+    }
+
+    private struct SupplierOrderPayload: Codable {
+        let contractVersion: Int
+        let connectorKind: SupplierConnectorKind
+        let purchaseOrderID: String
+        let purchaseOrderNumber: String
+        let serviceCallID: String?
+        let vendorName: String
+        let itemName: String
+        let internalSKU: String?
+        let supplierPartNumber: String?
+        let quantity: Double
+        let expectedUnitCost: Double
+        let expectedShippingCost: Double
+        let currencyCode: String
+        let supplierLocation: String?
+        let priceAvailabilityCheckedAt: String?
+        let orderNotes: String?
+    }
+
+    private struct SupplierOrderAcceptanceWire: Codable {
+        let contractVersion: Int
+        let purchaseOrderID: String
+        let purchaseOrderNumber: String
+        let connectorKind: SupplierConnectorKind
+        let externalOrderID: String
+        let reference: String
+        let supplierLocation: String?
+        let confirmedUnitCost: Double
+        let confirmedShippingCost: Double
+        let currencyCode: String
+        let confirmedByEmail: String
+        let confirmedAt: String
+        let priceAvailabilityCheckedAt: String
+        let idempotencyKey: String
+        let replayed: Bool
+    }
+
+    private struct SupplierOrderResponse: Codable {
+        let acceptance: SupplierOrderAcceptanceWire
+    }
+
+    private struct ServerErrorResponse: Codable {
+        let error: String
+    }
+
     private struct QuickBooksWebhookAcknowledgementPayload: Codable {
         let eventIDs: [String]
     }
@@ -367,11 +571,17 @@ enum GunnAireBackendService {
         let serviceCallID: String?
         let invoiceID: String?
         let estimateID: String?
+        let maintenanceContractID: String?
         let channel: String
         let direction: String
         let recipient: String
         let subject: String
         let deliveryStatus: String
+        let workflow: String
+        let templateVersion: String
+        let consentSnapshot: CustomerCommunicationConsentSnapshot?
+        let providerStatusDetail: String?
+        let deliveredAt: String?
         let attachmentFileNames: [String]
         let providerMessageID: String?
         let occurredAt: String
@@ -390,6 +600,7 @@ enum GunnAireBackendService {
         let serviceCallID: String?
         let invoiceID: String?
         let estimateID: String?
+        let maintenanceContractID: String?
         let customerEquipmentID: String?
         let equipmentName: String?
         let customerName: String?
@@ -459,6 +670,46 @@ enum GunnAireBackendService {
         _ = try await send(path: "/api/qbo/revoke", method: "POST")
     }
 
+    static func fetchQuickBooksAccountingConfiguration() async throws -> BackendQuickBooksAccountingConfiguration? {
+        let data = try await send(path: "/api/qbo/accounting-config", method: "GET")
+        return try JSONDecoder().decode(
+            QuickBooksAccountingConfigurationResponse.self,
+            from: data
+        ).configuration
+    }
+
+    static func updateQuickBooksAccountingConfiguration(
+        _ configuration: BackendQuickBooksAccountingConfiguration
+    ) async throws -> BackendQuickBooksAccountingConfiguration {
+        let payload = QuickBooksAccountingConfigurationPayload(
+            defaultSalesItemRef: configuration.defaultSalesItemRef,
+            defaultSalesItemName: configuration.defaultSalesItemName,
+            defaultSalesItemType: configuration.defaultSalesItemType,
+            defaultIncomeAccountRef: configuration.defaultIncomeAccountRef,
+            defaultIncomeAccountName: configuration.defaultIncomeAccountName,
+            defaultIncomeAccountType: configuration.defaultIncomeAccountType,
+            defaultExpenseAccountRef: configuration.defaultExpenseAccountRef,
+            defaultExpenseAccountName: configuration.defaultExpenseAccountName,
+            defaultExpenseAccountType: configuration.defaultExpenseAccountType,
+            defaultAPAccountRef: configuration.defaultAPAccountRef,
+            defaultAPAccountName: configuration.defaultAPAccountName,
+            defaultAPAccountType: configuration.defaultAPAccountType,
+            defaultBankAccountRef: configuration.defaultBankAccountRef,
+            defaultBankAccountName: configuration.defaultBankAccountName,
+            defaultBankAccountType: configuration.defaultBankAccountType,
+            defaultCreditCardAccountRef: configuration.defaultCreditCardAccountRef,
+            defaultCreditCardAccountName: configuration.defaultCreditCardAccountName,
+            defaultCreditCardAccountType: configuration.defaultCreditCardAccountType
+        )
+        let body = try JSONEncoder().encode(payload)
+        let data = try await send(path: "/api/qbo/accounting-config", method: "POST", body: body)
+        let response = try JSONDecoder().decode(QuickBooksAccountingConfigurationResponse.self, from: data)
+        guard let saved = response.configuration else {
+            throw GunnAireBackendError.invalidResponse
+        }
+        return saved
+    }
+
     private static func decodeQuickBooksTokens(from data: Data) throws -> QuickBooksOAuthTokens {
         let response = try JSONDecoder().decode(QuickBooksTokenResponse.self, from: data)
         return QuickBooksOAuthTokens(
@@ -477,6 +728,125 @@ enum GunnAireBackendService {
         return try JSONDecoder().decode(BackendSessionRecord.self, from: data).user
     }
 
+    static func exchangeAppleIdentity(
+        identityToken: String,
+        nonce: String
+    ) async throws -> BackendApplicationSessionResponse {
+        let payload = AppleIdentityPayload(identityToken: identityToken, nonce: nonce)
+        let body = try JSONEncoder().encode(payload)
+        let data = try await sendUnauthenticated(path: "/api/auth/apple", method: "POST", body: body)
+        return try JSONDecoder().decode(BackendApplicationSessionResponse.self, from: data)
+    }
+
+    static func exchangeGoogleIdentity(
+        identityToken: String
+    ) async throws -> BackendApplicationSessionResponse {
+        let payload = GoogleIdentityPayload(identityToken: identityToken)
+        let body = try JSONEncoder().encode(payload)
+        let data = try await sendUnauthenticated(path: "/api/auth/google", method: "POST", body: body)
+        return try JSONDecoder().decode(BackendApplicationSessionResponse.self, from: data)
+    }
+
+    static func revokeApplicationSession(_ token: String) async throws {
+        guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        _ = try await sendWithBearerToken(
+            path: "/api/auth/logout",
+            method: "POST",
+            token: token
+        )
+    }
+
+    static func registerStaffPushDevice(
+        installationID: UUID,
+        deviceToken: String,
+        platform: String,
+        environment: String,
+        bundleID: String,
+        appVersion: String,
+        appBuild: String
+    ) async throws -> BackendStaffPushRegistrationResponse {
+        let payload = StaffPushDevicePayload(
+            installationID: installationID.uuidString,
+            deviceToken: deviceToken,
+            platform: platform,
+            environment: environment,
+            bundleID: bundleID,
+            appVersion: appVersion,
+            appBuild: appBuild
+        )
+        let body = try JSONEncoder().encode(payload)
+        let data = try await send(path: "/api/push-devices", method: "POST", body: body)
+        return try JSONDecoder().decode(BackendStaffPushRegistrationResponse.self, from: data)
+    }
+
+    static func fetchCurrentStaffPushDevice(
+        installationID: UUID
+    ) async throws -> BackendStaffPushRegistrationResponse {
+        let encodedID = installationID.uuidString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+            ?? installationID.uuidString
+        let data = try await send(
+            path: "/api/push-devices/current?installationID=\(encodedID)",
+            method: "GET"
+        )
+        return try JSONDecoder().decode(BackendStaffPushRegistrationResponse.self, from: data)
+    }
+
+    static func deactivateStaffPushDevice(installationID: UUID) async throws -> Bool {
+        let encodedID = installationID.uuidString.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+            ?? installationID.uuidString
+        let data = try await send(path: "/api/push-devices/\(encodedID)", method: "DELETE")
+        return try JSONDecoder().decode(BackendStaffPushDeactivationResponse.self, from: data).deactivated
+    }
+
+    static func deactivateStaffPushDevice(
+        installationID: UUID,
+        applicationSessionToken: String
+    ) async throws -> Bool {
+        let encodedID = installationID.uuidString.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+            ?? installationID.uuidString
+        let data = try await sendWithBearerToken(
+            path: "/api/push-devices/\(encodedID)",
+            method: "DELETE",
+            token: applicationSessionToken
+        )
+        return try JSONDecoder().decode(BackendStaffPushDeactivationResponse.self, from: data).deactivated
+    }
+
+    @discardableResult
+    @MainActor
+    static func applyVerifiedUser(
+        _ remoteUser: BackendAppUserRecord,
+        into modelContext: ModelContext,
+        currentUsers: [AppUser],
+        technicians: [Technician]
+    ) -> [AppUser] {
+        let email = AppAccess.normalizedEmail(remoteUser.email)
+        guard !email.isEmpty else { return currentUsers }
+        let role = AppUserRole.allCases.first {
+            $0.rawValue.caseInsensitiveCompare(remoteUser.role) == .orderedSame
+        } ?? .standard
+        let matches = currentUsers.filter { AppAccess.normalizedEmail($0.email) == email }
+        let user = matches.first ?? AppUser(email: email, role: role, isActive: remoteUser.isActive)
+        if matches.isEmpty {
+            modelContext.insert(user)
+        }
+        for match in matches.isEmpty ? [user] : matches {
+            match.email = email
+            match.role = role
+            match.isActive = remoteUser.isActive
+        }
+        if remoteUser.isActive {
+            _ = AppAccess.ensureTechnicianRecord(for: email, technicians: technicians, modelContext: modelContext)
+        }
+        try? modelContext.save()
+        _ = AppUserDataMaintenance.collapseCloudKitDuplicates(
+            matches.isEmpty ? currentUsers + [user] : currentUsers,
+            modelContext: modelContext
+        )
+        let descriptor = FetchDescriptor<AppUser>(sortBy: [SortDescriptor(\AppUser.email)])
+        return (try? modelContext.fetch(descriptor)) ?? currentUsers
+    }
+
     @discardableResult
     @MainActor
     static func refreshCurrentUser(
@@ -485,23 +855,12 @@ enum GunnAireBackendService {
         technicians: [Technician]
     ) async throws -> [AppUser] {
         let remoteUser = try await fetchCurrentUser()
-        let email = AppAccess.normalizedEmail(remoteUser.email)
-        guard !email.isEmpty else { return currentUsers }
-        let role = AppUserRole.allCases.first {
-            $0.rawValue.caseInsensitiveCompare(remoteUser.role) == .orderedSame
-        } ?? .standard
-        let user = currentUsers.first(where: { $0.email == email }) ?? AppUser(email: email, role: role, isActive: remoteUser.isActive)
-        if user.modelContext == nil {
-            modelContext.insert(user)
-        }
-        user.role = role
-        user.isActive = remoteUser.isActive
-        if remoteUser.isActive {
-            _ = AppAccess.ensureTechnicianRecord(for: email, technicians: technicians, modelContext: modelContext)
-        }
-        try? modelContext.save()
-        let descriptor = FetchDescriptor<AppUser>(sortBy: [SortDescriptor(\AppUser.email)])
-        return (try? modelContext.fetch(descriptor)) ?? currentUsers
+        return applyVerifiedUser(
+            remoteUser,
+            into: modelContext,
+            currentUsers: currentUsers,
+            technicians: technicians
+        )
     }
 
     static func fetchPaymentCollections() async throws -> [BackendPaymentCollectionRecord] {
@@ -575,6 +934,90 @@ enum GunnAireBackendService {
         try JSONDecoder().decode(BackendReadinessSnapshot.self, from: data)
     }
 
+    static func fetchCustomerFinancingReadiness() async throws -> CustomerFinancingReadiness {
+        let data = try await send(path: "/api/customer-financing", method: "GET")
+        return try decodeCustomerFinancingReadiness(from: data)
+    }
+
+    static func decodeCustomerFinancingReadiness(from data: Data) throws -> CustomerFinancingReadiness {
+        try JSONDecoder().decode(CustomerFinancingReadiness.self, from: data)
+    }
+
+    static func fetchSupplierConnectors() async throws -> [SupplierConnectorReadiness] {
+        let data = try await send(path: "/api/supplier-connectors", method: "GET")
+        return try JSONDecoder().decode(SupplierConnectorsResponse.self, from: data).connectors
+    }
+
+    static func decodeSupplierConnectors(from data: Data) throws -> [SupplierConnectorReadiness] {
+        try JSONDecoder().decode(SupplierConnectorsResponse.self, from: data).connectors
+    }
+
+    static func submitSupplierOrder(
+        _ order: PurchaseOrder,
+        connectorKind: SupplierConnectorKind,
+        supplierLocation: String?
+    ) async throws -> SupplierConnectorOrderAcceptance {
+        let payload = SupplierOrderPayload(
+            contractVersion: 1,
+            connectorKind: connectorKind,
+            purchaseOrderID: order.id.uuidString.lowercased(),
+            purchaseOrderNumber: order.number,
+            serviceCallID: order.serviceCallID?.uuidString.lowercased(),
+            vendorName: order.vendorName,
+            itemName: order.itemName,
+            internalSKU: order.itemSKU?.nilIfBlank,
+            supplierPartNumber: order.vendorPartNumber?.nilIfBlank,
+            quantity: order.quantity,
+            expectedUnitCost: order.unitCost,
+            expectedShippingCost: order.shippingCost,
+            currencyCode: "USD",
+            supplierLocation: supplierLocation?.nilIfBlank,
+            priceAvailabilityCheckedAt: nil,
+            orderNotes: order.userNotes
+        )
+        let body = try JSONEncoder().encode(payload)
+        let idempotencyKey = "po:\(order.id.uuidString.lowercased()):\(Int(order.updatedAt.timeIntervalSince1970 * 1_000))"
+        let data = try await send(
+            path: "/api/supplier-connectors/orders",
+            method: "POST",
+            body: body,
+            headers: ["Idempotency-Key": idempotencyKey]
+        )
+        let wire = try JSONDecoder().decode(SupplierOrderResponse.self, from: data).acceptance
+        guard let purchaseOrderID = UUID(uuidString: wire.purchaseOrderID),
+              let confirmedAt = supplierConnectorDate(from: wire.confirmedAt),
+              let priceAvailabilityCheckedAt = supplierConnectorDate(from: wire.priceAvailabilityCheckedAt) else {
+            throw GunnAireBackendError.invalidResponse
+        }
+        return SupplierConnectorOrderAcceptance(
+            contractVersion: wire.contractVersion,
+            purchaseOrderID: purchaseOrderID,
+            purchaseOrderNumber: wire.purchaseOrderNumber,
+            connectorKind: wire.connectorKind,
+            externalOrderID: wire.externalOrderID,
+            reference: wire.reference,
+            supplierLocation: wire.supplierLocation,
+            confirmedUnitCost: wire.confirmedUnitCost,
+            confirmedShippingCost: wire.confirmedShippingCost,
+            currencyCode: wire.currencyCode,
+            confirmedByEmail: wire.confirmedByEmail,
+            confirmedAt: confirmedAt,
+            priceAvailabilityCheckedAt: priceAvailabilityCheckedAt,
+            idempotencyKey: wire.idempotencyKey,
+            replayed: wire.replayed
+        )
+    }
+
+    private static func supplierConnectorDate(from value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: value) {
+            return date
+        }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
+    }
+
     static func fetchQuickBooksWebhookEvents() async throws -> [BackendQuickBooksWebhookEvent] {
         let data = try await send(path: "/api/qbo/webhook-events", method: "GET")
         return try decodeQuickBooksWebhookEvents(from: data)
@@ -645,6 +1088,7 @@ enum GunnAireBackendService {
         for remote in remoteRequests where !knownIDs.contains(remote.id) {
             let type = ServiceCallType(rawValue: remote.requestedServiceType) ?? .service
             let urgency = ServiceRequestUrgency(rawValue: remote.urgency) ?? .normal
+            let source = remote.source.flatMap(ServiceRequestSource.init(rawValue:)) ?? .website
             let request = ServiceRequest(
                 backendRequestID: remote.id,
                 customerName: remote.customerName,
@@ -655,6 +1099,7 @@ enum GunnAireBackendService {
                 urgency: urgency,
                 summary: remote.summary,
                 preferredDate: remote.preferredDate.flatMap(formatter.date(from:)),
+                source: source,
                 createdByEmail: "online-booking",
                 createdAt: formatter.date(from: remote.createdAt) ?? Date()
             )
@@ -674,11 +1119,17 @@ enum GunnAireBackendService {
             serviceCallID: communication.serviceCallID?.uuidString,
             invoiceID: communication.invoiceID?.uuidString,
             estimateID: communication.estimateID?.uuidString,
+            maintenanceContractID: communication.maintenanceContractID?.uuidString,
             channel: communication.channel,
             direction: communication.direction,
             recipient: communication.recipient,
             subject: communication.subject,
             deliveryStatus: communication.deliveryStatus,
+            workflow: communication.workflow.rawValue,
+            templateVersion: communication.templateVersion,
+            consentSnapshot: communication.consentSnapshot,
+            providerStatusDetail: communication.providerStatusDetail,
+            deliveredAt: communication.deliveredAt.map { ISO8601DateFormatter().string(from: $0) },
             attachmentFileNames: communication.attachmentFileNames,
             providerMessageID: communication.providerMessageID,
             occurredAt: ISO8601DateFormatter().string(from: communication.createdAt)
@@ -782,6 +1233,7 @@ enum GunnAireBackendService {
         serviceCallID: UUID?,
         invoiceID: UUID? = nil,
         estimateID: UUID? = nil,
+        maintenanceContractID: UUID? = nil,
         customerEquipmentID: UUID? = nil,
         equipmentName: String? = nil,
         customerName: String?
@@ -793,6 +1245,7 @@ enum GunnAireBackendService {
             serviceCallID: serviceCallID?.uuidString,
             invoiceID: invoiceID?.uuidString,
             estimateID: estimateID?.uuidString,
+            maintenanceContractID: maintenanceContractID?.uuidString,
             customerEquipmentID: customerEquipmentID?.uuidString,
             equipmentName: equipmentName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank,
             customerName: customerName,
@@ -838,25 +1291,81 @@ enum GunnAireBackendService {
             serviceCallID: attachment.serviceCallID,
             invoiceID: attachment.invoiceID,
             estimateID: attachment.estimateID,
+            maintenanceContractID: attachment.maintenanceContractID,
             customerEquipmentID: attachment.customerEquipmentID,
             customerName: attachment.customer?.name
         )
     }
 
-    private static func send(path: String, method: String, body: Data? = nil) async throws -> Data {
-        let request = try makeRequest(path: path, method: method, body: body)
+    private static func send(
+        path: String,
+        method: String,
+        body: Data? = nil,
+        headers: [String: String] = [:]
+    ) async throws -> Data {
+        let request = try makeRequest(path: path, method: method, body: body, headers: headers)
+        return try await perform(request)
+    }
+
+    private static func sendUnauthenticated(path: String, method: String, body: Data?) async throws -> Data {
+        let request = try baseRequest(path: path, method: method, body: body)
+        return try await perform(request)
+    }
+
+    private static func sendWithBearerToken(
+        path: String,
+        method: String,
+        token: String
+    ) async throws -> Data {
+        var request = try baseRequest(path: path, method: method, body: nil)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return try await perform(request)
+    }
+
+    private static func perform(_ request: URLRequest) async throws -> Data {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw GunnAireBackendError.invalidResponse
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            let message = String(data: data, encoding: .utf8) ?? HTTPURLResponse.localizedString(forStatusCode: httpResponse.statusCode)
+            let message = (try? JSONDecoder().decode(ServerErrorResponse.self, from: data).error)
+                ?? String(data: data, encoding: .utf8)
+                ?? HTTPURLResponse.localizedString(forStatusCode: httpResponse.statusCode)
             throw GunnAireBackendError.server(statusCode: httpResponse.statusCode, message: message)
         }
         return data
     }
 
-    private static func makeRequest(path: String, method: String, body: Data?) throws -> URLRequest {
+    private static func makeRequest(
+        path: String,
+        method: String,
+        body: Data?,
+        headers: [String: String] = [:]
+    ) throws -> URLRequest {
+        var request = try baseRequest(path: path, method: method, body: body)
+        if Config.Backend.usesBusinessIdentity {
+            if let sessionToken = AppleAuthManager.shared.sessionToken,
+               !sessionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+            } else if let sessionToken = GoogleAuthManager.shared.applicationSessionToken,
+                      !sessionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+            } else if let idToken = GoogleAuthManager.shared.idToken,
+                      !idToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                request.setValue(idToken, forHTTPHeaderField: "X-GunnAire-Google-ID-Token")
+            } else {
+                throw GunnAireBackendError.missingBusinessIdentity
+            }
+        } else {
+            request.setValue("Bearer \(Config.Backend.apiToken)", forHTTPHeaderField: "Authorization")
+        }
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        return request
+    }
+
+    private static func baseRequest(path: String, method: String, body: Data?) throws -> URLRequest {
         guard Config.Backend.isConfigured else {
             throw GunnAireBackendError.notConfigured
         }
@@ -867,15 +1376,6 @@ enum GunnAireBackendService {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 30
-        if Config.Backend.usesGoogleIDToken {
-            guard let idToken = GoogleAuthManager.shared.idToken,
-                  !idToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw GunnAireBackendError.missingGoogleIdentityToken
-            }
-            request.setValue(idToken, forHTTPHeaderField: "X-GunnAire-Google-ID-Token")
-        } else {
-            request.setValue("Bearer \(Config.Backend.apiToken)", forHTTPHeaderField: "Authorization")
-        }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body {
             request.httpBody = body

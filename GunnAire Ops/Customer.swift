@@ -15,8 +15,8 @@ final class Customer {
     /// sent only while this preference is enabled. It defaults to true to preserve
     /// the existing customer relationship when an older local store is migrated.
     var allowsTransactionalEmail: Bool = true
-    /// Captures the customer's preference before an SMS provider is enabled.
-    /// The app does not send text messages until a consent-aware provider is added.
+    /// Allows staff-reviewed operational drafts in Apple's Messages composer.
+    /// Automated SMS remains unavailable until a consent-aware provider is added.
     var allowsServiceText: Bool = false
     /// Marketing is opt-in and intentionally kept separate from operational notices.
     var allowsMarketing: Bool = false

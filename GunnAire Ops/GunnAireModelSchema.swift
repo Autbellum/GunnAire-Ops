@@ -23,6 +23,7 @@ enum GunnAireModelSchema {
             InventoryMovement.self,
             ServiceRequest.self,
             ServiceCallActivity.self,
+            ProjectMilestone.self,
             FieldFormTemplate.self,
             FieldFormResponse.self,
         ])
