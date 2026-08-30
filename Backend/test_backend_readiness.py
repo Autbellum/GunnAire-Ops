@@ -88,6 +88,7 @@ class BackendReadinessTests(unittest.TestCase):
                     default_sales_item_ref, default_sales_item_name, default_sales_item_type,
                     default_income_account_ref, default_income_account_name, default_income_account_type,
                     default_expense_account_ref, default_expense_account_name, default_expense_account_type,
+                    default_ap_account_ref, default_ap_account_name, default_ap_account_type,
                     default_bank_account_ref, default_bank_account_name, default_bank_account_type,
                     default_credit_card_account_ref, default_credit_card_account_name,
                     default_credit_card_account_type, updated_at, updated_by
@@ -96,6 +97,7 @@ class BackendReadinessTests(unittest.TestCase):
                     '101', 'HVAC Service', 'Service',
                     '201', 'Service Income', 'Income',
                     '301', 'Cost of Goods Sold', 'Cost of Goods Sold',
+                    '351', 'Accounts Payable', 'Accounts Payable',
                     '401', 'Operating Checking', 'Bank',
                     '501', 'Company Credit Card', 'Credit Card', ?, 'admin@gunnaire.com'
                 )
