@@ -207,7 +207,7 @@ private enum GunnAireUITestFixtures {
         }
 
         let payments = try context.fetch(FetchDescriptor<Payment>())
-        for payment in payments where payment.invoice.id == invoiceID {
+        for payment in payments where payment.invoice?.id == invoiceID {
             context.delete(payment)
         }
         let invoices = try context.fetch(FetchDescriptor<Invoice>())

@@ -4,7 +4,47 @@
 
 The app uses the private CloudKit database container
 `iCloud.com.gunnaire.businesssuite` for its SwiftData store. Apple configuration
-and schema status as of 2026-08-28:
+and schema status as of 2026-08-30.
+
+### Current capability and schema status
+
+- A refreshed authenticated Apple Developer inspection confirms the explicit
+  App ID `com.gunnaire.businesssuite` under team `7C4B3RR7RD` has Associated
+  Domains, iCloud/CloudKit, Push Notifications, and Sign in with Apple enabled.
+  Sign in with Apple is primary, and the assigned container is
+  `iCloud.com.gunnaire.businesssuite`. In-App Purchase is Apple-managed and
+  enabled automatically.
+- Handoff does not have an App ID checkbox. The app declares
+  `com.gunnaire.businesssuite.field-payment-handoff` in `NSUserActivityTypes`;
+  signed physical Mac/iPad-to-iPhone acceptance remains required. Native
+  MapKit/Apple Maps URLs and the system Mail and Messages composers do not need
+  the portal's Maps or Messages Collaboration capabilities. Those unrelated
+  capabilities remain off deliberately.
+- Production remains schema v15 across 24 record types in retained export
+  `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
+  `f81de36537620a10fe34fde22883a94dc6f5b00deea6fec08004160c0aae7594`.
+  The signed isolated bootstrap initialized Development schema v16 and exported
+  `/Users/gunnaire/Downloads/cloudkit-development-9.ckdb`, SHA-256
+  `faf57f850f598380e4786581269d66d6ddaf07ea52fa4136b20133bc59116fd8`.
+- Working source schema v16 adds sixteen optional fields to
+  `CD_ServiceDocumentAttachment`: the previously unstaged customer/equipment,
+  estimate, invoice, backend, shared-company, and QBO linkage/status fields plus
+  the Google Drive file ID, trusted web link, sync state/detail/time, and archive
+  actor. The isolated Debug bootstrap now writes every one of those optional
+  values, and its unit contract asserts the complete seed. The release preflight
+  accepts only the exact additive v16 delta or an exact post-promotion match; it
+  no longer lets a matching v15 Development/Production export masquerade as
+  current readiness.
+- Schema v16 initialization and marker cleanup completed in CloudKit
+  Development. Local mirroring metadata records successful setup/import/export
+  events, no pending upload or delete, and no synthetic marker record after the
+  cleanup passes. The fresh Development export differs from v15 Production by
+  exactly the sixteen approved optional attachment fields with zero removed or
+  changed Production fields. Complete signed two-device file/link merge
+  acceptance, review the pending schema in CloudKit Console, and only then
+  promote the reviewed schema to Production.
+
+Historical deployment evidence follows:
 
 1. The App ID `com.gunnaire.businesssuite` has the CloudKit container and Remote
    notifications capability enabled. The project declares Push Notifications,
@@ -203,7 +243,7 @@ The project now uses the enabled Push Notifications capability for optional staf
 
 A new field-payment assignment queues one idempotent delivery per active device without delaying assignment creation. APNs previews are intentionally generic and omit customer names, addresses, balances, amounts, and payment data. The route contains only a versioned invoice UUID; the receiving app still applies its current role, assignment, invoice-visibility, and balance policy before opening Payments → Collect. Logout, session expiry, user deactivation, and permanent APNs token errors deactivate the registration and suppress its pending deliveries.
 
-Current source `2026.08.28.13` passes the 63-test backend suite, all 511 native push assertions with framework-appropriate evidence, and the compact Settings journey on iPad and iPhone. Production still runs backend `2026.08.27.9`. Before activation, deploy the reviewed source; create and store an authorized APNs signing key plus a separate Fernet device-token key in Render; confirm Admin readiness; update App Store privacy answers for the linked device identifier used only for app functionality; configure Apple's Sign in with Apple notification URL only after the endpoint is live; and prove sandbox and TestFlight/production delivery, tap routing, logout, deactivation, credential revocation, and invalid-token cleanup on signed hardware.
+Backend source `2026.08.30.15` is deployed and passes the 69-test suite. Native push and compact Settings behavior retain framework-appropriate unit/UI coverage. Before activation, create and store an authorized APNs signing key plus a separate Fernet device-token key in Render; confirm Admin readiness; update App Store privacy answers for the linked device identifier used only for app functionality; and prove sandbox and TestFlight/production delivery, tap routing, logout, deactivation, credential revocation, and invalid-token cleanup on signed hardware.
 
 ## Field iPhone payment handoff
 

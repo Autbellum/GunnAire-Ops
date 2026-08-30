@@ -329,7 +329,10 @@ final class Estimate {
            !quickBooksID.isEmpty {
             return "qb:\(quickBooksID.lowercased())"
         }
-        let customerKey = estimate.customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let customer = estimate.customer else {
+            return "unresolved-customer:\(estimate.id.uuidString.lowercased())"
+        }
+        let customerKey = customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let day = Calendar.current.startOfDay(for: estimate.createdAt).timeIntervalSince1970
         return "local:\(customerKey):\(String(format: "%.2f", estimate.amount)):\(Int(day))"
     }

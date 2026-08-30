@@ -82,7 +82,7 @@ struct PaymentsAndReceiptsView: View {
 
     private var selectedRefundPayment: Payment? {
         guard let refundPaymentID else { return nil }
-        return payments.first { $0.id == refundPaymentID }
+        return visiblePayments.first { $0.id == refundPaymentID }
     }
 
     private var selectedProcessor: OnsitePaymentProcessor {
@@ -104,15 +104,25 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private var visibleInvoices: [Invoice] {
-        guard !isAdminUser else { return invoices }
+        // CloudKit can resolve an invoice before its customer relationship. Such
+        // records stay visible in Sync Recovery but must never expose payment or
+        // customer actions until the relationship is complete.
+        let relationshipCompleteInvoices = invoices.filter { $0.customer != nil }
+        guard !isAdminUser else { return relationshipCompleteInvoices }
         let visibleIDs = visibleInvoiceIDsForFieldUser
-        return invoices.filter { visibleIDs.contains($0.id) }
+        return relationshipCompleteInvoices.filter { visibleIDs.contains($0.id) }
     }
 
     private var visiblePayments: [Payment] {
-        guard !isAdminUser else { return payments }
+        let relationshipCompletePayments = payments.filter {
+            $0.invoice?.customer != nil
+        }
+        guard !isAdminUser else { return relationshipCompletePayments }
         let visibleIDs = visibleInvoiceIDsForFieldUser
-        return payments.filter { visibleIDs.contains($0.invoice.id) }
+        return relationshipCompletePayments.filter {
+            guard let invoiceID = $0.invoice?.id else { return false }
+            return visibleIDs.contains(invoiceID)
+        }
     }
 
     private var companyQueueRetryPayments: [Payment] {
@@ -198,7 +208,9 @@ struct PaymentsAndReceiptsView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    if !actionMessage.isEmpty || !fieldHandoffMessage.isEmpty {
+                    if !actionMessage.isEmpty ||
+                        !fieldHandoffMessage.isEmpty ||
+                        fieldPaymentHandoff.activeInvoiceID != nil {
                         Section("Action Status") {
                             if !actionMessage.isEmpty {
                                 Text(actionMessage)

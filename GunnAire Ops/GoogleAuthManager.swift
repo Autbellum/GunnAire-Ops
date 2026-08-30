@@ -10,6 +10,30 @@ struct GoogleOAuthTokens: Codable {
     let refreshToken: String?
     let idToken: String?
     let expiration: Date
+    /// Normalized scopes that were confirmed when this token set was issued.
+    /// Legacy tokens decode with nil and must reconnect before a new capability
+    /// such as Drive can be used.
+    let scopeSignature: String?
+
+    init(
+        accessToken: String,
+        refreshToken: String?,
+        idToken: String?,
+        expiration: Date,
+        scopeSignature: String? = nil
+    ) {
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.idToken = idToken
+        self.expiration = expiration
+        self.scopeSignature = scopeSignature
+    }
+
+    func grants(_ scope: String) -> Bool {
+        let requested = scope.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !requested.isEmpty, let scopeSignature else { return false }
+        return Set(scopeSignature.split(separator: "|").map(String.init)).contains(requested)
+    }
 }
 
 struct GunnAireGoogleApplicationSession: Codable, Equatable {
@@ -257,6 +281,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     @Published private(set) var refreshToken: String?
     @Published private(set) var idToken: String?
     @Published private(set) var tokenExpiry: Date?
+    @Published private(set) var grantedScopeSignature: String?
     @Published private(set) var signedInEmail: String?
     @Published private(set) var applicationSessionToken: String?
 
@@ -283,6 +308,16 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         )
     }
 
+    func hasGrantedScope(_ scope: String) -> Bool {
+        GoogleOAuthTokens(
+            accessToken: "",
+            refreshToken: nil,
+            idToken: nil,
+            expiration: .distantFuture,
+            scopeSignature: grantedScopeSignature
+        ).grants(scope)
+    }
+
     private var businessAccountLinkError: GoogleAuthError? {
         canUseCurrentBusinessIdentity ? nil : .businessAccountMismatch
     }
@@ -294,6 +329,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         refreshToken = nil
         idToken = nil
         tokenExpiry = nil
+        grantedScopeSignature = nil
         signedInEmail = nil
         pendingOAuthState = nil
         activeAuthSession = nil
@@ -501,7 +537,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                     accessToken: payload.access_token,
                     refreshToken: payload.refresh_token,
                     idToken: payload.id_token,
-                    expiration: Date().addingTimeInterval(payload.expires_in)
+                    expiration: Date().addingTimeInterval(payload.expires_in),
+                    scopeSignature: payload.scope.map {
+                        Config.Google.scopeSignature(for: [$0])
+                    } ?? Config.Google.oauthScopeSignature
                 )
                 completion(.success(tokens))
             }
@@ -565,7 +604,10 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                     accessToken: payload.access_token,
                     refreshToken: self.refreshToken,
                     idToken: payload.id_token ?? self.idToken,
-                    expiration: Date().addingTimeInterval(payload.expires_in)
+                    expiration: Date().addingTimeInterval(payload.expires_in),
+                    scopeSignature: payload.scope.map {
+                        Config.Google.scopeSignature(for: [$0])
+                    } ?? self.grantedScopeSignature
                 )
                 self.storeTokens(merged)
                 completion(.success(()))
@@ -1143,6 +1185,7 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         refreshToken = tokens.refreshToken
         idToken = tokens.idToken
         tokenExpiry = tokens.expiration
+        grantedScopeSignature = tokens.scopeSignature
         isAuthenticated = true
         let restoredEmail = UserDefaults.standard.string(forKey: Self.signedInEmailStorageKey)
             ?? Self.extractEmail(fromIDToken: tokens.idToken)
@@ -1305,12 +1348,14 @@ private struct GoogleTokenResponse: Codable {
     let expires_in: TimeInterval
     let refresh_token: String?
     let id_token: String?
+    let scope: String?
 }
 
 private struct GoogleRefreshResponse: Codable {
     let access_token: String
     let expires_in: TimeInterval
     let id_token: String?
+    let scope: String?
 }
 
 private struct GoogleErrorEnvelope: Codable {

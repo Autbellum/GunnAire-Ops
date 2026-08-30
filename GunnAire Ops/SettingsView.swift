@@ -161,7 +161,10 @@ struct SettingsView: View {
                         Section("Operational Readiness") {
                             readinessRow(title: "Users and roles", isComplete: !users.isEmpty)
                             readinessRow(title: "QuickBooks connected", isComplete: isQuickBooksAuthenticated)
-                            readinessRow(title: "Google admin account connected", isComplete: isGoogleAuthenticated)
+                            readinessRow(
+                                title: "Google Calendar, Gmail & Drive authorized",
+                                isComplete: isGoogleAuthenticated && googleAuth.googleDriveAuthorizationState == .ready
+                            )
                             readinessRow(
                                 title: "CloudKit on this device",
                                 isComplete: cloudKitReadiness.isReady && !cloudKitEventMonitor.state.needsAttention
@@ -688,11 +691,35 @@ struct SettingsView: View {
         Section("Google") {
             connectionStatusRow(title: "Status", isConnected: isGoogleAuthenticated)
 
+            if googleAuth.googleDriveAuthorizationState == .ready {
+                Label("Calendar, Gmail, and per-file Drive archive access confirmed.", systemImage: "checkmark.shield")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                Text(googleAuth.googleDriveAuthorizationState.detail)
+                    .font(.caption)
+                    .foregroundColor(
+                        googleAuth.googleDriveAuthorizationState == .disconnected ? .secondary : .orange
+                    )
+            }
+
             if isAdminUser {
                 if isGoogleAuthenticated {
                     Button("Disconnect Google", role: .destructive) {
                         disconnectGoogle()
                         isGoogleAuthenticated = false
+                    }
+
+                    if googleAuth.googleDriveAuthorizationState == .reauthorizationRequired ||
+                        googleAuth.googleDriveAuthorizationState == .businessAccountMismatch {
+                        Button {
+                            disconnectGoogle()
+                            isGoogleAuthenticated = false
+                            authenticateGoogle()
+                        } label: {
+                            Label("Reconnect Google for Drive", systemImage: "arrow.clockwise.circle")
+                        }
+                        .accessibilityIdentifier("ReconnectGoogleForDrive")
                     }
                 } else {
                     Button {

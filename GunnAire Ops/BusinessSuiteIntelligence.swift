@@ -90,9 +90,10 @@ struct BusinessSuiteSyncAttentionSummary: Equatable {
     let timeEntryCount: Int
     let sharedFileCount: Int
     let communicationCount: Int
+    let dataRelationshipCount: Int
 
     var total: Int {
-        paymentCount + calendarCount + quickBooksDocumentCount + pricebookCount + timeEntryCount + sharedFileCount + communicationCount
+        paymentCount + calendarCount + quickBooksDocumentCount + pricebookCount + timeEntryCount + sharedFileCount + communicationCount + dataRelationshipCount
     }
 }
 
@@ -117,23 +118,32 @@ enum BusinessSuiteIntelligence {
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> BusinessSuiteSnapshot {
+        // CloudKit can materialize a record before its required relationship.
+        // Keep those records in sync recovery, but never turn them into normal
+        // dispatch, billing, collection, or agreement actions until resolved.
+        let linkedServiceCalls = serviceCalls.filter { $0.customer != nil }
+        let linkedEstimates = estimates.filter { $0.customer != nil }
+        let linkedInvoices = invoices.filter { $0.customer != nil }
+        let linkedPayments = payments.filter { $0.invoice?.customer != nil }
+        let linkedContracts = contracts.filter { $0.customer != nil }
+
         let customerSnapshots = CustomerIntelligence.snapshots(
             customers: customers,
-            serviceCalls: serviceCalls,
-            invoices: invoices,
-            estimates: estimates,
-            payments: payments,
-            contracts: contracts,
+            serviceCalls: linkedServiceCalls,
+            invoices: linkedInvoices,
+            estimates: linkedEstimates,
+            payments: linkedPayments,
+            contracts: linkedContracts,
             now: now,
             calendar: calendar
         )
 
-        let activeCalls = serviceCalls.filter { $0.status != .cancelled && $0.status != .completed }
+        let activeCalls = linkedServiceCalls.filter { $0.status != .cancelled && $0.status != .completed }
         let startOfToday = calendar.startOfDay(for: now)
         let dispatchWindowEnd = calendar.date(byAdding: .day, value: 3, to: startOfToday) ?? now
         let sevenDaysAhead = calendar.date(byAdding: .day, value: 7, to: now) ?? now
 
-        let upcomingCalls = serviceCalls.filter {
+        let upcomingCalls = linkedServiceCalls.filter {
             $0.status != .cancelled &&
             $0.scheduledDate >= now &&
             $0.scheduledDate <= sevenDaysAhead
@@ -144,40 +154,40 @@ enum BusinessSuiteIntelligence {
         let unassignedUpcomingCalls = upcomingCalls.filter { $0.assignedTechnician == nil }
         let pastStartCalls = activeCalls.filter { $0.scheduledDate < now && $0.status == .scheduled }
         let missingAddressCalls = dispatchWindowCalls.filter {
-            let address = ($0.siteAddress ?? $0.customer.address)?
+            let address = ($0.siteAddress ?? $0.customer?.address)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return address?.isEmpty != false
         }
 
-        let readyToBillCalls = serviceCalls.filter(\.isReadyToCreateBillingDocument)
-        let documentationInProgressCalls = serviceCalls.filter {
+        let readyToBillCalls = linkedServiceCalls.filter(\.isReadyToCreateBillingDocument)
+        let documentationInProgressCalls = linkedServiceCalls.filter {
             $0.documentationStartedAt != nil && $0.documentationCompletedAt == nil
         }
-        let serviceReportActionCalls = serviceCalls.filter {
+        let serviceReportActionCalls = linkedServiceCalls.filter {
             $0.status != .cancelled && $0.serviceReportActionSummary != nil
         }
-        let openServiceConcernCalls = serviceCalls.filter {
+        let openServiceConcernCalls = linkedServiceCalls.filter {
             $0.status != .cancelled && !$0.openServiceConcernRows.isEmpty
         }
-        let invoicesAwaitingCloseout = invoices.filter {
-            $0.finalizedAt == nil || CustomerIntelligence.outstandingBalance(for: $0, payments: payments) > 0
+        let invoicesAwaitingCloseout = linkedInvoices.filter {
+            $0.finalizedAt == nil || CustomerIntelligence.outstandingBalance(for: $0, payments: linkedPayments) > 0
         }
 
-        let openInvoiceBalances = invoices.compactMap { invoice -> (invoice: Invoice, balance: Double)? in
-            let balance = CustomerIntelligence.outstandingBalance(for: invoice, payments: payments)
+        let openInvoiceBalances = linkedInvoices.compactMap { invoice -> (invoice: Invoice, balance: Double)? in
+            let balance = CustomerIntelligence.outstandingBalance(for: invoice, payments: linkedPayments)
             guard balance > 0 else { return nil }
             return (invoice, balance)
         }
         let overdueInvoices = openInvoiceBalances.filter {
-            Invoice.isOverdue($0.invoice, payments: payments, now: now, calendar: calendar)
+            Invoice.isOverdue($0.invoice, payments: linkedPayments, now: now, calendar: calendar)
         }
         let openReceivablesTotal = openInvoiceBalances.reduce(0) { $0 + $1.balance }
 
-        let openEstimates = estimates.filter(isOpenEstimate)
+        let openEstimates = linkedEstimates.filter(isOpenEstimate)
         let estimatePipelineTotal = openEstimates.reduce(0) { $0 + $1.amount }
-        let acceptedEstimateCalls = serviceCalls.filter { call in
+        let acceptedEstimateCalls = linkedServiceCalls.filter { call in
             guard let linkedEstimateID = call.linkedEstimateID,
-                  let estimate = estimates.first(where: { $0.id == linkedEstimateID }) else {
+                  let estimate = linkedEstimates.first(where: { $0.id == linkedEstimateID }) else {
                 return false
             }
             return estimate.status.caseInsensitiveCompare("accepted") == .orderedSame &&
@@ -185,7 +195,7 @@ enum BusinessSuiteIntelligence {
             call.status != .cancelled
         }
 
-        let activeContracts = contracts.filter(\.active)
+        let activeContracts = linkedContracts.filter(\.active)
         let maintenanceAlerts = activeContracts.filter {
             $0.isOverdue || $0.isUpcoming || $0.needsReminder
         }
@@ -195,6 +205,7 @@ enum BusinessSuiteIntelligence {
             estimates: estimates,
             invoices: invoices,
             payments: payments,
+            contracts: contracts,
             attachments: attachments,
             communications: communications,
             timeEntries: timeEntries,
@@ -205,7 +216,7 @@ enum BusinessSuiteIntelligence {
             now: now,
             calendar: calendar
         )
-        let paymentSyncAttention = payments.filter {
+        let paymentSyncAttention = linkedPayments.filter {
             $0.needsQuickBooksAttention || $0.needsSharedCompanyQueueUpload
         }
         let calendarLinkGaps = syncAttention.calendarCount
@@ -242,10 +253,10 @@ enum BusinessSuiteIntelligence {
         }.count
         let fieldCoverage = technicians.isEmpty ? (upcomingCalls.isEmpty ? 1 : 0) : Double(clockedInTechnicianCount) / Double(technicians.count)
 
-        let monthInvoiceTotal = invoices
+        let monthInvoiceTotal = linkedInvoices
             .filter { calendar.isDate($0.createdAt, equalTo: now, toGranularity: .month) }
             .reduce(0) { $0 + $1.amount }
-        let monthPaymentTotal = payments
+        let monthPaymentTotal = linkedPayments
             .filter { calendar.isDate($0.date, equalTo: now, toGranularity: .month) }
             .reduce(0) { $0 + $1.amount }
 
@@ -296,7 +307,8 @@ enum BusinessSuiteIntelligence {
             syncAttention.quickBooksDocumentCount * 3 +
             syncAttention.pricebookCount * 4 +
             syncAttention.timeEntryCount * 6 +
-            syncAttention.sharedFileCount * 6
+            syncAttention.sharedFileCount * 6 +
+            syncAttention.dataRelationshipCount * 12
         )
 
         let overallScore = weightedAverage([
@@ -378,7 +390,7 @@ enum BusinessSuiteIntelligence {
                 systemImage: "repeat.circle",
                 score: agreementsScore,
                 severity: severity(for: agreementsScore),
-                destination: maintenanceAlerts.first.map { .customer($0.customer.id) } ?? .customers
+                destination: (maintenanceAlerts.first?.customer?.id).map(BusinessSuiteDestination.customer) ?? .customers
             ),
             BusinessSuiteWorkstream(
                 id: .fieldTeam,
@@ -494,7 +506,7 @@ enum BusinessSuiteIntelligence {
                 BusinessSuiteAction(
                     id: "collect-overdue-\(overdue.invoice.id.uuidString)",
                     title: "Collect overdue balance",
-                    detail: overdue.invoice.customer.name,
+                    detail: overdue.invoice.customer?.name ?? "Customer link unavailable",
                     value: currency(overdue.balance),
                     systemImage: "creditcard.trianglebadge.exclamationmark",
                     severity: .critical,
@@ -506,7 +518,7 @@ enum BusinessSuiteIntelligence {
                 BusinessSuiteAction(
                     id: "collect-open-\(open.invoice.id.uuidString)",
                     title: "Collect open balance",
-                    detail: open.invoice.customer.name,
+                    detail: open.invoice.customer?.name ?? "Customer link unavailable",
                     value: currency(open.balance),
                     systemImage: "creditcard",
                     severity: .warning,
@@ -520,7 +532,7 @@ enum BusinessSuiteIntelligence {
                 BusinessSuiteAction(
                     id: "ready-to-bill-\(call.id.uuidString)",
                     title: "Build billing document",
-                    detail: "\(call.customer.name) - \(call.type.displayName)",
+                    detail: "\(call.customer?.name ?? "Customer link unavailable") - \(call.type.displayName)",
                     value: "Ready",
                     systemImage: "doc.badge.plus",
                     severity: .warning,
@@ -534,7 +546,7 @@ enum BusinessSuiteIntelligence {
                 BusinessSuiteAction(
                     id: "service-report-action-\(call.id.uuidString)",
                     title: "Complete service report",
-                    detail: "\(call.customer.name) - \(call.nextServiceReportActionLabel ?? "Review required report items")",
+                    detail: "\(call.customer?.name ?? "Customer link unavailable") - \(call.nextServiceReportActionLabel ?? "Review required report items")",
                     value: call.type.displayName,
                     systemImage: "checklist.checked",
                     severity: .warning,
@@ -547,7 +559,7 @@ enum BusinessSuiteIntelligence {
                 BusinessSuiteAction(
                     id: "service-concern-\(call.id.uuidString)",
                     title: "Review open service concern",
-                    detail: "\(call.customer.name) - \(concern.label): \(concern.value)",
+                    detail: "\(call.customer?.name ?? "Customer link unavailable") - \(concern.label): \(concern.value)",
                     value: call.type.displayName,
                     systemImage: "exclamationmark.triangle",
                     severity: .notice,
@@ -561,7 +573,7 @@ enum BusinessSuiteIntelligence {
                 BusinessSuiteAction(
                     id: "assign-\(call.id.uuidString)",
                     title: "Assign field technician",
-                    detail: "\(call.customer.name) - \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))",
+                    detail: "\(call.customer?.name ?? "Customer link unavailable") - \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))",
                     value: call.type.displayName,
                     systemImage: "person.crop.circle.badge.plus",
                     severity: .warning,
@@ -575,7 +587,7 @@ enum BusinessSuiteIntelligence {
                 BusinessSuiteAction(
                     id: "accepted-estimate-\(call.id.uuidString)",
                     title: "Move approved work forward",
-                    detail: call.customer.name,
+                    detail: call.customer?.name ?? "Customer link unavailable",
                     value: "Accepted",
                     systemImage: "checkmark.seal",
                     severity: .notice,
@@ -589,7 +601,7 @@ enum BusinessSuiteIntelligence {
                 BusinessSuiteAction(
                     id: "payment-sync-\(payment.id.uuidString)",
                     title: "Review payment sync",
-                    detail: payment.invoice.customer.name,
+                    detail: payment.invoice?.customer?.name ?? "Invoice customer link unavailable",
                     value: currency(payment.amount),
                     systemImage: "arrow.triangle.2.circlepath.circle",
                     severity: .warning,
@@ -661,15 +673,16 @@ enum BusinessSuiteIntelligence {
         }
 
         if let contract = maintenanceAlerts.sorted(by: { $0.nextDate < $1.nextDate }).first {
+            let linkedCustomer = contract.customer
             actions.append(
                 BusinessSuiteAction(
                     id: "agreement-\(contract.id.uuidString)",
                     title: contract.isOverdue ? "Schedule overdue agreement" : "Prepare maintenance visit",
-                    detail: "\(contract.customer.name) - \(contract.schedulePattern)",
+                    detail: "\(linkedCustomer?.name ?? "Customer link unavailable") - \(contract.schedulePattern)",
                     value: contract.nextDate.formatted(date: .abbreviated, time: .omitted),
                     systemImage: "wrench.and.screwdriver",
                     severity: contract.isOverdue ? .warning : .notice,
-                    destination: .customer(contract.customer.id)
+                    destination: linkedCustomer.map { .customer($0.id) } ?? .customers
                 )
             )
         }
@@ -720,6 +733,7 @@ enum BusinessSuiteIntelligence {
         estimates: [Estimate],
         invoices: [Invoice],
         payments: [Payment],
+        contracts: [RecurringMaintenanceContract] = [],
         attachments: [ServiceDocumentAttachment],
         communications: [CustomerCommunication] = [],
         timeEntries: [TimeEntry],
@@ -733,6 +747,7 @@ enum BusinessSuiteIntelligence {
         let startOfToday = calendar.startOfDay(for: now)
         let dispatchWindowEnd = calendar.date(byAdding: .day, value: 3, to: startOfToday) ?? now
         let dispatchWindowCalls = serviceCalls.filter {
+            $0.customer != nil &&
             $0.status != .cancelled &&
             $0.status != .completed &&
             $0.scheduledDate >= startOfToday &&
@@ -750,7 +765,8 @@ enum BusinessSuiteIntelligence {
         }.count : 0
 
         let paymentCount = payments.filter {
-            $0.needsQuickBooksAttention || $0.needsSharedCompanyQueueUpload
+            $0.invoice?.customer != nil &&
+                ($0.needsQuickBooksAttention || $0.needsSharedCompanyQueueUpload)
         }.count
         let pricebookCount = items.filter { item in
             item.requiresPricebookReview ||
@@ -763,10 +779,23 @@ enum BusinessSuiteIntelligence {
                 entry.quickBooksTimeActivityID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
                 entry.quickBooksTimeActivitySyncError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         }.count
-        let sharedFileCount = attachments.filter(\.needsSharedCompanyStorageUpload).count
+        let sharedFileCount = attachments.filter {
+            $0.customer != nil && $0.needsSharedCompanyStorageUpload
+        }.count
         let communicationCount = sharedServerConfigured
-            ? communications.filter(\.needsSharedCompanySync).count
+            ? communications.filter { $0.customer != nil && $0.needsSharedCompanySync }.count
             : 0
+        // SwiftData relationships are optional at rest so CloudKit can deliver
+        // records in either order. Keep unresolved records visible as recovery
+        // work instead of crashing a dashboard while the relationship catches up.
+        let dataRelationshipCount =
+            serviceCalls.filter { $0.customer == nil }.count +
+            estimates.filter { $0.customer == nil }.count +
+            invoices.filter { $0.customer == nil }.count +
+            payments.filter { $0.invoice == nil }.count +
+            contracts.filter { $0.customer == nil }.count +
+            communications.filter { $0.customer == nil }.count +
+            attachments.filter { $0.customer == nil }.count
 
         return BusinessSuiteSyncAttentionSummary(
             paymentCount: paymentCount,
@@ -780,7 +809,8 @@ enum BusinessSuiteIntelligence {
             pricebookCount: pricebookCount,
             timeEntryCount: timeEntryCount,
             sharedFileCount: sharedFileCount,
-            communicationCount: communicationCount
+            communicationCount: communicationCount,
+            dataRelationshipCount: dataRelationshipCount
         )
     }
 
@@ -791,14 +821,17 @@ enum BusinessSuiteIntelligence {
         quickBooksConnected: Bool
     ) -> Int {
         let estimateGaps = quickBooksConnected
-            ? estimates.filter { isOpenEstimate($0) && $0.quickBooksID?.isEmpty != false }.count
+            ? estimates.filter {
+                $0.customer != nil && isOpenEstimate($0) && $0.quickBooksID?.isEmpty != false
+            }.count
             : 0
         let billingDocumentGaps = estimateGaps +
             invoices.filter {
-                $0.needsQuickBooksAttention ||
+                $0.customer != nil &&
+                    ($0.needsQuickBooksAttention ||
                     (quickBooksConnected &&
                         CustomerIntelligence.outstandingBalance(for: $0, payments: []) > 0 &&
-                        ($0.quickBooksID?.isEmpty != false || $0.quickBooksSyncState != "synced"))
+                        ($0.quickBooksID?.isEmpty != false || $0.quickBooksSyncState != "synced")))
             }.count
         let attachmentGaps = attachments.filter { attachment in
             if attachment.quickBooksSyncError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
@@ -914,6 +947,9 @@ enum BusinessSuiteIntelligence {
         }
         if syncAttention.communicationCount > 0 {
             details.append(counted(syncAttention.communicationCount, singular: "communication", plural: "communications"))
+        }
+        if syncAttention.dataRelationshipCount > 0 {
+            details.append(counted(syncAttention.dataRelationshipCount, singular: "unresolved data link", plural: "unresolved data links"))
         }
         return details.isEmpty ? "All connected systems are current." : details.joined(separator: ", ")
     }

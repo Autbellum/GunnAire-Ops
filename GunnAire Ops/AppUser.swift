@@ -329,6 +329,16 @@ enum AppAccess {
         activeRole(email: email, users: users) == .admin
     }
 
+    /// Google Drive archives can contain customer, equipment, billing, and job
+    /// evidence. Keep company-wide export and retry controls with administrators;
+    /// field and accounting roles continue to use their narrower in-app records.
+    static func canArchiveBusinessDocumentsToGoogleDrive(
+        email: String?,
+        users: [AppUser]
+    ) -> Bool {
+        activeRole(email: email, users: users) == .admin
+    }
+
     /// Job-level scope is enforced independently of whether a workspace is visible.
     /// Field technicians may only open jobs assigned to their signed-in account;
     /// office roles retain the workflow scope needed for dispatch and billing.
