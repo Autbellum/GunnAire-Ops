@@ -7448,6 +7448,316 @@ struct GunnAire_OpsTests {
         #expect(snapshot.pricebookUnitPrice == 189)
         #expect(snapshot.hasAuthorizedPriceAdjustment == false)
         #expect(snapshot.authorizedPriceAdjustment == nil)
+        #expect(CatalogLineItemSnapshot.documentDiscount(from: legacyJSON) == nil)
+    }
+
+    @Test func administratorDocumentDiscountsAreScopedValidatedAndBackwardCompatible() throws {
+        let technician = AppUser(email: "discount-tech@gunnaire.com", role: .fieldTechnician)
+        let admin = AppUser(email: "discount-admin@gunnaire.com", role: .admin)
+        let users = [technician, admin]
+        let item = Item(name: "Replacement Scope", unitPrice: 1_000)
+        let authorizedAt = Date(timeIntervalSinceReferenceDate: 1_250_000)
+
+        #expect(throws: BillingDocumentDiscountError.unauthorized) {
+            try BillingDocumentDiscountPolicy.authorize(
+                kind: .percentage,
+                value: 10,
+                grossSubtotal: 1_000,
+                reason: "Maintenance plan benefit",
+                actorEmail: technician.email,
+                users: users,
+                at: authorizedAt
+            )
+        }
+        #expect(throws: BillingDocumentDiscountError.invalidValue) {
+            try BillingDocumentDiscountPolicy.authorize(
+                kind: .percentage,
+                value: 101,
+                grossSubtotal: 1_000,
+                reason: "Invalid percent",
+                actorEmail: admin.email,
+                users: users
+            )
+        }
+        #expect(throws: BillingDocumentDiscountError.exceedsSubtotal) {
+            try BillingDocumentDiscountPolicy.authorize(
+                kind: .fixedAmount,
+                value: 1_001,
+                grossSubtotal: 1_000,
+                reason: "Invalid fixed amount",
+                actorEmail: admin.email,
+                users: users
+            )
+        }
+
+        let discount = try BillingDocumentDiscountPolicy.authorize(
+            kind: .percentage,
+            value: 10,
+            grossSubtotal: 1_000,
+            reason: "  Maintenance plan benefit  ",
+            actorEmail: admin.email,
+            users: users,
+            at: authorizedAt
+        )
+        let snapshotJSON = try #require(CatalogLineItemSnapshot.encoded(
+            from: [item],
+            documentDiscount: discount
+        ))
+
+        #expect(CatalogLineItemSnapshot.decoded(from: snapshotJSON).count == 1)
+        #expect(CatalogLineItemSnapshot.documentDiscount(from: snapshotJSON) == discount)
+        #expect(BillingDocumentDiscountPolicy.grossSubtotal(snapshotJSON: snapshotJSON) == 1_000)
+        #expect(BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: snapshotJSON) == 900)
+        #expect(discount.reason == "Maintenance plan benefit")
+        #expect(discount.authorizedByEmail == admin.email)
+
+        let staleJSON = try #require(CatalogLineItemSnapshot.encoded(
+            from: [item],
+            quantities: [item.id: 2],
+            documentDiscount: discount
+        ))
+        #expect(BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: staleJSON) == nil)
+        #expect(BillingDocumentDiscountPolicy.validationMessage(for: discount, grossSubtotal: 2_000) != nil)
+    }
+
+    @Test func documentDiscountPublishesAsNativeQuickBooksLineAndTaxReconcilesToNetSubtotal() throws {
+        let admin = AppUser(email: "qbo-discount-admin@gunnaire.com", role: .admin)
+        let item = Item(
+            quickBooksID: "QBO-DISCOUNT-SCOPE",
+            name: "Heat Pump Replacement",
+            unitPrice: 1_000,
+            isTaxable: true
+        )
+        let discount = try BillingDocumentDiscountPolicy.authorize(
+            kind: .percentage,
+            value: 10,
+            grossSubtotal: 1_000,
+            reason: "Seasonal replacement promotion",
+            actorEmail: admin.email,
+            users: [admin],
+            at: Date(timeIntervalSinceReferenceDate: 1_300_000)
+        )
+        let snapshotJSON = try #require(CatalogLineItemSnapshot.encoded(
+            from: [item],
+            documentDiscount: discount
+        ))
+        let lines = try QuickBooksDocumentLinePublication.lines(
+            snapshotJSON: snapshotJSON,
+            expectedSubtotal: 900,
+            catalogItems: [item]
+        )
+        let discountLine = try #require(lines.last)
+
+        #expect(lines.count == 2)
+        #expect(discountLine.DetailType == "DiscountLineDetail")
+        #expect(discountLine.Amount == 100)
+        #expect(discountLine.Description == "Seasonal replacement promotion")
+        #expect(discountLine.DiscountLineDetail?.PercentBased == true)
+        #expect(discountLine.DiscountLineDetail?.DiscountPercent == 10)
+
+        let lineJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(discountLine)) as? [String: Any]
+        )
+        #expect(lineJSON["DiscountLineDetail"] != nil)
+        #expect(lineJSON["SalesItemLineDetail"] == nil)
+
+        let customerRef = QuickBooksReference(value: "QBO-CUSTOMER-DISCOUNT", name: nil)
+        let invoicePayload = QuickBooksInvoiceCreate(
+            CustomerRef: customerRef,
+            Line: lines,
+            PrivateNote: nil,
+            GlobalTaxCalculation: "TaxExcluded",
+            ApplyTaxAfterDiscount: true
+        )
+        let estimatePayload = QuickBooksEstimateCreate(
+            CustomerRef: customerRef,
+            Line: lines,
+            PrivateNote: nil,
+            GlobalTaxCalculation: "TaxExcluded",
+            ApplyTaxAfterDiscount: true
+        )
+        let updatePayload = QuickBooksInvoiceUpdate(
+            Id: "QBO-INVOICE-DISCOUNT",
+            SyncToken: "3",
+            CustomerRef: customerRef,
+            Line: lines,
+            PrivateNote: nil,
+            GlobalTaxCalculation: "TaxExcluded",
+            ApplyTaxAfterDiscount: true
+        )
+        for payloadData in [
+            try JSONEncoder().encode(invoicePayload),
+            try JSONEncoder().encode(estimatePayload),
+            try JSONEncoder().encode(updatePayload)
+        ] {
+            let object = try #require(JSONSerialization.jsonObject(with: payloadData) as? [String: Any])
+            #expect(object["ApplyTaxAfterDiscount"] as? Bool == true)
+        }
+
+        let reconciliation = BillingTaxPolicy.reconcile(
+            snapshotJSON: snapshotJSON,
+            quickBooksTotal: 965,
+            reportedTax: 65
+        )
+        #expect(reconciliation.subtotal == 900)
+        #expect(reconciliation.salesTax == 65)
+        #expect(reconciliation.total == 965)
+        #expect(reconciliation.status == .calculatedByQuickBooks)
+
+        #expect(throws: QuickBooksDocumentLinePublicationError.amountMismatch(expected: 901, mapped: 900)) {
+            try QuickBooksDocumentLinePublication.lines(
+                snapshotJSON: snapshotJSON,
+                expectedSubtotal: 901,
+                catalogItems: [item]
+            )
+        }
+
+        let staleSnapshotJSON = try #require(CatalogLineItemSnapshot.encoded(
+            from: [item],
+            quantities: [item.id: 2],
+            documentDiscount: discount
+        ))
+        #expect(throws: QuickBooksDocumentLinePublicationError.invalidDocumentDiscount) {
+            try QuickBooksDocumentLinePublication.lines(
+                snapshotJSON: staleSnapshotJSON,
+                expectedSubtotal: 1_800,
+                catalogItems: [item]
+            )
+        }
+    }
+
+    @Test func discountedEstimateInvoiceAndCustomerDocumentsPreservePublicAndPrivateEvidence() throws {
+        let admin = AppUser(email: "document-discount-admin@gunnaire.com", role: .admin)
+        let customer = Customer(name: "Discount Document Customer")
+        let item = Item(name: "System Replacement", unitPrice: 1_000, isTaxable: true)
+        let authorizedAt = Date(timeIntervalSinceReferenceDate: 1_350_000)
+        let discount = try BillingDocumentDiscountPolicy.authorize(
+            kind: .fixedAmount,
+            value: 125,
+            grossSubtotal: 1_000,
+            reason: "Approved customer loyalty credit",
+            actorEmail: admin.email,
+            users: [admin],
+            at: authorizedAt
+        )
+        let snapshotJSON = try #require(CatalogLineItemSnapshot.encoded(
+            from: [item],
+            documentDiscount: discount
+        ))
+        let estimate = Estimate(
+            customer: customer,
+            lineItemSummary: "System Replacement",
+            catalogSnapshotJSON: snapshotJSON,
+            amount: 875
+        )
+        let invoice = Invoice.draft(from: estimate)
+        #expect(invoice.catalogSnapshotJSON == estimate.catalogSnapshotJSON)
+        #expect(invoice.documentDiscount == discount)
+        #expect(invoice.grossSubtotalAmount == 1_000)
+        #expect(invoice.subtotalAmount == 875)
+        #expect(invoice.amount == 875)
+        #expect(invoice.applyQuickBooksTaxResult(total: 938, reportedTax: 63) == nil)
+
+        let estimateRows = CustomerDocumentExporter.estimateDetailRows(for: estimate)
+        let invoiceRows = CustomerDocumentExporter.invoiceDetailRows(for: invoice, payments: [])
+        for rows in [estimateRows, invoiceRows] {
+            #expect(rows.contains { $0.label == "Gross Subtotal" && $0.value.contains("1,000") })
+            #expect(rows.contains { $0.label == "Discount" && $0.value.contains("125") })
+            #expect(rows.contains { $0.label == "Net Subtotal" && $0.value.contains("875") })
+            #expect(rows.contains { $0.label == "Document Discount" && $0.value.contains("Approved customer loyalty credit") })
+            #expect(!rows.contains { $0.value.contains(admin.email) })
+        }
+
+        let privateNote = try #require(BillingDocumentDiscountAudit.quickBooksPrivateNote(
+            existing: "Approved replacement",
+            snapshotJSON: snapshotJSON
+        ))
+        #expect(privateNote.contains("Approved replacement"))
+        #expect(privateNote.contains(admin.email))
+        #expect(privateNote.contains(ISO8601DateFormatter().string(from: authorizedAt)))
+    }
+
+    @Test func projectProgressInvoicesAllocateTheContractDiscountToExactMilestoneCents() throws {
+        let admin = AppUser(email: "project-discount-admin@gunnaire.com", role: .admin)
+        let item = Item(
+            quickBooksID: "QBO-PROJECT-DISCOUNT",
+            name: "Complete Replacement Project",
+            unitPrice: 10_000
+        )
+        let discount = try BillingDocumentDiscountPolicy.authorize(
+            kind: .percentage,
+            value: 10,
+            grossSubtotal: 10_000,
+            reason: "Approved project incentive",
+            actorEmail: admin.email,
+            users: [admin],
+            at: Date(timeIntervalSinceReferenceDate: 1_400_000)
+        )
+        let sourceJSON = try #require(CatalogLineItemSnapshot.encoded(
+            from: [item],
+            documentDiscount: discount
+        ))
+        let progressJSON = try ProjectBillingPolicy.progressDocumentSnapshotJSON(
+            from: sourceJSON,
+            targetAmount: 2_700
+        )
+        let progressDiscount = try #require(CatalogLineItemSnapshot.documentDiscount(from: progressJSON))
+        let progressGross = try #require(BillingDocumentDiscountPolicy.grossSubtotal(snapshotJSON: progressJSON))
+
+        #expect(progressGross == 3_000)
+        #expect(progressDiscount.kind == .fixedAmount)
+        #expect(progressDiscount.value == 300)
+        #expect(progressDiscount.reason == discount.reason)
+        #expect(progressDiscount.authorizedByEmail == discount.authorizedByEmail)
+        #expect(BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: progressJSON) == 2_700)
+
+        let lines = try QuickBooksDocumentLinePublication.lines(
+            snapshotJSON: progressJSON,
+            expectedSubtotal: 2_700,
+            catalogItems: [item]
+        )
+        #expect(lines.count == 2)
+        #expect(lines.last?.DetailType == "DiscountLineDetail")
+        #expect(lines.last?.Amount == 300)
+    }
+
+    @Test func projectProgressInvoiceOmitsAContractDiscountThatRoundsToZeroCents() throws {
+        let admin = AppUser(email: "project-cent-discount-admin@gunnaire.com", role: .admin)
+        let item = Item(
+            quickBooksID: "QBO-PROJECT-CENT-DISCOUNT",
+            name: "Replacement Project",
+            unitPrice: 100
+        )
+        let discount = try BillingDocumentDiscountPolicy.authorize(
+            kind: .percentage,
+            value: 10,
+            grossSubtotal: 100,
+            reason: "Approved project incentive",
+            actorEmail: admin.email,
+            users: [admin]
+        )
+        let sourceJSON = try #require(CatalogLineItemSnapshot.encoded(
+            from: [item],
+            documentDiscount: discount
+        ))
+
+        let progressJSON = try ProjectBillingPolicy.progressDocumentSnapshotJSON(
+            from: sourceJSON,
+            targetAmount: 0.01
+        )
+
+        #expect(CatalogLineItemSnapshot.documentDiscount(from: progressJSON) == nil)
+        #expect(BillingDocumentDiscountPolicy.grossSubtotal(snapshotJSON: progressJSON) == 0.01)
+        #expect(BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: progressJSON) == 0.01)
+
+        let lines = try QuickBooksDocumentLinePublication.lines(
+            snapshotJSON: progressJSON,
+            expectedSubtotal: 0.01,
+            catalogItems: [item]
+        )
+        #expect(lines.count == 1)
+        #expect(lines.first?.DetailType == "SalesItemLineDetail")
+        #expect(lines.first?.Amount == 0.01)
     }
 
     @Test func invoiceBuilderRoutePreservesServiceCallContext() async throws {

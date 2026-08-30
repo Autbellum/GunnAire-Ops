@@ -1872,6 +1872,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(stagePicker.buttons["Billing"].isSelected)
         XCTAssertFalse(app.buttons["Create Invoice"].exists)
         XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].exists)
+        XCTAssertFalse(app.buttons["DocumentDiscountAction"].exists)
 
         let servicedSystemPicker = app.descendants(matching: .any)["LineEquipmentPicker-\(catalogItemID)"]
         XCTAssertTrue(servicedSystemPicker.waitForExistence(timeout: 3))
@@ -2124,6 +2125,83 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdministratorAuthorizesDocumentDiscountWithoutChangingCatalogLines() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        app.staticTexts["Schedule & Jobs"].tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let documentation = app.buttons["OpenDocumentation-\(screenshotServiceCallID)"]
+        for _ in 0..<6 where !documentation.exists || !documentation.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(documentation.waitForExistence(timeout: 3))
+        documentation.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        stagePicker.buttons["Billing"].tap()
+
+        let discountAction = app.buttons["DocumentDiscountAction"]
+        for _ in 0..<7 where !discountAction.exists || !discountAction.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(discountAction.waitForExistence(timeout: 3))
+        XCTAssertEqual(discountAction.label, "Add Document Discount")
+        discountAction.tap()
+
+        XCTAssertTrue(app.navigationBars["Add Discount"].waitForExistence(timeout: 3))
+        let discountValue = app.textFields["DocumentDiscountValue"]
+        XCTAssertTrue(discountValue.waitForExistence(timeout: 3))
+        discountValue.tap()
+        discountValue.typeText("10")
+
+        let reason = app.textFields["DocumentDiscountReason"]
+        XCTAssertTrue(reason.waitForExistence(timeout: 3))
+        reason.tap()
+        reason.typeText("Maintenance plan member benefit")
+        if app.keyboards.firstMatch.exists {
+            app.typeKey(.escape, modifierFlags: [])
+        }
+
+        let authorize = app.buttons["AuthorizeDocumentDiscount"]
+        XCTAssertTrue(authorize.waitForExistence(timeout: 3))
+        XCTAssertTrue(authorize.isEnabled)
+        authorize.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        let summary = app.staticTexts["AuthorizedDocumentDiscount"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 3))
+        XCTAssertTrue(summary.label.contains("10%"))
+        XCTAssertTrue(summary.label.contains("Maintenance plan member benefit"))
+        XCTAssertFalse(summary.label.contains("@"))
+        XCTAssertTrue(app.staticTexts["−$18.90"].exists)
+        let netSubtotal = app.staticTexts["DocumentNetSubtotal"]
+        for _ in 0..<3 where !netSubtotal.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(netSubtotal.waitForExistence(timeout: 3))
+        XCTAssertTrue(netSubtotal.label.contains("$170.10"))
+
+        let updateInvoice = app.buttons["Update Invoice"]
+        for _ in 0..<6 where !updateInvoice.exists || !updateInvoice.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(updateInvoice.waitForExistence(timeout: 3))
+        XCTAssertTrue(updateInvoice.isEnabled)
+        updateInvoice.tap()
+        XCTAssertTrue(app.staticTexts["QuickBooks update pending"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testTaxableBillingShowsOneClearQuickBooksTotalHandoff() throws {
         let app = XCUIApplication()
         app.launchArguments = [
@@ -2155,7 +2233,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         XCTAssertTrue(notice.waitForExistence(timeout: 3))
         XCTAssertTrue(notice.label.contains("QuickBooks calculates sales tax"))
-        XCTAssertTrue(app.staticTexts["Subtotal"].exists)
+        XCTAssertTrue(app.staticTexts["DocumentNetSubtotal"].exists)
         XCTAssertFalse(app.staticTexts["Sales Tax Rate"].exists)
         XCTAssertTrue(app.buttons["Discount / Adjust"].exists)
     }

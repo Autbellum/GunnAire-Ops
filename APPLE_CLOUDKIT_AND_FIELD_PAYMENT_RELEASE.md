@@ -22,7 +22,7 @@ and schema status as of 2026-08-30.
   capabilities. The route estimate uses only staff-entered service addresses,
   requests no device location, and adds no location usage description. Those
   unrelated portal capabilities remain off deliberately.
-- Exact build `1.0 (2026083013)` is retained as a development-signed iOS
+- Exact build `1.0 (2026083014)` is retained as a development-signed iOS
   Release archive and universal arm64/x86_64 Mac Catalyst Release app under
   `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30`. Strict
   signature verification confirms Apple login, CloudKit, Push Notifications,
@@ -32,6 +32,12 @@ and schema status as of 2026-08-30.
   plus the host-only optional Metal search path. An Apple Distribution private
   key, separate Mac distribution signing, signed representative device
   acceptance, and App Store upload remain external release gates.
+- Build `2026083014` changes no SwiftData field or CloudKit schema. Its
+  versioned billing snapshot adds an authorized document-discount envelope
+  inside the existing stored document payload; legacy line arrays continue to
+  decode. Complete iPad and Mac logic suites pass **662/662** each, and the
+  consolidated iPad billing regression passes **5/5**. No CloudKit bootstrap,
+  Development mutation, or Production promotion was required or performed.
 - Production remains schema v15 across 24 record types in retained export
   `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
   `f81de36537620a10fe34fde22883a94dc6f5b00deea6fec08004160c0aae7594`.

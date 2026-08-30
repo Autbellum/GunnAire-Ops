@@ -135,6 +135,198 @@ struct AuthorizedLinePriceAdjustment: Codable, Equatable {
     let authorizedAt: Date
 }
 
+enum BillingDocumentDiscountKind: String, Codable, CaseIterable, Identifiable {
+    case percentage
+    case fixedAmount = "fixed_amount"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .percentage: "Percent"
+        case .fixedAmount: "Fixed Amount"
+        }
+    }
+}
+
+/// A revenue-reducing adjustment authorized against one exact document scope.
+/// Keeping the gross subtotal in the immutable evidence prevents later line
+/// edits from silently expanding a previously approved percentage discount.
+struct AuthorizedDocumentDiscount: Codable, Equatable {
+    let kind: BillingDocumentDiscountKind
+    let value: Double
+    let grossSubtotalAtAuthorization: Double
+    let reason: String
+    let authorizedByEmail: String
+    let authorizedAt: Date
+
+    func amount(for grossSubtotal: Double) -> Double? {
+        guard grossSubtotal.isFinite,
+              grossSubtotal >= 0,
+              BillingDocumentDiscountPolicy.currencyCents(grossSubtotal) ==
+                BillingDocumentDiscountPolicy.currencyCents(grossSubtotalAtAuthorization) else {
+            return nil
+        }
+        let rawAmount: Double
+        switch kind {
+        case .percentage:
+            rawAmount = grossSubtotal * value / 100
+        case .fixedAmount:
+            rawAmount = value
+        }
+        guard rawAmount.isFinite, rawAmount >= 0 else { return nil }
+        return min(BillingDocumentDiscountPolicy.roundCurrency(rawAmount), grossSubtotal)
+    }
+
+    var valueDisplayName: String {
+        switch kind {
+        case .percentage:
+            "\(value.formatted(.number.precision(.fractionLength(0...2))))%"
+        case .fixedAmount:
+            value.formatted(.currency(code: "USD"))
+        }
+    }
+}
+
+enum BillingDocumentDiscountError: LocalizedError, Equatable {
+    case unauthorized
+    case invalidSubtotal
+    case invalidValue
+    case exceedsSubtotal
+    case missingReason
+    case reasonTooLong
+    case scopeChanged
+
+    var errorDescription: String? {
+        switch self {
+        case .unauthorized:
+            "Only an administrator can authorize a document discount."
+        case .invalidSubtotal:
+            "Add at least one priced line before authorizing a discount."
+        case .invalidValue:
+            "Enter a percentage greater than 0 and no more than 100, or a fixed amount greater than 0."
+        case .exceedsSubtotal:
+            "A fixed discount cannot exceed the current line-item subtotal."
+        case .missingReason:
+            "Enter the customer-visible business reason for this discount."
+        case .reasonTooLong:
+            "Keep the discount reason to 240 characters or fewer."
+        case .scopeChanged:
+            "The line-item subtotal changed after this discount was authorized. Reauthorize or remove the discount before saving."
+        }
+    }
+}
+
+enum BillingDocumentDiscountPolicy {
+    static func authorize(
+        kind: BillingDocumentDiscountKind,
+        value: Double,
+        grossSubtotal: Double,
+        reason: String,
+        actorEmail: String?,
+        users: [AppUser],
+        at date: Date = Date()
+    ) throws -> AuthorizedDocumentDiscount {
+        guard AppAccess.canAuthorizePriceAdjustments(email: actorEmail, users: users) else {
+            throw BillingDocumentDiscountError.unauthorized
+        }
+        guard grossSubtotal.isFinite, grossSubtotal > 0 else {
+            throw BillingDocumentDiscountError.invalidSubtotal
+        }
+        guard value.isFinite, value > 0 else {
+            throw BillingDocumentDiscountError.invalidValue
+        }
+        switch kind {
+        case .percentage:
+            guard value <= 100 else { throw BillingDocumentDiscountError.invalidValue }
+        case .fixedAmount:
+            guard currencyCents(value).map({ $0 <= (currencyCents(grossSubtotal) ?? -1) }) == true else {
+                throw BillingDocumentDiscountError.exceedsSubtotal
+            }
+        }
+        let normalizedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedReason.isEmpty else { throw BillingDocumentDiscountError.missingReason }
+        guard normalizedReason.count <= 240 else { throw BillingDocumentDiscountError.reasonTooLong }
+
+        return AuthorizedDocumentDiscount(
+            kind: kind,
+            value: kind == .fixedAmount ? roundCurrency(value) : value,
+            grossSubtotalAtAuthorization: roundCurrency(grossSubtotal),
+            reason: normalizedReason,
+            authorizedByEmail: AppAccess.normalizedEmail(actorEmail),
+            authorizedAt: date
+        )
+    }
+
+    static func validationMessage(
+        for discount: AuthorizedDocumentDiscount?,
+        grossSubtotal: Double
+    ) -> String? {
+        guard let discount else { return nil }
+        return discount.amount(for: grossSubtotal) == nil
+            ? BillingDocumentDiscountError.scopeChanged.localizedDescription
+            : nil
+    }
+
+    static func netSubtotal(snapshotJSON: String?) -> Double? {
+        let lines = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
+        guard !lines.isEmpty else { return nil }
+        let grossSubtotal = lines.reduce(0) { $0 + ($1.unitPrice * $1.quantity) }
+        guard grossSubtotal.isFinite, grossSubtotal >= 0 else { return nil }
+        if let discount = CatalogLineItemSnapshot.documentDiscount(from: snapshotJSON) {
+            guard let discountAmount = discount.amount(for: grossSubtotal) else { return nil }
+            return max(roundCurrency(grossSubtotal - discountAmount), 0)
+        }
+        return roundCurrency(grossSubtotal)
+    }
+
+    static func grossSubtotal(snapshotJSON: String?) -> Double? {
+        let lines = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
+        guard !lines.isEmpty else { return nil }
+        let total = lines.reduce(0) { $0 + ($1.unitPrice * $1.quantity) }
+        return total.isFinite && total >= 0 ? roundCurrency(total) : nil
+    }
+
+    static func roundCurrency(_ value: Double) -> Double {
+        Double((value * 100).rounded()) / 100
+    }
+
+    static func currencyCents(_ value: Double) -> Int64? {
+        guard value.isFinite,
+              value >= 0,
+              value <= Double(Int64.max) / 100 else { return nil }
+        return Int64((value * 100).rounded())
+    }
+}
+
+enum BillingDocumentDiscountAudit {
+    static func quickBooksPrivateNote(existing: String?, snapshotJSON: String?) -> String? {
+        var entries = [existing]
+            .compactMap(normalized)
+        if let discount = CatalogLineItemSnapshot.documentDiscount(from: snapshotJSON),
+           let grossSubtotal = BillingDocumentDiscountPolicy.grossSubtotal(snapshotJSON: snapshotJSON),
+           let amount = discount.amount(for: grossSubtotal) {
+            entries.append(
+                "Authorized document discount: \(discount.valueDisplayName) / \(amount.formatted(.currency(code: "USD"))); \(discount.reason); authorized by \(discount.authorizedByEmail) at \(ISO8601DateFormatter().string(from: discount.authorizedAt))"
+            )
+        }
+        guard !entries.isEmpty else { return nil }
+        return String(entries.joined(separator: "\n").prefix(4_000))
+    }
+
+    static func customerDocumentSummary(snapshotJSON: String?) -> String? {
+        guard let discount = CatalogLineItemSnapshot.documentDiscount(from: snapshotJSON),
+              let grossSubtotal = BillingDocumentDiscountPolicy.grossSubtotal(snapshotJSON: snapshotJSON),
+              let amount = discount.amount(for: grossSubtotal) else { return nil }
+        return "\(discount.valueDisplayName) — \(discount.reason) • −\(amount.formatted(.currency(code: "USD")))"
+    }
+
+    nonisolated private static func normalized(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
+    }
+}
+
 enum BillingPriceAdjustmentError: LocalizedError, Equatable {
     case unauthorized
     case invalidPrice
@@ -471,7 +663,8 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         quantities: [UUID: Double] = [:],
         priceAdjustments: [UUID: AuthorizedLinePriceAdjustment] = [:],
         servicedEquipment: [UUID: CatalogLineEquipmentSnapshot] = [:],
-        assemblies: [UUID: CatalogLineAssemblySnapshot] = [:]
+        assemblies: [UUID: CatalogLineAssemblySnapshot] = [:],
+        documentDiscount: AuthorizedDocumentDiscount? = nil
     ) -> String? {
         let snapshots = items
             .map {
@@ -484,14 +677,27 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
                 )
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        guard !snapshots.isEmpty,
-              let data = try? JSONEncoder().encode(snapshots) else { return nil }
-        return String(data: data, encoding: .utf8)
+        return encoded(snapshots: snapshots, documentDiscount: documentDiscount)
     }
 
-    static func encoded(snapshots: [CatalogLineItemSnapshot]) -> String? {
-        guard !snapshots.isEmpty,
-              let data = try? JSONEncoder().encode(snapshots) else { return nil }
+    static func encoded(
+        snapshots: [CatalogLineItemSnapshot],
+        documentDiscount: AuthorizedDocumentDiscount? = nil
+    ) -> String? {
+        guard !snapshots.isEmpty else { return nil }
+        let data: Data?
+        if let documentDiscount {
+            data = try? JSONEncoder().encode(
+                CatalogDocumentSnapshotEnvelope(
+                    version: 1,
+                    lines: snapshots,
+                    documentDiscount: documentDiscount
+                )
+            )
+        } else {
+            data = try? JSONEncoder().encode(snapshots)
+        }
+        guard let data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
@@ -517,11 +723,22 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
 
     static func decoded(from json: String?) -> [CatalogLineItemSnapshot] {
         guard let json,
-              let data = json.data(using: .utf8),
-              let snapshots = try? JSONDecoder().decode([CatalogLineItemSnapshot].self, from: data) else {
+              let data = json.data(using: .utf8) else {
             return []
         }
-        return snapshots
+        if let snapshots = try? JSONDecoder().decode([CatalogLineItemSnapshot].self, from: data) {
+            return snapshots
+        }
+        return (try? JSONDecoder().decode(CatalogDocumentSnapshotEnvelope.self, from: data).lines) ?? []
+    }
+
+    static func documentDiscount(from json: String?) -> AuthorizedDocumentDiscount? {
+        guard let json,
+              let data = json.data(using: .utf8),
+              let envelope = try? JSONDecoder().decode(CatalogDocumentSnapshotEnvelope.self, from: data) else {
+            return nil
+        }
+        return envelope.documentDiscount
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -548,6 +765,12 @@ struct CatalogLineItemSnapshot: Codable, Equatable, Identifiable {
         servicedEquipment = try values.decodeIfPresent(CatalogLineEquipmentSnapshot.self, forKey: .servicedEquipment)
         assembly = try values.decodeIfPresent(CatalogLineAssemblySnapshot.self, forKey: .assembly)
     }
+}
+
+private struct CatalogDocumentSnapshotEnvelope: Codable {
+    let version: Int
+    let lines: [CatalogLineItemSnapshot]
+    let documentDiscount: AuthorizedDocumentDiscount?
 }
 
 @Model

@@ -1100,18 +1100,34 @@ enum CustomerDocumentExporter {
             ("Notes", estimate.notes ?? ""),
             ("Total", currency(estimate.amount))
         ]
-        if estimate.hasTaxableLines,
-           let totalIndex = rows.firstIndex(where: { $0.0 == "Total" }) {
-            rows.insert(contentsOf: [
-                ("Subtotal", currency(estimate.subtotalAmount)),
-                ("Sales Tax", currency(estimate.salesTaxAmount)),
-                ("Tax Status", estimate.taxCalculationStatus.displayName)
-            ], at: totalIndex)
+        if let totalIndex = rows.firstIndex(where: { $0.0 == "Total" }) {
+            var financialRows: [(String, String)] = []
+            if estimate.documentDiscount != nil {
+                financialRows.append(("Gross Subtotal", currency(estimate.grossSubtotalAmount)))
+                financialRows.append(("Discount", "−\(currency(estimate.documentDiscountAmount))"))
+                financialRows.append(("Net Subtotal", currency(estimate.subtotalAmount)))
+            } else if estimate.hasTaxableLines {
+                financialRows.append(("Subtotal", currency(estimate.subtotalAmount)))
+            }
+            if estimate.hasTaxableLines {
+                financialRows.append(("Sales Tax", currency(estimate.salesTaxAmount)))
+                financialRows.append(("Tax Status", estimate.taxCalculationStatus.displayName))
+            }
+            rows.insert(contentsOf: financialRows, at: totalIndex)
         }
-        if let adjustments = BillingPriceAdjustmentAudit.customerDocumentSummary(
-            snapshotJSON: estimate.catalogSnapshotJSON
-        ), let itemsIndex = rows.firstIndex(where: { $0.0 == "Items" }) {
-            rows.insert(("Discounts / Adjustments", adjustments), at: itemsIndex + 1)
+        if let itemsIndex = rows.firstIndex(where: { $0.0 == "Items" }) {
+            var adjustmentRows: [(String, String)] = []
+            if let adjustments = BillingPriceAdjustmentAudit.customerDocumentSummary(
+                snapshotJSON: estimate.catalogSnapshotJSON
+            ) {
+                adjustmentRows.append(("Line Price Adjustments", adjustments))
+            }
+            if let documentDiscount = BillingDocumentDiscountAudit.customerDocumentSummary(
+                snapshotJSON: estimate.catalogSnapshotJSON
+            ) {
+                adjustmentRows.append(("Document Discount", documentDiscount))
+            }
+            rows.insert(contentsOf: adjustmentRows, at: itemsIndex + 1)
         }
         if estimate.isProposalOption {
             rows.insert(
@@ -1215,18 +1231,34 @@ enum CustomerDocumentExporter {
             ("Payments", currency(paidTotal)),
             ("Balance Due", currency(balance))
         ]
-        if invoice.hasTaxableLines,
-           let totalIndex = rows.firstIndex(where: { $0.0 == "Invoice Total" }) {
-            rows.insert(contentsOf: [
-                ("Subtotal", currency(invoice.subtotalAmount)),
-                ("Sales Tax", currency(invoice.salesTaxAmount)),
-                ("Tax Status", invoice.taxCalculationStatus.displayName)
-            ], at: totalIndex)
+        if let totalIndex = rows.firstIndex(where: { $0.0 == "Invoice Total" }) {
+            var financialRows: [(String, String)] = []
+            if invoice.documentDiscount != nil {
+                financialRows.append(("Gross Subtotal", currency(invoice.grossSubtotalAmount)))
+                financialRows.append(("Discount", "−\(currency(invoice.documentDiscountAmount))"))
+                financialRows.append(("Net Subtotal", currency(invoice.subtotalAmount)))
+            } else if invoice.hasTaxableLines {
+                financialRows.append(("Subtotal", currency(invoice.subtotalAmount)))
+            }
+            if invoice.hasTaxableLines {
+                financialRows.append(("Sales Tax", currency(invoice.salesTaxAmount)))
+                financialRows.append(("Tax Status", invoice.taxCalculationStatus.displayName))
+            }
+            rows.insert(contentsOf: financialRows, at: totalIndex)
         }
-        if let adjustments = BillingPriceAdjustmentAudit.customerDocumentSummary(
-            snapshotJSON: invoice.catalogSnapshotJSON
-        ), let itemsIndex = rows.firstIndex(where: { $0.0 == "Items" }) {
-            rows.insert(("Discounts / Adjustments", adjustments), at: itemsIndex + 1)
+        if let itemsIndex = rows.firstIndex(where: { $0.0 == "Items" }) {
+            var adjustmentRows: [(String, String)] = []
+            if let adjustments = BillingPriceAdjustmentAudit.customerDocumentSummary(
+                snapshotJSON: invoice.catalogSnapshotJSON
+            ) {
+                adjustmentRows.append(("Line Price Adjustments", adjustments))
+            }
+            if let documentDiscount = BillingDocumentDiscountAudit.customerDocumentSummary(
+                snapshotJSON: invoice.catalogSnapshotJSON
+            ) {
+                adjustmentRows.append(("Document Discount", documentDiscount))
+            }
+            rows.insert(contentsOf: adjustmentRows, at: itemsIndex + 1)
         }
         if let siteAddress = normalizedValue(invoice.siteAddress) {
             rows.insert(("Service Address", siteAddress), at: 2)

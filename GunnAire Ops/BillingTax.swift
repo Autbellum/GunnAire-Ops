@@ -38,11 +38,11 @@ struct BillingTaxReconciliation: Equatable {
 /// collection all use the same amount.
 enum BillingTaxPolicy {
     static func snapshotSubtotal(_ snapshotJSON: String?) -> Double? {
-        let snapshots = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
-        guard !snapshots.isEmpty else { return nil }
-        let subtotal = snapshots.reduce(0) { $0 + ($1.unitPrice * $1.quantity) }
-        guard subtotal.isFinite, subtotal >= 0 else { return nil }
-        return subtotal
+        BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: snapshotJSON)
+    }
+
+    static func snapshotGrossSubtotal(_ snapshotJSON: String?) -> Double? {
+        BillingDocumentDiscountPolicy.grossSubtotal(snapshotJSON: snapshotJSON)
     }
 
     static func hasTaxableLines(_ snapshotJSON: String?) -> Bool {
@@ -86,9 +86,7 @@ enum BillingTaxPolicy {
     ) -> BillingTaxReconciliation {
         let safeTotal = quickBooksTotal.isFinite && quickBooksTotal >= 0 ? quickBooksTotal : 0
         let snapshots = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
-        let snapshotSubtotal = snapshots.isEmpty
-            ? nil
-            : snapshots.reduce(0) { $0 + ($1.unitPrice * $1.quantity) }
+        let snapshotSubtotal = BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: snapshotJSON)
         let hasTaxableLines = snapshots.contains(where: \.isTaxable)
         let validReportedTax = reportedTax.flatMap { value in
             value.isFinite && value >= 0 ? value : nil
@@ -113,9 +111,9 @@ enum BillingTaxPolicy {
         var issue: String?
 
         if safeTotal + 0.009 < snapshotSubtotal {
-            issue = "QuickBooks returned a total below the immutable line-item subtotal."
+            issue = "QuickBooks returned a total below the immutable net line-item subtotal."
         } else if currencyCents(safeTotal) != currencyCents(expectedTotal) {
-            issue = "QuickBooks tax plus the immutable line-item subtotal does not equal the returned document total."
+            issue = "QuickBooks tax plus the immutable net line-item subtotal does not equal the returned document total."
         } else if !hasTaxableLines && tax > 0.009 {
             issue = "QuickBooks applied sales tax even though every immutable line is non-taxable."
         }

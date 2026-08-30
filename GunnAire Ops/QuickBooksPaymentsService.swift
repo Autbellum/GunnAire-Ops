@@ -392,7 +392,8 @@ final class QuickBooksPaymentsService {
             BillEmail: inputs.billEmail,
             ShipAddr: inputs.shipAddress,
             DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
-            GlobalTaxCalculation: "TaxExcluded"
+            GlobalTaxCalculation: "TaxExcluded",
+            ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true
         )
 
         let remoteInvoices = try await withCheckedThrowingContinuation { continuation in
