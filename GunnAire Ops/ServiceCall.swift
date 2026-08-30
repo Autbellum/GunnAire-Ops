@@ -1003,6 +1003,8 @@ struct JobCloseoutReadiness: Equatable {
             return "Mark work complete"
         case "Technical report complete":
             return "Complete technical report"
+        case "Work performed log":
+            return "Add work-performed entry"
         case "Job time stopped":
             return "Clock out of this job"
         case "Onsite report generated":
@@ -1039,7 +1041,7 @@ struct JobCloseoutReadiness: Equatable {
             return .work
         }
         switch requirement {
-        case "Work completed", "Technical report complete":
+        case "Work completed", "Technical report complete", "Work performed log":
             return .work
         case "Job time stopped":
             return .timeClock
@@ -2786,6 +2788,7 @@ final class ServiceCall {
         return "Documentation is not complete. Missing or invalid: \(serviceReportMissingRequirementLabels.joined(separator: ", "))."
     }
 
+    @MainActor
     func closeoutReadiness(
         invoice: Invoice?,
         payments: [Payment],
@@ -2793,7 +2796,9 @@ final class ServiceCall {
         fieldFormTemplates: [FieldFormTemplate] = [],
         fieldFormResponses: [FieldFormResponse] = [],
         timeEntries: [TimeEntry]? = nil,
-        materialReadiness: JobMaterialCloseoutSummary = .notApplicable
+        materialReadiness: JobMaterialCloseoutSummary = .notApplicable,
+        serviceCallActivities: [ServiceCallActivity] = [],
+        requireWorkPerformedLog: Bool = false
     ) -> JobCloseoutReadiness {
         let fieldForms = FieldFormCloseoutPolicy.readiness(
             serviceCallID: id,
@@ -2805,6 +2810,9 @@ final class ServiceCall {
             "Work completed",
             "Technical report complete"
         ]
+        if requireWorkPerformedLog, requiresTechnicalServiceReportCompletion {
+            requiredItems.append("Work performed log")
+        }
         requiredItems.append(contentsOf: fieldForms.requirements.map(\.closeoutItem))
         let jobTimeEntries = (timeEntries ?? self.timeEntries).filter {
             $0.serviceCall?.id == id && $0.activity == .job
@@ -2840,6 +2848,13 @@ final class ServiceCall {
         }
         if !canCompleteDocumentation {
             missing.append("Technical report complete")
+        }
+        if let workLogItem = ServiceWorkLogPolicy.closeoutMissingItem(
+            for: self,
+            activities: serviceCallActivities,
+            isRequired: requireWorkPerformedLog
+        ) {
+            missing.append(workLogItem)
         }
         missing.append(contentsOf: fieldForms.missingRequirements.map(\.closeoutItem))
         if jobTimeEntries.contains(where: \.isOpen) {

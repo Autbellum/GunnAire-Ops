@@ -14,6 +14,7 @@ struct ScheduleView: View {
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
     @Query(sort: \FieldFormTemplate.createdAt, order: .forward) private var fieldFormTemplates: [FieldFormTemplate]
     @Query(sort: \FieldFormResponse.completedAt, order: .reverse) private var fieldFormResponses: [FieldFormResponse]
+    @Query(sort: \ServiceCallActivity.occurredAt, order: .reverse) private var serviceCallActivities: [ServiceCallActivity]
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
     @Query(sort: \InventoryMovement.createdAt, order: .reverse) private var inventoryMovements: [InventoryMovement]
@@ -28,6 +29,7 @@ struct ScheduleView: View {
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
     @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
+    @AppStorage("requireWorkPerformedLogForCloseout") private var requireWorkPerformedLogForCloseout = true
 
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showingAddCallSheet = false
@@ -1890,7 +1892,9 @@ struct ScheduleView: View {
                 projectMilestones: projectMilestones,
                 items: items,
                 movements: inventoryMovements
-            )
+            ),
+            serviceCallActivities: serviceCallActivities,
+            requireWorkPerformedLog: requireWorkPerformedLogForCloseout
         )
     }
 

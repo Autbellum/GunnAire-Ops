@@ -19,6 +19,7 @@ struct BillingDocumentsView: View {
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var attachments: [ServiceDocumentAttachment]
     @Query(sort: \FieldFormTemplate.createdAt, order: .forward) private var fieldFormTemplates: [FieldFormTemplate]
     @Query(sort: \FieldFormResponse.completedAt, order: .reverse) private var fieldFormResponses: [FieldFormResponse]
+    @Query(sort: \ServiceCallActivity.occurredAt, order: .reverse) private var serviceCallActivities: [ServiceCallActivity]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
@@ -28,6 +29,8 @@ struct BillingDocumentsView: View {
     @Query(sort: \ProjectMilestone.plannedDate, order: .forward) private var projectMilestones: [ProjectMilestone]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var maintenanceAgreements: [RecurringMaintenanceContract]
     @AppStorage("defaultInvoicePaymentTerms") private var defaultInvoicePaymentTermsRawValue = InvoicePaymentTerms.dueOnReceipt.rawValue
+    @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
+    @AppStorage("requireWorkPerformedLogForCloseout") private var requireWorkPerformedLogForCloseout = true
 
     private let initialServiceCall: ServiceCall?
     private let openCloseoutOnAppear: Bool
@@ -3858,6 +3861,7 @@ GunnAire
 
     @ViewBuilder
     private func jobProgressSection(for call: ServiceCall) -> some View {
+        let completionBlockers = operationalCompletionBlockers(for: call)
         Section("Job Progress") {
             Toggle("Work Completed", isOn: Binding(
                 get: { call.workCompletedChecklist },
@@ -3879,12 +3883,31 @@ GunnAire
             if call.status == .scheduled || call.status == .inProgress {
                 Button(jobProgressActionLabel(for: call), action: { advanceJobProgress(call) })
                     .buttonStyle(.bordered)
+                    .disabled(call.status == .inProgress && !completionBlockers.isEmpty)
+            }
+            if call.status == .inProgress,
+               !completionBlockers.isEmpty {
+                Text("Before completion: \(completionBlockers.joined(separator: ", ")).")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("BillingOperationalCloseoutBlockers")
             }
         }
     }
 
     private func jobProgressActionLabel(for call: ServiceCall) -> String {
         call.status == .scheduled ? "Mark Job In Progress" : "Mark Job Completed"
+    }
+
+    private func operationalCompletionBlockers(for call: ServiceCall) -> [String] {
+        ServiceWorkLogPolicy.operationalCompletionBlockers(
+            for: call,
+            requireCompletionChecklist: requireJobCompletionChecklist,
+            fieldFormTemplates: fieldFormTemplates,
+            fieldFormResponses: fieldFormResponses,
+            activities: serviceCallActivities,
+            requireWorkPerformedLog: requireWorkPerformedLogForCloseout
+        )
     }
 
     private func advanceJobProgress(_ call: ServiceCall) {
@@ -3898,6 +3921,13 @@ GunnAire
                 actorEmail: currentUserEmail,
                 in: modelContext
             )
+            return
+        }
+
+        let completionBlockers = operationalCompletionBlockers(for: call)
+        if !completionBlockers.isEmpty {
+            call.status = .inProgress
+            actionMessage = "Before completion: \(completionBlockers.joined(separator: ", "))."
             return
         }
 
@@ -4874,7 +4904,9 @@ GunnAire
             fieldFormTemplates: fieldFormTemplates,
             fieldFormResponses: fieldFormResponses,
             timeEntries: timeEntries,
-            materialReadiness: jobMaterialCloseoutSummary
+            materialReadiness: jobMaterialCloseoutSummary,
+            serviceCallActivities: serviceCallActivities,
+            requireWorkPerformedLog: requireWorkPerformedLogForCloseout
         )
         let photoEvidence = call.photoEvidenceStatus(from: activeJobAttachments)
         let documentationPackageSummary = call.billingDocumentationPackageSummary(
@@ -6477,6 +6509,8 @@ GunnAire
                 items: items,
                 movements: inventoryMovements
             ),
+            serviceCallActivities: serviceCallActivities,
+            requireWorkPerformedLog: requireWorkPerformedLogForCloseout,
             includeFinancials: canViewFinancials || canCollectFieldPayments
         )
         let data = try Data(contentsOf: url)
@@ -7087,6 +7121,8 @@ GunnAire
                     items: items,
                     movements: inventoryMovements
                 ),
+                serviceCallActivities: serviceCallActivities,
+                requireWorkPerformedLog: requireWorkPerformedLogForCloseout,
                 includeFinancials: canViewFinancials || canCollectFieldPayments
             )
             generatedCustomerDocumentURL = url

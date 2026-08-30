@@ -714,10 +714,10 @@ struct ServiceCallDetailView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
-    @Query(sort: \ServiceCallActivity.occurredAt, order: .reverse) private var serviceCallActivities: [ServiceCallActivity]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \FieldFormTemplate.createdAt, order: .forward) private var fieldFormTemplates: [FieldFormTemplate]
     @Query(sort: \FieldFormResponse.completedAt, order: .reverse) private var fieldFormResponses: [FieldFormResponse]
+    @Query(sort: \ServiceCallActivity.occurredAt, order: .reverse) private var serviceCallActivities: [ServiceCallActivity]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var fieldFormAttachments: [ServiceDocumentAttachment]
     @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
@@ -727,6 +727,7 @@ struct ServiceCallDetailView: View {
     @Query(sort: \FieldExpenseClaim.expenseDate, order: .reverse) private var fieldExpenseClaims: [FieldExpenseClaim]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("requireJobCompletionChecklist") private var requireJobCompletionChecklist = true
+    @AppStorage("requireWorkPerformedLogForCloseout") private var requireWorkPerformedLogForCloseout = true
     @AppStorage("enablePhotoDocumentation") private var enablePhotoDocumentation = true
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
@@ -744,6 +745,9 @@ struct ServiceCallDetailView: View {
     @State private var warrantyClaimsEquipment: CustomerEquipment?
     @State private var showingEnRouteHandoff = false
     @State private var showingFieldExpenseClaim = false
+    @State private var showingWorkPerformedLog = false
+    @State private var showingCustomerWorkSummary = false
+    @State private var expandedWorkLogHistory = false
     @State private var activeServiceTextDraft: CustomerServiceTextDraft?
     @State private var customerTextStatus: String?
     @State private var jobActionStatus: String?
@@ -768,6 +772,30 @@ struct ServiceCallDetailView: View {
 
     private var callActivity: [ServiceCallActivity] {
         serviceCallActivities.filter { $0.serviceCallID == call.id }
+    }
+
+    private var workPerformedEntries: [ServiceCallActivity] {
+        ServiceWorkLogPolicy.workPerformedEntries(for: call.id, in: serviceCallActivities)
+    }
+
+    private var customerWorkSummaryRevisions: [ServiceCallActivity] {
+        ServiceWorkLogPolicy.customerSummaryRevisions(for: call.id, in: serviceCallActivities)
+    }
+
+    private var currentCustomerWorkSummary: String? {
+        ServiceWorkLogPolicy.latestCustomerSummary(for: call, in: serviceCallActivities)
+    }
+
+    private var suggestedCustomerWorkSummary: String {
+        ServiceWorkLogPolicy.suggestedCustomerSummary(from: workPerformedEntries)
+    }
+
+    private var workLogCloseoutMissingItem: String? {
+        ServiceWorkLogPolicy.closeoutMissingItem(
+            for: call,
+            activities: serviceCallActivities,
+            isRequired: requireWorkPerformedLogForCloseout
+        )
     }
 
     private var originatingCall: ServiceCall? {
@@ -1463,6 +1491,22 @@ GunnAire
         call.paymentCollectedChecklist
     }
 
+    private var operationalCompletionBlockers: [String] {
+        ServiceWorkLogPolicy.operationalCompletionBlockers(
+            for: call,
+            requireCompletionChecklist: requireJobCompletionChecklist,
+            fieldFormTemplates: fieldFormTemplates,
+            fieldFormResponses: fieldFormResponses,
+            activities: serviceCallActivities,
+            requireWorkPerformedLog: requireWorkPerformedLogForCloseout
+        )
+    }
+
+    private var operationalCompletionStatus: String? {
+        guard !operationalCompletionBlockers.isEmpty else { return nil }
+        return "Before completion: \(operationalCompletionBlockers.joined(separator: ", "))."
+    }
+
     private var hasJobStatusAction: Bool {
         canUpdateCurrentJob && (
             call.status == .scheduled ||
@@ -1544,16 +1588,18 @@ GunnAire
     }
 
     private var recentCustomerCalls: [ServiceCall] {
-        serviceCalls
-            .filter { $0.customer.id == call.customer.id }
+        guard let customerID = call.customer?.id else { return [] }
+        return serviceCalls
+            .filter { $0.customer?.id == customerID }
             .sorted(by: { $0.scheduledDate > $1.scheduledDate })
             .prefix(4)
             .map { $0 }
     }
 
     private var customerLifetimeInvoiceTotal: Double {
-        invoices
-            .filter { $0.customer.id == call.customer.id }
+        guard let customerID = call.customer?.id else { return 0 }
+        return invoices
+            .filter { $0.customer?.id == customerID }
             .reduce(0) { $0 + $1.amount }
     }
 
@@ -1832,6 +1878,56 @@ GunnAire
         }
     }
 
+    @discardableResult
+    private func saveWorkPerformedLog(_ content: String) -> Bool {
+        guard canUpdateCurrentJob else {
+            jobActionStatus = "This account can review the work log but cannot add an entry to this job."
+            return false
+        }
+        var insertedActivity: ServiceCallActivity?
+        do {
+            insertedActivity = try ServiceWorkLogPolicy.recordWorkPerformed(
+                content,
+                for: call,
+                actorEmail: currentActivityActor,
+                in: modelContext
+            )
+            try modelContext.save()
+            jobActionStatus = "Work performed was saved to the job timeline."
+            return true
+        } catch {
+            if let insertedActivity { modelContext.delete(insertedActivity) }
+            jobActionStatus = "The work log was not saved: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    @discardableResult
+    private func saveCustomerWorkSummary(_ content: String) -> Bool {
+        guard canUpdateCurrentJob else {
+            jobActionStatus = "This account can review the customer summary but cannot revise it for this job."
+            return false
+        }
+        let previousSummary = call.serviceReportSummary
+        var insertedActivity: ServiceCallActivity?
+        do {
+            insertedActivity = try ServiceWorkLogPolicy.recordCustomerSummary(
+                content,
+                for: call,
+                actorEmail: currentActivityActor,
+                in: modelContext
+            )
+            try modelContext.save()
+            jobActionStatus = "The customer-facing work summary and its revision history were saved."
+            return true
+        } catch {
+            call.serviceReportSummary = previousSummary
+            if let insertedActivity { modelContext.delete(insertedActivity) }
+            jobActionStatus = "The work summary was not saved: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     var body: some View {
         ZStack {
             WatermarkBackground()
@@ -2105,8 +2201,8 @@ GunnAire
                                         }
                                         Text(activity.detail)
                                             .font(.caption)
-                                        if let actorEmail = activity.actorEmail, !actorEmail.isEmpty {
-                                            Text(actorEmail)
+                                        if let actorName = ServiceWorkLogPolicy.actorDisplayName(activity.actorEmail) {
+                                            Text(actorName)
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
                                         }
@@ -2208,6 +2304,136 @@ GunnAire
                             }
                         }
                     }
+
+                    GroupBox("Work Performed") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if workPerformedEntries.isEmpty {
+                                Label(
+                                    requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
+                                        ? "A work log is required before this job can be completed."
+                                        : "No work-performed entries have been added yet.",
+                                    systemImage: requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
+                                        ? "exclamationmark.triangle.fill"
+                                        : "text.badge.plus"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(
+                                    requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
+                                        ? Color.orange
+                                        : Color.secondary
+                                )
+                                .accessibilityIdentifier("WorkPerformedEmptyState")
+                            } else {
+                                let visibleEntries = expandedWorkLogHistory
+                                    ? workPerformedEntries
+                                    : Array(workPerformedEntries.prefix(3))
+                                ForEach(visibleEntries) { entry in
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        HStack(alignment: .firstTextBaseline) {
+                                            Text(ServiceWorkLogPolicy.actorDisplayName(entry.actorEmail) ?? "GunnAire staff")
+                                                .font(.caption.weight(.semibold))
+                                            Spacer()
+                                            Text(entry.occurredAt.formatted(date: .abbreviated, time: .shortened))
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Text(entry.detail)
+                                            .font(.caption)
+                                            .textSelection(.enabled)
+                                    }
+                                    .padding(9)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .accessibilityElement(children: .combine)
+                                }
+                                if workPerformedEntries.count > 3 {
+                                    Button(expandedWorkLogHistory ? "Show Recent Entries" : "Show All \(workPerformedEntries.count) Entries") {
+                                        withAnimation { expandedWorkLogHistory.toggle() }
+                                    }
+                                    .font(.caption.weight(.semibold))
+                                    .accessibilityIdentifier("ToggleFullWorkLog")
+                                }
+                            }
+
+                            Divider()
+
+                            if let currentCustomerWorkSummary {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Label("Customer work summary ready", systemImage: "doc.text.fill")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.green)
+                                    Text(currentCustomerWorkSummary)
+                                        .font(.caption)
+                                        .lineLimit(4)
+                                    if !customerWorkSummaryRevisions.isEmpty {
+                                        Text("\(customerWorkSummaryRevisions.count) retained summary revision\(customerWorkSummaryRevisions.count == 1 ? "" : "s")")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .accessibilityIdentifier("CurrentCustomerWorkSummary")
+                            } else {
+                                Text("The customer-facing service report summary has not been prepared yet.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            if canUpdateCurrentJob {
+                                ViewThatFits(in: .horizontal) {
+                                    HStack(spacing: 8) {
+                                        Button {
+                                            showingWorkPerformedLog = true
+                                        } label: {
+                                            Label("Add Work Log", systemImage: "plus.circle")
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .accessibilityIdentifier("AddWorkPerformedLog")
+
+                                        Button {
+                                            showingCustomerWorkSummary = true
+                                        } label: {
+                                            Label(
+                                                currentCustomerWorkSummary == nil ? "Create Work Summary" : "Review Work Summary",
+                                                systemImage: "doc.text"
+                                            )
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(workPerformedEntries.isEmpty && currentCustomerWorkSummary == nil)
+                                        .accessibilityIdentifier("ReviewCustomerWorkSummary")
+                                    }
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Button {
+                                            showingWorkPerformedLog = true
+                                        } label: {
+                                            Label("Add Work Log", systemImage: "plus.circle")
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .accessibilityIdentifier("AddWorkPerformedLog")
+
+                                        Button {
+                                            showingCustomerWorkSummary = true
+                                        } label: {
+                                            Label(
+                                                currentCustomerWorkSummary == nil ? "Create Work Summary" : "Review Work Summary",
+                                                systemImage: "doc.text"
+                                            )
+                                            .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(workPerformedEntries.isEmpty && currentCustomerWorkSummary == nil)
+                                        .accessibilityIdentifier("ReviewCustomerWorkSummary")
+                                    }
+                                }
+                            }
+
+                            Text("Entries are append-only and remain available offline. The reviewed summary feeds the existing service report and customer-document workflow.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .accessibilityIdentifier("ServiceCallWorkPerformed")
 
                     GroupBox("Equipment") {
                         VStack(alignment: .leading, spacing: 8) {
@@ -2927,6 +3153,23 @@ GunnAire
             )
             .tint(Color.brandGold)
         }
+        .sheet(isPresented: $showingWorkPerformedLog) {
+            WorkPerformedLogComposer(
+                jobTitle: call.eventTitle ?? call.type.displayName,
+                onSave: saveWorkPerformedLog
+            )
+            .tint(Color.brandGold)
+        }
+        .sheet(isPresented: $showingCustomerWorkSummary) {
+            CustomerWorkSummaryComposer(
+                jobTitle: call.eventTitle ?? call.type.displayName,
+                suggestedSummary: suggestedCustomerWorkSummary,
+                existingSummary: currentCustomerWorkSummary,
+                workLogCount: workPerformedEntries.count,
+                onSave: saveCustomerWorkSummary
+            )
+            .tint(Color.brandGold)
+        }
         .sheet(item: $activeServiceTextDraft) { draft in
             #if canImport(MessageUI) && !targetEnvironment(macCatalyst)
             CustomerMessageComposer(draft: draft) { outcome in
@@ -3036,6 +3279,10 @@ GunnAire
                     .buttonStyle(.borderedProminent)
                 } else if call.status == .inProgress {
                     Button {
+                        guard operationalCompletionBlockers.isEmpty else {
+                            jobActionStatus = operationalCompletionStatus
+                            return
+                        }
                         if call.markDocumentationCompleteIfReady() {
                             call.status = .completed
                             call.completeLinkedMaintenanceAgreementIfNeeded()
@@ -3046,7 +3293,7 @@ GunnAire
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(requireJobCompletionChecklist && !checklistIsComplete)
+                    .disabled(!operationalCompletionBlockers.isEmpty)
                 } else if call.status == .completed {
                     Button {
                         call.status = .inProgress
@@ -3060,6 +3307,13 @@ GunnAire
             }
             .tint(Color.brandGold)
             .foregroundStyle(Color.primaryBlack)
+
+            if call.status == .inProgress, let operationalCompletionStatus {
+                Label(operationalCompletionStatus, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("OperationalCompletionBlockers")
+            }
 
             if let jobActionStatus {
                 Text(jobActionStatus)
@@ -4124,9 +4378,11 @@ struct EditServiceCallView: View {
     @Query private var technicians: [Technician]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query private var existingServiceCalls: [ServiceCall]
+    @Query(sort: \ServiceCallActivity.occurredAt, order: .reverse) private var serviceCallActivities: [ServiceCallActivity]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
+    @AppStorage("requireWorkPerformedLogForCloseout") private var requireWorkPerformedLogForCloseout = true
 
     let call: ServiceCall
 
@@ -4293,6 +4549,24 @@ struct EditServiceCallView: View {
         )
     }
 
+    private var isRequestingAClosedStatus: Bool {
+        (status == .completed || status == .invoiced) &&
+            call.status != .completed &&
+            call.status != .invoiced
+    }
+
+    private var workLogBlocksRequestedStatus: Bool {
+        isRequestingAClosedStatus &&
+            ServiceWorkLogPolicy.requiresWorkPerformedLog(
+                for: callType,
+                whenEnabled: requireWorkPerformedLogForCloseout
+            ) &&
+            ServiceWorkLogPolicy.workPerformedEntries(
+                for: call.id,
+                in: serviceCallActivities
+            ).isEmpty
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -4355,6 +4629,15 @@ struct EditServiceCallView: View {
                     ForEach(JobStatus.allCases, id: \.self) { status in
                         Text(status.rawValue.capitalized).tag(status)
                     }
+                }
+                if workLogBlocksRequestedStatus {
+                    Label(
+                        "Add a work-performed entry from the job's Work workspace before selecting a closed status.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("EditServiceCallWorkLogBlocker")
                 }
                 if status == .cancelled {
                     Section("Cancellation") {
@@ -4547,7 +4830,8 @@ struct EditServiceCallView: View {
                             customer == nil ||
                             (status == .cancelled && cancellationReason.nilIfBlank == nil) ||
                             (usesArrivalWindow && arrivalWindowEnd <= arrivalWindowStart) ||
-                            equipmentLifecycleSnapshot.validationMessage != nil
+                            equipmentLifecycleSnapshot.validationMessage != nil ||
+                            workLogBlocksRequestedStatus
                     )
                 }
             }
@@ -4673,6 +4957,7 @@ struct EditServiceCallView: View {
             return
         }
         guard equipmentLifecycleSnapshot.validationMessage == nil else { return }
+        guard !workLogBlocksRequestedStatus else { return }
         guard let customer else { return }
         let originalStart = call.scheduledDate
         let originalArrivalWindow = call.promisedArrivalWindowSummary
