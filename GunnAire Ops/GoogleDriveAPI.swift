@@ -514,7 +514,7 @@ enum GoogleDriveAPIError: Error, LocalizedError, Equatable {
         case .missingGeneratedFileID: "Google Drive did not reserve a file identifier."
         case .missingUploadSession: "Google Drive did not start a resumable upload session."
         case .emptyFile: "The selected document is empty and was not uploaded."
-        case .fileIsTrashed: "The existing Drive copy is in Trash. Restore it or create a new archive copy."
+        case .fileIsTrashed: "The existing Drive copy is in Trash. The next explicit retry will reserve a new archive copy."
         case .archiveIdentityMismatch: "The saved Drive file does not belong to this GunnAire attachment. Archive recovery stopped without linking it."
         case .invalidFileMetadata: "Google Drive returned an untrusted or incomplete file link."
         case .uploadIncomplete: "Google Drive upload did not finish. The same reserved file will be retried."
@@ -522,6 +522,18 @@ enum GoogleDriveAPIError: Error, LocalizedError, Equatable {
         case .decoding: "Google Drive response could not be read."
         case .provider(let statusCode, let message):
             "Google Drive request failed (HTTP \(statusCode))\(message.map { ": \($0)" } ?? "")."
+        }
+    }
+
+    /// Failures that prove the persisted reservation cannot be reused safely.
+    /// Transient and ambiguous failures deliberately retain the exact ID so a
+    /// retry reconciles the same provider object instead of creating a duplicate.
+    var discardsReservedFileIDBeforeRetry: Bool {
+        switch self {
+        case .invalidFileID, .fileIsTrashed, .archiveIdentityMismatch:
+            true
+        default:
+            false
         }
     }
 }

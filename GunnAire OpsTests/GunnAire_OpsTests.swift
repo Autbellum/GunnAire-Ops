@@ -21752,6 +21752,11 @@ struct GunnAire_OpsTests {
         #expect(saved.googleDriveFileID == nil)
         #expect(saved.googleDriveWebViewLink == nil)
         #expect(saved.googleDriveSyncDetail?.contains("\n") == false)
+        #expect(GoogleDriveAPIError.invalidFileID.discardsReservedFileIDBeforeRetry)
+        #expect(GoogleDriveAPIError.fileIsTrashed.discardsReservedFileIDBeforeRetry)
+        #expect(GoogleDriveAPIError.archiveIdentityMismatch.discardsReservedFileIDBeforeRetry)
+        #expect(!GoogleDriveAPIError.network.discardsReservedFileIDBeforeRetry)
+        #expect(!GoogleDriveAPIError.uploadIncomplete.discardsReservedFileIDBeforeRetry)
     }
 
     @Test func customerFinancingContractDecodesAProviderHostedReadOnlyHandoff() throws {

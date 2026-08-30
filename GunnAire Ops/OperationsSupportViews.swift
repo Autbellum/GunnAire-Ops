@@ -1570,16 +1570,12 @@ struct SyncIntegrationsView: View {
             let detail = Task.isCancelled
                 ? "Archive stopped before completion. Retry uses the same reserved Drive file."
                 : error.localizedDescription
-            let discardReservedID: Bool
-            switch error as? GoogleDriveAPIError {
-            case .invalidFileID?, .archiveIdentityMismatch?:
-                // A malformed or foreign ID cannot safely be retried. Clearing
-                // only that reservation lets the next explicit retry obtain a
-                // fresh app-owned ID without linking the unrelated Drive file.
-                discardReservedID = true
-            default:
-                discardReservedID = false
-            }
+            // A malformed, foreign, or trashed reservation is known to be
+            // unusable. Clear only that persisted ID so the next explicit retry
+            // can reserve a fresh app-owned file. Transient/ambiguous failures
+            // retain the exact ID for duplicate-safe reconciliation.
+            let discardReservedID = (error as? GoogleDriveAPIError)?
+                .discardsReservedFileIDBeforeRetry == true
             attachment.markGoogleDriveArchiveFailed(
                 detail,
                 discardReservedID: discardReservedID

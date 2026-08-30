@@ -940,11 +940,28 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
             "Development changes remove or alter no Production CloudKit fields",
             f"Development removes or alters Production fields: {changed_or_removed}",
         )
+        malformed_existing_v16_fields: list[str] = []
+        for record_name, expected_fields in EXPECTED_CLOUDKIT_V16_ADDITIONS.items():
+            production_fields = prod.get(record_name, {})
+            for field_name, expected_definition in expected_fields.items():
+                if (
+                    field_name in production_fields
+                    and production_fields[field_name] != expected_definition
+                ):
+                    malformed_existing_v16_fields.append(
+                        f"{record_name}.{field_name}"
+                    )
+        results.require(
+            not malformed_existing_v16_fields,
+            "Existing Production v16 fields match their approved definitions",
+            "CloudKit Production contains malformed approved v16 fields: "
+            f"{malformed_existing_v16_fields}",
+        )
         expected_remaining_v16_additions = {
             record_name: {
                 field_name: definition
                 for field_name, definition in expected_fields.items()
-                if field_name not in prod.get(record_name, {})
+                if prod.get(record_name, {}).get(field_name) != definition
             }
             for record_name, expected_fields in EXPECTED_CLOUDKIT_V16_ADDITIONS.items()
         }
