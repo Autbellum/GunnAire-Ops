@@ -150,6 +150,27 @@ class BackendReadinessTests(unittest.TestCase):
         self.assertEqual(statuses["quickbooks"], "attention")
         self.assertEqual(statuses["backup"], "attention")
 
+    def test_migrated_empty_accounts_payable_mapping_fails_readiness_closed(self) -> None:
+        now = datetime(2026, 8, 26, 20, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.readiness_configuration(root):
+                self.seed_ready_state(root, now)
+                with backend.db() as connection:
+                    connection.execute(
+                        """
+                        UPDATE qbo_accounting_config
+                        SET default_ap_account_ref = '',
+                            default_ap_account_name = '',
+                            default_ap_account_type = ''
+                        WHERE realm_id = 'realm-123' AND environment = 'production'
+                        """
+                    )
+                component = backend.quickbooks_accounting_configuration_readiness_component()
+
+        self.assertEqual(component["status"], "attention")
+        self.assertIn("Accounts Payable", component["detail"])
+
     def test_push_readiness_surfaces_missing_http2_provider_dependency_as_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

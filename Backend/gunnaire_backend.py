@@ -1487,7 +1487,16 @@ def quickbooks_accounting_configuration_readiness_component() -> dict[str, str]:
             "quickbooks-accounting-config",
             "QuickBooks Accounting Mappings",
             "attention",
-            "Choose the default sales item, income, expense, bank, and credit-card accounts in GunnAire Ops.",
+            "Choose the default sales item, income, expense, Accounts Payable, bank, and credit-card accounts in GunnAire Ops.",
+        )
+    try:
+        validate_qbo_accounting_configuration(qbo_accounting_configuration_record(row))
+    except ValueError:
+        return readiness_component(
+            "quickbooks-accounting-config",
+            "QuickBooks Accounting Mappings",
+            "attention",
+            "Reopen Accounting Mappings and save every required provider-typed account, including Accounts Payable, for this QuickBooks company.",
         )
     return readiness_component(
         "quickbooks-accounting-config",
