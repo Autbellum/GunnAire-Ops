@@ -377,7 +377,7 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
 enum GunnAireCloudKitSchemaBootstrap {
     static let initializeArgument = "-initializeCloudKitSchema"
     static let cleanupArgument = "-cleanupCloudKitSchemaBootstrap"
-    static let schemaVersion = 21
+    static let schemaVersion = 22
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
@@ -816,6 +816,25 @@ enum GunnAireCloudKitSchemaBootstrap {
             privateDetail: marker,
             requestStatus: .cancelled
         )
+        let workShift = TechnicianWorkShift(
+            creationOperationID: UUID(),
+            technicianID: technician.id,
+            technicianNameSnapshot: technician.name,
+            weekday: .monday,
+            startMinute: 8 * 60,
+            durationMinutes: 9 * 60,
+            kind: .regular,
+            effectiveFrom: now,
+            effectiveUntil: now.addingTimeInterval(7 * 86_400),
+            timeZoneIdentifier: "America/New_York",
+            note: marker,
+            createdAt: now,
+            createdByEmail: bootstrapEmail
+        )
+        workShift.retiredAt = now
+        workShift.retiredByEmail = bootstrapEmail
+        workShift.retirementReason = marker
+        workShift.retirementOperationID = UUID()
 
         let models: [any PersistentModel] = [
             item,
@@ -826,6 +845,7 @@ enum GunnAireCloudKitSchemaBootstrap {
             customer,
             technician,
             availabilityBlock,
+            workShift,
             maintenanceAgreement,
             invoice,
             estimate,
@@ -929,6 +949,9 @@ enum GunnAireCloudKitSchemaBootstrap {
     }
 
     private static func cleanup(in modelContext: ModelContext) throws {
+        for value in try modelContext.fetch(FetchDescriptor<TechnicianWorkShift>()) where value.technicianNameSnapshot == marker {
+            modelContext.delete(value)
+        }
         for value in try modelContext.fetch(FetchDescriptor<TechnicianAvailabilityEvent>()) where value.privateDetail == marker {
             modelContext.delete(value)
         }

@@ -843,8 +843,8 @@ struct GunnAire_OpsTests {
         #expect(configuration.cloudKitContainerIdentifier == GunnAireCloudKit.containerIdentifier)
         #expect(configuration.isStoredInMemoryOnly == false)
         #expect(configuration.url.lastPathComponent == GunnAireCloudKitSchemaBootstrap.storeFileName)
-        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 21)
-        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V21"))
+        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 22)
+        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V22"))
     }
     #endif
 
@@ -2201,6 +2201,251 @@ struct GunnAire_OpsTests {
             availabilityBlocks: [breakBlock]
         )
         #expect(afterJob == blockEnd.addingTimeInterval(45 * 60))
+    }
+
+    @Test func recurringTechnicianShiftsAreImmutableAuditedAndRejectOverlappingRules() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let effectiveFrom = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 31)))
+        let technicianID = UUID()
+
+        let shifts = try TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: technicianID,
+            technicianName: "Recurring Shift Tech",
+            weekdays: Set([.monday, .tuesday, .wednesday, .thursday, .friday]),
+            startMinute: 8 * 60,
+            durationMinutes: 9 * 60,
+            kind: .regular,
+            effectiveFrom: effectiveFrom,
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: "Normal service coverage",
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: [],
+            now: effectiveFrom
+        )
+
+        #expect(shifts.count == 5)
+        #expect(Set(shifts.map(\.creationOperationID)).count == 5)
+        #expect(shifts.map(\.weekday) == [.monday, .tuesday, .wednesday, .thursday, .friday])
+        #expect(shifts.allSatisfy { $0.createdByEmail == "dispatch@gunnaire.com" && $0.isActive })
+        #expect(shifts.first?.publicScheduleSummary.localizedCaseInsensitiveContains("Mon") == true)
+
+        #expect(throws: TechnicianWorkShiftValidationError.self) {
+            try TechnicianWorkShiftPolicy.makeShifts(
+                technicianID: technicianID,
+                technicianName: "Recurring Shift Tech",
+                weekdays: Set([.monday]),
+                startMinute: 12 * 60,
+                durationMinutes: 4 * 60,
+                kind: .regular,
+                effectiveFrom: effectiveFrom,
+                effectiveUntil: nil,
+                timeZoneIdentifier: calendar.timeZone.identifier,
+                note: nil,
+                actorEmail: "dispatch@gunnaire.com",
+                existingShifts: shifts
+            )
+        }
+
+        let retired = try #require(shifts.first)
+        let retirementOperationID = UUID()
+        try TechnicianWorkShiftPolicy.retire(
+            retired,
+            actorEmail: "admin@gunnaire.com",
+            reason: "Summer schedule changed",
+            now: effectiveFrom.addingTimeInterval(86_400),
+            operationID: retirementOperationID
+        )
+        #expect(!retired.isActive)
+        #expect(retired.retiredByEmail == "admin@gunnaire.com")
+        #expect(retired.retirementReason == "Summer schedule changed")
+        #expect(retired.retirementOperationID == retirementOperationID)
+        #expect(TechnicianWorkShiftPolicy.hasConfiguredSchedule(technicianID: technicianID, shifts: [retired]))
+
+        let retiredOnlyTechnicianID = UUID()
+        let retiredOnly = try #require(TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: retiredOnlyTechnicianID,
+            technicianName: "Off Duty Tech",
+            weekdays: Set([.monday]),
+            startMinute: 8 * 60,
+            durationMinutes: 9 * 60,
+            kind: .regular,
+            effectiveFrom: effectiveFrom,
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: []
+        ).first)
+        try TechnicianWorkShiftPolicy.retire(
+            retiredOnly,
+            actorEmail: "admin@gunnaire.com",
+            reason: "No longer scheduled",
+            now: effectiveFrom
+        )
+        let proposedStart = try #require(calendar.date(bySettingHour: 8, minute: 0, second: 0, of: effectiveFrom))
+        #expect(TechnicianDispatchAvailability.nextAvailableStart(
+            technicianID: retiredOnlyTechnicianID,
+            proposedStart: proposedStart,
+            duration: 60 * 60,
+            serviceCalls: [],
+            availabilityBlocks: [],
+            workShifts: [retiredOnly],
+            urgency: .emergency
+        ) == nil)
+    }
+
+    @Test func dispatchRecommendationsRespectRegularOnCallOvernightAndUnavailableTime() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let monday = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 31)))
+        let technician = Technician(name: "Shift Coverage Tech")
+        let regular = try TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: technician.id,
+            technicianName: technician.name,
+            weekdays: Set([.monday, .tuesday]),
+            startMinute: 8 * 60,
+            durationMinutes: 9 * 60,
+            kind: .regular,
+            effectiveFrom: monday,
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: []
+        )
+        let onCall = try TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: technician.id,
+            technicianName: technician.name,
+            weekdays: Set([.monday]),
+            startMinute: 6 * 60,
+            durationMinutes: 2 * 60,
+            kind: .onCall,
+            effectiveFrom: monday,
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: regular
+        )
+        let allShifts = regular + onCall
+        let earlyMonday = try #require(calendar.date(bySettingHour: 6, minute: 30, second: 0, of: monday))
+        let eightMonday = try #require(calendar.date(bySettingHour: 8, minute: 0, second: 0, of: monday))
+
+        let normalStart = TechnicianDispatchAvailability.nextAvailableStart(
+            technicianID: technician.id,
+            proposedStart: earlyMonday,
+            duration: 60 * 60,
+            serviceCalls: [],
+            availabilityBlocks: [],
+            workShifts: allShifts,
+            urgency: .normal
+        )
+        #expect(normalStart == eightMonday)
+
+        let urgentStart = TechnicianDispatchAvailability.nextAvailableStart(
+            technicianID: technician.id,
+            proposedStart: earlyMonday,
+            duration: 60 * 60,
+            serviceCalls: [],
+            availabilityBlocks: [],
+            workShifts: allShifts,
+            urgency: .emergency
+        )
+        #expect(urgentStart == earlyMonday)
+
+        let lunch = TechnicianAvailabilityBlock(
+            technicianID: technician.id,
+            startsAt: try #require(calendar.date(bySettingHour: 12, minute: 0, second: 0, of: monday)),
+            endsAt: try #require(calendar.date(bySettingHour: 13, minute: 0, second: 0, of: monday)),
+            kind: .breakPeriod,
+            reason: "Lunch"
+        )
+        let beforeLunch = try #require(calendar.date(bySettingHour: 11, minute: 30, second: 0, of: monday))
+        let afterLunch = TechnicianDispatchAvailability.nextAvailableStart(
+            technicianID: technician.id,
+            proposedStart: beforeLunch,
+            duration: 60 * 60,
+            serviceCalls: [],
+            availabilityBlocks: [lunch],
+            workShifts: allShifts,
+            urgency: .normal
+        )
+        #expect(afterLunch == lunch.endsAt)
+
+        let overnight = try TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: UUID(),
+            technicianName: "Overnight Tech",
+            weekdays: Set([.sunday]),
+            startMinute: 22 * 60,
+            durationMinutes: 8 * 60,
+            kind: .regular,
+            effectiveFrom: monday.addingTimeInterval(-86_400),
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: []
+        )
+        let mondayTwoAM = try #require(calendar.date(bySettingHour: 2, minute: 0, second: 0, of: monday))
+        #expect(TechnicianWorkShiftPolicy.coverage(
+            technicianID: try #require(overnight.first).technicianID,
+            start: mondayTwoAM,
+            end: mondayTwoAM.addingTimeInterval(60 * 60),
+            shifts: overnight,
+            allowOnCall: false
+        ) == .regular)
+    }
+
+    @Test func dispatchConflictExplainsOffDutyAndNormalOnCallBoundaries() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let monday = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 31, hour: 18)))
+        let technician = Technician(name: "After Hours Tech")
+        let customer = Customer(name: "After Hours Customer")
+        let call = ServiceCall(
+            type: .service,
+            dispatchUrgency: .normal,
+            scheduledDate: monday,
+            duration: 60 * 60,
+            assignedTechnician: technician,
+            customer: customer
+        )
+        let onCall = try TechnicianWorkShiftPolicy.makeShifts(
+            technicianID: technician.id,
+            technicianName: technician.name,
+            weekdays: Set([.monday]),
+            startMinute: 17 * 60,
+            durationMinutes: 4 * 60,
+            kind: .onCall,
+            effectiveFrom: monday,
+            effectiveUntil: nil,
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            note: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            existingShifts: []
+        )
+        let conflict = DispatchBoardScheduling.conflictSummary(
+            for: call,
+            proposedStart: monday,
+            serviceCalls: [call],
+            availabilityBlocks: [],
+            workShifts: onCall,
+            technicians: [technician]
+        )
+        #expect(conflict?.localizedCaseInsensitiveContains("on call") == true)
+        #expect(conflict?.localizedCaseInsensitiveContains("regular hours") == true)
+
+        call.dispatchUrgency = .emergency
+        #expect(DispatchBoardScheduling.conflictSummary(
+            for: call,
+            proposedStart: monday,
+            serviceCalls: [call],
+            availabilityBlocks: [],
+            workShifts: onCall,
+            technicians: [technician]
+        ) == nil)
     }
 
     @MainActor
@@ -17709,6 +17954,18 @@ struct GunnAire_OpsTests {
         #expect(availabilityEvent.requestID == timeOffRequest.id)
         #expect(availabilityEvent.availabilityBlockID == availabilityBlock.id)
         #expect(availabilityEvent.privateDetail.isEmpty == false)
+
+        let workShift = try #require(container.mainContext.fetch(FetchDescriptor<TechnicianWorkShift>()).first)
+        #expect(workShift.technicianID == technician.id)
+        #expect(workShift.creationOperationID.uuidString.count == 36)
+        #expect(workShift.weekday == .monday)
+        #expect(workShift.kind == .regular)
+        #expect(workShift.timeZoneIdentifier == "America/New_York")
+        #expect(workShift.note?.isEmpty == false)
+        #expect(workShift.retiredAt != nil)
+        #expect(workShift.retiredByEmail == "schema-bootstrap@gunnaire.invalid")
+        #expect(workShift.retirementReason?.isEmpty == false)
+        #expect(workShift.retirementOperationID != nil)
     }
 
     @Test func timeOffRolePolicyFailsClosedOnAmbiguousTechnicianIdentity() {

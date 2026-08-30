@@ -3224,6 +3224,98 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdministratorCreatesAndRetiresCompactRecurringTechnicianHours() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-appStoreScreenshotFixtures"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 6))
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        if !schedule.waitForExistence(timeout: 2) {
+            let sidebar = app.buttons["GunnAire Ops"]
+            XCTAssertTrue(sidebar.waitForExistence(timeout: 3))
+            sidebar.tap()
+        }
+        XCTAssertTrue(schedule.waitForExistence(timeout: 3))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let availability = app.buttons["ManageTechnicianAvailability"]
+        XCTAssertTrue(availability.waitForExistence(timeout: 3), app.debugDescription)
+        availability.tap()
+        XCTAssertTrue(app.navigationBars["Technician Availability"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Jordan Lee"].exists)
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] 'No recurring hours are configured'")
+        ).firstMatch.exists)
+
+        let addShift = app.buttons["AddRecurringTechnicianShift"]
+        XCTAssertTrue(addShift.waitForExistence(timeout: 3))
+        addShift.tap()
+        XCTAssertTrue(app.navigationBars["Recurring Work Shift"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Regular"].exists)
+        XCTAssertTrue(app.switches["RecurringShiftDay-2"].isEnabled)
+        if !app.switches["RecurringShiftDay-6"].exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(app.switches["RecurringShiftDay-6"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.switches["RecurringShiftDay-6"].isEnabled)
+
+        let save = app.buttons["SaveRecurringTechnicianShift"]
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        XCTAssertTrue(app.navigationBars["Technician Availability"].waitForExistence(timeout: 4))
+
+        let shiftRows = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH 'TechnicianWorkShift-'")
+        )
+        XCTAssertTrue(shiftRows.firstMatch.waitForExistence(timeout: 3), app.debugDescription)
+        let activeShiftCount = app.staticTexts["ActiveTechnicianWorkShiftCount"]
+        XCTAssertTrue(activeShiftCount.waitForExistence(timeout: 2))
+        XCTAssertEqual(activeShiftCount.label, "5 active")
+        XCTAssertTrue(shiftRows.firstMatch.label.localizedCaseInsensitiveContains("regular"))
+        XCTAssertFalse(shiftRows.firstMatch.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        let created = XCTAttachment(screenshot: app.screenshot())
+        created.name = "Compact recurring technician hours without account email"
+        created.lifetime = .keepAlways
+        add(created)
+
+        shiftRows.firstMatch.swipeLeft()
+        let retire = app.buttons["Retire"]
+        XCTAssertTrue(retire.waitForExistence(timeout: 3))
+        retire.tap()
+        XCTAssertTrue(app.navigationBars["Retire Work Shift"].waitForExistence(timeout: 3))
+        let reason = app.descendants(matching: .any)["RecurringShiftRetirementReason"]
+        XCTAssertTrue(reason.exists)
+        reason.tap()
+        reason.typeText("Changed summer coverage hours")
+        let confirm = app.buttons["ConfirmRecurringShiftRetirement"]
+        XCTAssertTrue(confirm.isEnabled)
+        confirm.tap()
+
+        XCTAssertTrue(app.navigationBars["Technician Availability"].waitForExistence(timeout: 4))
+        XCTAssertEqual(activeShiftCount.label, "4 active")
+        let retiredHistory = app.buttons["Retired History"]
+        for _ in 0..<3 where !retiredHistory.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(retiredHistory.waitForExistence(timeout: 3))
+        retiredHistory.tap()
+        let retirementReason = app.staticTexts["Retired: Changed summer coverage hours"]
+        if !retirementReason.waitForExistence(timeout: 2) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(retirementReason.waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testEquipmentProfileActionsStayCompactAndRequireDeleteConfirmation() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

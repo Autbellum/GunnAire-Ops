@@ -8,6 +8,7 @@ struct OperationsDashboardView: View {
     @Query(sort: \ServiceCall.scheduledDate, order: .forward) private var serviceCalls: [ServiceCall]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \TechnicianAvailabilityBlock.startsAt, order: .forward) private var technicianAvailabilityBlocks: [TechnicianAvailabilityBlock]
+    @Query(sort: \TechnicianWorkShift.createdAt, order: .reverse) private var technicianWorkShifts: [TechnicianWorkShift]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -1740,9 +1741,23 @@ struct OperationsDashboardView: View {
         let qualificationSuffix = qualification.assignmentNotice.map { " • \($0)" } ?? ""
         let areaMatch = technician.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
         let areaSuffix = areaMatch == .covered ? "" : " • \(areaMatch.dispatchDetail.lowercased())"
-        guard let nextStart = nextAvailableStart(for: technician, proposedStart: call.scheduledDate, duration: call.duration),
-              nextStart > call.scheduledDate else {
-            return technicianLabel + qualificationSuffix + areaSuffix
+        guard let nextStart = nextAvailableStart(for: technician, call: call) else {
+            let scheduleSuffix = TechnicianWorkShiftPolicy.hasConfiguredSchedule(
+                technicianID: technician.id,
+                shifts: technicianWorkShifts
+            ) ? " • no scheduled hours" : ""
+            return technicianLabel + scheduleSuffix + qualificationSuffix + areaSuffix
+        }
+        guard nextStart > call.scheduledDate else {
+            let coverage = TechnicianWorkShiftPolicy.coverage(
+                technicianID: technician.id,
+                start: call.scheduledDate,
+                end: call.scheduledDate.addingTimeInterval(max(call.duration, 60)),
+                shifts: technicianWorkShifts,
+                allowOnCall: call.dispatchUrgency == .priority || call.dispatchUrgency == .emergency
+            )
+            let scheduleSuffix = coverage == .onCall ? " • on call" : ""
+            return technicianLabel + scheduleSuffix + qualificationSuffix + areaSuffix
         }
         return "\(technicianLabel) • move to \(nextStart.formatted(date: .omitted, time: .shortened))\(qualificationSuffix)\(areaSuffix)"
     }
@@ -1750,7 +1765,15 @@ struct OperationsDashboardView: View {
     private func assign(_ call: ServiceCall, to technician: Technician) {
         let originalStart = call.scheduledDate
         let previousTechnician = call.assignedTechnician?.name
-        let nextStart = nextAvailableStart(for: technician, proposedStart: call.scheduledDate, duration: call.duration)
+        let nextStart = nextAvailableStart(for: technician, call: call)
+        if nextStart == nil,
+           TechnicianWorkShiftPolicy.hasConfiguredSchedule(
+            technicianID: technician.id,
+            shifts: technicianWorkShifts
+           ) {
+            dispatchMessage = "\(technician.name) has no eligible recurring hours in the next \(TechnicianWorkShiftPolicy.recommendationHorizonDays) days. Review Technician Availability before assigning this job."
+            return
+        }
         call.assignedTechnician = technician
         if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
             call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
@@ -1806,41 +1829,45 @@ struct OperationsDashboardView: View {
 
     private func bestTechnician(for call: ServiceCall) -> Technician? {
         assignableTechnicians
+            .compactMap { technician in
+                nextAvailableStart(for: technician, call: call).map { (technician, $0) }
+            }
             .sorted { lhs, rhs in
-                let lhsQualification = lhs.qualification(for: call.equipmentType)
-                let rhsQualification = rhs.qualification(for: call.equipmentType)
+                let lhsQualification = lhs.0.qualification(for: call.equipmentType)
+                let rhsQualification = rhs.0.qualification(for: call.equipmentType)
                 if lhsQualification.dispatchRank != rhsQualification.dispatchRank {
                     return lhsQualification.dispatchRank < rhsQualification.dispatchRank
                 }
-                let lhsArea = lhs.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
-                let rhsArea = rhs.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
+                let lhsArea = lhs.0.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
+                let rhsArea = rhs.0.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
                 if lhsArea != rhsArea {
                     return lhsArea < rhsArea
                 }
-                let lhsStart = nextAvailableStart(for: lhs, proposedStart: call.scheduledDate, duration: call.duration) ?? call.scheduledDate
-                let rhsStart = nextAvailableStart(for: rhs, proposedStart: call.scheduledDate, duration: call.duration) ?? call.scheduledDate
-                if lhsStart != rhsStart {
-                    return lhsStart < rhsStart
+                if lhs.1 != rhs.1 {
+                    return lhs.1 < rhs.1
                 }
 
-                let lhsWeekLoad = upcomingCalls.filter { $0.includesAssignedTechnician(lhs.id) }.count
-                let rhsWeekLoad = upcomingCalls.filter { $0.includesAssignedTechnician(rhs.id) }.count
+                let lhsWeekLoad = upcomingCalls.filter { $0.includesAssignedTechnician(lhs.0.id) }.count
+                let rhsWeekLoad = upcomingCalls.filter { $0.includesAssignedTechnician(rhs.0.id) }.count
                 if lhsWeekLoad != rhsWeekLoad {
                     return lhsWeekLoad < rhsWeekLoad
                 }
 
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                return lhs.0.name.localizedCaseInsensitiveCompare(rhs.0.name) == .orderedAscending
             }
+            .map { $0.0 }
             .first
     }
 
-    private func nextAvailableStart(for technician: Technician, proposedStart: Date, duration: TimeInterval) -> Date? {
+    private func nextAvailableStart(for technician: Technician, call: ServiceCall) -> Date? {
         TechnicianDispatchAvailability.nextAvailableStart(
             technicianID: technician.id,
-            proposedStart: proposedStart,
-            duration: duration,
+            proposedStart: call.scheduledDate,
+            duration: call.duration,
             serviceCalls: dashboardServiceCalls,
-            availabilityBlocks: technicianAvailabilityBlocks
+            availabilityBlocks: technicianAvailabilityBlocks,
+            workShifts: technicianWorkShifts,
+            urgency: call.dispatchUrgency
         )
     }
 

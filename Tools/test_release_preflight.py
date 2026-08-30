@@ -11,14 +11,14 @@ except ModuleNotFoundError:  # Direct execution from the Tools directory.
     import release_preflight
 
 
-class CloudKitV21PreflightTests(unittest.TestCase):
+class CloudKitV22PreflightTests(unittest.TestCase):
     def setUp(self) -> None:
         self.production = {
             record_name: {}
             for record_name in release_preflight.EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES
         }
         self.development = copy.deepcopy(self.production)
-        for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V21_ADDITIONS.items():
+        for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V22_ADDITIONS.items():
             self.development.setdefault(record_name, {}).update(fields)
 
     def check(self, development: dict, production: dict) -> release_preflight.Results:
@@ -36,7 +36,7 @@ class CloudKitV21PreflightTests(unittest.TestCase):
             )
         return results
 
-    def test_exact_cumulative_v21_schema_is_accepted(self) -> None:
+    def test_exact_cumulative_v22_schema_is_accepted(self) -> None:
         results = self.check(self.development, self.production)
 
         self.assertEqual(results.failures, [])
@@ -58,7 +58,16 @@ class CloudKitV21PreflightTests(unittest.TestCase):
         results = self.check(partial_development, self.production)
 
         self.assertTrue(results.failures)
-        self.assertTrue(any("v21" in failure.lower() for failure in results.failures))
+        self.assertTrue(any("v22" in failure.lower() for failure in results.failures))
+
+    def test_partial_recurring_work_shift_fields_are_rejected(self) -> None:
+        partial_development = copy.deepcopy(self.development)
+        partial_development["CD_TechnicianWorkShift"].pop("CD_retirementOperationID")
+
+        results = self.check(partial_development, self.production)
+
+        self.assertTrue(results.failures)
+        self.assertTrue(any("v22" in failure.lower() for failure in results.failures))
 
 
 if __name__ == "__main__":

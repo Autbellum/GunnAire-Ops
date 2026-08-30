@@ -26,16 +26,20 @@ and schema status as of 2026-08-30.
   The signed isolated bootstrap initialized Development schema v16 and exported
   `/Users/gunnaire/Downloads/cloudkit-development-9.ckdb`, SHA-256
   `faf57f850f598380e4786581269d66d6ddaf07ea52fa4136b20133bc59116fd8`.
-- Working source is now schema v21. It retains the exact v16 attachment delta;
+- Working source is now schema v22. It retains the exact v16 attachment delta;
   adds the v17 fleet vehicle/event pair and attachment linkage; the v18 field
   expense record and receipt linkage; the v19 customer operational-alert record;
   the v20 business-task/event pair; and the v21 technician-time-off
   request/event pair plus seven audit/cancellation fields on
-  `CD_TechnicianAvailabilityBlock`. The isolated Debug bootstrap writes every
-  optional value through v21, and unit contracts assert the complete seed. The
-  release preflight accepts only the exact cumulative additive v21 delta or an
+  `CD_TechnicianAvailabilityBlock`; then adds the v22 19-field
+  `CD_TechnicianWorkShift` record for regular/on-call weekly capacity,
+  effective dates, time zone, stable creation evidence, and reason-required
+  retirement history. The isolated Debug bootstrap writes every optional value
+  through v22, and unit contracts assert the complete seed. The release
+  preflight accepts only the exact cumulative additive v22 delta or an
   exact post-promotion match, requires each new record family to be all-or-none,
-  and rejects partial v21 availability-block fields. A matching retained
+  and rejects partial v21 availability-block fields or a partial v22 shift
+  record. A matching retained
   Development-v16/Production-v15 export therefore cannot masquerade as current
   readiness.
 - Schema v16 initialization and marker cleanup completed in CloudKit
@@ -43,8 +47,8 @@ and schema status as of 2026-08-30.
   events, no pending upload or delete, and no synthetic marker record after the
   cleanup passes. The retained Development export differs from v15 Production
   by exactly the sixteen approved optional attachment fields with zero removed
-  or changed Production fields. Source v17-v21 is not staged in either retained
-  export. Run a signed isolated v21 Development bootstrap, export and review the
+  or changed Production fields. Source v17-v22 is not staged in either retained
+  export. Run a signed isolated v22 Development bootstrap, export and review the
   exact cumulative delta, complete signed two-device role/offline merge
   acceptance, and only then promote the reviewed schema to Production.
 

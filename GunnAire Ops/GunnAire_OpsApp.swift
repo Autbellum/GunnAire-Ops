@@ -333,6 +333,10 @@ private enum GunnAireUITestFixtures {
         for block in availabilityBlocks where block.sourceTimeOffRequestID == timeOffRequestID {
             context.delete(block)
         }
+        let workShifts = try context.fetch(FetchDescriptor<TechnicianWorkShift>())
+        for shift in workShifts where shift.technicianID == technicianID || shift.technicianID == timeOffTechnicianID {
+            context.delete(shift)
+        }
         let customers = try context.fetch(FetchDescriptor<Customer>())
         for customer in customers where customer.id == customerID {
             context.delete(customer)

@@ -12,6 +12,7 @@ struct TimeClockView: View {
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \FieldExpenseClaim.expenseDate, order: .reverse) private var expenseClaims: [FieldExpenseClaim]
     @Query(sort: \TechnicianTimeOffRequest.createdAt, order: .reverse) private var timeOffRequests: [TechnicianTimeOffRequest]
+    @Query(sort: \TechnicianWorkShift.createdAt, order: .reverse) private var workShifts: [TechnicianWorkShift]
     @State private var syncMessage: String?
     @State private var selectedActivity: TimeEntryActivity = .general
     @State private var selectedServiceCallID: UUID?
@@ -69,6 +70,18 @@ struct TimeClockView: View {
                 $0.requestedByEmail == signedInEmail &&
                 $0.status == .pending
         }.count
+    }
+
+    private var ownWorkShifts: [TechnicianWorkShift] {
+        guard let technicianID = ownPerformanceTechnicianID else { return [] }
+        return TechnicianWorkShiftPolicy.ordered(
+            workShifts.filter { $0.technicianID == technicianID && $0.isActive }
+        )
+    }
+
+    private var hasOwnWorkScheduleHistory: Bool {
+        guard let technicianID = ownPerformanceTechnicianID else { return false }
+        return workShifts.contains { $0.technicianID == technicianID }
     }
 
     private var fieldExpenseAttentionCount: Int {
@@ -224,6 +237,37 @@ struct TimeClockView: View {
 
                     if canUseTimeOff {
                         Section("Availability") {
+                            if ownPerformanceTechnicianID != nil {
+                                DisclosureGroup("My Work Schedule") {
+                                    if ownWorkShifts.isEmpty {
+                                        Text(
+                                            hasOwnWorkScheduleHistory
+                                                ? "No active recurring hours. Dispatch treats you as off duty until new hours are added."
+                                                : "Recurring hours have not been configured. Dispatch is still using appointments and approved unavailable time."
+                                        )
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    } else {
+                                        ForEach(ownWorkShifts) { shift in
+                                            HStack(alignment: .firstTextBaseline) {
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text(shift.publicScheduleSummary)
+                                                        .font(.subheadline.weight(.semibold))
+                                                    Text(shift.effectiveDateSummary)
+                                                        .font(.caption)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                                Spacer()
+                                                Text(shift.kind.displayName)
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(shift.kind == .onCall ? .orange : .secondary)
+                                            }
+                                            .accessibilityIdentifier("MyWorkShift-\(shift.id.uuidString)")
+                                        }
+                                    }
+                                }
+                                .accessibilityIdentifier("MyWorkSchedule")
+                            }
                             NavigationLink {
                                 TechnicianTimeOffWorkspaceView()
                             } label: {

@@ -7,6 +7,7 @@ struct ScheduleView: View {
     @Query(sort: [SortDescriptor(\ServiceCall.scheduledDate)]) private var serviceCalls: [ServiceCall]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \TechnicianAvailabilityBlock.startsAt, order: .forward) private var technicianAvailabilityBlocks: [TechnicianAvailabilityBlock]
+    @Query(sort: \TechnicianWorkShift.createdAt, order: .reverse) private var technicianWorkShifts: [TechnicianWorkShift]
     @Query(sort: \TechnicianTimeOffRequest.createdAt, order: .reverse) private var technicianTimeOffRequests: [TechnicianTimeOffRequest]
     @Query private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
@@ -1141,21 +1142,41 @@ struct ScheduleView: View {
 
                         if canManageDispatch {
                             if let signedInTechnician {
-                                Button("Assign To Me") {
-                                    assign(job, to: signedInTechnician)
+                                Button(assignToMeTitle(for: job, technician: signedInTechnician)) {
+                                    if let nextStart = nextAvailableStart(for: signedInTechnician, call: job),
+                                       nextStart > job.scheduledDate {
+                                        assign(job, to: signedInTechnician, reschedulingTo: nextStart)
+                                    } else {
+                                        assign(job, to: signedInTechnician)
+                                    }
                                 }
                                 .buttonStyle(.bordered)
                                 .tint(Color.brandGold)
+                                .disabled(
+                                    nextAvailableStart(for: signedInTechnician, call: job) == nil &&
+                                        TechnicianWorkShiftPolicy.hasConfiguredSchedule(
+                                            technicianID: signedInTechnician.id,
+                                            shifts: technicianWorkShifts
+                                        )
+                                )
                             }
 
                             if !assignableTechnicians.isEmpty {
                                 Menu {
                                     ForEach(assignableTechnicians) { technician in
-                                        if let nextAvailableStart = nextAvailableStart(for: technician, proposedStart: job.scheduledDate, duration: job.duration),
+                                        let proposedStart = nextAvailableStart(for: technician, call: job)
+                                        if let nextAvailableStart = proposedStart,
                                            nextAvailableStart > job.scheduledDate {
                                             Button("\(AppAccess.scheduleLabel(for: technician)) • move to \(nextAvailableStart.formatted(date: .omitted, time: .shortened))") {
                                                 assign(job, to: technician, reschedulingTo: nextAvailableStart)
                                             }
+                                        } else if proposedStart == nil,
+                                                  TechnicianWorkShiftPolicy.hasConfiguredSchedule(
+                                                    technicianID: technician.id,
+                                                    shifts: technicianWorkShifts
+                                                  ) {
+                                            Button("\(AppAccess.scheduleLabel(for: technician)) • no scheduled hours") {}
+                                                .disabled(true)
                                         } else {
                                             Button(AppAccess.scheduleLabel(for: technician)) {
                                                 assign(job, to: technician)
@@ -1470,10 +1491,22 @@ struct ScheduleView: View {
                     }
                     .buttonStyle(.bordered)
                 } else if canManageDispatch, call.assignedTechnician == nil, let signedInTechnician {
-                    Button("Assign To Me") {
-                        assign(call, to: signedInTechnician)
+                    Button(assignToMeTitle(for: call, technician: signedInTechnician)) {
+                        if let nextStart = nextAvailableStart(for: signedInTechnician, call: call),
+                           nextStart > call.scheduledDate {
+                            assign(call, to: signedInTechnician, reschedulingTo: nextStart)
+                        } else {
+                            assign(call, to: signedInTechnician)
+                        }
                     }
                     .buttonStyle(.bordered)
+                    .disabled(
+                        nextAvailableStart(for: signedInTechnician, call: call) == nil &&
+                            TechnicianWorkShiftPolicy.hasConfiguredSchedule(
+                                technicianID: signedInTechnician.id,
+                                shifts: technicianWorkShifts
+                            )
+                    )
                 } else if isAdminUser && call.isReadyToCreateBillingDocument {
                     Button("Invoice") {
                         openDocumentationInCloseout = false
@@ -2335,6 +2368,7 @@ GunnAire
             proposedStart: proposedStart,
             serviceCalls: serviceCalls,
             availabilityBlocks: technicianAvailabilityBlocks,
+            workShifts: technicianWorkShifts,
             technicians: technicians
         )
         let overrideDecision = DispatchBoardScheduling.conflictOverrideDecision(
@@ -2465,14 +2499,27 @@ GunnAire
         publishToGoogleCalendar(call)
     }
 
-    private func nextAvailableStart(for technician: Technician, proposedStart: Date, duration: TimeInterval) -> Date? {
+    private func nextAvailableStart(for technician: Technician, call: ServiceCall) -> Date? {
         TechnicianDispatchAvailability.nextAvailableStart(
             technicianID: technician.id,
-            proposedStart: proposedStart,
-            duration: duration,
+            proposedStart: call.scheduledDate,
+            duration: call.duration,
             serviceCalls: serviceCalls,
-            availabilityBlocks: technicianAvailabilityBlocks
+            availabilityBlocks: technicianAvailabilityBlocks,
+            workShifts: technicianWorkShifts,
+            urgency: call.dispatchUrgency
         )
+    }
+
+    private func assignToMeTitle(for call: ServiceCall, technician: Technician) -> String {
+        guard let nextStart = nextAvailableStart(for: technician, call: call) else {
+            return TechnicianWorkShiftPolicy.hasConfiguredSchedule(
+                technicianID: technician.id,
+                shifts: technicianWorkShifts
+            ) ? "Assign To Me • no scheduled hours" : "Assign To Me"
+        }
+        guard nextStart > call.scheduledDate else { return "Assign To Me" }
+        return "Assign To Me • move to \(nextStart.formatted(date: .omitted, time: .shortened))"
     }
 
 }
@@ -2593,6 +2640,7 @@ enum DispatchBoardScheduling {
         proposedStart: Date,
         serviceCalls: [ServiceCall],
         availabilityBlocks: [TechnicianAvailabilityBlock],
+        workShifts: [TechnicianWorkShift] = [],
         technicians: [Technician]
     ) -> String? {
         let proposedEnd = proposedStart.addingTimeInterval(max(call.duration, 60))
@@ -2618,6 +2666,26 @@ enum DispatchBoardScheduling {
                 $0.technicianID == technicianID && $0.overlaps(start: proposedStart, end: proposedEnd)
             }) {
                 return "\(technicianName) is marked \(block.dispatchLabel.lowercased()) during that time."
+            }
+            let coverage = TechnicianWorkShiftPolicy.coverage(
+                technicianID: technicianID,
+                start: proposedStart,
+                end: proposedEnd,
+                shifts: workShifts,
+                allowOnCall: call.dispatchUrgency == .priority || call.dispatchUrgency == .emergency
+            )
+            if coverage == .offDuty {
+                let rawCoverage = TechnicianWorkShiftPolicy.coverage(
+                    technicianID: technicianID,
+                    start: proposedStart,
+                    end: proposedEnd,
+                    shifts: workShifts,
+                    allowOnCall: true
+                )
+                if rawCoverage == .onCall && call.dispatchUrgency == .normal {
+                    return "\(technicianName) is on call, not in regular hours, during that time."
+                }
+                return "\(technicianName) is off duty during that time."
             }
         }
         return nil
