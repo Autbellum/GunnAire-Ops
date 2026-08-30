@@ -21,6 +21,7 @@ final class GunnAire_OpsUITests: XCTestCase {
     private let servicePackageItemID = "A1000000-0000-4000-8000-000000000032"
     private let warrantyClaimID = "A1000000-0000-4000-8000-000000000037"
     private let fieldExpenseClaimID = "A1000000-0000-4000-8000-000000000041"
+    private let operationalAlertID = "A1000000-0000-4000-8000-000000000042"
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
@@ -3029,6 +3030,111 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(restoredWorkspacePicker.buttons["History"].isSelected)
         XCTAssertTrue(app.staticTexts["Recent Jobs"].exists)
         XCTAssertFalse(app.staticTexts["Documents & Photos"].exists)
+    }
+
+    @MainActor
+    func testAdministratorResolvesDoNotServiceFromCustomerRecordAndRestoresJobStart() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedOperationalAlert"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let alertBadge = app.descendants(matching: .any)["ScheduleOperationalAlert-\(screenshotServiceCallID)"]
+        for _ in 0..<6 where !alertBadge.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(alertBadge.waitForExistence(timeout: 3))
+        XCTAssertTrue(alertBadge.label.localizedCaseInsensitiveContains("Do Not Service"))
+
+        let job = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        XCTAssertTrue(job.waitForExistence(timeout: 3))
+        job.tap()
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+        let jobWorkspace = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(jobWorkspace.waitForExistence(timeout: 3))
+        jobWorkspace.buttons["Overview"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["ServiceCallOperationalAlerts"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Start Job"].isEnabled)
+
+        app.navigationBars["Call Details"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+        let sidebarButton = app.buttons["GunnAire Ops"]
+        if sidebarButton.waitForExistence(timeout: 2) {
+            sidebarButton.tap()
+        }
+        let customers = app.staticTexts["Customers"]
+        XCTAssertTrue(customers.waitForExistence(timeout: 3))
+        customers.tap()
+        XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
+
+        let customerRecord = app.buttons["OpenCustomerRecord-\(screenshotCustomerID)"]
+        for _ in 0..<5 where !customerRecord.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(customerRecord.waitForExistence(timeout: 3))
+        customerRecord.tap()
+        XCTAssertTrue(app.navigationBars["Edit Customer"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["CustomerOperationalAlertSummary"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Management review hold"].exists)
+
+        let manage = app.buttons["ManageCustomerOperationalAlerts"]
+        for _ in 0..<4 where !manage.exists || !manage.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(manage.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(manage.isHittable)
+        manage.tap()
+        XCTAssertTrue(app.navigationBars["Operational Alerts"].waitForExistence(timeout: 3))
+        let resolve = app.buttons["ResolveOperationalAlert-\(operationalAlertID)"]
+        XCTAssertTrue(resolve.waitForExistence(timeout: 3))
+        resolve.tap()
+        XCTAssertTrue(app.navigationBars["Resolve Alert"].waitForExistence(timeout: 3))
+
+        let resolution = app.textFields["OperationalAlertResolutionNote"]
+        XCTAssertTrue(resolution.waitForExistence(timeout: 3))
+        resolution.tap()
+        resolution.typeText("Management reviewed the account and approved continued service.")
+        let confirm = app.buttons["ConfirmResolveOperationalAlert"]
+        XCTAssertTrue(confirm.isEnabled)
+        confirm.tap()
+
+        XCTAssertTrue(app.navigationBars["Operational Alerts"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["ResolveOperationalAlert-\(operationalAlertID)"].exists)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Edit Customer"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["No active customer or site alerts"].waitForExistence(timeout: 3))
+
+        app.navigationBars["Edit Customer"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
+        let customersSidebarButton = app.buttons["GunnAire Ops"]
+        if customersSidebarButton.waitForExistence(timeout: 2) {
+            customersSidebarButton.tap()
+        }
+        let scheduleAgain = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(scheduleAgain.waitForExistence(timeout: 3))
+        scheduleAgain.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let restoredJob = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        for _ in 0..<6 where !restoredJob.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(restoredJob.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.descendants(matching: .any)["ScheduleOperationalAlert-\(screenshotServiceCallID)"].exists)
+        restoredJob.tap()
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Start Job"].isEnabled)
     }
 
     @MainActor

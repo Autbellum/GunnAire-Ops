@@ -155,6 +155,7 @@ private enum GunnAireUITestFixtures {
     private static let fleetVehicleID = UUID(uuidString: "A1000000-0000-4000-8000-000000000039")!
     private static let fleetEventID = UUID(uuidString: "A1000000-0000-4000-8000-000000000040")!
     private static let fieldExpenseClaimID = UUID(uuidString: "A1000000-0000-4000-8000-000000000041")!
+    private static let operationalAlertID = UUID(uuidString: "A1000000-0000-4000-8000-000000000042")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -190,6 +191,7 @@ private enum GunnAireUITestFixtures {
         let isServicePackageFixture = arguments.contains("-uiTestSeedServicePackage")
         let isFleetFixture = arguments.contains("-uiTestSeedFleetReadiness")
         let isFieldExpenseFixture = arguments.contains("-uiTestSeedFieldExpenseReview")
+        let isOperationalAlertFixture = arguments.contains("-uiTestSeedOperationalAlert")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
         for user in appUsers where
@@ -300,6 +302,10 @@ private enum GunnAireUITestFixtures {
         for communication in communications where communication.id == communicationID {
             context.delete(communication)
         }
+        let operationalAlerts = try context.fetch(FetchDescriptor<CustomerOperationalAlert>())
+        for alert in operationalAlerts where alert.id == operationalAlertID {
+            context.delete(alert)
+        }
         let customers = try context.fetch(FetchDescriptor<Customer>())
         for customer in customers where customer.id == customerID {
             context.delete(customer)
@@ -394,7 +400,8 @@ private enum GunnAireUITestFixtures {
             isQualificationReviewFixture ||
             isServicePackageFixture ||
             isWarrantyClaimFixture ||
-            isFieldExpenseFixture else { return }
+            isFieldExpenseFixture ||
+            isOperationalAlertFixture else { return }
 
         let customer = Customer(
             id: customerID,
@@ -561,11 +568,11 @@ private enum GunnAireUITestFixtures {
             scheduledDate: scheduledDate,
             assignedTechnician: technician,
             customer: customer,
-            status: .invoiced,
-            workCompletedChecklist: true,
-            documentationChecklist: true,
+            status: isOperationalAlertFixture ? .scheduled : .invoiced,
+            workCompletedChecklist: !isOperationalAlertFixture,
+            documentationChecklist: !isOperationalAlertFixture,
             linkedEstimateID: (isPendingEstimateFixture || isSyncRecoveryFixture) ? estimateID : nil,
-            linkedInvoiceID: invoiceID
+            linkedInvoiceID: isOperationalAlertFixture ? nil : invoiceID
         )
         let equipmentDecisionHistoryCall: ServiceCall? = isEquipmentDecisionFixture
             ? ServiceCall(
@@ -728,6 +735,19 @@ private enum GunnAireUITestFixtures {
         context.insert(equipment)
         context.insert(serviceLocation)
         context.insert(call)
+        if isOperationalAlertFixture {
+            context.insert(CustomerOperationalAlert(
+                id: operationalAlertID,
+                customerID: customer.id,
+                customerName: customer.name,
+                serviceLocationID: serviceLocation.id,
+                serviceLocationName: serviceLocation.displayName,
+                kind: .doNotService,
+                title: "Management review hold",
+                detail: "Administrator review is required before dispatching or starting another visit.",
+                createdByEmail: AppAccess.primaryAdminEmail
+            ))
+        }
         if isWarrantyClaimFixture {
             let evidence = ServiceDocumentAttachment(
                 id: warrantyEvidenceID,

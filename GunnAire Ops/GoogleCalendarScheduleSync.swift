@@ -3,8 +3,28 @@ import SwiftData
 
 @MainActor
 enum GoogleCalendarScheduleSync {
+    private struct ImportSummary {
+        let importedCount: Int
+        let restrictedReviewCount: Int
+    }
+
     private static let deletedCalendarEventKeysStorageKey = "GunnAireDeletedGoogleCalendarEventKeys"
     private static let locallyEditedCalendarCallIDsStorageKey = "GunnAireLocallyEditedGoogleCalendarCallIDs"
+
+    static func shouldQuarantineImportedCalendarEvent(
+        existingCallFound: Bool,
+        hasSchedulingBlocker: Bool
+    ) -> Bool {
+        !existingCallFound && hasSchedulingBlocker
+    }
+
+    static func operationalCustomerForCalendarImport(
+        existingCall: ServiceCall?,
+        matchedCustomer: Customer?
+    ) -> Customer? {
+        existingCall?.customer ?? matchedCustomer
+    }
+
     static func markCalendarEventDeleted(calendarID: String?, eventID: String?) {
         guard let eventID, !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         var deletedKeys = Set(UserDefaults.standard.stringArray(forKey: deletedCalendarEventKeysStorageKey) ?? [])
@@ -73,12 +93,15 @@ enum GoogleCalendarScheduleSync {
                     case .success(let calendarEvents):
                         Task { @MainActor in
                             do {
-                                let importedCount = try importEvents(
+                                let summary = try importEvents(
                                     calendarEvents,
                                     into: modelContext,
                                     signedInEmail: signedInEmail
                                 )
-                                completion(.success("Imported \(importedCount) Google Calendar events. Existing Google events are read-only in GunnAire Ops, so sync will not overwrite titles, locations, descriptions, attendees, or reminders."))
+                                let restrictionNotice = summary.restrictedReviewCount == 0
+                                    ? ""
+                                    : " \(summary.restrictedReviewCount) new event\(summary.restrictedReviewCount == 1 ? "" : "s") matched an active Do Not Service hold and remained unassigned for office review."
+                                completion(.success("Imported \(summary.importedCount) Google Calendar events. Existing Google events are read-only in GunnAire Ops, so sync will not overwrite titles, locations, descriptions, attendees, or reminders.\(restrictionNotice)"))
                             } catch {
                                 completion(.failure(error))
                             }
@@ -209,10 +232,12 @@ enum GoogleCalendarScheduleSync {
         _ calendarEvents: [(calendarID: String, event: GoogleCalendarEvent)],
         into modelContext: ModelContext,
         signedInEmail: String?
-    ) throws -> Int {
+    ) throws -> ImportSummary {
         let existingCalls = try modelContext.fetch(FetchDescriptor<ServiceCall>())
         let existingCustomers = try modelContext.fetch(FetchDescriptor<Customer>())
         let existingTechnicians = try modelContext.fetch(FetchDescriptor<Technician>())
+        let serviceLocations = try modelContext.fetch(FetchDescriptor<CustomerServiceLocation>())
+        let operationalAlerts = try modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>())
 
         var callsByGoogleEventKey: [String: ServiceCall] = [:]
         var callsByGoogleEventID: [String: ServiceCall] = [:]
@@ -253,6 +278,7 @@ enum GoogleCalendarScheduleSync {
 
         let technician = resolveTechnician(signedInEmail: signedInEmail, techniciansByEmail: &techniciansByEmail, modelContext: modelContext)
         var imported = 0
+        var restrictedReviewCount = 0
 
         for calendarEvent in calendarEvents {
             let event = calendarEvent.event
@@ -279,14 +305,54 @@ enum GoogleCalendarScheduleSync {
                 signedInEmail: signedInEmail,
                 technicianEmails: Set(techniciansByEmail.keys)
             )
-            let customer = resolveExistingCustomer(
+            let existingCall = callsByGoogleEventKey[eventKey] ?? callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint]
+            let matchedCustomer = resolveExistingCustomer(
                 for: customerCandidate,
                 customersByEmail: &customersByEmail,
                 customersByName: &customersByName
-            ) ?? resolveUnassignedCalendarCustomer(
-                existing: &unassignedCalendarCustomer,
-                modelContext: modelContext
             )
+            let operationalCustomer = operationalCustomerForCalendarImport(
+                existingCall: existingCall,
+                matchedCustomer: matchedCustomer
+            )
+            let matchedLocationID = existingCall?.serviceLocationID ?? operationalCustomer.flatMap { operationalCustomer in
+                CustomerServiceLocationPolicy.matchingLocation(
+                    address: event.location,
+                    customerID: operationalCustomer.id,
+                    in: serviceLocations
+                )?.id
+            }
+            let schedulingBlocker = operationalCustomer.flatMap { operationalCustomer in
+                CustomerOperationalAlertPolicy.schedulingBlocker(
+                    customerID: operationalCustomer.id,
+                    serviceLocationID: matchedLocationID,
+                    in: operationalAlerts
+                )
+            }
+            let mustRemainUnassigned = shouldQuarantineImportedCalendarEvent(
+                existingCallFound: existingCall != nil,
+                hasSchedulingBlocker: schedulingBlocker != nil
+            )
+            let importedTechnician = mustRemainUnassigned
+                ? nil
+                : resolveTechnician(
+                    calendarID: calendarEvent.calendarID,
+                    signedInEmail: signedInEmail,
+                    techniciansByEmail: &techniciansByEmail,
+                    modelContext: modelContext
+                ) ?? technician
+            let customer = mustRemainUnassigned
+                ? resolveUnassignedCalendarCustomer(
+                    existing: &unassignedCalendarCustomer,
+                    modelContext: modelContext
+                )
+                : operationalCustomer ?? resolveUnassignedCalendarCustomer(
+                    existing: &unassignedCalendarCustomer,
+                    modelContext: modelContext
+                )
+            if mustRemainUnassigned {
+                restrictedReviewCount += 1
+            }
             if let customerCandidate,
                !CustomerDataMaintenance.isSystemCalendarCustomer(customer) {
                 if customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
@@ -304,10 +370,17 @@ enum GoogleCalendarScheduleSync {
                     customersByEmail[email] = customer
                 }
             }
-            let eventNotes = calendarNotes(description: event.description)
+            var eventNotes = calendarNotes(description: event.description)
+            if mustRemainUnassigned {
+                let notice = "Operational review required: this new Google Calendar event matched a customer with an active Do Not Service hold and was not attached to that customer. Resolve the hold in the customer record before creating app-managed work."
+                eventNotes = [eventNotes, notice]
+                    .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n\n")
+            }
             let isManagedByApp = isImportedEventManagedByApp(event)
 
-            let call = callsByGoogleEventKey[eventKey] ?? callsByGoogleEventID[event.id] ?? callsByFingerprint[fingerprint] ?? ServiceCall(
+            let call = existingCall ?? ServiceCall(
                 googleCalendarID: calendarEvent.calendarID,
                 googleEventID: event.id,
                 googleEventManagedByApp: isManagedByApp,
@@ -316,12 +389,7 @@ enum GoogleCalendarScheduleSync {
                 type: inferCallType(from: event.summary, description: event.description),
                 scheduledDate: startDate,
                 duration: duration,
-                assignedTechnician: resolveTechnician(
-                    calendarID: calendarEvent.calendarID,
-                    signedInEmail: signedInEmail,
-                    techniciansByEmail: &techniciansByEmail,
-                    modelContext: modelContext
-                ) ?? technician,
+                assignedTechnician: importedTechnician,
                 customer: customer,
                 status: .scheduled,
                 notes: eventNotes
@@ -341,12 +409,7 @@ enum GoogleCalendarScheduleSync {
             call.type = inferCallType(from: event.summary, description: event.description)
             call.scheduledDate = startDate
             call.duration = duration
-            call.assignedTechnician = resolveTechnician(
-                calendarID: calendarEvent.calendarID,
-                signedInEmail: signedInEmail,
-                techniciansByEmail: &techniciansByEmail,
-                modelContext: modelContext
-            ) ?? technician
+            call.assignedTechnician = importedTechnician
             call.customer = customer
             call.siteAddress = mergedImportedCalendarText(
                 remoteValue: event.location,
@@ -365,7 +428,7 @@ enum GoogleCalendarScheduleSync {
         }
 
         try? modelContext.save()
-        return imported
+        return ImportSummary(importedCount: imported, restrictedReviewCount: restrictedReviewCount)
     }
 
     private static func exportCalls(

@@ -377,7 +377,7 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
 enum GunnAireCloudKitSchemaBootstrap {
     static let initializeArgument = "-initializeCloudKitSchema"
     static let cleanupArgument = "-cleanupCloudKitSchemaBootstrap"
-    static let schemaVersion = 18
+    static let schemaVersion = 19
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
@@ -713,6 +713,17 @@ enum GunnAireCloudKitSchemaBootstrap {
             submittedAt: now,
             createdAt: now
         )
+        let operationalAlert = CustomerOperationalAlert(
+            customerID: customer.id,
+            customerName: customer.name,
+            serviceLocationID: serviceLocation.id,
+            serviceLocationName: serviceLocation.displayName,
+            kind: .safety,
+            title: marker,
+            detail: marker,
+            createdAt: now,
+            createdByEmail: bootstrapEmail
+        )
 
         let models: [any PersistentModel] = [
             item,
@@ -817,6 +828,7 @@ enum GunnAireCloudKitSchemaBootstrap {
             fleetVehicle,
             fleetEvent,
             fieldExpenseClaim,
+            operationalAlert,
         ]
 
         for model in models {
@@ -826,6 +838,9 @@ enum GunnAireCloudKitSchemaBootstrap {
     }
 
     private static func cleanup(in modelContext: ModelContext) throws {
+        for value in try modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>()) where value.title == marker {
+            modelContext.delete(value)
+        }
         for value in try modelContext.fetch(FetchDescriptor<FieldExpenseClaim>()) where value.claimantEmail == bootstrapEmail {
             modelContext.delete(value)
         }

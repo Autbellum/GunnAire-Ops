@@ -843,8 +843,8 @@ struct GunnAire_OpsTests {
         #expect(configuration.cloudKitContainerIdentifier == GunnAireCloudKit.containerIdentifier)
         #expect(configuration.isStoredInMemoryOnly == false)
         #expect(configuration.url.lastPathComponent == GunnAireCloudKitSchemaBootstrap.storeFileName)
-        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 18)
-        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V18"))
+        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 19)
+        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V19"))
     }
     #endif
 
@@ -20824,7 +20824,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func deletingCustomerExplicitlyRemovesServiceLocations() throws {
+    @Test func deletingCustomerExplicitlyRemovesServiceLocationsAndOperationalAlerts() throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(
             for: schema,
@@ -20833,8 +20833,18 @@ struct GunnAire_OpsTests {
         let context = ModelContext(container)
         let customer = Customer(name: "Deleted Property Customer")
         let location = CustomerServiceLocation(customer: customer, name: "Shop", address: "9 Delete Lane")
+        let operationalAlert = CustomerOperationalAlert(
+            customerID: customer.id,
+            customerName: customer.name,
+            serviceLocationID: location.id,
+            serviceLocationName: location.displayName,
+            kind: .access,
+            title: "Call before entry",
+            createdByEmail: "dispatch@gunnaire.com"
+        )
         context.insert(customer)
         context.insert(location)
+        context.insert(operationalAlert)
         try context.save()
 
         let summary = CustomerDataMaintenance.deleteCustomer(
@@ -20849,13 +20859,16 @@ struct GunnAire_OpsTests {
             documentAttachments: [],
             equipmentProfiles: [],
             serviceLocations: [location],
-            customerCommunications: []
+            customerCommunications: [],
+            operationalAlerts: [operationalAlert]
         )
         try context.save()
 
         #expect(summary.customers == 1)
         #expect(summary.serviceLocations == 1)
+        #expect(summary.operationalAlerts == 1)
         #expect(try context.fetch(FetchDescriptor<CustomerServiceLocation>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<CustomerOperationalAlert>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<Customer>()).isEmpty)
     }
 
@@ -23615,6 +23628,201 @@ struct GunnAire_OpsTests {
         #expect(csv.contains("Approved Field Expense Cost,40.00"))
         #expect(csv.contains("Pending Expense Claims,1"))
         #expect(csv.contains("Expense Cost Customer"))
+    }
+
+    @Test func operationalAlertsScopeSortAndBlockNewBookingsUntilResolved() throws {
+        let customerID = UUID()
+        let northLocationID = UUID()
+        let southLocationID = UUID()
+        let base = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        let priority = try CustomerOperationalAlertPolicy.makeAlert(
+            customerID: customerID,
+            customerName: "Scope Customer",
+            kind: .priority,
+            title: "Priority customer",
+            detail: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            now: base
+        )
+        let safety = try CustomerOperationalAlertPolicy.makeAlert(
+            customerID: customerID,
+            customerName: "Scope Customer",
+            serviceLocationID: northLocationID,
+            serviceLocationName: "North Plant",
+            kind: .safety,
+            title: "Roof access",
+            detail: "Use fall protection beyond the marked hatch.",
+            actorEmail: "dispatch@gunnaire.com",
+            now: base.addingTimeInterval(60)
+        )
+        let holdOperationID = UUID()
+        let doNotService = try CustomerOperationalAlertPolicy.makeAlert(
+            customerID: customerID,
+            customerName: "Scope Customer",
+            serviceLocationID: northLocationID,
+            serviceLocationName: "North Plant",
+            kind: .doNotService,
+            title: "Management hold",
+            detail: "Administrator review is required before another visit.",
+            actorEmail: "admin@gunnaire.com",
+            now: base.addingTimeInterval(120),
+            creationOperationID: holdOperationID
+        )
+        let unrelated = try CustomerOperationalAlertPolicy.makeAlert(
+            customerID: UUID(),
+            customerName: "Other Customer",
+            kind: .access,
+            title: "Gate code",
+            detail: nil,
+            actorEmail: "dispatch@gunnaire.com",
+            now: base.addingTimeInterval(180)
+        )
+        let alerts = [priority, safety, doNotService, unrelated]
+
+        let north = CustomerOperationalAlertPolicy.activeAlerts(
+            customerID: customerID,
+            serviceLocationID: northLocationID,
+            in: alerts
+        )
+        #expect(north.map(\.kind) == [.doNotService, .safety, .priority])
+        #expect(CustomerOperationalAlertPolicy.activeAlerts(
+            customerID: customerID,
+            serviceLocationID: southLocationID,
+            in: alerts
+        ).map(\.kind) == [.priority])
+        #expect(CustomerOperationalAlertPolicy.activeAlerts(
+            customerID: customerID,
+            in: alerts
+        ).map(\.kind) == [.priority])
+        #expect(CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: customerID,
+            serviceLocationID: northLocationID,
+            in: alerts
+        )?.id == doNotService.id)
+        #expect(CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: customerID,
+            serviceLocationID: southLocationID,
+            in: alerts
+        ) == nil)
+        #expect(doNotService.creationOperationID == holdOperationID)
+
+        let resolutionOperationID = UUID()
+        try CustomerOperationalAlertPolicy.resolve(
+            doNotService,
+            actorEmail: "ADMIN@GUNNAIRE.COM",
+            note: "Account and safety review completed.",
+            now: base.addingTimeInterval(300),
+            resolutionOperationID: resolutionOperationID
+        )
+        #expect(!doNotService.isActive)
+        #expect(doNotService.resolvedByEmail == "admin@gunnaire.com")
+        #expect(doNotService.resolutionOperationID == resolutionOperationID)
+        #expect(CustomerOperationalAlertPolicy.schedulingBlocker(
+            customerID: customerID,
+            serviceLocationID: northLocationID,
+            in: alerts
+        ) == nil)
+
+        #expect(throws: CustomerOperationalAlertValidationError.detailRequired(.doNotService)) {
+            try CustomerOperationalAlertPolicy.makeAlert(
+                customerID: customerID,
+                customerName: "Scope Customer",
+                kind: .doNotService,
+                title: "",
+                detail: " ",
+                actorEmail: "admin@gunnaire.com"
+            )
+        }
+    }
+
+    @Test func operationalAlertRolesKeepDoNotServiceAdministrativeAndOtherAlertsWithDispatch() {
+        let field = AppUser(email: "alert-field@gunnaire.com", role: .fieldTechnician)
+        let dispatch = AppUser(email: "alert-dispatch@gunnaire.com", role: .dispatcher)
+        let accounting = AppUser(email: "alert-accounting@gunnaire.com", role: .accounting)
+        let admin = AppUser(email: "alert-admin@gunnaire.com", role: .admin)
+        let standard = AppUser(email: "alert-standard@gunnaire.com", role: .standard)
+        let users = [field, dispatch, accounting, admin, standard]
+
+        for action in AppAccess.CustomerOperationalAlertAction.allCases {
+            #expect(!AppAccess.canPerformCustomerOperationalAlertAction(action, kind: .safety, email: field.email, users: users))
+            #expect(AppAccess.canPerformCustomerOperationalAlertAction(action, kind: .safety, email: dispatch.email, users: users))
+            #expect(!AppAccess.canPerformCustomerOperationalAlertAction(action, kind: .doNotService, email: dispatch.email, users: users))
+            #expect(!AppAccess.canPerformCustomerOperationalAlertAction(action, kind: .safety, email: accounting.email, users: users))
+            #expect(AppAccess.canPerformCustomerOperationalAlertAction(action, kind: .doNotService, email: admin.email, users: users))
+            #expect(!AppAccess.canPerformCustomerOperationalAlertAction(action, kind: .priority, email: standard.email, users: users))
+        }
+    }
+
+    @Test func newRestrictedGoogleCalendarEventsStayInTheOfficeReviewQueue() {
+        #expect(GoogleCalendarScheduleSync.shouldQuarantineImportedCalendarEvent(
+            existingCallFound: false,
+            hasSchedulingBlocker: true
+        ))
+        #expect(!GoogleCalendarScheduleSync.shouldQuarantineImportedCalendarEvent(
+            existingCallFound: true,
+            hasSchedulingBlocker: true
+        ))
+        #expect(!GoogleCalendarScheduleSync.shouldQuarantineImportedCalendarEvent(
+            existingCallFound: false,
+            hasSchedulingBlocker: false
+        ))
+    }
+
+    @Test func calendarRefreshPreservesTheExistingOperationalCustomerRelationship() {
+        let existingCustomer = Customer(name: "Existing Operational Customer")
+        let newlyMatchedCustomer = Customer(name: "Remote Text Match")
+        let call = ServiceCall(
+            type: .service,
+            scheduledDate: Date(),
+            customer: existingCustomer
+        )
+
+        #expect(GoogleCalendarScheduleSync.operationalCustomerForCalendarImport(
+            existingCall: call,
+            matchedCustomer: newlyMatchedCustomer
+        )?.id == existingCustomer.id)
+        #expect(GoogleCalendarScheduleSync.operationalCustomerForCalendarImport(
+            existingCall: nil,
+            matchedCustomer: newlyMatchedCustomer
+        )?.id == newlyMatchedCustomer.id)
+    }
+
+    @MainActor
+    @Test func operationalAlertEvidencePersistsInTheSharedCloudKitModelSchema() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(name: "Persistent Alert Customer")
+        let location = CustomerServiceLocation(
+            customer: customer,
+            name: "Warehouse",
+            address: "100 CloudKit Way"
+        )
+        let alert = try CustomerOperationalAlertPolicy.makeAlert(
+            customerID: customer.id,
+            customerName: customer.name,
+            serviceLocationID: location.id,
+            serviceLocationName: location.displayName,
+            kind: .safety,
+            title: "Forklift traffic",
+            detail: "Check in at the safety desk before entering the warehouse.",
+            actorEmail: "dispatch@gunnaire.com"
+        )
+        context.insert(customer)
+        context.insert(location)
+        context.insert(alert)
+        try context.save()
+
+        let restored = try #require(try context.fetch(FetchDescriptor<CustomerOperationalAlert>()).first)
+        #expect(restored.customerID == customer.id)
+        #expect(restored.serviceLocationID == location.id)
+        #expect(restored.kind == .safety)
+        #expect(restored.detail == "Check in at the safety desk before entering the warehouse.")
+        #expect(restored.createdByEmail == "dispatch@gunnaire.com")
+        #expect(restored.isActive)
     }
 
 }
