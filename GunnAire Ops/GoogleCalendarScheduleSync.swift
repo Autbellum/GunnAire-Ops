@@ -818,9 +818,12 @@ enum GoogleCalendarScheduleSync {
         let endDate = call.scheduledDate.addingTimeInterval(call.duration)
         let summary = calendarEventTitle(for: call, existingSummary: existingSummary)
         let customerEmail = call.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let attendees = !preserveExternalDetails && customerEmail?.isEmpty == false
-            ? [GoogleWritableCalendarAttendee(email: customerEmail!, displayName: call.customer.name)]
-            : nil
+        let attendees: [GoogleWritableCalendarAttendee]?
+        if !preserveExternalDetails, let customerEmail, !customerEmail.isEmpty {
+            attendees = [GoogleWritableCalendarAttendee(email: customerEmail, displayName: call.customer.name)]
+        } else {
+            attendees = nil
+        }
         let eventDescription = preserveExternalDetails ? nil : calendarEventUserDescription(for: call)
         let eventLocation = preserveExternalDetails ? nil : calendarEventLocation(for: call)
         return GoogleWritableCalendarEvent(

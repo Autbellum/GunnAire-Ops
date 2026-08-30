@@ -390,7 +390,12 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     private static func refreshFailureMessage(statusCode: Int, raw: String?) -> String {
-        let detail = raw?.isEmpty == false ? " Intuit detail: \(String(raw!.prefix(700)))" : ""
+        let detail: String
+        if let raw, !raw.isEmpty {
+            detail = " Intuit detail: \(String(raw.prefix(700)))"
+        } else {
+            detail = ""
+        }
         switch statusCode {
         case 400, 401, 403:
             return "QuickBooks token refresh was rejected (HTTP \(statusCode)). The saved refresh token is expired, revoked, already rotated, or belongs to different production credentials. Disconnect QuickBooks, then connect again with a QuickBooks company admin.\(detail)"

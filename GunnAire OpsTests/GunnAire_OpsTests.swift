@@ -3915,6 +3915,25 @@ struct GunnAire_OpsTests {
         #expect(entry.durationMinutes == 95)
     }
 
+    @Test func timeEntryReviewEventNormalizesOptionalDetailWithoutForcedUnwraps() {
+        let blank = TimeEntryReviewEvent(
+            action: .submitted,
+            actorEmail: " TECH@GUNNAIRE.COM ",
+            occurredAt: Date(timeIntervalSinceReferenceDate: 51_000),
+            detail: "  \n\t "
+        )
+        let bounded = TimeEntryReviewEvent(
+            action: .correctionRequested,
+            actorEmail: "admin@gunnaire.com",
+            occurredAt: Date(timeIntervalSinceReferenceDate: 51_100),
+            detail: "  \(String(repeating: "x", count: 700))  "
+        )
+
+        #expect(blank.actorEmail == "tech@gunnaire.com")
+        #expect(blank.detail == nil)
+        #expect(bounded.detail?.count == 500)
+    }
+
     @MainActor
     @Test func timeActivityClassificationMigratesLegacyAuditAndPersistsWithoutANewModelField() throws {
         let occurredAt = Date(timeIntervalSinceReferenceDate: 75_000)
@@ -8441,6 +8460,28 @@ struct GunnAire_OpsTests {
         let properties = try #require(object["extendedProperties"] as? [String: Any])
         let privateProperties = try #require(properties["private"] as? [String: String])
         #expect(privateProperties["gunnaireManaged"] == "true")
+    }
+
+    @Test func googleCalendarCreatePayloadOmitsWhitespaceOnlyCustomerEmail() async throws {
+        let customer = Customer(
+            name: "Calendar Customer",
+            email: "  \n\t  ",
+            address: "123 Main Street"
+        )
+        let call = ServiceCall(
+            eventTitle: "Service visit",
+            type: .service,
+            scheduledDate: Date(timeIntervalSince1970: 1_800_000_000),
+            duration: 3_600,
+            customer: customer
+        )
+
+        let event = GoogleCalendarScheduleSync.makeCalendarCreateEvent(for: call)
+        let encoded = try JSONEncoder().encode(event)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+
+        #expect(object["attendees"] == nil)
+        #expect(object["summary"] as? String == "Service visit")
     }
 
     @Test func googleCalendarCreatePayloadKeepsUserEnteredLocationAndDetailsVisible() async throws {
@@ -23035,6 +23076,51 @@ struct GunnAire_OpsTests {
                 from: Data(#"{"TotalAmt":125.00}"#.utf8)
             )
         }
+    }
+
+    @MainActor
+    @Test func quickBooksPaymentRecoveryFailsClosedUntilCloudKitInvoiceLinkResolves() async {
+        let customer = Customer(
+            quickBooksID: "qbo-customer-1",
+            name: "Payment Customer"
+        )
+        let invoice = Invoice(
+            customer: customer,
+            quickBooksID: "qbo-invoice-1",
+            lineItemSummary: "Service",
+            amount: 125
+        )
+        let payment = Payment(
+            invoice: invoice,
+            quickBooksChargeID: "qbo-charge-1",
+            quickBooksClientTransID: "ga-payment-1",
+            amount: 125,
+            method: "card"
+        )
+        payment.invoice = nil
+
+        await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
+            try await QuickBooksPaymentsService.shared.retryAccountingSync(for: payment)
+        }
+        await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
+            try await QuickBooksPaymentsService.shared.syncManualAccountingPayment(for: payment)
+        }
+        await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
+            try await QuickBooksPaymentsService.shared.refundPayment(
+                payment: payment,
+                amount: 25,
+                note: "Customer refund"
+            )
+        }
+
+        payment.isRefund = true
+        await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
+            try await QuickBooksPaymentsService.shared.retryRefundReceiptSync(for: payment)
+        }
+        #expect(
+            QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable.errorDescription?
+                .contains("no QuickBooks request was sent") == true
+        )
     }
 
     @Test func quickBooksCapturedCardResponseRequiresMatchingTransactionEvidence() throws {

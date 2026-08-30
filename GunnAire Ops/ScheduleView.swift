@@ -2066,13 +2066,19 @@ GunnAire
     private func maintenanceReminderEmailDraft(for contract: RecurringMaintenanceContract) -> (to: String, subject: String, body: String)? {
         guard let email = contract.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else { return nil }
+        let reminderDetail: String
+        if contract.needsRenewalAttention, let termEndsOn = contract.termEndsOn {
+            reminderDetail = "Your \(contract.displayName) is due for renewal on \(termEndsOn.formatted(date: .abbreviated, time: .omitted))."
+        } else {
+            reminderDetail = "This is a reminder that your \(contract.schedulePattern) maintenance visit is due on \(contract.nextDate.formatted(date: .abbreviated, time: .omitted))."
+        }
         return (
             to: email,
             subject: contract.needsRenewalAttention ? "Maintenance Agreement Renewal From GunnAire" : "Maintenance Reminder From GunnAire",
             body: """
 Hello \(contract.customer.name),
 
-\(contract.needsRenewalAttention && contract.termEndsOn != nil ? "Your \(contract.displayName) is due for renewal on \(contract.termEndsOn!.formatted(date: .abbreviated, time: .omitted))." : "This is a reminder that your \(contract.schedulePattern) maintenance visit is due on \(contract.nextDate.formatted(date: .abbreviated, time: .omitted)).")
+\(reminderDetail)
 
 Reply to this email if you would like us to schedule your visit.
 

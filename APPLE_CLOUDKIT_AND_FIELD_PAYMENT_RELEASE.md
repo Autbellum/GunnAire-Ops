@@ -33,26 +33,29 @@ and schema status as of 2026-08-30.
   gated on a participating certified payment service provider, Account Holder
   entitlement approval, provider integration, and signed physical-iPhone
   acceptance.
-- Exact build `1.0 (2026083015)` is retained as a development-signed iOS
+- Exact build `1.0 (2026083016)` is retained as a development-signed iOS
   Release archive and universal arm64/x86_64 Mac Catalyst Release app under
   `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30`. Strict
   signature verification confirms Apple login, CloudKit, Push Notifications,
   and Associated Domains in both products. The iOS app/dSYM UUID matches at
-  `172985E6-FE7E-31DD-B506-AD5450DFAD7C`; Mac app/dSYM UUIDs match at
-  `69B8C754-F56C-3C44-924B-E6BA0A0C8C15` and
-  `F66650F2-2A27-39A6-B02D-3CA673604353`. Exact retained-artifact and CloudKit
+  `B4B6A43B-F5D7-3223-9604-9FA1A5ADDEA0`; Mac app/dSYM UUIDs match at
+  `A99F0FB5-6030-3159-BE7F-4443ED1B8EB5` and
+  `5A879011-AA52-34F1-8DD1-8B8EBA999C71`. Exact retained-artifact and CloudKit
   preflight passes **61 checks, 4 expected warnings, and 0 failures**. The
   read-only online probe passes every unchanged production route but reports
-  **54/4/1** because production remains backend `2026.08.30.15` while source is
+  **63/3/1** because production remains backend `2026.08.30.15` while source is
   undeployed `2026.08.30.16`. An Apple Distribution private key, separate Mac
   distribution signing, signed representative-device acceptance, and App
   Store upload remain external release gates.
-- Build `2026083015` changes no SwiftData field or CloudKit schema. Its
-  supplier connector v2 state remains inside the existing purchase-order notes
-  envelope. Complete iPad and Mac logic suites pass **662/662** each, backend
-  tests pass **70/70**, and the focused multi-line purchase-order to receipt to
-  vendor-bill handoff passes **1/1**. No CloudKit bootstrap, Development
-  mutation, or Production promotion was required or performed.
+- Build `2026083016` changes no SwiftData field or CloudKit schema. It fails
+  closed before any QBO refund or accounting retry when CloudKit has not yet
+  resolved the payment's invoice/customer links, and removes adjacent unsafe
+  optional access in Google Calendar, QBO messaging, equipment parsing,
+  maintenance reminders, and time-review normalization. Complete iPad and Mac
+  logic suites pass **665/665** each, and the three new integration-recovery
+  regressions pass **3/3**; backend source `.16` passes **70/70**. No CloudKit bootstrap, Development mutation,
+  Production promotion, accounting write, refund, or payment was required or
+  performed.
 - Production remains schema v15 across 24 record types in retained export
   `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
   `f81de36537620a10fe34fde22883a94dc6f5b00deea6fec08004160c0aae7594`.

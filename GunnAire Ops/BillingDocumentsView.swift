@@ -7479,9 +7479,11 @@ GunnAire
         guard prepareEstimateDocumentationForQuickBooksSend(estimate) else {
             return
         }
-        let email = estimate.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEmail = estimate.customer.email?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let email = trimmedEmail.flatMap { $0.isEmpty ? nil : $0 }
         actionMessage = "Prepared estimate PDF and attachments. Sending estimate through QuickBooks..."
-        QuickBooksDataAPI.shared.sendEstimate(id: quickBooksID, to: email?.isEmpty == false ? email : nil) { result in
+        QuickBooksDataAPI.shared.sendEstimate(id: quickBooksID, to: email) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success:
@@ -7490,9 +7492,11 @@ GunnAire
                         estimate.status = "sent"
                     }
                     try? modelContext.save()
-                    actionMessage = email?.isEmpty == false
-                        ? "Estimate sent through QuickBooks to \(email!)."
-                        : "Estimate sent through QuickBooks."
+                    if let email {
+                        actionMessage = "Estimate sent through QuickBooks to \(email)."
+                    } else {
+                        actionMessage = "Estimate sent through QuickBooks."
+                    }
                 case .failure(let error):
                     actionMessage = "QuickBooks estimate send failed: \(error.localizedDescription)"
                 }
@@ -7513,9 +7517,11 @@ GunnAire
         guard prepareInvoiceDocumentationForQuickBooksSend(invoice) else {
             return
         }
-        let email = invoice.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEmail = invoice.customer.email?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let email = trimmedEmail.flatMap { $0.isEmpty ? nil : $0 }
         actionMessage = "Prepared service report and invoice attachments. Sending invoice through QuickBooks..."
-        QuickBooksDataAPI.shared.sendInvoice(id: quickBooksID, to: email?.isEmpty == false ? email : nil) { result in
+        QuickBooksDataAPI.shared.sendInvoice(id: quickBooksID, to: email) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success:
@@ -7524,9 +7530,11 @@ GunnAire
                         invoice.status = "sent"
                     }
                     try? modelContext.save()
-                    actionMessage = email?.isEmpty == false
-                        ? "Invoice sent through QuickBooks to \(email!)."
-                        : "Invoice sent through QuickBooks."
+                    if let email {
+                        actionMessage = "Invoice sent through QuickBooks to \(email)."
+                    } else {
+                        actionMessage = "Invoice sent through QuickBooks."
+                    }
                 case .failure(let error):
                     actionMessage = "QuickBooks invoice send failed: \(error.localizedDescription)"
                 }

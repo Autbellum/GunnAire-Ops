@@ -171,7 +171,10 @@ final class QuickBooksPaymentsService {
         guard let chargeID = payment.quickBooksChargeID, !chargeID.isEmpty else {
             throw QuickBooksPaymentsServiceError.chargeNotSynced
         }
-        guard let customerQBID = payment.invoice.customer.quickBooksID, !customerQBID.isEmpty else {
+        guard let invoice = payment.invoice, let customer = invoice.customer else {
+            throw QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable
+        }
+        guard let customerQBID = customer.quickBooksID, !customerQBID.isEmpty else {
             throw QuickBooksPaymentsServiceError.customerNotSynced
         }
         guard let salesItemRef = await resolvedSalesItemRef() else {
@@ -191,7 +194,7 @@ final class QuickBooksPaymentsService {
             expectedClientTransactionID: clientTransactionID
         )
         let refundReceipt = await syncRefundReceipt(
-            payment: payment,
+            invoice: invoice,
             customerQBID: customerQBID,
             salesItemRef: salesItemRef,
             amount: amount,
@@ -212,15 +215,18 @@ final class QuickBooksPaymentsService {
         guard !payment.isRefund else {
             throw QuickBooksPaymentsServiceError.invalidRetryTarget
         }
-        guard let customerQBID = payment.invoice.customer.quickBooksID, !customerQBID.isEmpty else {
+        guard let invoice = payment.invoice, let customer = invoice.customer else {
+            throw QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable
+        }
+        guard let customerQBID = customer.quickBooksID, !customerQBID.isEmpty else {
             throw QuickBooksPaymentsServiceError.customerNotSynced
         }
-        guard payment.invoice.quickBooksID.nilIfBlank != nil else {
+        guard invoice.quickBooksID.nilIfBlank != nil else {
             throw QuickBooksPaymentsServiceError.invoiceNotSyncedToQuickBooks
         }
 
-        let payload = await quickBooksPaymentPayload(
-            invoice: payment.invoice,
+        let payload = try await quickBooksPaymentPayload(
+            invoice: invoice,
             customerQBID: customerQBID,
             amount: payment.amount,
             note: payment.notes,
@@ -240,19 +246,22 @@ final class QuickBooksPaymentsService {
         guard !payment.isRefund else {
             throw QuickBooksPaymentsServiceError.invalidRetryTarget
         }
-        guard let customerQBID = payment.invoice.customer.quickBooksID, !customerQBID.isEmpty else {
+        guard let invoice = payment.invoice, let customer = invoice.customer else {
+            throw QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable
+        }
+        guard let customerQBID = customer.quickBooksID, !customerQBID.isEmpty else {
             throw QuickBooksPaymentsServiceError.customerNotSynced
         }
-        guard payment.invoice.quickBooksID.nilIfBlank != nil else {
+        guard invoice.quickBooksID.nilIfBlank != nil else {
             throw QuickBooksPaymentsServiceError.invoiceNotSyncedToQuickBooks
         }
 
-        let payload = await quickBooksPaymentPayload(
-            invoice: payment.invoice,
+        let payload = try await quickBooksPaymentPayload(
+            invoice: invoice,
             customerQBID: customerQBID,
             amount: payment.amount,
             note: payment.notes,
-            paymentRef: payment.authorizationReference.nilIfBlank ?? "Payment for invoice #\(payment.invoice.id.uuidString.prefix(8)) from \(payment.invoice.customer.name)",
+            paymentRef: payment.authorizationReference.nilIfBlank ?? "Payment for invoice #\(invoice.id.uuidString.prefix(8)) from \(customer.name)",
             paymentKind: .manual(methodName: payment.method)
         )
 
@@ -267,7 +276,10 @@ final class QuickBooksPaymentsService {
         guard refundPayment.isRefund else {
             throw QuickBooksPaymentsServiceError.invalidRetryTarget
         }
-        guard let customerQBID = refundPayment.invoice.customer.quickBooksID, !customerQBID.isEmpty else {
+        guard let invoice = refundPayment.invoice, let customer = invoice.customer else {
+            throw QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable
+        }
+        guard let customerQBID = customer.quickBooksID, !customerQBID.isEmpty else {
             throw QuickBooksPaymentsServiceError.customerNotSynced
         }
         guard let refundID = refundPayment.quickBooksChargeID.nilIfBlank else {
@@ -277,7 +289,7 @@ final class QuickBooksPaymentsService {
             throw QuickBooksPaymentsServiceError.missingSalesItemReference
         }
 
-        let description = refundPayment.invoice.lineItemSummary.isEmpty ? "Refund" : refundPayment.invoice.lineItemSummary
+        let description = invoice.lineItemSummary.isEmpty ? "Refund" : invoice.lineItemSummary
         let receipt = QuickBooksRefundReceiptCreate(
             Line: [
                 QuickBooksLineItem(
@@ -289,7 +301,7 @@ final class QuickBooksPaymentsService {
                     )
                 )
             ],
-            CustomerRef: QuickBooksReference(value: customerQBID, name: refundPayment.invoice.customer.name),
+            CustomerRef: QuickBooksReference(value: customerQBID, name: customer.name),
             CreditCardPayment: QuickBooksCreditCardPayment(
                 CreditChargeInfo: QuickBooksCreditChargeInfo(ProcessPayment: "true"),
                 CreditChargeResponse: QuickBooksCreditChargeResponse(CCTransId: refundID)
@@ -632,17 +644,16 @@ final class QuickBooksPaymentsService {
             return (nil, QuickBooksPaymentsServiceError.invoiceNotSyncedToQuickBooks.localizedDescription)
         }
 
-        let payload = await quickBooksPaymentPayload(
-            invoice: invoice,
-            customerQBID: customerQBID,
-            amount: amount,
-            note: note,
-            paymentRef: charge.resolvedClientTransID ?? charge.id,
-            clientTransactionID: clientTransactionID,
-            paymentKind: paymentKind
-        )
-
         do {
+            let payload = try await quickBooksPaymentPayload(
+                invoice: invoice,
+                customerQBID: customerQBID,
+                amount: amount,
+                note: note,
+                paymentRef: charge.resolvedClientTransID ?? charge.id,
+                clientTransactionID: clientTransactionID,
+                paymentKind: paymentKind
+            )
             let payment = try await withCheckedThrowingContinuation { continuation in
                 api.createPayment(payload) { result in
                     continuation.resume(with: result)
@@ -655,7 +666,7 @@ final class QuickBooksPaymentsService {
     }
 
     private func syncRefundReceipt(
-        payment: Payment,
+        invoice: Invoice,
         customerQBID: String,
         salesItemRef: String,
         amount: Double,
@@ -663,7 +674,10 @@ final class QuickBooksPaymentsService {
         refund: QuickBooksPaymentsRefundResponse,
         clientTransactionID: String
     ) async -> (receipt: QuickBooksRefundReceipt?, error: String?) {
-        let description = payment.invoice.lineItemSummary.isEmpty ? "Refund" : payment.invoice.lineItemSummary
+        guard let customer = invoice.customer else {
+            return (nil, QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable.localizedDescription)
+        }
+        let description = invoice.lineItemSummary.isEmpty ? "Refund" : invoice.lineItemSummary
         let receipt = QuickBooksRefundReceiptCreate(
             Line: [
                 QuickBooksLineItem(
@@ -675,7 +689,7 @@ final class QuickBooksPaymentsService {
                     )
                 )
             ],
-            CustomerRef: QuickBooksReference(value: customerQBID, name: payment.invoice.customer.name),
+            CustomerRef: QuickBooksReference(value: customerQBID, name: customer.name),
             CreditCardPayment: QuickBooksCreditCardPayment(
                 CreditChargeInfo: QuickBooksCreditChargeInfo(ProcessPayment: "true"),
                 CreditChargeResponse: QuickBooksCreditChargeResponse(CCTransId: refund.id)
@@ -747,9 +761,9 @@ final class QuickBooksPaymentsService {
         paymentRef: String,
         clientTransactionID: String? = nil,
         paymentKind: AccountingPaymentKind
-    ) async -> QuickBooksPaymentCreate {
+    ) async throws -> QuickBooksPaymentCreate {
         guard let invoiceQBID = invoice.quickBooksID.nilIfBlank else {
-            preconditionFailure("Invoice QuickBooks ID is required before building a QuickBooks Payment payload.")
+            throw QuickBooksPaymentsServiceError.invoiceNotSyncedToQuickBooks
         }
 
         let lines: [QuickBooksPaymentLine]? = [
@@ -775,7 +789,7 @@ final class QuickBooksPaymentsService {
         }
 
         return QuickBooksPaymentCreate(
-            CustomerRef: QuickBooksReference(value: customerQBID, name: invoice.customer.name),
+            CustomerRef: QuickBooksReference(value: customerQBID, name: invoice.customer?.name),
             TotalAmt: amount,
             PrivateNote: privateNote,
             PaymentRefNum: Self.quickBooksPaymentRefNum(paymentRef),
@@ -834,8 +848,9 @@ final class QuickBooksPaymentsService {
     }
 }
 
-enum QuickBooksPaymentsServiceError: LocalizedError {
+enum QuickBooksPaymentsServiceError: LocalizedError, Equatable {
     case customerNotSynced
+    case invoiceRelationshipUnavailable
     case chargeNotSynced
     case missingSalesItemReference
     case invalidRetryTarget
@@ -850,6 +865,8 @@ enum QuickBooksPaymentsServiceError: LocalizedError {
         switch self {
         case .customerNotSynced:
             return "This customer needs a QuickBooks customer ID before QuickBooks Payments can be processed."
+        case .invoiceRelationshipUnavailable:
+            return "This payment is still waiting for its CloudKit invoice and customer links. Keep GunnAire Ops open until sync finishes, then retry; no QuickBooks request was sent."
         case .chargeNotSynced:
             return "This payment does not have a QuickBooks Payments charge ID to refund."
         case .missingSalesItemReference:

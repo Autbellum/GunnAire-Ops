@@ -102,7 +102,11 @@ struct TimeEntryReviewEvent: Codable, Equatable, Identifiable {
         self.actorEmail = actorEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.occurredAt = occurredAt
         let normalizedDetail = detail?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.detail = normalizedDetail?.isEmpty == false ? String(normalizedDetail!.prefix(500)) : nil
+        if let normalizedDetail, !normalizedDetail.isEmpty {
+            self.detail = String(normalizedDetail.prefix(500))
+        } else {
+            self.detail = nil
+        }
     }
 }
 
@@ -296,7 +300,8 @@ final class TimeEntry {
 
     private static func normalizedReviewNote(_ value: String?) -> String? {
         let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized?.isEmpty == false ? String(normalized!.prefix(500)) : nil
+        guard let normalized, !normalized.isEmpty else { return nil }
+        return String(normalized.prefix(500))
     }
 }
 
