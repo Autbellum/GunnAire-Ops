@@ -58,15 +58,20 @@ credential rotation, production restores, or customer communications.
    database tables. The `.12` Apple identity tables, `.13` supplier-attempt
    table/indexes, and `.15` Accounts Payable configuration columns are additive;
    rolling code back does not require deleting them or restoring the database.
-5. Do not push release source directly to `main`. The repository includes the
-   **Backend regression / Python 3.13** and **Backend regression / Python 3.14**
-   checks. The main branch should have a GitHub ruleset that requires a pull
-   request and both successful checks before merge. Until that ruleset is
-   enabled, record the control gap and manually verify both checks on the exact
-   head commit before merging. Prepare a release branch, review the exact diff
-   against the recorded commit, and merge only with deployment-owner
-   authorization. Render follows `main`, so the merge is a production
-   deployment. Do not change Render secrets as part of a routine code deploy.
+5. Do not push release source directly to `main`. The repository runs the
+   secret-free **Backend regression / Python 3.13** and **Backend regression /
+   Python 3.14** checks on every pull request and every push to `main`; merge
+   commit `3df24b5` proves both jobs succeed with the unfiltered triggers. The
+   main branch should also have an active GitHub ruleset requiring a pull
+   request, resolved review conversations, an up-to-date branch, and both
+   successful GitHub Actions checks, with deletion and force pushes blocked and
+   no bypass actor. Repository-owner sudo-mode confirmation is still required
+   before that ruleset can be created. Until it is enabled, record the control
+   gap and manually verify both checks on the exact head commit before merging.
+   Prepare a release branch, review the exact diff against the recorded commit,
+   and merge only with deployment-owner authorization. Render follows `main`,
+   so the merge is a production deployment. Do not change Render secrets as
+   part of a routine code deploy.
 6. After the authorized deployment, rerun the same preflight with `--online`.
    Confirm `/health` returns HTTP 200 and exact `serviceVersion`
    `2026.08.30.15`.
@@ -94,7 +99,7 @@ credential rotation, production restores, or customer communications.
 10. Confirm the primary App ID's existing Sign in with Apple server-to-server
    notification URL remains
    `https://gunnaire-api.onrender.com/api/auth/apple/notifications`. Record the
-   Record the Apple configuration time and test signed-device sign-in, relay status,
+   Apple configuration time and test signed-device sign-in, relay status,
    consent revocation, delayed-event protection, and account deletion. The raw
    Apple JWS, private-relay address, and provider subject must not appear in
    logs or incident notes.
