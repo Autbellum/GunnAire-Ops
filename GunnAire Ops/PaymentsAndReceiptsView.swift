@@ -25,6 +25,7 @@ struct PaymentsAndReceiptsView: View {
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
 
     @StateObject private var onsitePaymentManager = OnsitePaymentManager.shared
+    @StateObject private var fieldPaymentHandoff = FieldPaymentHandoff.shared
     @State private var selectedWorkspace: PaymentsWorkspace = .overview
     @State private var showingRecordPaymentSheet = false
     @State private var showingContactlessPaymentGuide = false
@@ -209,6 +210,14 @@ struct PaymentsAndReceiptsView: View {
                                     .font(.caption)
                                     .foregroundStyle(fieldHandoffMessage.localizedCaseInsensitiveContains("could not") ? .red : .secondary)
                             }
+                            if fieldPaymentHandoff.activeInvoiceID != nil {
+                                Button("Stop Field Handoff", role: .cancel) {
+                                    fieldPaymentHandoff.end()
+                                    fieldHandoffMessage = "Payment handoff stopped. Send the invoice again if it still needs field collection."
+                                }
+                                .buttonStyle(.bordered)
+                                .accessibilityHint("Stops advertising the current invoice to nearby company devices.")
+                            }
                         }
                     }
 
@@ -339,14 +348,14 @@ struct PaymentsAndReceiptsView: View {
                                         }
 
                                         if entry.invoice.isReadyForPaymentCollection,
-                                           FieldPaymentHandoff.shared.canStartFromCurrentDevice {
+                                           fieldPaymentHandoff.canStartFromCurrentDevice {
                                             Button("Send to Field iPhone") {
-                                                let didStart = FieldPaymentHandoff.shared.begin(
+                                                let didStart = fieldPaymentHandoff.begin(
                                                     invoiceID: entry.invoice.id,
                                                     amount: entry.balanceDue
                                                 )
                                                 fieldHandoffMessage = didStart
-                                                    ? "Payment handoff is ready. Open GunnAire Ops from Handoff on the nearby company iPhone to collect this invoice. \(FieldPaymentHandoff.quickBooksTapToPayDetail) \(FieldPaymentHandoff.requirementsDetail)"
+                                                    ? "Payment handoff is ready for \(Int(FieldPaymentHandoff.validityDuration / 60)) minutes. Open GunnAire Ops from Handoff on the nearby company iPhone to collect this invoice. \(FieldPaymentHandoff.quickBooksTapToPayDetail) \(FieldPaymentHandoff.requirementsDetail)"
                                                     : "Payment handoff could not start on this device."
                                             }
                                             .buttonStyle(.bordered)
@@ -983,6 +992,16 @@ struct PaymentsAndReceiptsView: View {
                             Text("QuickBooks does not publish a supported link that opens a specific invoice, so GunnAire Ops provides the verified QBO identifier without sending customer or card data through Handoff.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+
+                            Link(destination: FieldPaymentHandoff.quickBooksMobileAppStoreURL) {
+                                Label("Open or Install QuickBooks Mobile", systemImage: "arrow.up.forward.app")
+                            }
+                            .accessibilityIdentifier("OpenQuickBooksMobileApp")
+
+                            Link(destination: FieldPaymentHandoff.goPaymentAppStoreURL) {
+                                Label("Open or Install GoPayment", systemImage: "arrow.up.forward.app")
+                            }
+                            .accessibilityIdentifier("OpenGoPaymentApp")
                         }
 
                         Section("After Collection") {

@@ -340,6 +340,7 @@ struct ContentView: View {
                 },
                 signOutOfApp: {
                     StaffPushNotificationManager.shared.prepareForSignOut()
+                    FieldPaymentHandoff.shared.end()
                     GunnAireAppIntentRouter.discardAllPendingPayloads()
                     QuickBooksAuthAPI.shared.signOut()
                     GoogleAuthManager.shared.signOut()

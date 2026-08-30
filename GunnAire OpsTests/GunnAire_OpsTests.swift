@@ -1073,6 +1073,29 @@ struct GunnAire_OpsTests {
         #expect(FieldPaymentHandoff.quickBooksTapToPayDetail.localizedCaseInsensitiveContains("Tap to Pay on iPhone"))
         #expect(FieldPaymentHandoff.quickBooksTapToPaySteps.count == 4)
         #expect(FieldPaymentHandoff.quickBooksTapToPaySteps.last?.localizedCaseInsensitiveContains("Tap to Pay on iPhone") == true)
+        #expect(FieldPaymentHandoff.supportsOrigin(isMacCatalyst: true, isPad: false))
+        #expect(FieldPaymentHandoff.supportsOrigin(isMacCatalyst: false, isPad: true))
+        #expect(!FieldPaymentHandoff.supportsOrigin(isMacCatalyst: false, isPad: false))
+        #if targetEnvironment(macCatalyst)
+        #expect(FieldPaymentHandoff.shared.canStartFromCurrentDevice)
+        #endif
+        #expect(FieldPaymentHandoff.validityDuration == 30 * 60)
+        #expect(FieldPaymentHandoff.quickBooksMobileAppStoreURL.scheme == "https")
+        #expect(FieldPaymentHandoff.quickBooksMobileAppStoreURL.host == "apps.apple.com")
+        #expect(FieldPaymentHandoff.quickBooksMobileAppStoreURL.absoluteString.contains("id584606479"))
+        #expect(FieldPaymentHandoff.goPaymentAppStoreURL.scheme == "https")
+        #expect(FieldPaymentHandoff.goPaymentAppStoreURL.host == "apps.apple.com")
+        #expect(FieldPaymentHandoff.goPaymentAppStoreURL.absoluteString.contains("id324389392"))
+
+        let handoff = FieldPaymentHandoff.shared
+        if handoff.canStartFromCurrentDevice {
+            #expect(handoff.begin(invoiceID: invoiceID, amount: 87.50))
+            #expect(handoff.activeInvoiceID == invoiceID)
+            handoff.end(invoiceID: UUID())
+            #expect(handoff.activeInvoiceID == invoiceID)
+            handoff.end(invoiceID: invoiceID)
+            #expect(handoff.activeInvoiceID == nil)
+        }
         #expect(FieldPaymentHandoff.invoiceReference(quickBooksID: " 8710 ", localID: invoiceID) == "8710")
         #expect(FieldPaymentHandoff.invoiceReference(quickBooksID: " ", localID: invoiceID) == String(invoiceID.uuidString.prefix(8)))
         #expect(FieldPaymentHandoff.quickBooksInvoiceReference(" 8710 ") == "8710")
