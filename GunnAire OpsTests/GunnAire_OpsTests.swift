@@ -1385,10 +1385,15 @@ struct GunnAire_OpsTests {
     }
 
     @Test func fieldPaymentHandoffOnlyAcceptsItsOwnActivityAndValidInvoiceID() {
-        let activity = NSUserActivity(activityType: FieldPaymentHandoff.activityType)
         let invoiceID = UUID()
-        activity.userInfo = ["invoiceID": invoiceID.uuidString]
-        #expect(FieldPaymentHandoff.invoiceID(from: activity) == invoiceID)
+        let issuedAt = Date(timeIntervalSinceReferenceDate: 900_000)
+        let activity = FieldPaymentHandoff.makeActivity(invoiceID: invoiceID, now: issuedAt)
+        #expect(activity.expirationDate == issuedAt.addingTimeInterval(FieldPaymentHandoff.validityDuration))
+        #expect(FieldPaymentHandoff.invoiceID(from: activity, now: issuedAt) == invoiceID)
+        #expect(FieldPaymentHandoff.invoiceID(
+            from: activity,
+            now: issuedAt.addingTimeInterval(FieldPaymentHandoff.validityDuration)
+        ) == nil)
         #expect(FieldPaymentHandoff.requirementsDetail.localizedCaseInsensitiveContains("same approved business Apple Account"))
         #expect(FieldPaymentHandoff.quickBooksTapToPayDetail.localizedCaseInsensitiveContains("QuickBooks Mobile"))
         #expect(FieldPaymentHandoff.quickBooksTapToPayDetail.localizedCaseInsensitiveContains("GoPayment"))
@@ -1425,7 +1430,11 @@ struct GunnAire_OpsTests {
         #expect(FieldPaymentHandoff.quickBooksInvoiceReference(nil) == nil)
 
         activity.userInfo = ["invoiceID": "not-an-invoice"]
-        #expect(FieldPaymentHandoff.invoiceID(from: activity) == nil)
+        #expect(FieldPaymentHandoff.invoiceID(from: activity, now: issuedAt) == nil)
+
+        let activityWithoutExpiration = NSUserActivity(activityType: FieldPaymentHandoff.activityType)
+        activityWithoutExpiration.userInfo = ["invoiceID": invoiceID.uuidString]
+        #expect(FieldPaymentHandoff.invoiceID(from: activityWithoutExpiration, now: issuedAt) == nil)
     }
 
     @Test func invoicePaymentTermsProvideOneDeterministicOverdueBoundary() throws {
@@ -8216,32 +8225,73 @@ struct GunnAire_OpsTests {
 
     @Test func deferredFieldCollectionRouteSurvivesNavigationButFailsClosedAcrossAccounts() async throws {
         let invoiceID = UUID()
+        let now = Date(timeIntervalSinceReferenceDate: 910_000)
+        let expiresAt = now.addingTimeInterval(300)
         GunnAireAppIntentRouter.clearDeferredPaymentCollectionRoute()
 
         GunnAireAppIntentRouter.storeDeferredPaymentCollectionRoute(
             invoiceID,
             ownerEmail: " Tech@GunnAire.com ",
-            prefersContactlessGuide: true
+            prefersContactlessGuide: true,
+            expiresAt: expiresAt
         )
-        #expect(GunnAireAppIntentRouter.deferredPaymentCollectionID(ownerEmail: "tech@gunnaire.com") == invoiceID)
-        #expect(GunnAireAppIntentRouter.deferredPaymentCollectionPrefersContactlessGuide(ownerEmail: "tech@gunnaire.com"))
-        #expect(GunnAireAppIntentRouter.deferredPaymentCollectionID(ownerEmail: "another@gunnaire.com") == nil)
-        #expect(GunnAireAppIntentRouter.deferredPaymentCollectionID(ownerEmail: "tech@gunnaire.com") == nil)
-        #expect(!GunnAireAppIntentRouter.deferredPaymentCollectionPrefersContactlessGuide(ownerEmail: "tech@gunnaire.com"))
+        let savedRoute = GunnAireAppIntentRouter.deferredPaymentCollectionRoute(
+            ownerEmail: "tech@gunnaire.com",
+            now: now
+        )
+        #expect(savedRoute?.invoiceID == invoiceID)
+        #expect(savedRoute?.prefersContactlessGuide == true)
+        #expect(savedRoute?.expiresAt == expiresAt)
+        #expect(GunnAireAppIntentRouter.deferredPaymentCollectionRoute(
+            ownerEmail: "tech@gunnaire.com",
+            now: expiresAt
+        ) == nil)
+
+        GunnAireAppIntentRouter.storeDeferredPaymentCollectionRoute(
+            invoiceID,
+            ownerEmail: "tech@gunnaire.com",
+            prefersContactlessGuide: true,
+            expiresAt: expiresAt
+        )
+        #expect(GunnAireAppIntentRouter.deferredPaymentCollectionRoute(
+            ownerEmail: "another@gunnaire.com",
+            now: now
+        ) == nil)
+        #expect(GunnAireAppIntentRouter.deferredPaymentCollectionRoute(
+            ownerEmail: "tech@gunnaire.com",
+            now: now
+        ) == nil)
     }
 
     @Test func paymentCollectionRoutePreservesContactlessPresentationOnlyForHandoff() async throws {
         let invoiceID = UUID()
+        let now = Date(timeIntervalSinceReferenceDate: 920_000)
+        let expiresAt = now.addingTimeInterval(300)
         GunnAireAppIntentRouter.discardPendingPayload(for: .payments)
 
-        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID, prefersContactlessGuide: true)
-        #expect(GunnAireAppIntentRouter.consumePendingInvoiceCollectionID() == invoiceID)
-        #expect(GunnAireAppIntentRouter.consumePendingContactlessPaymentGuidePreference())
-        #expect(!GunnAireAppIntentRouter.consumePendingContactlessPaymentGuidePreference())
+        GunnAireAppIntentRouter.storePaymentCollectionRoute(
+            invoiceID,
+            prefersContactlessGuide: true,
+            expiresAt: expiresAt
+        )
+        let contactlessRoute = GunnAireAppIntentRouter.consumePendingPaymentCollectionRoute(now: now)
+        #expect(contactlessRoute?.invoiceID == invoiceID)
+        #expect(contactlessRoute?.prefersContactlessGuide == true)
+        #expect(contactlessRoute?.expiresAt == expiresAt)
+        #expect(GunnAireAppIntentRouter.consumePendingPaymentCollectionRoute(now: now) == nil)
 
         GunnAireAppIntentRouter.storePaymentCollectionRoute(invoiceID)
-        #expect(GunnAireAppIntentRouter.consumePendingInvoiceCollectionID() == invoiceID)
-        #expect(!GunnAireAppIntentRouter.consumePendingContactlessPaymentGuidePreference())
+        let ordinaryRoute = GunnAireAppIntentRouter.consumePendingPaymentCollectionRoute(now: now)
+        #expect(ordinaryRoute?.invoiceID == invoiceID)
+        #expect(ordinaryRoute?.prefersContactlessGuide == false)
+        #expect(ordinaryRoute?.expiresAt == nil)
+
+        GunnAireAppIntentRouter.storePaymentCollectionRoute(
+            invoiceID,
+            prefersContactlessGuide: true,
+            expiresAt: expiresAt
+        )
+        #expect(GunnAireAppIntentRouter.consumePendingPaymentCollectionRoute(now: expiresAt) == nil)
         _ = GunnAireAppIntentRouter.consumePendingRoute()
     }
 
@@ -8268,8 +8318,8 @@ struct GunnAire_OpsTests {
         #expect(GunnAireAppIntentRouter.consumePendingRoute() == nil)
         #expect(GunnAireAppIntentRouter.consumePendingCustomerID() == nil)
         #expect(GunnAireAppIntentRouter.consumePendingServiceCallID() == nil)
-        #expect(GunnAireAppIntentRouter.consumePendingInvoiceCollectionID() == nil)
-        #expect(GunnAireAppIntentRouter.deferredPaymentCollectionID(ownerEmail: "tech@gunnaire.com") == nil)
+        #expect(GunnAireAppIntentRouter.consumePendingPaymentCollectionRoute() == nil)
+        #expect(GunnAireAppIntentRouter.deferredPaymentCollectionRoute(ownerEmail: "tech@gunnaire.com") == nil)
         #expect(GunnAireAppIntentRouter.consumePendingMailDraft() == nil)
     }
 

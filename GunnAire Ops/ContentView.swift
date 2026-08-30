@@ -408,10 +408,12 @@ struct ContentView: View {
             applyPendingAppRouteIfNeeded()
         }
         .onContinueUserActivity(FieldPaymentHandoff.activityType) { activity in
-            guard let invoiceID = FieldPaymentHandoff.invoiceID(from: activity) else { return }
+            let now = Date()
+            guard let invoiceID = FieldPaymentHandoff.invoiceID(from: activity, now: now) else { return }
             GunnAireAppIntentRouter.storePaymentCollectionRoute(
                 invoiceID,
-                prefersContactlessGuide: true
+                prefersContactlessGuide: true,
+                expiresAt: activity.expirationDate
             )
             applyPendingAppRouteIfNeeded()
         }

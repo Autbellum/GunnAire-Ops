@@ -255,6 +255,12 @@ enum GunnAireMailWorkflow: String, Codable, Sendable {
 }
 
 enum GunnAireAppIntentRouter {
+    struct PaymentCollectionRoute: Equatable {
+        let invoiceID: UUID
+        let prefersContactlessGuide: Bool
+        let expiresAt: Date?
+    }
+
     nonisolated static func store(_ route: GunnAireAppRoute) {
         UserDefaults.standard.set(route.rawValue, forKey: "GunnAirePendingAppRoute")
         NotificationCenter.default.post(name: Notification.Name("GunnAireRouteDidChange"), object: nil)
@@ -281,9 +287,7 @@ enum GunnAireAppIntentRouter {
         case .documentation, .invoices:
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingServiceCallID")
         case .payments:
-            UserDefaults.standard.removeObject(forKey: "GunnAirePendingInvoiceID")
-            UserDefaults.standard.removeObject(forKey: "GunnAirePendingOpenPaymentCollection")
-            UserDefaults.standard.removeObject(forKey: "GunnAirePendingContactlessPaymentGuide")
+            clearPendingPaymentCollectionRoute()
             clearDeferredPaymentCollectionRoute()
         case .mail:
             UserDefaults.standard.removeObject(forKey: "GunnAirePendingMailTo")
@@ -314,9 +318,11 @@ enum GunnAireAppIntentRouter {
             "GunnAirePendingInvoiceID",
             "GunnAirePendingOpenPaymentCollection",
             "GunnAirePendingContactlessPaymentGuide",
+            "GunnAirePendingPaymentCollectionExpiresAt",
             "GunnAireDeferredFieldCollectionInvoiceID",
             "GunnAireDeferredFieldCollectionOwner",
             "GunnAireDeferredContactlessPaymentGuide",
+            "GunnAireDeferredPaymentCollectionExpiresAt",
             "GunnAirePendingMailTo",
             "GunnAirePendingMailSubject",
             "GunnAirePendingMailBody",
@@ -395,29 +401,40 @@ enum GunnAireAppIntentRouter {
 
     nonisolated static func storePaymentCollectionRoute(
         _ id: UUID,
-        prefersContactlessGuide: Bool = false
+        prefersContactlessGuide: Bool = false,
+        expiresAt: Date? = nil
     ) {
         UserDefaults.standard.set(id.uuidString, forKey: "GunnAirePendingInvoiceID")
         UserDefaults.standard.set(true, forKey: "GunnAirePendingOpenPaymentCollection")
         UserDefaults.standard.set(prefersContactlessGuide, forKey: "GunnAirePendingContactlessPaymentGuide")
+        if let expiresAt {
+            UserDefaults.standard.set(expiresAt, forKey: "GunnAirePendingPaymentCollectionExpiresAt")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "GunnAirePendingPaymentCollectionExpiresAt")
+        }
         store(.payments)
     }
 
-    nonisolated static func consumePendingInvoiceCollectionID() -> UUID? {
+    nonisolated static func consumePendingPaymentCollectionRoute(
+        now: Date = Date()
+    ) -> PaymentCollectionRoute? {
         guard UserDefaults.standard.bool(forKey: "GunnAirePendingOpenPaymentCollection"),
               let rawValue = UserDefaults.standard.string(forKey: "GunnAirePendingInvoiceID"),
               let id = UUID(uuidString: rawValue) else {
+            clearPendingPaymentCollectionRoute()
             return nil
         }
-        UserDefaults.standard.removeObject(forKey: "GunnAirePendingInvoiceID")
-        UserDefaults.standard.removeObject(forKey: "GunnAirePendingOpenPaymentCollection")
-        return id
-    }
-
-    nonisolated static func consumePendingContactlessPaymentGuidePreference() -> Bool {
         let prefersContactlessGuide = UserDefaults.standard.bool(forKey: "GunnAirePendingContactlessPaymentGuide")
-        UserDefaults.standard.removeObject(forKey: "GunnAirePendingContactlessPaymentGuide")
-        return prefersContactlessGuide
+        let expiresAt = paymentCollectionExpirationDate(
+            forKey: "GunnAirePendingPaymentCollectionExpiresAt"
+        )
+        clearPendingPaymentCollectionRoute()
+        guard expiresAt.map({ $0 > now }) ?? true else { return nil }
+        return PaymentCollectionRoute(
+            invoiceID: id,
+            prefersContactlessGuide: prefersContactlessGuide,
+            expiresAt: expiresAt
+        )
     }
 
     /// Retains a collection handoff while CloudKit delivers the authorized
@@ -426,7 +443,8 @@ enum GunnAireAppIntentRouter {
     nonisolated static func storeDeferredPaymentCollectionRoute(
         _ id: UUID,
         ownerEmail: String?,
-        prefersContactlessGuide: Bool = false
+        prefersContactlessGuide: Bool = false,
+        expiresAt: Date? = nil
     ) {
         let owner = normalizedRouteOwner(ownerEmail)
         guard !owner.isEmpty else {
@@ -436,9 +454,17 @@ enum GunnAireAppIntentRouter {
         UserDefaults.standard.set(id.uuidString, forKey: "GunnAireDeferredFieldCollectionInvoiceID")
         UserDefaults.standard.set(owner, forKey: "GunnAireDeferredFieldCollectionOwner")
         UserDefaults.standard.set(prefersContactlessGuide, forKey: "GunnAireDeferredContactlessPaymentGuide")
+        if let expiresAt {
+            UserDefaults.standard.set(expiresAt, forKey: "GunnAireDeferredPaymentCollectionExpiresAt")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "GunnAireDeferredPaymentCollectionExpiresAt")
+        }
     }
 
-    nonisolated static func deferredPaymentCollectionID(ownerEmail: String?) -> UUID? {
+    nonisolated static func deferredPaymentCollectionRoute(
+        ownerEmail: String?,
+        now: Date = Date()
+    ) -> PaymentCollectionRoute? {
         let requestedOwner = normalizedRouteOwner(ownerEmail)
         guard !requestedOwner.isEmpty,
               let storedOwner = UserDefaults.standard.string(forKey: "GunnAireDeferredFieldCollectionOwner"),
@@ -448,18 +474,48 @@ enum GunnAireAppIntentRouter {
             clearDeferredPaymentCollectionRoute()
             return nil
         }
-        return id
+        let expiresAt = paymentCollectionExpirationDate(
+            forKey: "GunnAireDeferredPaymentCollectionExpiresAt"
+        )
+        guard expiresAt.map({ $0 > now }) ?? true else {
+            clearDeferredPaymentCollectionRoute()
+            return nil
+        }
+        return PaymentCollectionRoute(
+            invoiceID: id,
+            prefersContactlessGuide: UserDefaults.standard.bool(
+                forKey: "GunnAireDeferredContactlessPaymentGuide"
+            ),
+            expiresAt: expiresAt
+        )
     }
 
-    nonisolated static func deferredPaymentCollectionPrefersContactlessGuide(ownerEmail: String?) -> Bool {
-        guard deferredPaymentCollectionID(ownerEmail: ownerEmail) != nil else { return false }
-        return UserDefaults.standard.bool(forKey: "GunnAireDeferredContactlessPaymentGuide")
+    nonisolated static func clearPendingPaymentCollectionRoute() {
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingInvoiceID")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingOpenPaymentCollection")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingContactlessPaymentGuide")
+        UserDefaults.standard.removeObject(forKey: "GunnAirePendingPaymentCollectionExpiresAt")
     }
 
     nonisolated static func clearDeferredPaymentCollectionRoute() {
         UserDefaults.standard.removeObject(forKey: "GunnAireDeferredFieldCollectionInvoiceID")
         UserDefaults.standard.removeObject(forKey: "GunnAireDeferredFieldCollectionOwner")
         UserDefaults.standard.removeObject(forKey: "GunnAireDeferredContactlessPaymentGuide")
+        UserDefaults.standard.removeObject(forKey: "GunnAireDeferredPaymentCollectionExpiresAt")
+    }
+
+    nonisolated private static func paymentCollectionExpirationDate(forKey key: String) -> Date? {
+        if let date = UserDefaults.standard.object(forKey: key) as? Date {
+            return date
+        }
+        if let number = UserDefaults.standard.object(forKey: key) as? NSNumber {
+            return Date(timeIntervalSince1970: number.doubleValue)
+        }
+        if let rawValue = UserDefaults.standard.string(forKey: key),
+           let interval = TimeInterval(rawValue) {
+            return Date(timeIntervalSince1970: interval)
+        }
+        return nil
     }
 
     nonisolated private static func normalizedRouteOwner(_ email: String?) -> String {

@@ -4786,6 +4786,35 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testExpiredFieldCollectionHandoffClearsWithoutOpeningAnInvoice() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        let expiresAt = Date().addingTimeInterval(10).timeIntervalSince1970
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-GunnAirePendingAppRoute", "payments",
+            "-GunnAirePendingInvoiceID", "B2000000-0000-4000-8000-000000000002",
+            "-GunnAirePendingOpenPaymentCollection", "YES",
+            "-GunnAirePendingContactlessPaymentGuide", "YES",
+            "-GunnAirePendingPaymentCollectionExpiresAt", String(expiresAt)
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Waiting for the assigned invoice"].waitForExistence(timeout: 5))
+
+        let expiredMessage = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@", "nearby-device handoff expired")
+        ).firstMatch
+        XCTAssertTrue(expiredMessage.waitForExistence(timeout: 15))
+        XCTAssertFalse(app.staticTexts["Waiting for the assigned invoice"].exists)
+        XCTAssertFalse(app.navigationBars["Contactless Payment"].exists)
+        XCTAssertFalse(app.navigationBars["Record Payment"].exists)
+    }
+
+    @MainActor
     func testReceiptsBillsUsesRoleAwareOperationalWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

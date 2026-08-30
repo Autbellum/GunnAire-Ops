@@ -33,6 +33,22 @@ and schema status as of 2026-08-30.
   gated on a participating certified payment service provider, Account Holder
   entitlement approval, provider integration, and signed physical-iPhone
   acceptance.
+- Exact build `1.0 (2026083020)` is retained as a development-signed iOS
+  Release archive and universal arm64/x86_64 Mac Catalyst Release app under
+  `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30`. Strict
+  signature verification confirms Apple login, CloudKit, Push Notifications,
+  and Associated Domains in both products. The iOS app/dSYM UUID matches at
+  `8924005C-2D14-3B0A-8309-48B7CE5BE564`; Mac app/dSYM UUIDs match at
+  `28FB2D3B-F171-3C24-BDFA-2F1DE56ECC94` and
+  `02C8193A-987A-35CE-953A-78F9D3A691C3`. Exact retained-artifact and CloudKit
+  preflight passes **61 checks, 4 expected warnings, and 0 failures**. The
+  read-only online probe passes every unchanged production route but reports
+  **63/3/1** because production remains backend `2026.08.30.15` while source is
+  undeployed `2026.08.30.16`. Complete iPad and Mac logic suites pass
+  **671/671** each; the iPhone Handoff lifecycle passes **3/3**, and the iPad
+  origin journey passes **1/1**. This build adds no SwiftData field, CloudKit
+  schema, backend contract, Apple capability, provider credential, or
+  accounting mutation.
 - Exact build `1.0 (2026083019)` is retained as a development-signed iOS
   Release archive and universal arm64/x86_64 Mac Catalyst Release app under
   `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30`. Strict
@@ -310,9 +326,11 @@ Backend source `2026.08.30.15` is deployed and passes the 69-test suite. Native 
 The Payments workspace can hand an unpaid invoice from the iPad or Mac to the
 company iPhone with Apple Handoff. The handoff contains only an invoice
 identifier; the receiving device resolves the current balance from its
-authorized local invoice. A new activity invalidates the prior one, expires
-after 30 minutes, exposes **Stop Field Handoff** from the origin, and is
-invalidated on app sign-out or credential revocation.
+authorized local invoice. A new activity invalidates the prior one, embeds an
+exact 30-minute `NSUserActivity` expiration that survives origin-process
+suspension or termination, exposes **Stop Field Handoff** from the origin, and
+is invalidated on app sign-out or credential revocation. A receiver rejects a
+missing or expired deadline before routing.
 It never transfers an amount, card data, customer contact details, processor
 tokens, or QuickBooks credentials. Apple Handoff and the separate-account
 server assignment both open the same dedicated contactless guide only after the
@@ -341,11 +359,14 @@ instead of a horizontally clipped row: narrow devices retain a compact column,
 while iPad and Mac use the available width for multiple columns.
 
 If the authorized CloudKit invoice graph has not arrived yet, the app retains
-an account-bound deferred invoice identifier across navigation and relaunch,
-shows a retry/dismiss recovery row, and automatically retries when the invoice
-becomes visible. The route opens payment entry only for an invoice the current
-role can see with a remaining balance. It is cleared on settlement, dismissal,
-restricted routing, sign-out, or business-account mismatch.
+the invoice, contactless-guide preference, and the same expiration as one
+account-bound deferred route across navigation and relaunch, shows a
+retry/dismiss recovery row, and automatically retries when the invoice becomes
+visible. Expiration clears the route automatically and points staff to the
+existing server field-collection tasks instead of leaving an indefinite wait.
+The route opens payment entry only for an invoice the current role can see with
+a remaining balance. It is also cleared on settlement, dismissal, restricted
+routing, sign-out, or business-account mismatch.
 
 The shared server permits only one active field collection assignment per
 invoice. It derives the collector from the authenticated principal instead of

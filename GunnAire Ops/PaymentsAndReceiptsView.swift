@@ -51,6 +51,7 @@ struct PaymentsAndReceiptsView: View {
     @State private var isLoadingFieldPaymentAssignments = false
     @State private var deferredCollectionInvoiceID: UUID?
     @State private var deferredCollectionPrefersContactlessGuide = false
+    @State private var deferredCollectionExpiresAt: Date?
     @State private var contactlessGuideMessage = ""
     @State private var syncingPaymentID: UUID?
     @State private var isProcessingQuickBooksPayment = false
@@ -713,6 +714,9 @@ struct PaymentsAndReceiptsView: View {
         .onChange(of: visibleInvoices.map(\.id)) { _, _ in
             resolveDeferredCollectionRouteIfPossible()
         }
+        .task(id: deferredCollectionExpiresAt) {
+            await waitForDeferredCollectionExpiration()
+        }
     }
 
     @ViewBuilder
@@ -736,6 +740,8 @@ struct PaymentsAndReceiptsView: View {
 
                 Button("Dismiss", role: .cancel) {
                     deferredCollectionInvoiceID = nil
+                    deferredCollectionPrefersContactlessGuide = false
+                    deferredCollectionExpiresAt = nil
                     GunnAireAppIntentRouter.clearDeferredPaymentCollectionRoute()
                     actionMessage = "Collection handoff dismissed. The server task remains available in Your Field Collection Tasks."
                 }
@@ -1168,30 +1174,33 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private func applyPendingIntentInvoiceIfNeeded() {
-        let newlyRequestedInvoiceID = GunnAireAppIntentRouter.consumePendingInvoiceCollectionID()
-        let newlyRequestedContactlessGuide = newlyRequestedInvoiceID == nil
-            ? false
-            : GunnAireAppIntentRouter.consumePendingContactlessPaymentGuidePreference()
-        if let newlyRequestedInvoiceID {
+        let newlyRequestedRoute = GunnAireAppIntentRouter.consumePendingPaymentCollectionRoute()
+        if let newlyRequestedRoute {
             GunnAireAppIntentRouter.storeDeferredPaymentCollectionRoute(
-                newlyRequestedInvoiceID,
+                newlyRequestedRoute.invoiceID,
                 ownerEmail: signedInEmail,
-                prefersContactlessGuide: newlyRequestedContactlessGuide
+                prefersContactlessGuide: newlyRequestedRoute.prefersContactlessGuide,
+                expiresAt: newlyRequestedRoute.expiresAt
             )
         }
-        guard let pendingInvoiceID = newlyRequestedInvoiceID ?? GunnAireAppIntentRouter.deferredPaymentCollectionID(
+        let pendingRoute = newlyRequestedRoute ?? GunnAireAppIntentRouter.deferredPaymentCollectionRoute(
             ownerEmail: signedInEmail
-        ) else { return }
+        )
+        guard let pendingRoute else { return }
         selectedWorkspace = .collect
-        deferredCollectionInvoiceID = pendingInvoiceID
-        deferredCollectionPrefersContactlessGuide = newlyRequestedInvoiceID == nil
-            ? GunnAireAppIntentRouter.deferredPaymentCollectionPrefersContactlessGuide(ownerEmail: signedInEmail)
-            : newlyRequestedContactlessGuide
+        deferredCollectionInvoiceID = pendingRoute.invoiceID
+        deferredCollectionPrefersContactlessGuide = pendingRoute.prefersContactlessGuide
+        deferredCollectionExpiresAt = pendingRoute.expiresAt
         resolveDeferredCollectionRouteIfPossible()
     }
 
     private func resolveDeferredCollectionRouteIfPossible() {
         guard let invoiceID = deferredCollectionInvoiceID else { return }
+        if let deferredCollectionExpiresAt,
+           deferredCollectionExpiresAt <= Date() {
+            expireDeferredCollectionRoute()
+            return
+        }
         selectedWorkspace = .collect
 
         switch FieldCollectionInvoiceRouteResolver.decision(
@@ -1206,6 +1215,7 @@ struct PaymentsAndReceiptsView: View {
         case .alreadySettled:
             deferredCollectionInvoiceID = nil
             deferredCollectionPrefersContactlessGuide = false
+            deferredCollectionExpiresAt = nil
             GunnAireAppIntentRouter.clearDeferredPaymentCollectionRoute()
             actionMessage = "This invoice no longer has an open balance. Refresh payment history before collecting again."
         case .collect:
@@ -1213,6 +1223,7 @@ struct PaymentsAndReceiptsView: View {
             let presentsContactlessGuide = deferredCollectionPrefersContactlessGuide
             deferredCollectionInvoiceID = nil
             deferredCollectionPrefersContactlessGuide = false
+            deferredCollectionExpiresAt = nil
             GunnAireAppIntentRouter.clearDeferredPaymentCollectionRoute()
             withAnimation(.easeInOut(duration: 0.2)) {
                 preparePaymentForm(for: invoice)
@@ -1224,6 +1235,29 @@ struct PaymentsAndReceiptsView: View {
                 }
             }
         }
+    }
+
+    private func waitForDeferredCollectionExpiration() async {
+        guard let expiresAt = deferredCollectionExpiresAt else { return }
+        let remaining = expiresAt.timeIntervalSinceNow
+        if remaining > 0 {
+            do {
+                try await Task.sleep(for: .seconds(remaining))
+            } catch {
+                return
+            }
+        }
+        guard !Task.isCancelled,
+              deferredCollectionExpiresAt == expiresAt else { return }
+        expireDeferredCollectionRoute()
+    }
+
+    private func expireDeferredCollectionRoute() {
+        deferredCollectionInvoiceID = nil
+        deferredCollectionPrefersContactlessGuide = false
+        deferredCollectionExpiresAt = nil
+        GunnAireAppIntentRouter.clearDeferredPaymentCollectionRoute()
+        actionMessage = "This nearby-device handoff expired. Send the invoice again, or open its server task in Your Field Collection Tasks."
     }
 
     private func preparePaymentForm(for invoice: Invoice, preferredMethod: PaymentMethod = .card) {
