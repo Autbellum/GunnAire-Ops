@@ -20,6 +20,7 @@ struct PaymentsAndReceiptsView: View {
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var payments: [Payment]
+    @Query(sort: \Item.name, order: .forward) private var catalogItems: [Item]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
 
@@ -1453,7 +1454,8 @@ struct PaymentsAndReceiptsView: View {
                     invoice: invoice,
                     amount: amount,
                     cardInput: quickBooksCardInput(for: invoice),
-                    note: paymentNotes.nilIfBlank
+                    note: paymentNotes.nilIfBlank,
+                    catalogItems: catalogItems
                 )
                 if let masked = result.charge.card?.number?.suffix(4), cardLast4.nilIfBlank == nil {
                     cardLast4 = String(masked)
@@ -1502,7 +1504,8 @@ struct PaymentsAndReceiptsView: View {
                         accountType: achAccountType,
                         checkNumber: achCheckNumber.nilIfBlank
                     ),
-                    note: paymentNotes.nilIfBlank
+                    note: paymentNotes.nilIfBlank,
+                    catalogItems: catalogItems
                 )
                 authorizationReference = result.charge.authCode ?? authorizationReference
                 let payment = saveLocalPayment(

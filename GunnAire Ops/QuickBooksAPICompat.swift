@@ -57,8 +57,12 @@ final class QuickBooksAPI: ObservableObject {
         data.fetchInvoices(completion: completion)
     }
     
-    func createInvoice(_ invoice: QuickBooksInvoiceCreate, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
-        data.createInvoice(invoice, completion: completion)
+    func createInvoice(
+        _ invoice: QuickBooksInvoiceCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void
+    ) {
+        data.createInvoice(invoice, requestID: requestID, completion: completion)
     }
 
     func sendInvoice(id: String, to emailAddress: String? = nil, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
