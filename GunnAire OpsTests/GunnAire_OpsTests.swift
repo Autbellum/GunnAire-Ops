@@ -3981,6 +3981,306 @@ struct GunnAire_OpsTests {
         #expect(restored.notes == "Warehouse cleanup")
     }
 
+    @Test func legacyTimeReviewEventsDecodeWithoutTimesheetAttestationFields() throws {
+        let eventID = UUID(uuidString: "A1000000-0000-4000-8000-000000000128")!
+        let json = """
+        {"version":1,"events":[{"id":"\(eventID.uuidString)","action":"submitted","actorEmail":"legacy@gunnaire.com","occurredAt":12345,"detail":"Legacy review"}]}
+        """
+        let entry = TimeEntry(
+            userEmail: "legacy@gunnaire.com",
+            reviewAuditJSON: json
+        )
+
+        let event = try #require(entry.reviewEvents.first)
+        #expect(event.id == eventID)
+        #expect(event.periodStart == nil)
+        #expect(event.periodEnd == nil)
+        #expect(event.snapshotDigest == nil)
+    }
+
+    @Test func timesheetSignOffIsSnapshotBoundAndInvalidatedByCorrectionOrNewEntry() throws {
+        let email = "snapshot-tech@gunnaire.com"
+        let interval = DateInterval(
+            start: Date(timeIntervalSinceReferenceDate: 500_000),
+            duration: 7 * 24 * 60 * 60
+        )
+        let first = TimeEntry(
+            userEmail: email,
+            clockIn: interval.start.addingTimeInterval(8 * 60 * 60),
+            clockOut: interval.start.addingTimeInterval(9 * 60 * 60),
+            notes: "Morning setup",
+            activity: .general
+        )
+        let second = TimeEntry(
+            userEmail: email,
+            clockIn: interval.start.addingTimeInterval(10 * 60 * 60),
+            clockOut: interval.start.addingTimeInterval(10.5 * 60 * 60),
+            activity: .travel
+        )
+        let entries = [first, second]
+        let operationID = UUID(uuidString: "A1000000-0000-4000-8000-000000000129")!
+        let signedAt = interval.start.addingTimeInterval(2 * 24 * 60 * 60)
+
+        let event = try TimesheetAttestationPolicy.signOff(
+            employeeEmail: email,
+            actorEmail: email.uppercased(),
+            interval: interval,
+            entries: entries,
+            at: signedAt,
+            operationID: operationID
+        )
+        #expect(event.id == operationID)
+        #expect(first.reviewEvents.last?.id == operationID)
+        #expect(second.reviewEvents.last?.id == operationID)
+        #expect(TimesheetAttestationPolicy.currentAttestation(
+            employeeEmail: email,
+            interval: interval,
+            entries: entries
+        )?.occurredAt == signedAt)
+
+        first.reviewStatus = .approved
+        second.reviewStatus = .approved
+        first.appendReviewEvent(.approved, actorEmail: "accounting@gunnaire.com")
+        second.appendReviewEvent(.approved, actorEmail: "accounting@gunnaire.com")
+        #expect(TimesheetAttestationPolicy.currentAttestation(
+            employeeEmail: email,
+            interval: interval,
+            entries: entries
+        )?.id == operationID)
+
+        second.reviewStatus = .correctionRequested
+        second.appendReviewEvent(.correctionRequested, actorEmail: "accounting@gunnaire.com")
+        #expect(TimesheetAttestationPolicy.currentAttestation(
+            employeeEmail: email,
+            interval: interval,
+            entries: entries
+        ) == nil)
+
+        second.reviewStatus = .submitted
+        second.appendReviewEvent(.correctedAndResubmitted, actorEmail: email)
+        #expect(TimesheetAttestationPolicy.currentAttestation(
+            employeeEmail: email,
+            interval: interval,
+            entries: entries
+        ) == nil)
+
+        _ = try TimesheetAttestationPolicy.signOff(
+            employeeEmail: email,
+            actorEmail: email,
+            interval: interval,
+            entries: entries,
+            at: signedAt.addingTimeInterval(30)
+        )
+        second.clockOut = second.clockOut?.addingTimeInterval(10 * 60)
+        #expect(TimesheetAttestationPolicy.currentAttestation(
+            employeeEmail: email,
+            interval: interval,
+            entries: entries
+        ) == nil)
+
+        _ = try TimesheetAttestationPolicy.signOff(
+            employeeEmail: email,
+            actorEmail: email,
+            interval: interval,
+            entries: entries,
+            at: signedAt.addingTimeInterval(60)
+        )
+        let added = TimeEntry(
+            userEmail: email,
+            clockIn: interval.start.addingTimeInterval(12 * 60 * 60),
+            clockOut: interval.start.addingTimeInterval(12.5 * 60 * 60),
+            activity: .training
+        )
+        #expect(TimesheetAttestationPolicy.currentAttestation(
+            employeeEmail: email,
+            interval: interval,
+            entries: entries + [added]
+        ) == nil)
+    }
+
+    @Test func timesheetSignOffFailsClosedForForeignOpenReturnedAndOutOfPeriodTime() {
+        let email = "closed-tech@gunnaire.com"
+        let interval = DateInterval(
+            start: Date(timeIntervalSinceReferenceDate: 600_000),
+            duration: 7 * 24 * 60 * 60
+        )
+        let closed = TimeEntry(
+            userEmail: email,
+            clockIn: interval.start.addingTimeInterval(60 * 60),
+            clockOut: interval.start.addingTimeInterval(2 * 60 * 60),
+            activity: .general
+        )
+        #expect(throws: TimesheetAttestationError.unauthorized) {
+            try TimesheetAttestationPolicy.signOff(
+                employeeEmail: email,
+                actorEmail: "other@gunnaire.com",
+                interval: interval,
+                entries: [closed]
+            )
+        }
+
+        let open = TimeEntry(
+            userEmail: email,
+            clockIn: interval.start.addingTimeInterval(3 * 60 * 60),
+            activity: .general
+        )
+        #expect(throws: TimesheetAttestationError.openEntries) {
+            try TimesheetAttestationPolicy.signOff(
+                employeeEmail: email,
+                actorEmail: email,
+                interval: interval,
+                entries: [open]
+            )
+        }
+
+        closed.reviewStatus = .correctionRequested
+        #expect(throws: TimesheetAttestationError.correctionRequired) {
+            try TimesheetAttestationPolicy.signOff(
+                employeeEmail: email,
+                actorEmail: email,
+                interval: interval,
+                entries: [closed]
+            )
+        }
+        closed.reviewStatus = .submitted
+
+        let outside = TimeEntry(
+            userEmail: email,
+            clockIn: interval.end,
+            clockOut: interval.end.addingTimeInterval(60 * 60),
+            activity: .general
+        )
+        #expect(throws: TimesheetAttestationError.invalidPeriodScope) {
+            try TimesheetAttestationPolicy.signOff(
+                employeeEmail: email,
+                actorEmail: email,
+                interval: interval,
+                entries: [outside]
+            )
+        }
+    }
+
+    @Test func timesheetReadinessRequiresEmployeeSignOffAndOfficeApprovalButNotQBOPublication() throws {
+        let email = "readiness-tech@gunnaire.com"
+        let interval = DateInterval(
+            start: Date(timeIntervalSinceReferenceDate: 700_000),
+            duration: 7 * 24 * 60 * 60
+        )
+        let travel = TimeEntry(
+            userEmail: email,
+            clockIn: interval.start.addingTimeInterval(60 * 60),
+            clockOut: interval.start.addingTimeInterval(2 * 60 * 60),
+            activity: .travel
+        )
+        let breakEntry = TimeEntry(
+            userEmail: email,
+            clockIn: interval.start.addingTimeInterval(2 * 60 * 60),
+            clockOut: interval.start.addingTimeInterval(2.25 * 60 * 60),
+            activity: .unpaidBreak
+        )
+        let entries = [travel, breakEntry]
+
+        _ = try TimesheetAttestationPolicy.signOff(
+            employeeEmail: email,
+            actorEmail: email,
+            interval: interval,
+            entries: entries
+        )
+        var readiness = TimesheetAttestationPolicy.readiness(
+            employeeEmail: email,
+            interval: interval,
+            entries: entries
+        )
+        #expect(readiness.employeeSignedOffAt != nil)
+        #expect(readiness.unapprovedEntryCount == 2)
+        #expect(!readiness.isApprovedForTimeExport)
+
+        travel.reviewStatus = .approved
+        breakEntry.reviewStatus = .approved
+        travel.quickBooksTimeActivitySyncError = "QuickBooks is not connected."
+        readiness = TimesheetAttestationPolicy.readiness(
+            employeeEmail: email,
+            interval: interval,
+            entries: entries
+        )
+        #expect(readiness.payableMinutes == 60)
+        #expect(readiness.unpaidMinutes == 15)
+        #expect(readiness.qboPendingCount == 1)
+        #expect(readiness.qboAttentionCount == 1)
+        #expect(readiness.isApprovedForTimeExport)
+    }
+
+    @Test func approvedTimesheetCSVFailsClosedAndIncludesIdentityActivityApprovalAndQBOEvidence() throws {
+        let email = "export-tech@gunnaire.com"
+        let interval = DateInterval(
+            start: Date(timeIntervalSinceReferenceDate: 800_000),
+            duration: 7 * 24 * 60 * 60
+        )
+        let reviewedAt = interval.start.addingTimeInterval(2 * 24 * 60 * 60)
+        let travel = TimeEntry(
+            id: UUID(uuidString: "A1000000-0000-4000-8000-000000000130")!,
+            userEmail: email,
+            clockIn: interval.start.addingTimeInterval(60 * 60),
+            clockOut: interval.start.addingTimeInterval(2.5 * 60 * 60),
+            notes: "Private customer note must not enter the payroll export.",
+            activity: .travel,
+            quickBooksTimeActivityID: "QBO-TIME-130",
+            reviewStatus: .approved,
+            reviewedByEmail: "accounting@gunnaire.com",
+            reviewedAt: reviewedAt
+        )
+        let breakEntry = TimeEntry(
+            userEmail: email,
+            clockIn: interval.start.addingTimeInterval(3 * 60 * 60),
+            clockOut: interval.start.addingTimeInterval(3.5 * 60 * 60),
+            activity: .unpaidBreak,
+            reviewStatus: .approved,
+            reviewedByEmail: "accounting@gunnaire.com",
+            reviewedAt: reviewedAt
+        )
+        let entries = [travel, breakEntry]
+        let displayNames = [email: "Export Technician"]
+
+        #expect(throws: ApprovedTimesheetCSVError.notReady) {
+            _ = try ApprovedTimesheetCSV.render(
+                interval: interval,
+                entries: entries,
+                employeeDisplayNames: displayNames
+            )
+        }
+        #expect(throws: ApprovedTimesheetCSVError.noEntries) {
+            _ = try ApprovedTimesheetCSV.render(
+                interval: interval,
+                entries: [],
+                employeeDisplayNames: [:]
+            )
+        }
+
+        _ = try TimesheetAttestationPolicy.signOff(
+            employeeEmail: email,
+            actorEmail: email,
+            interval: interval,
+            entries: entries,
+            at: reviewedAt.addingTimeInterval(60)
+        )
+        let csv = try ApprovedTimesheetCSV.render(
+            interval: interval,
+            entries: entries,
+            employeeDisplayNames: displayNames
+        )
+
+        #expect(csv.contains("GunnAire Approved Time Export"))
+        #expect(csv.contains("Export Technician"))
+        #expect(csv.contains(travel.id.uuidString.uppercased()))
+        #expect(csv.contains("Travel"))
+        #expect(csv.contains("Unpaid Break"))
+        #expect(csv.contains("accounting@gunnaire.com"))
+        #expect(csv.contains("QBO-TIME-130"))
+        #expect(csv.contains("Approved time evidence only"))
+        #expect(csv.contains("no wage, overtime, tax, commission, deduction, or net-pay calculation"))
+        #expect(!csv.contains("Private customer note"))
+    }
+
     @Test func timeActivityClassificationEnforcesJobContextAndKeepsUnpaidBreaksOutOfQBO() async throws {
         let start = Date(timeIntervalSinceReferenceDate: 80_000)
         let customer = Customer(quickBooksID: "QBO-TIME-CUSTOMER", name: "Activity Customer")

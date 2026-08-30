@@ -1,5 +1,23 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
+
+private struct ApprovedTimesheetCSVDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.commaSeparatedText] }
+    var content: String
+
+    init(content: String) {
+        self.content = content
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        content = configuration.file.regularFileContents.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(content.utf8))
+    }
+}
 
 struct TimeClockView: View {
     @Environment(\.modelContext) private var modelContext
@@ -23,6 +41,12 @@ struct TimeClockView: View {
     @State private var entryPendingCorrection: TimeEntry?
     @State private var entryPendingCorrectionRequest: TimeEntry?
     @State private var reviewMessage: String?
+    @State private var personalTimesheetPeriod: TimesheetPayPeriod = .currentWeek
+    @State private var showingTimesheetSignOffConfirmation = false
+    @State private var timesheetMessage: String?
+    @State private var showingTimesheetExporter = false
+    @State private var timesheetExportContent = ""
+    @State private var timesheetExportError: String?
 
     private var signedInEmail: String {
         let candidate = AppIdentity.currentEmail
@@ -131,6 +155,26 @@ struct TimeClockView: View {
         entries.filter { $0.userEmail.caseInsensitiveCompare(signedInEmail) == .orderedSame }
     }
 
+    private var personalTimesheetInterval: DateInterval {
+        personalTimesheetPeriod.dateInterval(now: Date())
+    }
+
+    private var personalTimesheetEntries: [TimeEntry] {
+        TimesheetAttestationPolicy.entries(
+            for: signedInEmail,
+            interval: personalTimesheetInterval,
+            allEntries: entries
+        )
+    }
+
+    private var personalTimesheetReadiness: TimesheetReadinessSnapshot {
+        TimesheetAttestationPolicy.readiness(
+            employeeEmail: signedInEmail,
+            interval: personalTimesheetInterval,
+            entries: entries
+        )
+    }
+
     private var openEntry: TimeEntry? {
         userEntries.first { $0.isOpen }
     }
@@ -178,6 +222,56 @@ struct TimeClockView: View {
 
     private var teamReviewAttentionCount: Int {
         teamReviewEntries.filter { $0.isOpen || $0.needsTeamReview }.count
+    }
+
+    private var teamTimesheetInterval: DateInterval? {
+        reviewPeriod.timesheetPayPeriod?.dateInterval(now: Date())
+    }
+
+    private var teamTimesheetEntries: [TimeEntry] {
+        guard let teamTimesheetInterval else { return [] }
+        return entries.filter {
+            $0.clockIn >= teamTimesheetInterval.start && $0.clockIn < teamTimesheetInterval.end
+        }
+    }
+
+    private var teamTimesheetEmployeeEmails: [String] {
+        Array(Set(teamTimesheetEntries.map { AppAccess.normalizedEmail($0.userEmail) }.filter { !$0.isEmpty }))
+            .sorted {
+                teamMemberDisplayName(for: $0)
+                    .localizedCaseInsensitiveCompare(teamMemberDisplayName(for: $1)) == .orderedAscending
+            }
+    }
+
+    private var teamTimesheetReadiness: [TimesheetReadinessSnapshot] {
+        guard let teamTimesheetInterval else { return [] }
+        return teamTimesheetEmployeeEmails.map { email in
+            TimesheetAttestationPolicy.readiness(
+                employeeEmail: email,
+                interval: teamTimesheetInterval,
+                entries: teamTimesheetEntries
+            )
+        }
+    }
+
+    private var allTeamTimesheetsApprovedForExport: Bool {
+        !teamTimesheetReadiness.isEmpty && teamTimesheetReadiness.allSatisfy(\.isApprovedForTimeExport)
+    }
+
+    private var teamTimesheetDisplayNames: [String: String] {
+        Dictionary(uniqueKeysWithValues: teamTimesheetEmployeeEmails.map {
+            ($0, teamMemberDisplayName(for: $0))
+        })
+    }
+
+    private var approvedTimesheetFilename: String {
+        guard let teamTimesheetInterval else { return "GunnAire-approved-time" }
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return "GunnAire-approved-time-\(formatter.string(from: teamTimesheetInterval.start))"
     }
 
     private func serviceCall(for id: UUID?) -> ServiceCall? {
@@ -322,6 +416,40 @@ struct TimeClockView: View {
                     requestCorrection(for: entry, reason: reason)
                 }
             }
+            .confirmationDialog(
+                "Sign this weekly time snapshot?",
+                isPresented: $showingTimesheetSignOffConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Sign Time Snapshot") {
+                    signOffPersonalTimesheet()
+                }
+                .accessibilityIdentifier("ConfirmTimesheetSignOff")
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("You are confirming that every listed time entry is complete and accurate. Any later addition or correction automatically requires a new sign-off.")
+            }
+            .fileExporter(
+                isPresented: $showingTimesheetExporter,
+                document: ApprovedTimesheetCSVDocument(content: timesheetExportContent),
+                contentType: .commaSeparatedText,
+                defaultFilename: approvedTimesheetFilename
+            ) { result in
+                if case .failure(let error) = result {
+                    timesheetExportError = "The approved-time file was not saved: \(error.localizedDescription)"
+                }
+            }
+            .alert(
+                "Timesheet Export",
+                isPresented: Binding(
+                    get: { timesheetExportError != nil },
+                    set: { if !$0 { timesheetExportError = nil } }
+                )
+            ) {
+                Button("OK") { timesheetExportError = nil }
+            } message: {
+                Text(timesheetExportError ?? "")
+            }
         }
     }
 
@@ -425,6 +553,8 @@ struct TimeClockView: View {
                 currentStatusContent
             }
 
+            personalTimesheetSignOffSection
+
             Section("Recent Time Entries") {
                 if userEntries.isEmpty {
                     Text("No time entries yet.")
@@ -435,6 +565,81 @@ struct TimeClockView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var personalTimesheetSignOffSection: some View {
+        let readiness = personalTimesheetReadiness
+        return Section("Weekly Time") {
+            Picker("Weekly Period", selection: $personalTimesheetPeriod) {
+                ForEach(TimesheetPayPeriod.allCases) { period in
+                    Text(period.displayName).tag(period)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("PersonalTimesheetPeriodPicker")
+
+            HStack(spacing: 12) {
+                timeMetric("\(readiness.entryCount)", label: "Entries")
+                timeMetric(durationLabel(minutes: readiness.payableMinutes), label: "Payable")
+                timeMetric(durationLabel(minutes: readiness.unpaidMinutes), label: "Unpaid")
+            }
+
+            personalTimesheetStatus(readiness)
+                .accessibilityIdentifier("TimesheetSignOffStatus")
+
+            Button {
+                showingTimesheetSignOffConfirmation = true
+            } label: {
+                Label(
+                    readiness.employeeSignedOffAt == nil ? "Review & Sign Snapshot" : "Snapshot Signed",
+                    systemImage: readiness.employeeSignedOffAt == nil ? "signature" : "checkmark.seal.fill"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Color.brandGold)
+            .foregroundStyle(Color.primaryBlack)
+            .disabled(!readiness.canEmployeeSignOff || readiness.employeeSignedOffAt != nil)
+            .accessibilityIdentifier("SignTimesheetSnapshot")
+
+            Text("This confirms the exact entries shown for the week. New time or a correction invalidates the signature automatically; the office still approves every entry separately.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Text("This app does not calculate wages, overtime, tax, commission, deductions, or net pay.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if let timesheetMessage {
+                Text(timesheetMessage)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func personalTimesheetStatus(_ readiness: TimesheetReadinessSnapshot) -> some View {
+        if let signedAt = readiness.employeeSignedOffAt {
+            Label(
+                "Signed \(signedAt.formatted(date: .abbreviated, time: .shortened)) • \(readiness.unapprovedEntryCount) awaiting office approval",
+                systemImage: "checkmark.seal.fill"
+            )
+            .font(.subheadline.weight(.semibold))
+            .foregroundColor(readiness.unapprovedEntryCount == 0 ? .green : .secondary)
+        } else if readiness.entryCount == 0 {
+            Label("No time entries in this period", systemImage: "clock.badge.questionmark")
+                .foregroundColor(.secondary)
+        } else if readiness.openEntryCount > 0 {
+            Label("Clock out \(readiness.openEntryCount) open \(readiness.openEntryCount == 1 ? "entry" : "entries") before signing", systemImage: "clock.badge.exclamationmark")
+                .foregroundColor(.orange)
+        } else if readiness.correctionRequiredCount > 0 {
+            Label("Resolve \(readiness.correctionRequiredCount) correction \(readiness.correctionRequiredCount == 1 ? "request" : "requests") before signing", systemImage: "exclamationmark.bubble")
+                .foregroundColor(.orange)
+        } else if readiness.invalidContextCount > 0 {
+            Label("Resolve \(readiness.invalidContextCount) work-context \(readiness.invalidContextCount == 1 ? "issue" : "issues") before signing", systemImage: "link.badge.plus")
+                .foregroundColor(.orange)
+        } else {
+            Label("Ready for your sign-off", systemImage: "signature")
+                .foregroundColor(Color.brandGold)
         }
     }
 
@@ -622,6 +827,8 @@ struct TimeClockView: View {
                 }
                 .accessibilityIdentifier("TeamTimeActivitySummary")
 
+                teamTimesheetReadinessContent
+
                 if !entriesReadyForApproval.isEmpty {
                     Button("Approve \(entriesReadyForApproval.count) Ready \(entriesReadyForApproval.count == 1 ? "Entry" : "Entries")") {
                         approveAllReadyEntries()
@@ -654,6 +861,87 @@ struct TimeClockView: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var teamTimesheetReadinessContent: some View {
+        DisclosureGroup("Timesheet Readiness") {
+            if teamTimesheetInterval == nil {
+                Text("Select This Week or Last Week to review employee sign-offs and export a payroll-ready time file.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else if teamTimesheetReadiness.isEmpty {
+                Text("No employee time falls in this weekly period.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(teamTimesheetReadiness, id: \.employeeEmail) { readiness in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(teamMemberDisplayName(for: readiness.employeeEmail))
+                                    .font(.subheadline.weight(.semibold))
+                                Text("\(readiness.entryCount) entries • \(durationLabel(minutes: readiness.payableMinutes)) payable")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            teamTimesheetReadinessLabel(readiness)
+                        }
+                        if readiness.qboPendingCount > 0 || readiness.qboAttentionCount > 0 {
+                            Text("QBO: \(readiness.qboPendingCount) pending • \(readiness.qboAttentionCount) need attention")
+                                .font(.caption2)
+                                .foregroundColor(readiness.qboAttentionCount > 0 ? .orange : .secondary)
+                        }
+                    }
+                    .accessibilityIdentifier("TeamTimesheetReadiness-\(readiness.employeeEmail)")
+                }
+
+                Button {
+                    beginTimesheetExport()
+                } label: {
+                    Label("Export Approved Time CSV", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.brandGold)
+                .foregroundStyle(Color.primaryBlack)
+                .disabled(!allTeamTimesheetsApprovedForExport)
+                .accessibilityIdentifier("ExportApprovedTimesheetCSV")
+
+                Text("Export requires a current employee signature and office approval for every entry. It includes QBO reconciliation state, but does not calculate wages, overtime, tax, commission, deductions, or net pay.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func teamTimesheetReadinessLabel(_ readiness: TimesheetReadinessSnapshot) -> some View {
+        if readiness.isApprovedForTimeExport {
+            Label("Ready", systemImage: "checkmark.circle.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.green)
+        } else if readiness.openEntryCount > 0 {
+            Label("\(readiness.openEntryCount) open", systemImage: "clock.badge.exclamationmark")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.orange)
+        } else if readiness.correctionRequiredCount > 0 {
+            Label("Correction", systemImage: "exclamationmark.bubble")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.orange)
+        } else if readiness.invalidContextCount > 0 {
+            Label("Context", systemImage: "link.badge.plus")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.orange)
+        } else if readiness.employeeSignedOffAt == nil {
+            Label("Sign-off", systemImage: "signature")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.orange)
+        } else {
+            Label("\(readiness.unapprovedEntryCount) approval", systemImage: "person.badge.clock")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.orange)
         }
     }
 
@@ -915,6 +1203,42 @@ struct TimeClockView: View {
         }
     }
 
+    private func signOffPersonalTimesheet() {
+        let originals = personalTimesheetEntries.map { ($0, $0.reviewAuditJSON) }
+        do {
+            let event = try TimesheetAttestationPolicy.signOff(
+                employeeEmail: signedInEmail,
+                actorEmail: signedInEmail,
+                interval: personalTimesheetInterval,
+                entries: personalTimesheetEntries
+            )
+            try modelContext.save()
+            timesheetMessage = "Signed this weekly snapshot at \(event.occurredAt.formatted(date: .abbreviated, time: .shortened))."
+        } catch {
+            originals.forEach { entry, reviewAuditJSON in
+                entry.reviewAuditJSON = reviewAuditJSON
+            }
+            timesheetMessage = error.localizedDescription
+        }
+    }
+
+    private func beginTimesheetExport() {
+        guard let teamTimesheetInterval else {
+            timesheetExportError = "Select a weekly review period before exporting approved time."
+            return
+        }
+        do {
+            timesheetExportContent = try ApprovedTimesheetCSV.render(
+                interval: teamTimesheetInterval,
+                entries: teamTimesheetEntries,
+                employeeDisplayNames: teamTimesheetDisplayNames
+            )
+            showingTimesheetExporter = true
+        } catch {
+            timesheetExportError = error.localizedDescription
+        }
+    }
+
     private func clockIn() {
         guard hasAuthenticatedUser else {
             syncMessage = "Sign in with an approved GunnAire business account before recording time."
@@ -1141,6 +1465,14 @@ private enum TeamTimeReviewPeriod: String, CaseIterable, Identifiable {
         case .currentWeek: "This Week"
         case .previousWeek: "Last Week"
         case .trailingFourteenDays: "14 Days"
+        }
+    }
+
+    var timesheetPayPeriod: TimesheetPayPeriod? {
+        switch self {
+        case .currentWeek: .currentWeek
+        case .previousWeek: .previousWeek
+        case .trailingFourteenDays: nil
         }
     }
 

@@ -33,30 +33,35 @@ and schema status as of 2026-08-30.
   gated on a participating certified payment service provider, Account Holder
   entitlement approval, provider integration, and signed physical-iPhone
   acceptance.
-- Exact build `1.0 (2026083017)` is retained as a development-signed iOS
+- Exact build `1.0 (2026083019)` is retained as a development-signed iOS
   Release archive and universal arm64/x86_64 Mac Catalyst Release app under
   `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30`. Strict
   signature verification confirms Apple login, CloudKit, Push Notifications,
   and Associated Domains in both products. The iOS app/dSYM UUID matches at
-  `E2815F8A-A6F2-32EC-B79F-C41521A1526B`; Mac app/dSYM UUIDs match at
-  `9DDB5985-95E5-37E9-950E-A34FF313E1AA` and
-  `9DEBC96C-767C-349C-B6EC-A9852642E357`. Exact retained-artifact and CloudKit
+  `F5B71EF8-AAB7-3616-8C4F-0F85F276BC7F`; Mac app/dSYM UUIDs match at
+  `CDA62558-5A45-3673-AD64-47C7C58B44F8` and
+  `5BE78D12-A4A3-3973-8C33-3099DCAA27D8`. Exact retained-artifact and CloudKit
   preflight passes **61 checks, 4 expected warnings, and 0 failures**. The
   read-only online probe passes every unchanged production route but reports
   **63/3/1** because production remains backend `2026.08.30.15` while source is
   undeployed `2026.08.30.16`. An Apple Distribution private key, separate Mac
   distribution signing, signed representative-device acceptance, and App
   Store upload remain external release gates.
-- Build `2026083017` changes no SwiftData field or CloudKit schema. Google and
-  QBO OAuth now require a foreground scene-bound app window, retain that
-  presentation provider for the complete system-browser session, and otherwise
-  fail closed with visible foreground-and-retry guidance. The unsafe runtime
-  window-construction fallback is removed. Complete iPad and Mac logic suites
-  pass **666/666** each, and the focused no-window recovery regression passes
-  **1/1**; unchanged backend source `.16` retains its prior **70/70** result. No
-  CloudKit bootstrap, Development mutation, Production promotion, provider
-  authorization, accounting write, refund, or payment was required or
-  performed.
+- Build `2026083019` changes no SwiftData field or CloudKit schema. Weekly
+  employee attestation reuses the existing versioned `reviewAuditJSON`; its
+  period, employee workflow-revision IDs, and SHA-256 snapshot digest bind the
+  signature to the exact closed, job-valid entries, and any later addition or
+  correction request requires another review. Office approval and QBO state do
+  not alter that employee digest. Approved-time CSV export fails closed until each employee snapshot is
+  signed and every entry office-approved. It retains entry/job/QBO evidence but
+  performs no wage, overtime, tax, commission, deduction, or net-pay math.
+  Explicit UI-test roles now win over the screenshot-fixture fallback, allowing
+  a privacy-safe technician screenshot without changing that account into an
+  Administrator. Complete iPad and Mac logic suites pass **671/671** each, and
+  the exact technician sign-off journey passes **1/1**; unchanged backend source
+  `.16` retains its prior **70/70** result. No CloudKit bootstrap, Development
+  mutation, Production promotion, provider authorization, accounting write,
+  refund, or payment was required or performed.
 - Production remains schema v15 across 24 record types in retained export
   `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
   `f81de36537620a10fe34fde22883a94dc6f5b00deea6fec08004160c0aae7594`.

@@ -492,6 +492,48 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testFieldTechnicianSignsTheCurrentWeeklyTimeSnapshot() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedTeamTimeReview",
+            "-appStoreScreenshotFixtures",
+            "-GunnAirePendingAppRoute", "timeClock"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Time Clock"].waitForExistence(timeout: 8))
+        let signSnapshot = app.buttons["SignTimesheetSnapshot"]
+        for _ in 0..<8 where !signSnapshot.exists || !signSnapshot.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(signSnapshot.waitForExistence(timeout: 3))
+        XCTAssertTrue(signSnapshot.isEnabled)
+        XCTAssertTrue(app.staticTexts["Ready for your sign-off"].exists)
+        signSnapshot.tap()
+
+        let confirm = app.buttons.matching(identifier: "ConfirmTimesheetSignOff").firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 3))
+        confirm.tap()
+
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH 'Signed '")
+        ).firstMatch.waitForExistence(timeout: 3))
+        XCTAssertFalse(signSnapshot.isEnabled)
+        XCTAssertFalse(app.descendants(matching: .any)["SidebarAccountIdentity"].exists)
+        XCTAssertFalse(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
+        ).firstMatch.exists)
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Field technician weekly time snapshot signed without account email"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
     func testFieldTechnicianClassifiesOfflineTimeBeforeOfficeReview() throws {
         let app = XCUIApplication()
         app.launchArguments = [

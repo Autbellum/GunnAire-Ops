@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import SwiftData
 
 enum TimeEntryActivity: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -81,6 +82,7 @@ enum TimeEntryReviewAction: String, Codable {
     case correctionRequested = "correction_requested"
     case correctedAndResubmitted = "corrected_and_resubmitted"
     case approved
+    case employeeSignedOff = "employee_signed_off"
 }
 
 struct TimeEntryReviewEvent: Codable, Equatable, Identifiable {
@@ -89,13 +91,19 @@ struct TimeEntryReviewEvent: Codable, Equatable, Identifiable {
     let actorEmail: String
     let occurredAt: Date
     let detail: String?
+    let periodStart: Date?
+    let periodEnd: Date?
+    let snapshotDigest: String?
 
     init(
         id: UUID = UUID(),
         action: TimeEntryReviewAction,
         actorEmail: String,
         occurredAt: Date,
-        detail: String? = nil
+        detail: String? = nil,
+        periodStart: Date? = nil,
+        periodEnd: Date? = nil,
+        snapshotDigest: String? = nil
     ) {
         self.id = id
         self.action = action
@@ -107,6 +115,10 @@ struct TimeEntryReviewEvent: Codable, Equatable, Identifiable {
         } else {
             self.detail = nil
         }
+        self.periodStart = periodStart
+        self.periodEnd = periodEnd
+        let normalizedDigest = snapshotDigest?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        self.snapshotDigest = normalizedDigest?.isEmpty == false ? normalizedDigest : nil
     }
 }
 
@@ -298,10 +310,425 @@ final class TimeEntry {
         )
     }
 
+    func appendReviewEvent(_ event: TimeEntryReviewEvent) {
+        reviewAuditJSON = TimeEntryReviewAudit.appending(event, to: reviewAuditJSON)
+    }
+
     private static func normalizedReviewNote(_ value: String?) -> String? {
         let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let normalized, !normalized.isEmpty else { return nil }
         return String(normalized.prefix(500))
+    }
+}
+
+enum TimesheetPayPeriod: String, Codable, CaseIterable, Identifiable, Sendable {
+    case currentWeek = "current_week"
+    case previousWeek = "previous_week"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .currentWeek: "This Week"
+        case .previousWeek: "Last Week"
+        }
+    }
+
+    func dateInterval(now: Date, calendar: Calendar = .current) -> DateInterval {
+        let current = calendar.dateInterval(of: .weekOfYear, for: now)
+            ?? DateInterval(start: calendar.startOfDay(for: now), duration: 7 * 24 * 60 * 60)
+        switch self {
+        case .currentWeek:
+            return current
+        case .previousWeek:
+            let start = calendar.date(byAdding: .weekOfYear, value: -1, to: current.start)
+                ?? current.start.addingTimeInterval(-7 * 24 * 60 * 60)
+            return DateInterval(start: start, end: current.start)
+        }
+    }
+}
+
+struct TimesheetReadinessSnapshot: Equatable {
+    let employeeEmail: String
+    let interval: DateInterval
+    let entryCount: Int
+    let payableMinutes: Int
+    let unpaidMinutes: Int
+    let openEntryCount: Int
+    let correctionRequiredCount: Int
+    let invalidContextCount: Int
+    let unapprovedEntryCount: Int
+    let qboPendingCount: Int
+    let qboAttentionCount: Int
+    let employeeSignedOffAt: Date?
+
+    var canEmployeeSignOff: Bool {
+        entryCount > 0 && openEntryCount == 0 && correctionRequiredCount == 0 && invalidContextCount == 0
+    }
+
+    var isApprovedForTimeExport: Bool {
+        canEmployeeSignOff && unapprovedEntryCount == 0 && employeeSignedOffAt != nil
+    }
+}
+
+enum TimesheetAttestationError: LocalizedError, Equatable {
+    case unauthorized
+    case noEntries
+    case invalidPeriodScope
+    case openEntries
+    case correctionRequired
+    case invalidWorkContext
+
+    var errorDescription: String? {
+        switch self {
+        case .unauthorized:
+            "Only the employee who recorded this time can sign the timesheet snapshot."
+        case .noEntries:
+            "There are no time entries in this period to sign."
+        case .invalidPeriodScope:
+            "Review the exact weekly period before signing its time snapshot."
+        case .openEntries:
+            "Clock out every open entry before signing this period."
+        case .correctionRequired:
+            "Correct and resubmit every returned entry before signing this period."
+        case .invalidWorkContext:
+            "Wait for every Job Labor entry to resolve its service job before signing this period."
+        }
+    }
+}
+
+enum TimesheetAttestationPolicy {
+    private struct Snapshot: Codable {
+        let version: Int
+        let employeeEmail: String
+        let periodStart: Date
+        let periodEnd: Date
+        let entries: [SnapshotEntry]
+    }
+
+    private struct SnapshotEntry: Codable {
+        let id: UUID
+        let clockIn: Date
+        let clockOut: Date?
+        let activity: String
+        let serviceCallID: UUID?
+        let notes: String?
+        /// Employee submission and correction events are part of the signed
+        /// record revision. Office approval, QBO publication, and the signature
+        /// event itself remain outside the digest so those later handoffs do not
+        /// invalidate an otherwise unchanged employee attestation.
+        let workflowRevisionEventIDs: [UUID]
+    }
+
+    static func entries(
+        for employeeEmail: String,
+        interval: DateInterval,
+        allEntries: [TimeEntry]
+    ) -> [TimeEntry] {
+        let normalizedEmail = AppAccess.normalizedEmail(employeeEmail)
+        return allEntries
+            .filter {
+                AppAccess.normalizedEmail($0.userEmail) == normalizedEmail &&
+                    $0.clockIn >= interval.start &&
+                    $0.clockIn < interval.end
+            }
+            .sorted {
+                if $0.clockIn != $1.clockIn { return $0.clockIn < $1.clockIn }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+    }
+
+    static func snapshotDigest(
+        employeeEmail: String,
+        interval: DateInterval,
+        entries: [TimeEntry]
+    ) -> String {
+        let snapshot = Snapshot(
+            version: 1,
+            employeeEmail: AppAccess.normalizedEmail(employeeEmail),
+            periodStart: interval.start,
+            periodEnd: interval.end,
+            entries: entries
+                .sorted { $0.id.uuidString < $1.id.uuidString }
+                .map {
+                    SnapshotEntry(
+                        id: $0.id,
+                        clockIn: $0.clockIn,
+                        clockOut: $0.clockOut,
+                        activity: $0.activity.rawValue,
+                        serviceCallID: $0.serviceCall?.id,
+                        notes: $0.notes,
+                        workflowRevisionEventIDs: $0.reviewEvents.compactMap { event in
+                            switch event.action {
+                            case .submitted, .correctionRequested, .correctedAndResubmitted:
+                                event.id
+                            case .approved, .employeeSignedOff:
+                                nil
+                            }
+                        }
+                    )
+                }
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(snapshot) else { return "" }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func currentAttestation(
+        employeeEmail: String,
+        interval: DateInterval,
+        entries: [TimeEntry]
+    ) -> TimeEntryReviewEvent? {
+        guard !entries.isEmpty else { return nil }
+        let normalizedEmail = AppAccess.normalizedEmail(employeeEmail)
+        let digest = snapshotDigest(employeeEmail: normalizedEmail, interval: interval, entries: entries)
+        guard !digest.isEmpty else { return nil }
+
+        let matchingByEntry = entries.map { entry in
+            entry.reviewEvents.filter { event in
+                event.action == .employeeSignedOff &&
+                    event.actorEmail == normalizedEmail &&
+                    event.periodStart == interval.start &&
+                    event.periodEnd == interval.end &&
+                    event.snapshotDigest == digest
+            }
+        }
+        guard var commonIDs = matchingByEntry.first.map({ Set($0.map(\.id)) }), !commonIDs.isEmpty else {
+            return nil
+        }
+        for events in matchingByEntry.dropFirst() {
+            commonIDs.formIntersection(events.map(\.id))
+            if commonIDs.isEmpty { return nil }
+        }
+        return matchingByEntry
+            .flatMap { $0 }
+            .filter { commonIDs.contains($0.id) }
+            .max { $0.occurredAt < $1.occurredAt }
+    }
+
+    @discardableResult
+    static func signOff(
+        employeeEmail: String,
+        actorEmail: String,
+        interval: DateInterval,
+        entries: [TimeEntry],
+        at date: Date = Date(),
+        operationID: UUID = UUID()
+    ) throws -> TimeEntryReviewEvent {
+        let employee = AppAccess.normalizedEmail(employeeEmail)
+        guard !employee.isEmpty, employee == AppAccess.normalizedEmail(actorEmail) else {
+            throw TimesheetAttestationError.unauthorized
+        }
+        guard !entries.isEmpty,
+              entries.allSatisfy({ AppAccess.normalizedEmail($0.userEmail) == employee }) else {
+            throw TimesheetAttestationError.noEntries
+        }
+        guard entries.allSatisfy({ $0.clockIn >= interval.start && $0.clockIn < interval.end }) else {
+            throw TimesheetAttestationError.invalidPeriodScope
+        }
+        guard !entries.contains(where: \.isOpen) else { throw TimesheetAttestationError.openEntries }
+        guard !entries.contains(where: { $0.reviewStatus == .correctionRequested }) else {
+            throw TimesheetAttestationError.correctionRequired
+        }
+        guard entries.allSatisfy({ entry in
+            entry.activity.requiresServiceCall ? entry.serviceCall != nil : entry.serviceCall == nil
+        }) else {
+            throw TimesheetAttestationError.invalidWorkContext
+        }
+        if let existing = currentAttestation(
+            employeeEmail: employee,
+            interval: interval,
+            entries: entries
+        ) {
+            return existing
+        }
+
+        let digest = snapshotDigest(employeeEmail: employee, interval: interval, entries: entries)
+        guard !digest.isEmpty else { throw TimesheetAttestationError.invalidWorkContext }
+        let event = TimeEntryReviewEvent(
+            id: operationID,
+            action: .employeeSignedOff,
+            actorEmail: employee,
+            occurredAt: date,
+            detail: "Employee confirmed the complete time-entry snapshot for this period.",
+            periodStart: interval.start,
+            periodEnd: interval.end,
+            snapshotDigest: digest
+        )
+        entries.forEach { $0.appendReviewEvent(event) }
+        return event
+    }
+
+    static func readiness(
+        employeeEmail: String,
+        interval: DateInterval,
+        entries: [TimeEntry]
+    ) -> TimesheetReadinessSnapshot {
+        let scopedEntries = Self.entries(
+            for: employeeEmail,
+            interval: interval,
+            allEntries: entries
+        )
+        let signedOffAt = currentAttestation(
+            employeeEmail: employeeEmail,
+            interval: interval,
+            entries: scopedEntries
+        )?.occurredAt
+        return TimesheetReadinessSnapshot(
+            employeeEmail: AppAccess.normalizedEmail(employeeEmail),
+            interval: interval,
+            entryCount: scopedEntries.count,
+            payableMinutes: scopedEntries.compactMap(\.payableDurationMinutes).reduce(0, +),
+            unpaidMinutes: scopedEntries
+                .filter { !$0.activity.countsTowardPayableTime }
+                .compactMap(\.durationMinutes)
+                .reduce(0, +),
+            openEntryCount: scopedEntries.filter(\.isOpen).count,
+            correctionRequiredCount: scopedEntries.filter { $0.reviewStatus == .correctionRequested }.count,
+            invalidContextCount: scopedEntries.filter { entry in
+                entry.activity.requiresServiceCall ? entry.serviceCall == nil : entry.serviceCall != nil
+            }.count,
+            unapprovedEntryCount: scopedEntries.filter { $0.reviewStatus != .approved }.count,
+            qboPendingCount: scopedEntries.filter {
+                $0.reviewStatus == .approved &&
+                    $0.activity.isQuickBooksPublishable &&
+                    $0.quickBooksTimeActivityID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+            }.count,
+            qboAttentionCount: scopedEntries.filter {
+                $0.quickBooksTimeActivitySyncError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            }.count,
+            employeeSignedOffAt: signedOffAt
+        )
+    }
+}
+
+enum ApprovedTimesheetCSVError: LocalizedError, Equatable {
+    case noEntries
+    case notReady
+
+    var errorDescription: String? {
+        switch self {
+        case .noEntries:
+            "There are no time entries in this weekly period to export."
+        case .notReady:
+            "Every employee must sign the current snapshot and every entry must receive office approval before export."
+        }
+    }
+}
+
+enum ApprovedTimesheetCSV {
+    static func render(
+        interval: DateInterval,
+        entries: [TimeEntry],
+        employeeDisplayNames: [String: String]
+    ) throws -> String {
+        let scopedEntries = entries
+            .filter { $0.clockIn >= interval.start && $0.clockIn < interval.end }
+            .sorted {
+                let leftEmail = AppAccess.normalizedEmail($0.userEmail)
+                let rightEmail = AppAccess.normalizedEmail($1.userEmail)
+                if leftEmail != rightEmail { return leftEmail < rightEmail }
+                if $0.clockIn != $1.clockIn { return $0.clockIn < $1.clockIn }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+        let employeeEmails = Array(Set(scopedEntries.map { AppAccess.normalizedEmail($0.userEmail) })).sorted()
+        guard !employeeEmails.isEmpty else { throw ApprovedTimesheetCSVError.noEntries }
+        let readinessByEmail = Dictionary(uniqueKeysWithValues: employeeEmails.map { email in
+            (
+                email,
+                TimesheetAttestationPolicy.readiness(
+                    employeeEmail: email,
+                    interval: interval,
+                    entries: scopedEntries
+                )
+            )
+        })
+        guard readinessByEmail.values.allSatisfy(\.isApprovedForTimeExport) else {
+            throw ApprovedTimesheetCSVError.notReady
+        }
+        var rows: [[String]] = [
+            ["GunnAire Approved Time Export"],
+            ["Period Start", iso8601(interval.start)],
+            ["Period End", iso8601(interval.end)],
+            ["Generated At", iso8601(Date())],
+            ["Scope", "Entries are included by clock-in date; payable time excludes unpaid breaks."],
+            ["Boundary", "Approved time evidence only; no wage, overtime, tax, commission, deduction, or net-pay calculation."],
+            [],
+            ["Employee Summary"],
+            ["Employee Name", "Employee Email", "Entries", "Payable Minutes", "Unpaid Minutes", "Employee Signed At", "Export Readiness", "QBO Pending", "QBO Attention"]
+        ]
+        for email in employeeEmails {
+            guard let readiness = readinessByEmail[email] else { continue }
+            rows.append([
+                employeeDisplayNames[email] ?? AppAccess.inferredDisplayName(fromEmail: email),
+                email,
+                String(readiness.entryCount),
+                String(readiness.payableMinutes),
+                String(readiness.unpaidMinutes),
+                readiness.employeeSignedOffAt.map { iso8601($0) } ?? "Unsigned",
+                readiness.isApprovedForTimeExport ? "Ready" : "Needs review",
+                String(readiness.qboPendingCount),
+                String(readiness.qboAttentionCount)
+            ])
+        }
+        rows += [
+            [],
+            ["Approved Time Entries"],
+            ["Employee Name", "Employee Email", "Entry ID", "Clock In", "Clock Out", "Activity", "Job ID", "Payable Minutes", "Unpaid Minutes", "Review Status", "Employee Signed At", "Office Reviewed By", "Office Reviewed At", "QBO TimeActivity ID", "QBO State"]
+        ]
+        for entry in scopedEntries {
+            let email = AppAccess.normalizedEmail(entry.userEmail)
+            let employeeEntries = TimesheetAttestationPolicy.entries(
+                for: email,
+                interval: interval,
+                allEntries: scopedEntries
+            )
+            let signedAt = TimesheetAttestationPolicy.currentAttestation(
+                employeeEmail: email,
+                interval: interval,
+                entries: employeeEntries
+            )?.occurredAt
+            let qboState: String
+            if !entry.activity.isQuickBooksPublishable {
+                qboState = "Not applicable"
+            } else if entry.quickBooksTimeActivityID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                qboState = "Synced"
+            } else if entry.quickBooksTimeActivitySyncError?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                qboState = "Needs attention"
+            } else {
+                qboState = "Pending"
+            }
+            rows.append([
+                employeeDisplayNames[email] ?? AppAccess.inferredDisplayName(fromEmail: email),
+                email,
+                entry.id.uuidString.uppercased(),
+                iso8601(entry.clockIn),
+                entry.clockOut.map { iso8601($0) } ?? "Open",
+                entry.activity.displayName,
+                entry.serviceCall?.id.uuidString.uppercased() ?? "",
+                String(entry.payableDurationMinutes ?? 0),
+                entry.activity.countsTowardPayableTime ? "0" : String(entry.durationMinutes ?? 0),
+                entry.reviewStatus.displayName,
+                signedAt.map { iso8601($0) } ?? "Unsigned",
+                entry.reviewedByEmail ?? "",
+                entry.reviewedAt.map { iso8601($0) } ?? "",
+                entry.quickBooksTimeActivityID ?? "",
+                qboState
+            ])
+        }
+        return rows.map { row in
+            row.map { escaped($0) }.joined(separator: ",")
+        }.joined(separator: "\n") + "\n"
+    }
+
+    private static func iso8601(_ date: Date) -> String {
+        date.formatted(.iso8601)
+    }
+
+    private static func escaped(_ value: String) -> String {
+        guard value.contains(",") || value.contains("\"") || value.contains("\n") else { return value }
+        return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
 }
 
