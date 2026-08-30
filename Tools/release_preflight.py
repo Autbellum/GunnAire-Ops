@@ -83,6 +83,27 @@ EXPECTED_CLOUDKIT_V15_ADDITIONS = {
         "CD_vendorPartNumber": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
     },
 }
+EXPECTED_CLOUDKIT_V16_ADDITIONS = {
+    **EXPECTED_CLOUDKIT_V15_ADDITIONS,
+    "CD_ServiceDocumentAttachment": {
+        "CD_backendDocumentID": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_caption": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_customerEquipmentID": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_estimateID": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_googleDriveArchivedByEmail": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_googleDriveFileID": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_googleDriveLastSyncedAt": ("TIMESTAMP", "QUERYABLE", "SORTABLE"),
+        "CD_googleDriveSyncDetail": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_googleDriveSyncStatus": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_googleDriveWebViewLink": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_invoiceID": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_quickBooksAttachableID": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_quickBooksAttachedEntityKeysRaw": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_quickBooksSyncError": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_sharedCompanySyncDetail": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+        "CD_sharedCompanySyncStatus": ("STRING", "QUERYABLE", "SEARCHABLE", "SORTABLE"),
+    },
+}
 
 
 @dataclass
@@ -160,6 +181,34 @@ def load_plist(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{path} is not a dictionary property list")
     return value
+
+
+def configured_url_schemes(info: dict[str, Any]) -> set[str]:
+    schemes: set[str] = set()
+    for url_type in info.get("CFBundleURLTypes", []):
+        if not isinstance(url_type, dict):
+            continue
+        for scheme in url_type.get("CFBundleURLSchemes", []):
+            if isinstance(scheme, str) and scheme:
+                schemes.add(scheme)
+    return schemes
+
+
+def google_native_oauth_is_consistent(info: dict[str, Any]) -> bool:
+    client_id = str(info.get("GOOGLE_CLIENT_ID", "")).strip()
+    reversed_client_id = str(info.get("GOOGLE_REVERSED_CLIENT_ID", "")).strip()
+    callback_scheme = str(info.get("GOOGLE_CALLBACK_SCHEME", "")).strip()
+    redirect_uri = str(info.get("GOOGLE_REDIRECT_URI", "")).strip()
+    suffix = ".apps.googleusercontent.com"
+    if not client_id.endswith(suffix):
+        return False
+    expected_scheme = f"com.googleusercontent.apps.{client_id.removesuffix(suffix)}"
+    return (
+        reversed_client_id == expected_scheme
+        and callback_scheme == expected_scheme
+        and redirect_uri == f"{expected_scheme}:/oauth2redirect"
+        and expected_scheme in configured_url_schemes(info)
+    )
 
 
 def source_versions(project_file: Path) -> tuple[str, str]:
@@ -458,11 +507,9 @@ def check_archive(
             "Archive is missing the QBO client identifier",
         )
         results.require(
-            bool(str(app_info.get("GOOGLE_CLIENT_ID", "")).strip())
-            and app_info.get("GOOGLE_CALLBACK_SCHEME")
-            == app_info.get("GOOGLE_REVERSED_CLIENT_ID"),
-            "Archive contains matching Google OAuth client/callback identifiers",
-            "Archived Google OAuth client/callback identifiers are incomplete or inconsistent",
+            google_native_oauth_is_consistent(app_info),
+            "Archive contains a consistent native Google OAuth client, reversed callback, redirect URI, and registered URL scheme",
+            "Archived native Google OAuth identifiers, redirect URI, or registered URL scheme are incomplete or inconsistent",
         )
 
         entitlements = extract_codesign_entitlements(app_path)
@@ -720,11 +767,9 @@ def check_mac_app(
         )
         results.require(
             bool(str(app_info.get("QB_CLIENT_ID", "")).strip())
-            and bool(str(app_info.get("GOOGLE_CLIENT_ID", "")).strip())
-            and app_info.get("GOOGLE_CALLBACK_SCHEME")
-            == app_info.get("GOOGLE_REVERSED_CLIENT_ID"),
-            "Mac Catalyst artifact contains matching non-secret QBO and Google OAuth identifiers",
-            "Mac Catalyst QBO/Google OAuth identifiers are incomplete or inconsistent",
+            and google_native_oauth_is_consistent(app_info),
+            "Mac Catalyst artifact contains a QBO client ID and consistent native Google OAuth configuration",
+            "Mac Catalyst QBO client ID or native Google OAuth configuration is incomplete or inconsistent",
         )
         collected_types = {
             row.get("NSPrivacyCollectedDataType")
@@ -895,9 +940,22 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
             "Development changes remove or alter no Production CloudKit fields",
             f"Development removes or alters Production fields: {changed_or_removed}",
         )
+        expected_remaining_v16_additions = {
+            record_name: {
+                field_name: definition
+                for field_name, definition in expected_fields.items()
+                if field_name not in prod.get(record_name, {})
+            }
+            for record_name, expected_fields in EXPECTED_CLOUDKIT_V16_ADDITIONS.items()
+        }
+        expected_remaining_v16_additions = {
+            record_name: fields
+            for record_name, fields in expected_remaining_v16_additions.items()
+            if fields
+        }
         if not actual_additions:
-            missing_or_changed_v15_fields: list[str] = []
-            for record_name, expected_fields in EXPECTED_CLOUDKIT_V15_ADDITIONS.items():
+            missing_or_changed_v16_fields: list[str] = []
+            for record_name, expected_fields in EXPECTED_CLOUDKIT_V16_ADDITIONS.items():
                 development_fields = dev.get(record_name, {})
                 production_fields = prod.get(record_name, {})
                 for field_name, expected_definition in expected_fields.items():
@@ -905,33 +963,44 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                         development_fields.get(field_name) != expected_definition
                         or production_fields.get(field_name) != expected_definition
                     ):
-                        missing_or_changed_v15_fields.append(f"{record_name}.{field_name}")
+                        missing_or_changed_v16_fields.append(f"{record_name}.{field_name}")
             results.require(
-                not missing_or_changed_v15_fields,
-                "CloudKit Production exactly matches Development with every approved v15 field",
-                "CloudKit exports match, but approved v15 fields are missing or changed: "
-                f"{missing_or_changed_v15_fields}",
+                not missing_or_changed_v16_fields,
+                "CloudKit Production exactly matches Development with every approved v16 field",
+                "CloudKit exports match, but approved v16 fields are missing or changed: "
+                f"{missing_or_changed_v16_fields}",
+            )
+        elif actual_additions == expected_remaining_v16_additions:
+            results.pass_(
+                "CloudKit Development contains exactly the remaining additive v16 fields relative to Production"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V13_ADDITIONS:
             results.pass_(
                 "CloudKit Development v13 delta is exactly six additive tax fields on Estimate and Invoice"
             )
             results.warn(
-                "CloudKit source v15 fields are not staged in Development; run the signed v15 bootstrap before promotion review"
+                "CloudKit source v16 fields are not staged in Development; run the signed v16 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V14_ADDITIONS:
             results.pass_(
                 "CloudKit Development v14 cumulative delta is exactly six tax fields plus Invoice.dueDate"
             )
             results.warn(
-                "CloudKit source v15 Item continuity and package fields are not staged in Development; run the signed v15 bootstrap before promotion review"
+                "CloudKit source v16 fields are not staged in Development; run the signed v16 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V15_ADDITIONS:
             results.pass_(
                 "CloudKit Development v15 cumulative delta is exactly the approved tax, due-date, inventory continuity, Item continuity, and service-package fields"
             )
+            results.warn(
+                "CloudKit source v16 document-linkage and Google Drive fields are not staged in Development; run the signed v16 bootstrap before promotion review"
+            )
+        elif actual_additions == EXPECTED_CLOUDKIT_V16_ADDITIONS:
+            results.pass_(
+                "CloudKit Development v16 cumulative delta is exactly the approved tax, due-date, inventory continuity, Item continuity, service-package, document-linkage, and Google Drive fields"
+            )
         else:
-            results.fail(f"Unexpected CloudKit v13/v14/v15 delta: {actual_additions}")
+            results.fail(f"Unexpected CloudKit v13/v14/v15/v16 delta: {actual_additions}")
         results.pass_(f"Development export SHA-256 is {sha256(development)}")
         results.pass_(f"Production export SHA-256 is {sha256(production)}")
     except (OSError, ValueError) as error:
@@ -1049,7 +1118,7 @@ def main() -> int:
             results,
         )
     else:
-        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15 Production delta was not rechecked")
+        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15/v16 Production delta was not rechecked")
 
     if args.online:
         check_online(backend_version, results)

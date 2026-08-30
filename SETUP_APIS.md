@@ -11,8 +11,8 @@ This app reads its API credentials from Xcode build settings, not from hardcoded
 ## New Computer Setup
 
 1. Duplicate `Config/Local.example.xcconfig` as `Config/Local.xcconfig`.
-2. Paste in the public QuickBooks client ID and Google OAuth values. Keep the QuickBooks client secret only in the backend environment as `GUNNAIRE_QBO_CLIENT_SECRET`.
-3. Use the provider-registered HTTPS redirect URIs documented in `OAUTH_CALLBACK_BRIDGE.md`, not the final `gunnaireops://` app callback.
+2. Paste in the public QuickBooks client ID and the Google iOS OAuth client/reversed-client values. Keep the QuickBooks client secret only in the backend environment as `GUNNAIRE_QBO_CLIENT_SECRET`; a native Google iOS client does not use a client secret.
+3. Use the QuickBooks HTTPS callback bridge and the native Google reversed-client callback documented in `OAUTH_CALLBACK_BRIDGE.md`.
 4. Open `GunnAire Ops.xcodeproj` in Xcode.
 5. Select the project, then the `GunnAire Ops` target.
 6. For both `Debug` and `Release`, confirm the Base Configuration points at `Config/Base.xcconfig`.
@@ -25,10 +25,52 @@ This app reads its API credentials from Xcode build settings, not from hardcoded
 - `QB_CALLBACK_SCHEME`
 - `QB_ENVIRONMENT`
 - `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REVERSED_CLIENT_ID`
 - `GOOGLE_REDIRECT_URI`
 - `GOOGLE_CALLBACK_SCHEME`
 - `GOOGLE_ALLOWED_HOSTED_DOMAIN`
+
+## Google Workspace APIs
+
+Use one Google Cloud project and its iOS OAuth client for the GunnAire bundle.
+In **Google Cloud Console → APIs & Services → Library**, enable:
+
+- Gmail API;
+- Google Calendar API; and
+- Google Drive API.
+
+In **Google Auth Platform → Data Access**, configure only the user-facing
+scopes used by this app:
+
+- `openid`, `profile`, and `email` for business identity;
+- `https://www.googleapis.com/auth/calendar` for GunnAire-managed schedule
+  events;
+- `https://www.googleapis.com/auth/gmail.modify` for customer email delivery
+  and retained provider status; and
+- `https://www.googleapis.com/auth/drive.file` for files the app creates or
+  the user explicitly opens with the app.
+
+Do not substitute broad Drive access or Google Workspace administrator scopes.
+Complete the Google consent-screen publishing/verification process required for
+the selected user type and scopes, list `gunnaire.com` as the approved business
+domain, and keep test users current until the app is published. Organization
+policy must allow the scopes for the GunnAire Workspace account.
+
+The iOS OAuth client must match the public values in `Config/Base.xcconfig`:
+the client ID ends in `.apps.googleusercontent.com`; the reversed client ID and
+callback scheme are `com.googleusercontent.apps.<client>`; the redirect URI is
+that same scheme followed by `:/oauth2redirect`; and the reversed scheme is in
+the app's URL Types. The release preflight checks all four values together.
+
+After `drive.file` is approved, every previously connected user must open
+**Settings → Google Workspace**, disconnect, and reconnect the matching
+`@gunnaire.com` account. Legacy tokens without the new scope intentionally fail
+closed. An administrator can then archive a queued internal service report,
+invoice/estimate support file, receipt, agreement, or related customer file
+from **Sync & Integrations → Google Drive Archive**. Uploads reserve a stable
+Drive file ID, use resumable transfer, reconcile an uncertain response by the
+app-owned ID/metadata, and retain the Drive link, actor, status, and retry detail
+in CloudKit. The app cannot browse unrelated Drive content.
 
 ## QuickBooks backend bridge
 

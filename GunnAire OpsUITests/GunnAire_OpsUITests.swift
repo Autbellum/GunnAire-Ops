@@ -3490,7 +3490,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         let syncIntegrations = app.staticTexts["Sync & Integrations"]
         XCTAssertTrue(syncIntegrations.waitForExistence(timeout: 5))
         syncIntegrations.tap()
-        XCTAssertTrue(app.navigationBars["Sync & Integrations"].waitForExistence(timeout: 3))
+        // On iPadOS 26 a nested NavigationStack inside the split view does not
+        // consistently expose its title as an XCUI navigation bar. A unique
+        // first-section label is the stable screen-ready boundary.
+        XCTAssertTrue(app.staticTexts["Sync Status"].waitForExistence(timeout: 8))
 
         let recoveryDisclosure = app.buttons["SyncRecoveryDisclosure"]
         XCTAssertTrue(recoveryDisclosure.waitForExistence(timeout: 3))
@@ -3523,6 +3526,44 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].waitForExistence(timeout: 3))
         XCTAssertTrue(retryCatalogPublication.exists)
         XCTAssertFalse(retryCatalogPublication.isEnabled)
+    }
+
+    @MainActor
+    func testGoogleDriveArchiveIsCompactRoleAwareAndFailsClosedUntilAuthorized() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedWarrantyClaim"
+        ]
+        app.launch()
+
+        let syncIntegrations = app.staticTexts["Sync & Integrations"]
+        XCTAssertTrue(syncIntegrations.waitForExistence(timeout: 5))
+        syncIntegrations.tap()
+        XCTAssertTrue(app.staticTexts["Sync Status"].waitForExistence(timeout: 8))
+
+        let driveSection = app.descendants(matching: .any)["GoogleDriveArchiveSection"]
+        for _ in 0..<8 where !driveSection.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(driveSection.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Google Drive Archive"].exists)
+        XCTAssertTrue(app.staticTexts["Connect Google"].exists)
+        let waitingCount = app.descendants(matching: .any)["GoogleDriveWaitingCount"]
+        for _ in 0..<3 where !waitingCount.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitingCount.waitForExistence(timeout: 3))
+        XCTAssertTrue(waitingCount.label.contains("1"), "Unexpected Drive waiting count: \(waitingCount.label)")
+
+        let archivePending = app.buttons["ArchivePendingGoogleDriveFiles"]
+        XCTAssertTrue(archivePending.exists)
+        XCTAssertFalse(archivePending.isEnabled)
+        XCTAssertTrue(app.buttons["GoogleDriveArchiveQueue"].exists)
+        XCTAssertFalse(app.buttons["ReconnectGoogleForDrive"].exists)
     }
 
     @MainActor
@@ -3587,7 +3628,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         workspacePicker.buttons["Collect"].tap()
 
         let actionGrid = app.descendants(matching: .any)["InvoiceCollectionActions-\(screenshotInvoiceID)"]
-        XCTAssertTrue(actionGrid.waitForExistence(timeout: 5))
+        XCTAssertTrue(actionGrid.waitForExistence(timeout: 10))
         let sendToFieldIPhone = actionGrid.buttons["Send to Field iPhone"]
         for _ in 0..<4 where !sendToFieldIPhone.exists || !sendToFieldIPhone.isHittable {
             app.swipeUp()
@@ -3602,6 +3643,20 @@ final class GunnAire_OpsUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(handoffStatus.waitForExistence(timeout: 5))
         XCTAssertTrue(handoffStatus.label.contains("Tap to Pay on iPhone"))
+
+        let stopFieldHandoff = app.buttons["Stop Field Handoff"]
+        XCTAssertTrue(stopFieldHandoff.waitForExistence(timeout: 3))
+
+        // The Handoff activity is app-scoped while status copy is view-local. Recreate
+        // the Payments screen and prove that cancellation never disappears with the
+        // transient message state.
+        app.staticTexts["Command Center"].tap()
+        XCTAssertTrue(app.navigationBars["Command Center"].waitForExistence(timeout: 3))
+        app.staticTexts["Payments"].tap()
+        XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Stop Field Handoff"].waitForExistence(timeout: 3))
+        app.buttons["Stop Field Handoff"].tap()
+        XCTAssertFalse(app.buttons["Stop Field Handoff"].exists)
     }
 
     @MainActor

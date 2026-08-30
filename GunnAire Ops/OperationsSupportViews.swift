@@ -745,8 +745,23 @@ struct TechnicianCalendarAccessAssessment {
     }
 }
 
+private enum GoogleDriveArchivePreparationError: Error, LocalizedError {
+    case contentUnavailable
+    case unresolvedCustomer
+
+    var errorDescription: String? {
+        switch self {
+        case .contentUnavailable:
+            "The file is not on this device or in shared company storage. Restore the company copy, then retry."
+        case .unresolvedCustomer:
+            "CloudKit is still resolving this file's customer link. Wait for sync to finish, then retry."
+        }
+    }
+}
+
 struct SyncIntegrationsView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openURL) private var openURL
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \ServiceCall.scheduledDate, order: .forward) private var serviceCalls: [ServiceCall]
@@ -770,6 +785,10 @@ struct SyncIntegrationsView: View {
     @State private var newTechnicianCalendarEmail = ""
     @State private var selectedTechnician: Technician?
     @State private var technicianMessage: String?
+    @State private var googleDriveArchiveMessage: String?
+    @State private var googleDriveArchiveTask: Task<Void, Never>?
+    @State private var showingGoogleDriveQueue = false
+    @State private var showingRecentGoogleDriveFiles = false
 
     private let calendar = Calendar.current
 
@@ -782,6 +801,44 @@ struct SyncIntegrationsView: View {
             email: AppIdentity.currentEmail,
             users: users
         )
+    }
+
+    private var canManageGoogleDriveArchive: Bool {
+        AppAccess.canArchiveBusinessDocumentsToGoogleDrive(
+            email: AppIdentity.currentEmail,
+            users: users
+        )
+    }
+
+    private var googleDriveAuthorizationState: GoogleDriveAuthorizationState {
+        googleAuth.googleDriveAuthorizationState
+    }
+
+    private var googleDriveQueue: [ServiceDocumentAttachment] {
+        documentAttachments
+            .filter { $0.customer != nil && $0.needsGoogleDriveArchive }
+            .sorted { lhs, rhs in
+                if lhs.googleDriveSyncState == .needsAttention && rhs.googleDriveSyncState != .needsAttention {
+                    return true
+                }
+                if rhs.googleDriveSyncState == .needsAttention && lhs.googleDriveSyncState != .needsAttention {
+                    return false
+                }
+                return lhs.createdAt > rhs.createdAt
+            }
+    }
+
+    private var recentGoogleDriveFiles: [ServiceDocumentAttachment] {
+        documentAttachments
+            .filter { $0.googleDriveSyncState == .archived && !$0.needsGoogleDriveArchive }
+            .sorted {
+                ($0.googleDriveLastSyncedAt ?? $0.createdAt) >
+                    ($1.googleDriveLastSyncedAt ?? $1.createdAt)
+            }
+    }
+
+    private var googleDriveNeedsAttentionCount: Int {
+        googleDriveQueue.filter { $0.googleDriveSyncState == .needsAttention }.count
     }
 
     private var suiteSnapshot: BusinessSuiteSnapshot {
@@ -817,6 +874,7 @@ struct SyncIntegrationsView: View {
             estimates: estimates,
             invoices: invoices,
             payments: payments,
+            contracts: recurringContracts,
             attachments: documentAttachments,
             communications: customerCommunications,
             timeEntries: timeEntries,
@@ -960,6 +1018,114 @@ struct SyncIntegrationsView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(suiteSeverityTint(action.severity))
                     }
+                    }
+                }
+
+                if canManageGoogleDriveArchive {
+                    Section {
+                        HStack(alignment: .top, spacing: 12) {
+                            Label {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(googleDriveAuthorizationState.title)
+                                        .font(.subheadline.weight(.semibold))
+                                    Text(googleDriveAuthorizationState.detail)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            } icon: {
+                                Image(systemName: googleDriveAuthorizationState == .ready
+                                    ? "externaldrive.badge.checkmark"
+                                    : "externaldrive.badge.exclamationmark")
+                                    .foregroundColor(googleDriveAuthorizationState == .ready ? .green : .orange)
+                            }
+                            Spacer()
+                        }
+
+                        HStack(spacing: 10) {
+                            suiteMetric("\(googleDriveQueue.count)", label: "waiting")
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("GoogleDriveWaitingCount")
+                            suiteMetric("\(googleDriveNeedsAttentionCount)", label: "need attention")
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("GoogleDriveAttentionCount")
+                            suiteMetric("\(recentGoogleDriveFiles.count)", label: "archived")
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("GoogleDriveArchivedCount")
+                        }
+
+                        if googleDriveQueue.isEmpty {
+                            Label("All known local business documents are archived.", systemImage: "checkmark.circle")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        } else {
+                            HStack(spacing: 10) {
+                                Button {
+                                    startGoogleDriveArchive(googleDriveQueue)
+                                } label: {
+                                    Label(
+                                        googleDriveArchiveTask == nil ? "Archive Pending Files" : "Archiving...",
+                                        systemImage: "arrow.up.doc"
+                                    )
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(Color.brandGold)
+                                .foregroundStyle(Color.primaryBlack)
+                                .disabled(googleDriveAuthorizationState != .ready || googleDriveArchiveTask != nil)
+                                .accessibilityIdentifier("ArchivePendingGoogleDriveFiles")
+
+                                if googleDriveArchiveTask != nil {
+                                    Button("Stop After Current File", role: .cancel) {
+                                        googleDriveArchiveTask?.cancel()
+                                        googleDriveArchiveMessage = "Google Drive archive stopped. Reserved file identifiers are retained for duplicate-safe retry."
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+
+                            DisclosureGroup(
+                                "Pending & recovery (\(googleDriveQueue.count))",
+                                isExpanded: $showingGoogleDriveQueue
+                            ) {
+                                ForEach(googleDriveQueue.prefix(12)) { attachment in
+                                    googleDriveArchiveRow(attachment)
+                                }
+                                if googleDriveQueue.count > 12 {
+                                    Text("\(googleDriveQueue.count - 12) additional files will be included by Archive Pending Files.")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .accessibilityIdentifier("GoogleDriveArchiveQueue")
+                        }
+
+                        if !recentGoogleDriveFiles.isEmpty {
+                            DisclosureGroup(
+                                "Recently archived",
+                                isExpanded: $showingRecentGoogleDriveFiles
+                            ) {
+                                ForEach(recentGoogleDriveFiles.prefix(8)) { attachment in
+                                    googleDriveArchiveRow(attachment)
+                                }
+                            }
+                        }
+
+                        if let googleDriveArchiveMessage {
+                            Text(googleDriveArchiveMessage)
+                                .font(.caption)
+                                .foregroundColor(
+                                    googleDriveArchiveMessage.localizedCaseInsensitiveContains("failed") ||
+                                        googleDriveArchiveMessage.localizedCaseInsensitiveContains("attention")
+                                        ? .orange
+                                        : .secondary
+                                )
+                        }
+
+                        Text("The archive stores app-created copies in the connected business Drive. CloudKit continues to sync document links and recovery state across approved devices; unrelated Drive files remain outside GunnAire access.")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    } header: {
+                        Text("Google Drive Archive")
+                            .accessibilityIdentifier("GoogleDriveArchiveSection")
                     }
                 }
 
@@ -1224,6 +1390,16 @@ struct SyncIntegrationsView: View {
                 destination: .mail
             )
         }
+        if syncAttentionSummary.dataRelationshipCount > 0 {
+            syncRecoveryRow(
+                title: "Unresolved data links",
+                detail: "CloudKit is still resolving related customer, job, invoice, or agreement records.",
+                count: syncAttentionSummary.dataRelationshipCount,
+                systemImage: "link.badge.plus",
+                identifier: "SyncRecoveryDataRelationships",
+                destination: .customers
+            )
+        }
     }
 
     private func syncRecoveryRow(
@@ -1262,6 +1438,215 @@ struct SyncIntegrationsView: View {
         .accessibilityIdentifier(identifier)
         .accessibilityLabel("\(title), \(count) item\(count == 1 ? "" : "s")")
         .accessibilityHint(detail)
+    }
+
+    @ViewBuilder
+    private func googleDriveArchiveRow(_ attachment: ServiceDocumentAttachment) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: googleDriveIcon(for: attachment.googleDriveSyncState))
+                .foregroundColor(googleDriveTint(for: attachment.googleDriveSyncState))
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(attachment.displayName)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(googleDriveRelationshipDetail(for: attachment))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                if let detail = attachment.googleDriveSyncDetail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundColor(attachment.googleDriveSyncState == .needsAttention ? .orange : .secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer()
+
+            if let url = attachment.googleDriveWebURL {
+                Button("Open") {
+                    openURL(url)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("Open \(attachment.displayName) in Google Drive")
+            } else {
+                Button(attachment.googleDriveFileID == nil ? "Archive" : "Retry") {
+                    startGoogleDriveArchive([attachment])
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(googleDriveAuthorizationState != .ready || googleDriveArchiveTask != nil)
+                .accessibilityLabel("Archive \(attachment.displayName) in Google Drive")
+            }
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func startGoogleDriveArchive(_ attachments: [ServiceDocumentAttachment]) {
+        guard canManageGoogleDriveArchive else {
+            googleDriveArchiveMessage = "Only an administrator can archive company documents in Google Drive."
+            return
+        }
+        guard googleDriveAuthorizationState == .ready else {
+            googleDriveArchiveMessage = googleDriveAuthorizationState.detail
+            return
+        }
+        guard googleDriveArchiveTask == nil else { return }
+
+        let pending = attachments.filter(\.needsGoogleDriveArchive)
+        guard !pending.isEmpty else {
+            googleDriveArchiveMessage = "The selected files are already archived."
+            return
+        }
+
+        googleDriveArchiveMessage = "Preparing \(pending.count) file\(pending.count == 1 ? "" : "s") for Google Drive..."
+        googleDriveArchiveTask = Task { @MainActor in
+            var archived = 0
+            var failed = 0
+
+            for attachment in pending {
+                guard !Task.isCancelled else { break }
+                if await archiveInGoogleDrive(attachment) {
+                    archived += 1
+                } else {
+                    failed += 1
+                }
+            }
+
+            let wasCancelled = Task.isCancelled
+            googleDriveArchiveTask = nil
+            if wasCancelled {
+                googleDriveArchiveMessage = "Archive stopped after \(archived) file\(archived == 1 ? "" : "s"). Reserved IDs remain available for duplicate-safe retry."
+            } else if failed == 0 {
+                googleDriveArchiveMessage = "Archived \(archived) file\(archived == 1 ? "" : "s") in Google Drive."
+            } else {
+                googleDriveArchiveMessage = "Archived \(archived); \(failed) file\(failed == 1 ? " needs" : "s need") attention. Open the recovery list for details."
+            }
+        }
+    }
+
+    private func archiveInGoogleDrive(_ attachment: ServiceDocumentAttachment) async -> Bool {
+        do {
+            guard canManageGoogleDriveArchive else {
+                throw GoogleDriveAPIError.authorizationChanged
+            }
+            guard attachment.customer != nil else {
+                throw GoogleDriveArchivePreparationError.unresolvedCustomer
+            }
+
+            let actorEmail = AppIdentity.currentEmail
+            let existingID = attachment.googleDriveFileID?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let fileID: String
+            if let existingID, !existingID.isEmpty {
+                fileID = existingID
+            } else {
+                fileID = try await GoogleDriveAPI.shared.generateFileID()
+                attachment.markGoogleDrivePreparing(fileID: fileID, actorEmail: actorEmail)
+                try modelContext.save()
+            }
+
+            let data = try await googleDriveData(for: attachment)
+            guard !Task.isCancelled else { throw CancellationError() }
+            attachment.markGoogleDriveUploading()
+            try modelContext.save()
+
+            let file = try await GoogleDriveAPI.shared.uploadFile(
+                fileID: fileID,
+                displayName: attachment.displayName,
+                mimeType: attachment.contentType,
+                attachmentID: attachment.id,
+                documentKind: attachment.kindRaw,
+                data: data
+            )
+            guard !Task.isCancelled else { throw CancellationError() }
+            attachment.markGoogleDriveArchived(file, actorEmail: actorEmail)
+            try modelContext.save()
+            return true
+        } catch {
+            let detail = Task.isCancelled
+                ? "Archive stopped before completion. Retry uses the same reserved Drive file."
+                : error.localizedDescription
+            let discardReservedID: Bool
+            switch error as? GoogleDriveAPIError {
+            case .invalidFileID?, .archiveIdentityMismatch?:
+                // A malformed or foreign ID cannot safely be retried. Clearing
+                // only that reservation lets the next explicit retry obtain a
+                // fresh app-owned ID without linking the unrelated Drive file.
+                discardReservedID = true
+            default:
+                discardReservedID = false
+            }
+            attachment.markGoogleDriveArchiveFailed(
+                detail,
+                discardReservedID: discardReservedID
+            )
+            try? modelContext.save()
+            return false
+        }
+    }
+
+    private func googleDriveData(for attachment: ServiceDocumentAttachment) async throws -> Data {
+        let localURL = attachment.localFileURL
+        if FileManager.default.fileExists(atPath: localURL.path) {
+            do {
+                return try await Task.detached(priority: .utility) {
+                    try Data(contentsOf: localURL, options: .mappedIfSafe)
+                }.value
+            } catch {
+                // Do not persist a device path or filesystem error into the
+                // CloudKit-visible recovery detail.
+                throw GoogleDriveArchivePreparationError.contentUnavailable
+            }
+        }
+
+        if let backendDocumentID = attachment.backendDocumentID?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !backendDocumentID.isEmpty,
+           GunnAireBackendService.isConfigured {
+            return try await GunnAireBackendService.downloadDocument(id: backendDocumentID)
+        }
+
+        throw GoogleDriveArchivePreparationError.contentUnavailable
+    }
+
+    private func googleDriveRelationshipDetail(for attachment: ServiceDocumentAttachment) -> String {
+        var details = [attachment.kind.label]
+        if let customerName = attachment.customer?.name.trimmingCharacters(in: .whitespacesAndNewlines),
+           !customerName.isEmpty {
+            details.append(customerName)
+        }
+        if let serviceCallID = attachment.serviceCallID {
+            details.append("Job \(serviceCallID.uuidString.prefix(8))")
+        }
+        if let invoiceID = attachment.invoiceID {
+            details.append("Invoice \(invoiceID.uuidString.prefix(8))")
+        } else if let estimateID = attachment.estimateID {
+            details.append("Estimate \(estimateID.uuidString.prefix(8))")
+        }
+        return details.joined(separator: " • ")
+    }
+
+    private func googleDriveIcon(for state: GoogleDriveDocumentSyncState) -> String {
+        switch state {
+        case .notArchived: "doc.badge.arrow.up"
+        case .preparing: "doc.badge.clock"
+        case .uploading: "arrow.up.doc"
+        case .archived: "checkmark.icloud"
+        case .needsAttention: "exclamationmark.icloud"
+        }
+    }
+
+    private func googleDriveTint(for state: GoogleDriveDocumentSyncState) -> Color {
+        switch state {
+        case .archived: .green
+        case .needsAttention: .orange
+        case .preparing, .uploading: Color.brandGold
+        case .notArchived: .secondary
+        }
     }
 
     private func suiteTint(for score: Int) -> Color {

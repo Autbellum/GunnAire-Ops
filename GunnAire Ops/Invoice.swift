@@ -398,7 +398,7 @@ final class Invoice {
             return 0
         }
         let netPaid = payments
-            .filter { $0.invoice.id == invoice.id }
+            .filter { $0.invoice?.id == invoice.id }
             .reduce(0) { partial, payment in
                 partial + (payment.isRefund ? -payment.amount : payment.amount)
             }
@@ -475,7 +475,10 @@ final class Invoice {
            !quickBooksID.isEmpty {
             return "qb:\(quickBooksID.lowercased())"
         }
-        let customerKey = invoice.customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let customer = invoice.customer else {
+            return "unresolved-customer:\(invoice.id.uuidString.lowercased())"
+        }
+        let customerKey = customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let day = Calendar.current.startOfDay(for: invoice.createdAt).timeIntervalSince1970
         return "local:\(customerKey):\(String(format: "%.2f", invoice.amount)):\(Int(day))"
     }

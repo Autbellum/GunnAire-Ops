@@ -151,16 +151,37 @@ struct Config {
         static let callbackScheme = Config.value("GOOGLE_CALLBACK_SCHEME", fallback: reversedClientID)
         static let allowedHostedDomain = Config.value("GOOGLE_ALLOWED_HOSTED_DOMAIN", fallback: "gunnaire.com")
         
+        static let calendarScope = "https://www.googleapis.com/auth/calendar"
+        static let gmailModifyScope = "https://www.googleapis.com/auth/gmail.modify"
+        /// Per-file access is the least-privilege Drive scope. It limits the app
+        /// to files it creates or that the user explicitly opens with the app.
+        static let driveFileScope = "https://www.googleapis.com/auth/drive.file"
+
         // Request only the scopes tied to user-facing features in this app.
-        // Avoid unrelated Cloud / Drive / admin scopes here unless the app implements
-        // those APIs, because they substantially raise Google verification burden.
+        // Do not replace drive.file with broad Drive or Workspace admin access.
         static let scopes = [
             "openid",
             "profile",
             "email",
-            "https://www.googleapis.com/auth/calendar",
-            "https://www.googleapis.com/auth/gmail.modify"
+            calendarScope,
+            gmailModifyScope,
+            driveFileScope
         ]
+
+        static var oauthScopeSignature: String {
+            scopeSignature(for: scopes)
+        }
+
+        static func scopeSignature(for scopes: [String]) -> String {
+            scopes
+                .flatMap { $0.split(whereSeparator: \Character.isWhitespace).map(String.init) }
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .map { $0.lowercased() }
+                .reduce(into: Set<String>()) { $0.insert($1) }
+                .sorted()
+                .joined(separator: "|")
+        }
         
         // OAuth 2.0 endpoints for Google
         static let authorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth" // Authorization endpoint URL

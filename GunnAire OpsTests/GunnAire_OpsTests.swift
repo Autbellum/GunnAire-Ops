@@ -684,8 +684,8 @@ struct GunnAire_OpsTests {
         #expect(configuration.cloudKitContainerIdentifier == GunnAireCloudKit.containerIdentifier)
         #expect(configuration.isStoredInMemoryOnly == false)
         #expect(configuration.url.lastPathComponent == GunnAireCloudKitSchemaBootstrap.storeFileName)
-        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 15)
-        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V15"))
+        #expect(GunnAireCloudKitSchemaBootstrap.schemaVersion == 16)
+        #expect(GunnAireCloudKitSchemaBootstrap.storeFileName.contains("V16"))
     }
     #endif
 
@@ -5990,6 +5990,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canManageCustomerRecords(email: standard.email, users: users) == false)
         #expect(AppAccess.canDeleteCustomerRecords(email: standard.email, users: users) == false)
         #expect(AppAccess.canSyncCustomerRecordsWithAccounting(email: standard.email, users: users) == false)
+        #expect(AppAccess.canArchiveBusinessDocumentsToGoogleDrive(email: standard.email, users: users) == false)
         #expect(AppAccess.canReviewTeamTime(email: standard.email, users: users) == false)
 
         #expect(AppAccess.canAccessSidebarItem(.customers, email: technician.email, users: users) == false)
@@ -6011,6 +6012,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canManageCustomerRecords(email: technician.email, users: users) == false)
         #expect(AppAccess.canDeleteCustomerRecords(email: technician.email, users: users) == false)
         #expect(AppAccess.canSyncCustomerRecordsWithAccounting(email: technician.email, users: users) == false)
+        #expect(AppAccess.canArchiveBusinessDocumentsToGoogleDrive(email: technician.email, users: users) == false)
         #expect(AppAccess.canReviewTeamTime(email: technician.email, users: users) == false)
 
         #expect(AppAccess.canManageDispatch(email: dispatcher.email, users: users) == true)
@@ -6022,6 +6024,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canManageCustomerRecords(email: dispatcher.email, users: users) == true)
         #expect(AppAccess.canDeleteCustomerRecords(email: dispatcher.email, users: users) == false)
         #expect(AppAccess.canSyncCustomerRecordsWithAccounting(email: dispatcher.email, users: users) == false)
+        #expect(AppAccess.canArchiveBusinessDocumentsToGoogleDrive(email: dispatcher.email, users: users) == false)
         #expect(AppAccess.canReviewTeamTime(email: dispatcher.email, users: users) == false)
 
         #expect(AppAccess.canAccessSidebarItem(.customers, email: accounting.email, users: users) == true)
@@ -6040,6 +6043,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canManageCustomerRecords(email: accounting.email, users: users) == false)
         #expect(AppAccess.canDeleteCustomerRecords(email: accounting.email, users: users) == false)
         #expect(AppAccess.canSyncCustomerRecordsWithAccounting(email: accounting.email, users: users) == false)
+        #expect(AppAccess.canArchiveBusinessDocumentsToGoogleDrive(email: accounting.email, users: users) == false)
         #expect(AppAccess.canReviewTeamTime(email: accounting.email, users: users) == true)
 
         #expect(AppAccess.canAccessSidebarItem(.customers, email: admin.email, users: users) == true)
@@ -6056,6 +6060,7 @@ struct GunnAire_OpsTests {
         #expect(AppAccess.canManageCustomerRecords(email: admin.email, users: users) == true)
         #expect(AppAccess.canDeleteCustomerRecords(email: admin.email, users: users) == true)
         #expect(AppAccess.canSyncCustomerRecordsWithAccounting(email: admin.email, users: users) == true)
+        #expect(AppAccess.canArchiveBusinessDocumentsToGoogleDrive(email: admin.email, users: users) == true)
         #expect(AppAccess.canReviewTeamTime(email: admin.email, users: users) == true)
     }
 
@@ -16677,6 +16682,103 @@ struct GunnAire_OpsTests {
         #expect(snapshot.actions.contains { $0.destination == .sync })
     }
 
+    @Test func businessSuiteKeepsCloudKitRelationshipGapsVisibleWithoutCrashing() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let customer = Customer(
+            name: "Relationship Recovery Customer",
+            phone: "555-0199",
+            email: "recovery@example.com",
+            address: "900 Recovery Way"
+        )
+        let orphanCall = ServiceCall(type: .service, scheduledDate: now, customer: customer)
+        orphanCall.customer = nil
+        let orphanEstimate = Estimate(customer: customer, amount: 450, status: "pending")
+        orphanEstimate.customer = nil
+        let orphanInvoice = Invoice(customer: customer, amount: 300, status: "unpaid", createdAt: now)
+        orphanInvoice.customer = nil
+        let orphanPaymentInvoice = Invoice(customer: customer, amount: 75, status: "partial", createdAt: now)
+        let orphanPayment = Payment(invoice: orphanPaymentInvoice, amount: 25, date: now, method: "cash")
+        orphanPayment.invoice = nil
+        let orphanContract = RecurringMaintenanceContract(
+            customer: customer,
+            schedulePattern: "every 6 months",
+            nextDate: now,
+            active: true
+        )
+        orphanContract.customer = nil
+        let orphanCommunication = CustomerCommunication(
+            customer: customer,
+            recipient: "recovery@example.com",
+            subject: "Relationship recovery",
+            deliveryStatus: "sent"
+        )
+        orphanCommunication.customer = nil
+        let orphanAttachment = ServiceDocumentAttachment(
+            customer: nil,
+            serviceCallID: orphanCall.id,
+            kind: .beforePhoto,
+            displayName: "Unresolved relationship photo",
+            localFilePath: "/tmp/unresolved-relationship.jpg",
+            contentType: "image/jpeg",
+            fileSizeBytes: 128
+        )
+
+        let customerSnapshot = CustomerIntelligence.snapshot(
+            for: customer,
+            serviceCalls: [orphanCall],
+            invoices: [orphanInvoice],
+            estimates: [orphanEstimate],
+            payments: [orphanPayment],
+            contracts: [orphanContract],
+            now: now
+        )
+        let syncSummary = BusinessSuiteIntelligence.syncAttentionSummary(
+            serviceCalls: [orphanCall],
+            estimates: [orphanEstimate],
+            invoices: [orphanInvoice],
+            payments: [orphanPayment],
+            contracts: [orphanContract],
+            attachments: [orphanAttachment],
+            communications: [orphanCommunication],
+            timeEntries: [],
+            items: [],
+            googleConnected: true,
+            quickBooksConnected: false,
+            sharedServerConfigured: false,
+            now: now
+        )
+        let suiteSnapshot = BusinessSuiteIntelligence.snapshot(
+            customers: [customer],
+            serviceCalls: [orphanCall],
+            technicians: [],
+            contracts: [orphanContract],
+            estimates: [orphanEstimate],
+            invoices: [orphanInvoice],
+            payments: [orphanPayment],
+            attachments: [orphanAttachment],
+            communications: [orphanCommunication],
+            timeEntries: [],
+            googleConnected: true,
+            quickBooksConnected: false,
+            sharedServerConfigured: false,
+            onsitePaymentsReady: false,
+            now: now
+        )
+        let integrations = try #require(suiteSnapshot.workstreams.first { $0.id == .integrations })
+
+        #expect(customerSnapshot.openInvoiceCount == 0)
+        #expect(customerSnapshot.openEstimateCount == 0)
+        #expect(customerSnapshot.activeContractCount == 0)
+        #expect(syncSummary.dataRelationshipCount == 7)
+        #expect(syncSummary.total >= 7)
+        #expect(integrations.detail.contains("7 unresolved data links"))
+        #expect(suiteSnapshot.openReceivablesTotal == 0)
+        #expect(suiteSnapshot.estimatePipelineTotal == 0)
+        #expect(!suiteSnapshot.actions.contains { $0.title == "Collect open balance" })
+        #expect(!suiteSnapshot.actions.contains { $0.title == "Build billing document" })
+        #expect(suiteSnapshot.actions.contains { $0.title == "Tighten sync coverage" })
+    }
+
     @Test func businessSuiteSyncRecoveryCountsEveryDurableAttentionQueue() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let customer = Customer(name: "Recovery Customer", address: "525 Recovery Lane")
@@ -17303,6 +17405,28 @@ struct GunnAire_OpsTests {
         )
         #expect(agreementDocument.maintenanceContractID == maintenanceAgreement.id)
         #expect(agreementDocument.serviceCallID == serviceCall.id)
+
+        let archivedDocument = try #require(
+            container.mainContext.fetch(FetchDescriptor<ServiceDocumentAttachment>()).first(where: {
+                $0.googleDriveFileID == "GUNNAIRE-SCHEMA-BOOTSTRAP-DRIVE"
+            })
+        )
+        #expect(archivedDocument.customerEquipmentID != nil)
+        #expect(archivedDocument.invoiceID == invoice.id)
+        #expect(archivedDocument.estimateID == estimate.id)
+        #expect(archivedDocument.maintenanceContractID == maintenanceAgreement.id)
+        #expect(archivedDocument.caption?.isEmpty == false)
+        #expect(archivedDocument.backendDocumentID?.isEmpty == false)
+        #expect(archivedDocument.sharedCompanySyncStatus?.isEmpty == false)
+        #expect(archivedDocument.sharedCompanySyncDetail?.isEmpty == false)
+        #expect(archivedDocument.quickBooksAttachableID?.isEmpty == false)
+        #expect(archivedDocument.quickBooksSyncError?.isEmpty == false)
+        #expect(archivedDocument.quickBooksAttachedEntityKeysRaw == "[]")
+        #expect(archivedDocument.googleDriveWebViewLink?.isEmpty == false)
+        #expect(archivedDocument.googleDriveSyncState == .archived)
+        #expect(archivedDocument.googleDriveSyncDetail?.isEmpty == false)
+        #expect(archivedDocument.googleDriveLastSyncedAt != nil)
+        #expect(archivedDocument.googleDriveArchivedByEmail == "schema-bootstrap@gunnaire.invalid")
     }
 
     @Test func approvedPricebookPublicationReconcilesUniqueQuickBooksMatchesAndRejectsAmbiguity() throws {
@@ -21409,6 +21533,225 @@ struct GunnAire_OpsTests {
             primaryBusinessEmail: "eric.gunn@gunnaire.com",
             googleEmail: nil
         ))
+    }
+
+    @Test func googleDriveUsesLeastPrivilegeScopeAndLegacyTokensFailClosed() throws {
+        #expect(Config.Google.scopes.contains(Config.Google.driveFileScope))
+        #expect(!Config.Google.scopes.contains("https://www.googleapis.com/auth/drive"))
+        #expect(!Config.Google.scopes.contains { $0.localizedCaseInsensitiveContains("admin.directory") })
+        #expect(Config.Google.oauthScopeSignature.split(separator: "|").count == Config.Google.scopes.count)
+
+        let legacy = try JSONDecoder().decode(
+            GoogleOAuthTokens.self,
+            from: Data(#"{"accessToken":"legacy","refreshToken":"refresh","idToken":null,"expiration":900000000}"#.utf8)
+        )
+        #expect(legacy.scopeSignature == nil)
+        #expect(!legacy.grants(Config.Google.driveFileScope))
+
+        let current = GoogleOAuthTokens(
+            accessToken: "current",
+            refreshToken: "refresh",
+            idToken: nil,
+            expiration: .distantFuture,
+            scopeSignature: Config.Google.scopeSignature(for: [
+                Config.Google.gmailModifyScope,
+                Config.Google.driveFileScope,
+                Config.Google.calendarScope,
+                Config.Google.driveFileScope
+            ])
+        )
+        #expect(current.grants(Config.Google.driveFileScope))
+        #expect(current.grants(Config.Google.gmailModifyScope.uppercased()))
+    }
+
+    @Test func googleDriveAuthorizationRequiresConnectionIdentityAndNewScope() {
+        #expect(GoogleDriveAuthorizationState.evaluate(
+            isAuthenticated: false,
+            businessIdentityMatches: false,
+            hasDriveFileScope: false
+        ) == .disconnected)
+        #expect(GoogleDriveAuthorizationState.evaluate(
+            isAuthenticated: true,
+            businessIdentityMatches: false,
+            hasDriveFileScope: true
+        ) == .businessAccountMismatch)
+        #expect(GoogleDriveAuthorizationState.evaluate(
+            isAuthenticated: true,
+            businessIdentityMatches: true,
+            hasDriveFileScope: false
+        ) == .reauthorizationRequired)
+        #expect(GoogleDriveAuthorizationState.evaluate(
+            isAuthenticated: true,
+            businessIdentityMatches: true,
+            hasDriveFileScope: true
+        ) == .ready)
+        #expect(GoogleDriveAuthorizationState.ready.detail.localizedCaseInsensitiveContains("unrelated Drive files") ||
+            GoogleDriveAuthorizationState.ready.detail.localizedCaseInsensitiveContains("unrelated Drive content"))
+    }
+
+    @Test func googleDriveRequestsReserveOneIDAndUseResumableDuplicateSafeMetadata() throws {
+        let generate = try GoogleDriveRequestFactory.generateFileID(accessToken: "test-token")
+        let generateURL = try #require(generate.url)
+        let generateComponents = try #require(URLComponents(url: generateURL, resolvingAgainstBaseURL: false))
+        #expect(generate.httpMethod == "GET")
+        #expect(generateComponents.path == "/drive/v3/files/generateIds")
+        #expect(generateComponents.queryItems?.contains(URLQueryItem(name: "count", value: "1")) == true)
+        #expect(generateComponents.queryItems?.contains(URLQueryItem(name: "space", value: "drive")) == true)
+        #expect(generate.value(forHTTPHeaderField: "Authorization") == "Bearer test-token")
+
+        let attachmentID = UUID(uuidString: "A1000000-0000-4000-8000-000000000099")!
+        let metadata = GoogleDriveUploadMetadata.document(
+            fileID: "reserved-drive-id",
+            displayName: "Job/Closeout\nReport.pdf",
+            mimeType: "application/pdf\r\nX-Unsafe: yes",
+            attachmentID: attachmentID,
+            documentKind: ServiceDocumentAttachmentKind.serviceReport.rawValue
+        )
+        #expect(metadata.id == "reserved-drive-id")
+        #expect(metadata.name == "Job-Closeout-Report.pdf")
+        #expect(metadata.mimeType == "application/octet-stream")
+        #expect(metadata.appProperties["gunnaireAttachmentID"] == attachmentID.uuidString.lowercased())
+        #expect(metadata.appProperties["gunnaireDocumentKind"] == ServiceDocumentAttachmentKind.serviceReport.rawValue)
+        #expect(metadata.appProperties.values.allSatisfy { !$0.localizedCaseInsensitiveContains("customer") })
+        #expect(GoogleDriveRequestFactory.sanitizedMIMEType("application/vnd.gunnaire+pdf") == "application/vnd.gunnaire+pdf")
+        #expect(GoogleDriveRequestFactory.sanitizedMIMEType("application/pdf; charset=utf-8") == "application/octet-stream")
+
+        let initiation = try GoogleDriveRequestFactory.initiateResumableUpload(
+            metadata: metadata,
+            contentLength: 4096,
+            accessToken: "test-token"
+        )
+        let initiationURL = try #require(initiation.url)
+        let initiationComponents = try #require(URLComponents(url: initiationURL, resolvingAgainstBaseURL: false))
+        #expect(initiation.httpMethod == "POST")
+        #expect(initiationComponents.path == "/upload/drive/v3/files")
+        #expect(initiationComponents.queryItems?.contains(URLQueryItem(name: "uploadType", value: "resumable")) == true)
+        #expect(initiation.value(forHTTPHeaderField: "X-Upload-Content-Length") == "4096")
+        let encodedMetadata = try #require(initiation.httpBody)
+        #expect(try JSONDecoder().decode(GoogleDriveUploadMetadata.self, from: encodedMetadata) == metadata)
+
+        let sessionURL = URL(string: "https://www.googleapis.com/upload/drive/v3/files?upload_id=opaque")!
+        let payload = Data(repeating: 7, count: 16)
+        let upload = try GoogleDriveRequestFactory.uploadContent(
+            sessionURL: sessionURL,
+            data: Data(payload.dropFirst(4)),
+            totalLength: payload.count,
+            offset: 4,
+            mimeType: "application/pdf",
+            accessToken: "test-token"
+        )
+        #expect(upload.httpMethod == "PUT")
+        #expect(upload.value(forHTTPHeaderField: "Content-Range") == "bytes 4-15/16")
+        #expect(upload.httpBody?.count == 12)
+        #expect(GoogleDriveRequestFactory.nextUploadOffset(from: "bytes=0-7") == 8)
+        #expect(GoogleDriveRequestFactory.nextUploadOffset(from: nil) == 0)
+
+        #expect(throws: GoogleDriveAPIError.invalidFileID) {
+            try GoogleDriveRequestFactory.fetchFile(
+                fileID: "../../another-file",
+                accessToken: "test-token"
+            )
+        }
+
+        #expect(throws: GoogleDriveAPIError.invalidUploadSession) {
+            try GoogleDriveRequestFactory.queryUploadStatus(
+                sessionURL: URL(string: "https://evil.example/upload")!,
+                totalLength: 16,
+                accessToken: "test-token"
+            )
+        }
+
+        let matchingFile = GoogleDriveFile(
+            id: metadata.id,
+            name: metadata.name,
+            mimeType: metadata.mimeType,
+            webViewLink: "https://drive.google.com/file/d/reserved-drive-id/view",
+            trashed: false,
+            appProperties: metadata.appProperties
+        )
+        #expect(matchingFile.matchesArchiveIdentity(metadata))
+        #expect(GoogleDriveRequestFactory.isTrustedWebViewLink(matchingFile.webViewLink))
+
+        let mismatchedFile = GoogleDriveFile(
+            id: metadata.id,
+            name: metadata.name,
+            mimeType: metadata.mimeType,
+            webViewLink: "https://drive.google.com/file/d/reserved-drive-id/view",
+            trashed: false,
+            appProperties: ["gunnaireAttachmentID": UUID().uuidString.lowercased()]
+        )
+        #expect(!mismatchedFile.matchesArchiveIdentity(metadata))
+        #expect(!GoogleDriveRequestFactory.isTrustedWebViewLink("https://drive.google.com.evil.example/file"))
+    }
+
+    @Test func googleDriveAttachmentStatePersistsReservedIDAndRecoveryEvidence() throws {
+        let container = try ModelContainer(
+            for: GunnAireModelSchema.schema,
+            configurations: [ModelConfiguration(schema: GunnAireModelSchema.schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let attachment = ServiceDocumentAttachment(
+            customer: Customer(name: "Drive Archive Customer"),
+            serviceCallID: UUID(),
+            invoiceID: UUID(),
+            kind: .invoiceSupport,
+            displayName: "invoice.pdf",
+            localFilePath: "/tmp/invoice.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 512
+        )
+        context.insert(attachment)
+
+        attachment.markGoogleDrivePreparing(
+            fileID: "reserved-file-id",
+            actorEmail: " Admin@GunnAire.com "
+        )
+        attachment.markGoogleDriveUploading()
+        attachment.markGoogleDriveArchiveFailed("offline")
+        try context.save()
+
+        var saved = try #require(context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).first)
+        #expect(saved.googleDriveFileID == "reserved-file-id")
+        #expect(saved.googleDriveSyncState == .needsAttention)
+        #expect(saved.needsGoogleDriveArchive)
+        #expect(saved.googleDriveSyncDetail?.contains("offline") == true)
+        #expect(saved.googleDriveArchivedByEmail == "admin@gunnaire.com")
+
+        let archived = GoogleDriveFile(
+            id: "reserved-file-id",
+            name: "invoice.pdf",
+            mimeType: "application/pdf",
+            webViewLink: "https://drive.google.com/file/d/reserved-file-id/view",
+            trashed: false,
+            appProperties: ["gunnaireAttachmentID": attachment.id.uuidString.lowercased()]
+        )
+        saved.markGoogleDriveArchived(archived, actorEmail: "admin@gunnaire.com")
+        try context.save()
+        saved = try #require(context.fetch(FetchDescriptor<ServiceDocumentAttachment>()).first)
+        #expect(saved.googleDriveSyncState == .archived)
+        #expect(!saved.needsGoogleDriveArchive)
+        #expect(saved.googleDriveWebURL?.host == "drive.google.com")
+        #expect(saved.googleDriveLastSyncedAt != nil)
+
+        let unsafe = GoogleDriveFile(
+            id: "reserved-file-id",
+            name: "invoice.pdf",
+            mimeType: "application/pdf",
+            webViewLink: "https://drive.google.com.evil.example/file",
+            trashed: false,
+            appProperties: nil
+        )
+        saved.markGoogleDriveArchived(unsafe, actorEmail: "admin@gunnaire.com")
+        #expect(saved.googleDriveWebURL == nil)
+        #expect(saved.needsGoogleDriveArchive)
+
+        saved.markGoogleDriveArchiveFailed(
+            "foreign reservation\nrequires a new ID",
+            discardReservedID: true
+        )
+        #expect(saved.googleDriveFileID == nil)
+        #expect(saved.googleDriveWebViewLink == nil)
+        #expect(saved.googleDriveSyncDetail?.contains("\n") == false)
     }
 
     @Test func customerFinancingContractDecodesAProviderHostedReadOnlyHandoff() throws {

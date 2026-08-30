@@ -86,9 +86,9 @@ enum CustomerIntelligence {
         let search = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !search.isEmpty else { return true }
 
-        let customerCalls = serviceCalls.filter { $0.customer.id == customer.id }
+        let customerCalls = serviceCalls.filter { $0.customer?.id == customer.id }
         let customerEquipment = equipmentProfiles.filter { $0.customer?.id == customer.id }
-        let customerContracts = contracts.filter { $0.customer.id == customer.id && $0.active }
+        let customerContracts = contracts.filter { $0.customer?.id == customer.id && $0.active }
 
         var values: [String?] = [
             customer.name,
@@ -198,17 +198,20 @@ enum CustomerIntelligence {
         calendar: Calendar = .current
     ) -> CustomerIntelligenceSnapshot {
         let customerCalls = serviceCalls
-            .filter { $0.customer.id == customer.id }
+            .filter { $0.customer?.id == customer.id }
             .sorted { $0.scheduledDate > $1.scheduledDate }
         let customerInvoices = invoices
-            .filter { $0.customer.id == customer.id }
+            .filter { $0.customer?.id == customer.id }
             .sorted { $0.createdAt > $1.createdAt }
         let invoiceIDs = Set(customerInvoices.map(\.id))
-        let customerPayments = payments.filter { invoiceIDs.contains($0.invoice.id) }
-        let customerEstimates = estimates.filter { $0.customer.id == customer.id }
+        let customerPayments = payments.filter {
+            guard let invoiceID = $0.invoice?.id else { return false }
+            return invoiceIDs.contains(invoiceID)
+        }
+        let customerEstimates = estimates.filter { $0.customer?.id == customer.id }
         let customerContracts = contracts
-            .filter { $0.customer.id == customer.id }
-            .ifEmpty(customer.recurringContracts)
+            .filter { $0.customer?.id == customer.id }
+            .ifEmpty(customer.recurringContracts.filter { $0.customer?.id == customer.id })
 
         let openInvoiceBalances = customerInvoices.compactMap { invoice -> (invoice: Invoice, balance: Double)? in
             let balance = outstandingBalance(for: invoice, payments: customerPayments)

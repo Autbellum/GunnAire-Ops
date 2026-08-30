@@ -377,7 +377,7 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
 enum GunnAireCloudKitSchemaBootstrap {
     static let initializeArgument = "-initializeCloudKitSchema"
     static let cleanupArgument = "-cleanupCloudKitSchemaBootstrap"
-    static let schemaVersion = 15
+    static let schemaVersion = 16
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
@@ -691,11 +691,28 @@ enum GunnAireCloudKitSchemaBootstrap {
             ServiceDocumentAttachment(
                 customer: customer,
                 serviceCallID: serviceCall.id,
+                customerEquipmentID: UUID(),
+                invoiceID: invoice.id,
+                estimateID: estimate.id,
+                maintenanceContractID: maintenanceAgreement.id,
                 kind: .other,
                 displayName: marker,
+                caption: marker,
                 localFilePath: "/tmp/gunnaire-cloudkit-schema-bootstrap",
                 contentType: "application/octet-stream",
-                fileSizeBytes: 0
+                fileSizeBytes: 0,
+                backendDocumentID: marker,
+                sharedCompanySyncStatus: marker,
+                sharedCompanySyncDetail: marker,
+                quickBooksAttachableID: marker,
+                quickBooksSyncError: marker,
+                quickBooksAttachedEntityKeysRaw: "[]",
+                googleDriveFileID: "GUNNAIRE-SCHEMA-BOOTSTRAP-DRIVE",
+                googleDriveWebViewLink: "https://drive.google.com/file/d/GUNNAIRE-SCHEMA-BOOTSTRAP-DRIVE/view",
+                googleDriveSyncStatus: GoogleDriveDocumentSyncState.archived.rawValue,
+                googleDriveSyncDetail: marker,
+                googleDriveLastSyncedAt: now,
+                googleDriveArchivedByEmail: bootstrapEmail
             ),
             maintenanceAgreementDocument,
             CustomerEquipment(customer: customer, serviceLocationID: serviceLocation.id, name: marker),

@@ -1506,6 +1506,7 @@ final class ServiceCall {
     func completeLinkedMaintenanceAgreementIfNeeded() -> Bool {
         guard type == .maintenance,
               let maintenanceAgreementID,
+              let customer,
               let agreement = customer.recurringContracts.first(where: { $0.id == maintenanceAgreementID }) else {
             return false
         }
@@ -1636,7 +1637,7 @@ final class ServiceCall {
 
         let followUpCall = ServiceCall(
             googleEventManagedByApp: true,
-            siteAddress: siteAddress ?? customer.address,
+            siteAddress: siteAddress ?? customer?.address,
             serviceLocationID: serviceLocationID,
             equipmentName: equipmentName,
             equipmentManufacturer: equipmentManufacturer,
@@ -1768,10 +1769,10 @@ final class ServiceCall {
         guard !normalizedQuery.isEmpty else { return true }
         let concernRows = openServiceConcernRows.map { "\($0.label) \($0.value)" }
         let values = [
-            customer.name,
-            customer.phone,
-            customer.email,
-            customer.address,
+            customer?.name,
+            customer?.phone,
+            customer?.email,
+            customer?.address,
             eventTitle,
             siteAddress,
             type.displayName,
