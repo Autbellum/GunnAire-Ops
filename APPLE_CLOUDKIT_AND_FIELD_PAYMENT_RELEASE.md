@@ -4,7 +4,7 @@
 
 The app uses the private CloudKit database container
 `iCloud.com.gunnaire.businesssuite` for its SwiftData store. Apple configuration
-and schema status as of 2026-08-30.
+and schema status as of 2026-08-31.
 
 ### Current capability and schema status
 
@@ -33,7 +33,23 @@ and schema status as of 2026-08-30.
   gated on a participating certified payment service provider, Account Holder
   entitlement approval, provider integration, and signed physical-iPhone
   acceptance.
-- Exact build `1.0 (2026083021)` is retained as a development-signed iOS
+- Exact current build `1.0 (2026083101)` is retained as a development-signed iOS
+  Release archive and universal arm64/x86_64 Mac Catalyst Release app. Strict
+  signature verification confirms Apple login, CloudKit, Push Notifications,
+  and Associated Domains in both products. The iOS app/dSYM UUID matches at
+  `C62573CC-15F9-3413-A341-8452EF322FBA`; Mac app/dSYM UUIDs match at
+  `641B4DEA-FB67-3D3C-831F-8CF5B0A3F309` and
+  `B8BC1EC8-08FF-3F56-92F5-DD6289C6E767`. Exact retained-artifact and CloudKit
+  export preflight reports **61 checks, 4 expected warnings, and 0 failures**;
+  one warning records that online probes were intentionally omitted. The exact
+  read-only online probe reports **64/3/0**: production serves reviewed backend
+  `2026.08.30.16`, Apple notification routing rejects a malformed envelope with
+  HTTP 400, and the QBO callback reaches the app scheme. Complete iPad and Mac
+  logic suites pass **672/672** each, and the complete iPad UI target passes
+  **92/92 logical workflows** with **95/95 device executions**. The retained
+  consolidated evidence is
+  `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/release-verification-2026083101.json`.
+- Prior exact build `1.0 (2026083021)` is retained as a development-signed iOS
   Release archive and universal arm64/x86_64 Mac Catalyst Release app. Strict
   signature verification confirms Apple login, CloudKit, Push Notifications,
   and Associated Domains in both products. The iOS app/dSYM UUID matches at

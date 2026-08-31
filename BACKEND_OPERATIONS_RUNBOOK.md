@@ -1,6 +1,6 @@
 # GunnAire backend operations runbook
 
-Last verified: 2026-08-30
+Last verified: 2026-08-31
 
 This runbook covers the shared GunnAire service at
 `https://gunnaire-api.onrender.com`. It does not authorize accounting changes,
@@ -23,9 +23,9 @@ credential rotation, production restores, or customer communications.
 
    ```sh
    python3 Tools/release_preflight.py \
-     --archive "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083021 Current Source).xcarchive" \
-     --mac-app "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083021 Current Source Mac Catalyst).app" \
-     --mac-result "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/GunnAire Ops 1.0 (2026083021 Mac Universal Release Build).xcresult" \
+     --archive "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083101 Current Source).xcarchive" \
+     --mac-app "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083101 Current Source Mac Catalyst).app" \
+     --mac-result "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083101 Current Source Mac Catalyst).xcresult" \
      --cloudkit-development-export /Users/gunnaire/Downloads/cloudkit-development-11.ckdb \
      --cloudkit-production-export /Users/gunnaire/Downloads/cloudkit-production-7.ckdb
    ```
@@ -36,7 +36,7 @@ credential rotation, production restores, or customer communications.
    login scope, the exact universal Mac Catalyst Release app/result, privacy
    manifests, hardened runtime, release configuration, QBO/Google OAuth
    identifiers, app/dSYM UUIDs, binary hygiene, and the exact additive CloudKit
-   delta including record system fields and security grants. Build 3021's exact
+   delta including record system fields and security grants. Build 3101's exact
    local run passes 61 checks with four expected warnings and zero failures.
    Development-signing warnings are expected until the Apple
    Distribution private key is installed. Use
