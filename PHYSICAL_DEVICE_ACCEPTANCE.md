@@ -4,6 +4,25 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
+## Prepared build-2026083101 package
+
+The privacy-minimal readiness report and incomplete acceptance template are
+already retained at:
+
+- `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/physical-device-readiness-2026083101.json`
+  (`SHA-256 5b722fef3cc2233180328bf95dbb97c0480fc8d9032e8179aec2e02111f95bc0`)
+- `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/physical-device-acceptance-2026083101.json`
+  (`SHA-256 42960b19f177d632bb2c141c64479e05e82f5bf942cf1dd8ad82236cb6efe199`)
+
+The readiness report records only aggregate signing counts and a hashed device
+reference. Its current blockers are the missing iOS and Mac distribution
+private keys, an unavailable paired iPad, and no paired iPhone. The template
+contains all 19 required scenarios with `not_run` status and no evidence. The
+validator correctly reports 47 incomplete requirements until a real operator,
+timestamps, device models, OS versions, passing statuses, and privacy-safe
+evidence references are supplied. Do not recreate or overwrite these files;
+complete the retained template during the signed-device session.
+
 ## 1. Inspect readiness
 
 Run the privacy-minimal, read-only inspection from the repository root:
