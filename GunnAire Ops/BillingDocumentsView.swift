@@ -10382,6 +10382,7 @@ private struct DocumentationItemCreatorView: View {
     @State private var purchaseDescription = ""
     @State private var isTaxable = false
     @State private var creationMessage = ""
+    @FocusState private var isEditing: Bool
 
     private var vendorDropdownOptions: [SearchableDropdownOption] {
         CatalogVendorSelection.options(for: vendors)
@@ -10426,8 +10427,10 @@ private struct DocumentationItemCreatorView: View {
             Form {
                 Section("Sales") {
                     TextField("Item name", text: $name)
+                        .focused($isEditing)
                     TextField("SKU", text: $sku)
                         .textInputAutocapitalization(.characters)
+                        .focused($isEditing)
                     Picker("Item Type", selection: $itemType) {
                         ForEach(CatalogItemType.allCases) { type in
                             Text(type.rawValue).tag(type)
@@ -10436,9 +10439,11 @@ private struct DocumentationItemCreatorView: View {
                     .pickerStyle(.segmented)
                     TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(2...3)
+                        .focused($isEditing)
                     Toggle("Taxable", isOn: $isTaxable)
                     TextField("Sales price (optional)", text: $price)
                         .keyboardType(.decimalPad)
+                        .focused($isEditing)
                     if requiresPricebookReview {
                         Label(
                             "This job can use the item now. An administrator must review it before it becomes a reusable QuickBooks catalog item.",
@@ -10452,7 +10457,9 @@ private struct DocumentationItemCreatorView: View {
                 Section("Purchasing") {
                     TextField("Purchase price", text: $cost)
                         .keyboardType(.decimalPad)
+                        .focused($isEditing)
                     TextField("Typical purchase source", text: $preferredVendor)
+                        .focused($isEditing)
                     if !vendors.isEmpty {
                         SearchableDropdownPicker(
                             title: "Saved Vendor",
@@ -10463,11 +10470,14 @@ private struct DocumentationItemCreatorView: View {
                         )
                     }
                     TextField("Vendor part #", text: $vendorPartNumber)
+                        .focused($isEditing)
                     TextField("Purchase URL", text: $purchaseURL)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
+                        .focused($isEditing)
                     TextField("Purchase notes", text: $purchaseDescription, axis: .vertical)
                         .lineLimit(2...3)
+                        .focused($isEditing)
                 }
 
                 if !creationMessage.isEmpty {
@@ -10490,6 +10500,11 @@ private struct DocumentationItemCreatorView: View {
                         CatalogItemAmountParser.parseRequiredOrZero(price) == nil ||
                         !CatalogItemAmountParser.isValidOptionalAmount(cost)
                     )
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { isEditing = false }
+                        .accessibilityLabel("Done Editing Item")
                 }
             }
         }

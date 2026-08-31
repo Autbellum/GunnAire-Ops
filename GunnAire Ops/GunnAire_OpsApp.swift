@@ -222,12 +222,25 @@ private enum GunnAireUITestFixtures {
             context.insert(AppUser(id: accountingUserID, email: GunnAireUITestIdentity.accountingEmail, role: .accounting))
         }
 
+        let customers = try context.fetch(FetchDescriptor<Customer>())
+        let existingFixtureCustomer = customers.first { $0.id == customerID }
+
+        // Every UI-test launch shares the simulator's local SwiftData store. A
+        // prior workflow can create additional invoices, estimates, calls, or
+        // communications for the fixture customer. Deleting and recreating the
+        // customer while any of those records survive leaves invalid required
+        // relationships that trap as soon as a later view reads them. Remove
+        // the full dependent graph first, then reuse the stable customer object
+        // for seeded runs below.
         let payments = try context.fetch(FetchDescriptor<Payment>())
-        for payment in payments where payment.invoice?.id == invoiceID {
+        for payment in payments where
+            payment.invoice?.id == invoiceID ||
+            payment.invoice?.customer?.id == customerID {
             context.delete(payment)
         }
         let invoices = try context.fetch(FetchDescriptor<Invoice>())
         for invoice in invoices where
+            invoice.customer?.id == customerID ||
             invoice.id == invoiceID ||
             invoice.serviceCallID == projectServiceCallID ||
             invoice.projectMilestoneID == projectDepositMilestoneID ||
@@ -239,6 +252,7 @@ private enum GunnAireUITestFixtures {
         }
         let estimates = try context.fetch(FetchDescriptor<Estimate>())
         for estimate in estimates where
+            estimate.customer?.id == customerID ||
             estimate.id == estimateID ||
             estimate.id == projectEstimateID ||
             (isPricebookReviewFixture && CatalogLineItemSnapshot.decoded(from: estimate.catalogSnapshotJSON).contains { $0.catalogItemID == catalogItemID }) {
@@ -246,6 +260,7 @@ private enum GunnAireUITestFixtures {
         }
         let calls = try context.fetch(FetchDescriptor<ServiceCall>())
         let fixtureCallIDs = Set(calls.compactMap { call in
+            call.customer?.id == customerID ||
             call.id == serviceCallID ||
             call.id == correctiveSourceCallID ||
             call.id == correctiveFollowUpCallID ||
@@ -262,6 +277,7 @@ private enum GunnAireUITestFixtures {
         let timeEntries = try context.fetch(FetchDescriptor<TimeEntry>())
         for entry in timeEntries where entry.id == submittedTimeEntryID ||
             entry.id == openJobTimeEntryID ||
+            entry.serviceCall?.customer?.id == customerID ||
             (isTimeClassificationFixture && AppAccess.normalizedEmail(entry.userEmail) == GunnAireUITestIdentity.technicianEmail) {
             context.delete(entry)
         }
@@ -278,21 +294,28 @@ private enum GunnAireUITestFixtures {
             context.delete(milestone)
         }
         let maintenanceAgreements = try context.fetch(FetchDescriptor<RecurringMaintenanceContract>())
-        for agreement in maintenanceAgreements where agreement.id == maintenanceAgreementID {
+        for agreement in maintenanceAgreements where
+            agreement.id == maintenanceAgreementID ||
+            agreement.customer?.id == customerID {
             context.delete(agreement)
         }
         let equipmentProfiles = try context.fetch(FetchDescriptor<CustomerEquipment>())
-        for equipment in equipmentProfiles where equipment.id == equipmentID {
+        for equipment in equipmentProfiles where
+            equipment.id == equipmentID ||
+            equipment.customer?.id == customerID ||
+            equipment.serialNumber == "LEN-UI-9000" {
             context.delete(equipment)
         }
         let documentAttachments = try context.fetch(FetchDescriptor<ServiceDocumentAttachment>())
         for attachment in documentAttachments where attachment.id == warrantyEvidenceID ||
+            attachment.customer?.id == customerID ||
             attachment.fleetVehicleID == fleetVehicleID ||
             attachment.expenseClaimID == fieldExpenseClaimID {
             context.delete(attachment)
         }
         let fieldExpenseClaims = try context.fetch(FetchDescriptor<FieldExpenseClaim>())
         for claim in fieldExpenseClaims where claim.id == fieldExpenseClaimID ||
+            claim.customerID == customerID ||
             (arguments.contains("-uiTestSeedCollectibleJob") && claim.serviceCallID == serviceCallID) {
             context.delete(claim)
         }
@@ -305,15 +328,21 @@ private enum GunnAireUITestFixtures {
             context.delete(vehicle)
         }
         let serviceLocations = try context.fetch(FetchDescriptor<CustomerServiceLocation>())
-        for location in serviceLocations where location.id == serviceLocationID {
+        for location in serviceLocations where
+            location.id == serviceLocationID ||
+            location.customer?.id == customerID {
             context.delete(location)
         }
         let communications = try context.fetch(FetchDescriptor<CustomerCommunication>())
-        for communication in communications where communication.id == communicationID {
+        for communication in communications where
+            communication.id == communicationID ||
+            communication.customer?.id == customerID {
             context.delete(communication)
         }
         let operationalAlerts = try context.fetch(FetchDescriptor<CustomerOperationalAlert>())
-        for alert in operationalAlerts where alert.id == operationalAlertID {
+        for alert in operationalAlerts where
+            alert.id == operationalAlertID ||
+            alert.customerID == customerID {
             context.delete(alert)
         }
         let businessTaskEvents = try context.fetch(FetchDescriptor<BusinessTaskEvent>())
@@ -321,7 +350,7 @@ private enum GunnAireUITestFixtures {
             context.delete(event)
         }
         let businessTasks = try context.fetch(FetchDescriptor<BusinessTask>())
-        for task in businessTasks where task.id == businessTaskID {
+        for task in businessTasks where task.id == businessTaskID || task.customerID == customerID {
             context.delete(task)
         }
         let availabilityEvents = try context.fetch(FetchDescriptor<TechnicianAvailabilityEvent>())
@@ -337,12 +366,12 @@ private enum GunnAireUITestFixtures {
             context.delete(block)
         }
         let workShifts = try context.fetch(FetchDescriptor<TechnicianWorkShift>())
-        for shift in workShifts where shift.technicianID == technicianID || shift.technicianID == timeOffTechnicianID {
+        // Work-shift IDs and, in older fixture builds, technician IDs were
+        // generated dynamically. This persistent store is used only after the
+        // explicit Debug UI-test switch above, so clear every shift before a
+        // seeded launch rather than allowing an old random ID to alter capacity.
+        for shift in workShifts {
             context.delete(shift)
-        }
-        let customers = try context.fetch(FetchDescriptor<Customer>())
-        for customer in customers where customer.id == customerID {
-            context.delete(customer)
         }
         let technicians = try context.fetch(FetchDescriptor<Technician>())
         for technician in technicians where
@@ -425,7 +454,7 @@ private enum GunnAireUITestFixtures {
         }
         try context.save()
 
-        guard arguments.contains("-uiTestSeedCollectibleJob") ||
+        let shouldSeedOperationalFixture = arguments.contains("-uiTestSeedCollectibleJob") ||
             isPendingTaxFixture ||
             isScreenshotFixture ||
             isSyncRecoveryFixture ||
@@ -440,27 +469,51 @@ private enum GunnAireUITestFixtures {
             isFieldExpenseFixture ||
             isOperationalAlertFixture ||
             isTimeOffRequestFixture ||
-            isTechnicianRouteFixture else { return }
+            isTechnicianRouteFixture
+        guard shouldSeedOperationalFixture else {
+            if let existingFixtureCustomer {
+                context.delete(existingFixtureCustomer)
+                try context.save()
+            }
+            return
+        }
 
-        let customer = Customer(
-            id: customerID,
-            quickBooksID: "QBO-UI-CUSTOMER",
-            name: isScreenshotFixture ? "Blue Ridge Dental" : "UI Test Collectible Customer",
-            phone: isScreenshotFixture ? "(336) 555-0148" : "555-0100",
-            email: isScreenshotFixture ? "office@example.com" : "uitest@gunnaire.com",
-            address: isScreenshotFixture ? "2450 Robinhood Rd, Winston-Salem, NC" : "100 Test Air Way",
-            storedPaymentMethods: [
-                StoredPaymentMethodReference(
-                    id: "QBO-UI-CARD",
-                    providerCustomerID: "QBO-UI-CUSTOMER",
-                    cardholderName: isScreenshotFixture ? "Blue Ridge Dental" : "UI Test Collectible Customer",
-                    cardBrand: "Visa",
-                    lastFour: "4242",
-                    expirationMonth: "12",
-                    expirationYear: "2030"
-                )
-            ]
+        let customerName = isScreenshotFixture ? "Blue Ridge Dental" : "UI Test Collectible Customer"
+        let storedPaymentMethod = StoredPaymentMethodReference(
+            id: "QBO-UI-CARD",
+            providerCustomerID: "QBO-UI-CUSTOMER",
+            cardholderName: customerName,
+            cardBrand: "Visa",
+            lastFour: "4242",
+            expirationMonth: "12",
+            expirationYear: "2030"
         )
+        let customer: Customer
+        if let existingFixtureCustomer {
+            customer = existingFixtureCustomer
+            customer.quickBooksID = "QBO-UI-CUSTOMER"
+            customer.name = customerName
+            customer.phone = isScreenshotFixture ? "(336) 555-0148" : "555-0100"
+            customer.email = isScreenshotFixture ? "office@example.com" : "uitest@gunnaire.com"
+            customer.address = isScreenshotFixture ? "2450 Robinhood Rd, Winston-Salem, NC" : "100 Test Air Way"
+            customer.allowsTransactionalEmail = true
+            customer.allowsServiceText = false
+            customer.allowsMarketing = false
+            customer.preferredContactMethod = .email
+            customer.communicationConsentUpdatedAt = nil
+            customer.storedPaymentMethodsJSON = nil
+            customer.upsertStoredPaymentMethod(storedPaymentMethod)
+        } else {
+            customer = Customer(
+                id: customerID,
+                quickBooksID: "QBO-UI-CUSTOMER",
+                name: customerName,
+                phone: isScreenshotFixture ? "(336) 555-0148" : "555-0100",
+                email: isScreenshotFixture ? "office@example.com" : "uitest@gunnaire.com",
+                address: isScreenshotFixture ? "2450 Robinhood Rd, Winston-Salem, NC" : "100 Test Air Way",
+                storedPaymentMethods: [storedPaymentMethod]
+            )
+        }
         let technician = Technician(
             id: technicianID,
             name: isScreenshotFixture ? "Jordan Lee" : "UI Test Technician",
@@ -737,7 +790,9 @@ private enum GunnAireUITestFixtures {
                 approvedAt: Date().addingTimeInterval(-2_400)
             )
         }
-        context.insert(customer)
+        if existingFixtureCustomer == nil {
+            context.insert(customer)
+        }
         context.insert(technician)
         context.insert(catalogItem)
         if isCatalogMappingConflictFixture {

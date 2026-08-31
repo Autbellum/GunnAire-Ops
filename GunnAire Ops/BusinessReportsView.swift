@@ -712,7 +712,10 @@ private struct JobProfitabilityReportRowView: View {
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(currency(row.invoicedRevenue))
+                    Text("Gross profit")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(row.knownGrossProfit.map(currency) ?? "Incomplete")
                         .font(.subheadline.weight(.semibold))
                     Text(row.knownGrossMargin.map(percent) ?? "Cost review")
                         .font(.caption)

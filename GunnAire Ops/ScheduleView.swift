@@ -304,9 +304,6 @@ struct ScheduleView: View {
                                             calls: selectedDayCalls,
                                             accessibilityPrefix: "Field"
                                         )
-                                        Text(TechnicianTravelDisclosure.footerText)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
                                     }
                                     .padding(14)
                                     .background(
@@ -3348,7 +3345,10 @@ private struct DispatchTechnicianCapacityDetailView: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        // Route awareness and the complete appointment list are core dispatch
+        // work, so this task opens at a usable height instead of hiding the
+        // second half of the technician day behind a collapsed sheet.
+        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .accessibilityIdentifier("DispatchCapacityDetail")
     }
@@ -3580,6 +3580,10 @@ private struct TechnicianTravelDisclosure: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
+            Text(Self.footerText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 4)
             ForEach(routeLegs) { leg in
                 routeLegRow(leg)
                 if leg.id != routeLegs.last?.id {
@@ -3870,8 +3874,6 @@ private struct DispatchTechnicianDayScheduleView: View {
                         calls: routeCalls,
                         accessibilityPrefix: "Dispatch"
                     )
-                } footer: {
-                    Text(TechnicianTravelDisclosure.footerText)
                 }
             }
 

@@ -29,6 +29,74 @@ struct AppStoreScreenshotPrivacyPolicy: Equatable, Sendable {
     }
 }
 
+/// Registers the numbered workspace shortcuts with UIKit on native iPadOS.
+/// SwiftUI scene commands render correctly in the Mac menu bar, but they are
+/// not consistently inserted into the responder chain for an iPad split view.
+private struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
+    let onRoute: (GunnAireAppRoute) -> Void
+
+    func makeUIView(context: Context) -> KeyCommandResponderView {
+        let view = KeyCommandResponderView()
+        view.onRoute = onRoute
+        return view
+    }
+
+    func updateUIView(_ uiView: KeyCommandResponderView, context: Context) {
+        uiView.onRoute = onRoute
+        uiView.activateIfAvailable()
+    }
+
+    final class KeyCommandResponderView: UIView {
+        var onRoute: ((GunnAireAppRoute) -> Void)?
+
+        override var canBecomeFirstResponder: Bool { true }
+
+        override var keyCommands: [UIKeyCommand]? {
+            let definitions = GunnAireNavigationCommandDefinition.primary.map {
+                ($0.key.description, $0.title)
+            } + [("7", "Business Reports")]
+            return definitions.map { input, title in
+                let command = UIKeyCommand(
+                    title: title,
+                    action: #selector(handleKeyCommand(_:)),
+                    input: input,
+                    modifierFlags: .command
+                )
+                command.wantsPriorityOverSystemBehavior = true
+                return command
+            }
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil, !isFirstResponder else { return }
+            // The command host can become visible before SwiftUI's next update
+            // pass. Claim the responder synchronously so an attached keyboard
+            // works as soon as the workspace is visible, with the async retry
+            // retained for UIKit transitions that temporarily reject it.
+            if !becomeFirstResponder() {
+                activateIfAvailable()
+            }
+        }
+
+        func activateIfAvailable() {
+            guard window != nil, !isFirstResponder else { return }
+            DispatchQueue.main.async { [weak self] in
+                _ = self?.becomeFirstResponder()
+            }
+        }
+
+        @objc private func handleKeyCommand(_ command: UIKeyCommand) {
+            guard let input = command.input else { return }
+            let route = GunnAireNavigationCommandDefinition.primary.first {
+                $0.key.description == input
+            }?.route ?? (input == "7" ? .reports : nil)
+            guard let route else { return }
+            onRoute?(route)
+        }
+    }
+}
+
 // MARK: - ContentView with NavigationSplitView Sidebar
 
 struct ContentView: View {
@@ -288,6 +356,9 @@ struct ContentView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .background(alignment: .topLeading) {
+            nativeIPadNavigationShortcutHost
+        }
         .overlay(alignment: .top) {
             appWideFieldCollectionPromptBanner
         }
@@ -523,6 +594,29 @@ struct ContentView: View {
                 .tag(item)
                 .listRowBackground(selectedSidebarItem == item ? Color.brandGold.opacity(0.12) : Color.clear)
         }
+    }
+
+    /// Scene command menus remain the native Mac presentation. Native iPadOS
+    /// needs an in-view command responder for attached-keyboard shortcuts to
+    /// remain dependable while focus moves between split-view columns, forms,
+    /// and sheets. These buttons have no visual or accessibility footprint;
+    /// authorization still flows through the same central route resolver.
+    @ViewBuilder
+    private var nativeIPadNavigationShortcutHost: some View {
+        #if targetEnvironment(macCatalyst)
+        EmptyView()
+        #else
+        GunnAireIPadKeyCommandBridge(onRoute: openKeyboardRoute)
+        .frame(width: 1, height: 1)
+        .opacity(0.01)
+        .clipped()
+        .accessibilityHidden(true)
+        #endif
+    }
+
+    private func openKeyboardRoute(_ route: GunnAireAppRoute) {
+        GunnAireAppIntentRouter.store(route)
+        applyPendingAppRouteIfNeeded()
     }
     
     private func iconName(for item: SidebarItem) -> String {

@@ -43,6 +43,31 @@ final class GunnAire_OpsUITests: XCTestCase {
         return calendar.date(byAdding: .day, value: -offsetFromMonday, to: day) ?? day
     }
 
+    private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval = 3) -> Bool {
+        let hittable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [hittable], timeout: timeout) == .completed
+    }
+
+    private func replaceText(in field: XCUIElement, with replacement: String) {
+        field.tap()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(replacement)
+
+        guard (field.value as? String) != replacement else { return }
+        let currentValue = field.value as? String ?? ""
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        field.typeText(
+            String(
+                repeating: XCUIKeyboardKey.delete.rawValue,
+                count: max(currentValue.count, 1)
+            )
+        )
+        field.typeText(replacement)
+    }
+
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
 
@@ -453,15 +478,29 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(origin.waitForExistence(timeout: 3))
         origin.tap()
         origin.typeText("GunnAire shop")
+        let doneEditingExpense = app.buttons["Done Editing Expense"]
+        XCTAssertTrue(doneEditingExpense.waitForExistence(timeout: 3))
+        doneEditingExpense.tap()
+
         let destination = app.textFields["FieldMileageDestination"]
+        XCTAssertTrue(waitForHittable(destination))
         destination.tap()
         destination.typeText("Johnstone Supply")
+        XCTAssertTrue(doneEditingExpense.waitForExistence(timeout: 3))
+        doneEditingExpense.tap()
+
         let miles = app.textFields["FieldMileageMiles"]
+        XCTAssertTrue(waitForHittable(miles))
         miles.tap()
         miles.typeText("20")
+        XCTAssertTrue(doneEditingExpense.waitForExistence(timeout: 3))
+        doneEditingExpense.tap()
         let rate = app.textFields["FieldMileageRate"]
+        XCTAssertTrue(waitForHittable(rate))
         rate.tap()
         rate.typeText("0.655")
+        XCTAssertTrue(doneEditingExpense.waitForExistence(timeout: 3))
+        doneEditingExpense.tap()
         let purpose = app.textFields["FieldExpensePurpose"]
         for _ in 0..<3 where !purpose.exists || !purpose.isHittable {
             app.swipeUp()
@@ -705,7 +744,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(clockOut.waitForExistence(timeout: 3))
         clockOut.tap()
 
-        XCTAssertTrue(app.staticTexts["Ready for review"].waitForExistence(timeout: 3))
+        let readyForReview = app.staticTexts["Ready for review"]
+        for _ in 0..<4 where !readyForReview.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(readyForReview.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Travel"].exists)
         XCTAssertTrue(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] 'submitted for office review'")
@@ -761,7 +804,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3))
         app.typeKey("7", modifierFlags: .command)
-        XCTAssertTrue(app.navigationBars["Business Reports"].waitForExistence(timeout: 3))
+        let reports = app.navigationBars["Business Reports"]
+        if !reports.waitForExistence(timeout: 2) {
+            app.typeKey("7", modifierFlags: .command)
+        }
+        XCTAssertTrue(reports.waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -1088,11 +1135,11 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         let settingsForm = app.collectionViews["SettingsForm"]
         let manageForms = app.descendants(matching: .any)["ManageFieldFormTemplates"]
-        XCTAssertTrue(manageForms.waitForExistence(timeout: 3))
-        let scrollStart = settingsForm.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.78))
-        let scrollEnd = settingsForm.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.46))
-        scrollStart.press(forDuration: 0.05, thenDragTo: scrollEnd)
-        XCTAssertTrue(manageForms.waitForExistence(timeout: 3))
+        for _ in 0..<8 where !manageForms.exists || !manageForms.isHittable {
+            settingsForm.swipeUp()
+        }
+        XCTAssertTrue(manageForms.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(manageForms.isHittable, app.debugDescription)
         manageForms.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         XCTAssertTrue(app.navigationBars["Field Form Templates"].waitForExistence(timeout: 3))
@@ -1546,6 +1593,9 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         let routeLegID = "A1000000-0000-4000-8000-000000000002-A1000000-0000-4000-8000-000000000048"
         let routeTitle = app.staticTexts["Collectible HVAC service → Follow-up airflow repair"]
+        for _ in 0..<3 where !routeTitle.exists {
+            technicianDay.swipeUp()
+        }
         XCTAssertTrue(routeTitle.waitForExistence(timeout: 3), app.debugDescription)
         XCTAssertTrue(app.staticTexts["1h scheduled gap"].exists)
         XCTAssertFalse(routeTitle.label.localizedCaseInsensitiveContains("@gunnaire.com"))
@@ -1557,6 +1607,9 @@ final class GunnAire_OpsUITests: XCTestCase {
                 "Optional Apple Maps estimates require a connection and account for expected traffic. They are informational only and never change appointments, capacity, or promised arrival windows."
             )
         ).firstMatch
+        for _ in 0..<3 where !routeFooter.exists {
+            technicianDay.swipeUp()
+        }
         XCTAssertTrue(routeFooter.exists)
 
         let dayEvidence = XCTAttachment(screenshot: app.screenshot())
@@ -1564,6 +1617,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         dayEvidence.lifetime = .keepAlways
         add(dayEvidence)
 
+        for _ in 0..<4 where !routeDisclosure.isHittable {
+            technicianDay.swipeDown()
+        }
+        XCTAssertTrue(routeDisclosure.isHittable, app.debugDescription)
         routeDisclosure.tap()
         technicianDay.swipeDown()
         let editableDayJob = app.descendants(matching: .any)["DispatchTechnicianDayJob-A1000000-0000-4000-8000-000000000002"]
@@ -1899,9 +1956,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(reference.waitForExistence(timeout: 2))
         reference.tap()
         reference.typeText("Approved by reply to estimate email")
-        if app.keyboards.buttons["Hide keyboard"].exists {
-            app.keyboards.buttons["Hide keyboard"].tap()
-        }
+        app.typeKey(.escape, modifierFlags: [])
         let confirmation = app.switches["Customer reviewed the scope, total price, and terms"]
         confirmation.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         XCTAssertEqual(confirmation.value as? String, "1")
@@ -2080,9 +2135,9 @@ final class GunnAire_OpsUITests: XCTestCase {
         salesPrice.typeText("100")
         let saveItem = app.buttons["Save"]
         XCTAssertTrue(saveItem.waitForExistence(timeout: 3))
-        if app.keyboards.firstMatch.exists {
-            app.typeKey(.escape, modifierFlags: [])
-        }
+        let doneEditingItem = app.buttons["Done Editing Item"]
+        XCTAssertTrue(doneEditingItem.waitForExistence(timeout: 3))
+        doneEditingItem.tap()
         XCTAssertTrue(saveItem.isHittable)
         saveItem.tap()
 
@@ -2609,27 +2664,29 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         receiveShipment.tap()
         XCTAssertTrue(app.navigationBars["Receive Shipment"].waitForExistence(timeout: 3))
-        let quantity = app.textFields["PurchaseOrderReceiptQuantity"]
-        XCTAssertTrue(quantity.waitForExistence(timeout: 3))
-        quantity.tap()
-        quantity.typeKey("a", modifierFlags: .command)
-        quantity.typeText("1")
 
         let note = app.textFields["PurchaseOrderReceiptNote"]
-        XCTAssertTrue(note.exists)
-        let doneEditingShipment = app.buttons["Done Editing Shipment"]
-        if doneEditingShipment.exists && doneEditingShipment.isHittable {
-            doneEditingShipment.tap()
-        }
-        for _ in 0..<3 where !note.isHittable {
-            app.swipeUp()
-        }
-        XCTAssertTrue(note.isHittable)
+        XCTAssertTrue(waitForHittable(note))
         note.tap()
         note.typeText("Packing slip UI-1; one unit backordered.")
 
+        let doneEditingShipment = app.buttons["Done Editing Shipment"]
+        XCTAssertTrue(doneEditingShipment.waitForExistence(timeout: 3))
+        doneEditingShipment.tap()
+
+        let quantity = app.textFields["PurchaseOrderReceiptQuantity"]
+        XCTAssertTrue(waitForHittable(quantity))
+        replaceText(in: quantity, with: "1")
+        XCTAssertEqual(quantity.value as? String, "1", app.debugDescription)
+        XCTAssertTrue(doneEditingShipment.waitForExistence(timeout: 3))
+        doneEditingShipment.tap()
+
         let confirmReceipt = app.buttons["ConfirmPurchaseOrderReceipt"]
-        XCTAssertTrue(confirmReceipt.isEnabled)
+        let receiptEnabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"),
+            object: confirmReceipt
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [receiptEnabled], timeout: 3), .completed)
         confirmReceipt.tap()
 
         XCTAssertFalse(app.navigationBars["Receive Shipment"].waitForExistence(timeout: 1))
@@ -2941,7 +2998,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(installedSerial.waitForExistence(timeout: 3))
         let equipmentName = app.textFields["PurchaseOrderInstallEquipmentName"]
-        XCTAssertTrue(equipmentName.waitForExistence(timeout: 3))
+        for _ in 0..<5 where !equipmentName.exists || !equipmentName.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(equipmentName.waitForExistence(timeout: 3), app.debugDescription)
         XCTAssertTrue((equipmentName.value as? String)?.hasPrefix("Lennox Elite Heat") == true)
         let confirmInstallation = app.buttons["ConfirmPurchaseOrderAssetInstallation"]
         XCTAssertTrue(confirmInstallation.waitForExistence(timeout: 3))
@@ -3674,9 +3734,13 @@ final class GunnAire_OpsUITests: XCTestCase {
         availability.tap()
         XCTAssertTrue(app.navigationBars["Technician Availability"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Jordan Lee"].exists)
-        XCTAssertTrue(app.staticTexts.matching(
+        let noRecurringHours = app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] 'No recurring hours are configured'")
-        ).firstMatch.exists)
+        ).firstMatch
+        for _ in 0..<4 where !noRecurringHours.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(noRecurringHours.waitForExistence(timeout: 3), app.debugDescription)
 
         let addShift = app.buttons["AddRecurringTechnicianShift"]
         XCTAssertTrue(addShift.waitForExistence(timeout: 3))
@@ -5043,14 +5107,17 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(count.waitForExistence(timeout: 3))
         count.tap()
         count.typeText("2.5")
+        let doneEditingCount = app.buttons["Done Editing Inventory Count"]
+        XCTAssertTrue(doneEditingCount.waitForExistence(timeout: 3))
+        doneEditingCount.tap()
 
         let reason = app.textFields["InventoryCountReason"]
         XCTAssertTrue(reason.waitForExistence(timeout: 3))
+        XCTAssertTrue(reason.isHittable)
         reason.tap()
         reason.typeText("Damaged during truck bin inspection")
-        if app.keyboards.buttons["Hide keyboard"].exists {
-            app.keyboards.buttons["Hide keyboard"].tap()
-        }
+        XCTAssertTrue(doneEditingCount.waitForExistence(timeout: 3))
+        doneEditingCount.tap()
 
         let save = app.buttons["SaveInventoryCount"]
         XCTAssertTrue(save.isEnabled)
