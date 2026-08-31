@@ -40,11 +40,11 @@ and schema status as of 2026-08-30.
   `7C335331-C438-3C6E-B889-77AE067DE476`; Mac app/dSYM UUIDs match at
   `97010FC5-A7B9-3148-9B2D-7906D4ED0D9B` and
   `B88F9531-0261-36DD-9C29-0B5EAA729A24`. Exact retained-artifact and CloudKit
-  export preflight reports **61 checks, 5 expected warnings, and 0 failures**;
-  one warning records that online probes were intentionally omitted. The
-  read-only online probe reports **63/4/1** solely because production remains
-  backend `2026.08.30.15` while source expects undeployed `.16`; Apple
-  notification routing and the QBO callback pass. Complete iPad and Mac logic
+  export preflight reports **61 checks, 4 expected warnings, and 0 failures**;
+  one warning records that online probes were intentionally omitted. The exact
+  read-only online probe reports **64/3/0**: production serves reviewed backend
+  `2026.08.30.16`, Apple notification routing rejects a malformed envelope with
+  HTTP 400, and the QBO callback reaches the app scheme. Complete iPad and Mac logic
   suites pass **672/672** each; role-scoped iPad Find/navigation passes **4/4**,
   direct Mac global Find passes **1/1** after a controlled stale-test-service
   recycle, and the compact field iPhone Find passes **1/1**. This authorization
@@ -337,7 +337,7 @@ The project now uses the enabled Push Notifications capability for optional staf
 
 A new field-payment assignment queues one idempotent delivery per active device without delaying assignment creation. APNs previews are intentionally generic and omit customer names, addresses, balances, amounts, and payment data. The route contains only a versioned invoice UUID; the receiving app still applies its current role, assignment, invoice-visibility, and balance policy before opening Payments → Collect. Logout, session expiry, user deactivation, and permanent APNs token errors deactivate the registration and suppress its pending deliveries.
 
-Backend source `2026.08.30.15` is deployed and passes the 69-test suite. Native push and compact Settings behavior retain framework-appropriate unit/UI coverage. Before activation, create and store an authorized APNs signing key plus a separate Fernet device-token key in Render; confirm Admin readiness; update App Store privacy answers for the linked device identifier used only for app functionality; and prove sandbox and TestFlight/production delivery, tap routing, logout, deactivation, credential revocation, and invalid-token cleanup on signed hardware.
+Backend source `2026.08.30.16` is deployed and passes the 70-test suite. Native push and compact Settings behavior retain framework-appropriate unit/UI coverage. Before activation, create and store an authorized APNs signing key plus a separate Fernet device-token key in Render; confirm Admin readiness; update App Store privacy answers for the linked device identifier used only for app functionality; and prove sandbox and TestFlight/production delivery, tap routing, logout, deactivation, credential revocation, and invalid-token cleanup on signed hardware.
 
 ## Field iPhone payment handoff
 
