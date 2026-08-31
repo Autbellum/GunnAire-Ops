@@ -49,6 +49,16 @@ and schema status as of 2026-08-31.
   **92/92 logical workflows** with **95/95 device executions**. The retained
   consolidated evidence is
   `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/release-verification-2026083101.json`.
+- The final signed-hardware gate is executable rather than an informal
+  checklist. Run `Tools/physical_device_acceptance.py` with the exact retained
+  archive and Mac app, then follow `PHYSICAL_DEVICE_ACCEPTANCE.md`. The
+  read-only inventory omits device names, serial numbers, UDIDs, ECIDs,
+  accounts, customer data, and credentials. Its structured record validator
+  requires real evidence for every iPad/Mac/iPhone, CloudKit, offline, Handoff,
+  QBO sandbox item/invoice, payment recovery, Google, APNs, scanning, role,
+  accessibility, and revocation scenario; it refuses stale builds, missing
+  evidence, privacy-unsafe records, or Production QBO/CloudKit claims without
+  an explicit authorization reference.
 - Prior exact build `1.0 (2026083021)` is retained as a development-signed iOS
   Release archive and universal arm64/x86_64 Mac Catalyst Release app. Strict
   signature verification confirms Apple login, CloudKit, Push Notifications,

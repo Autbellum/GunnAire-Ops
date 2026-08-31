@@ -12,6 +12,15 @@ Current full-suite evidence: build `1.0 (2026083101)` completes the iPad-first r
 
 Exact current source passes **672/672** iPad logic, **672/672** Mac Catalyst logic, and the complete iPad UI target at **92/92 logical workflows** with **95/95 device executions**, zero failures, skips, or expected failures. Backend passes **70/70** and the CloudKit/release verifier passes **5/5**. Retained development-signed iOS and universal Mac Catalyst Release artifacts, matching dSYMs, exact results, and the consolidated `release-verification-2026083101.json` manifest live under `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30`. iOS UUID/hash are `C62573CC-15F9-3413-A341-8452EF322FBA` / `d2d46978c04765d71b0dc16ac99e917a9cd770a280c43477ebe7dd523c2e6203`; Mac UUIDs are `641B4DEA-FB67-3D3C-831F-8CF5B0A3F309` and `B8BC1EC8-08FF-3F56-92F5-DD6289C6E767`, with hash `f958a301ce8421b4a6adc23f40e6e07ce7b7462848d4df9b38872cc176ad9034`. Exact local/online preflight is **61/4/0** and **64/3/0** against cumulative-v22 Development, unchanged v15 Production, and healthy backend `.16`. The remaining warnings are development signing and the host-only optional Metal path. No live QBO/payment/supplier/customer-message mutation, Production CloudKit promotion, App Store upload, or production-data change occurred.
 
+The physical-device requirement now has an executable evidence boundary:
+`Tools/physical_device_acceptance.py` plus `PHYSICAL_DEVICE_ACCEPTANCE.md`.
+Its privacy and fail-closed validator passes **6/6**, inventories exact artifacts,
+signing, and device readiness without installation, and rejects stale builds,
+missing scenarios/evidence, privacy-unsafe records, or unauthorized Production
+QBO/CloudKit claims. The current live inventory reports the exact iOS/Mac
+artifacts ready but no Distribution identity, an unavailable paired iPad, and no
+connected iPhone, so no physical acceptance is falsely claimed.
+
 Current Command Center authorization/navigation evidence: one `OperationsAccessPolicy` now derives each active business role's Find categories, dashboard relationships, quick actions, financial visibility, and dispatch/QBO administration. Its query boundaries intersect hydrated customer/job/invoice/payment/estimate/contract/communication/technician identities with the existing account and assignment policy before SwiftUI receives them. Field receives no customer-directory IDs and only its exact assigned job and linked collectible invoice; Accounting receives customer/invoice/payment scope without jobs/estimates/dispatch/admin; Standard cannot assign a technician; unknown or inactive identity receives nothing. Assignment also rechecks the enumerated schedule mutation policy at commit time. The iPad/Mac sidebar exposes one compact global magnifier and Command-K that selects Command Center and opens its existing role-scoped sheet; iPhone retains the focused Command Center toolbar Find. This closes a real cross-role query leak without adding another workspace or broadening any server/accounting authorization.
 
 Exact build `1.0 (2026083021)` passes **672/672** iPad logic tests, **672/672** Mac Catalyst logic tests, **4/4** role/navigation iPad UI journeys, **1/1** direct Mac global-Find journey, and **1/1** compact field iPhone journey. Retained development-signed iOS and universal Mac Catalyst Release artifacts, matching dSYMs, exact test bundles, and manifests live under `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30`. iOS UUID/hash are `7C335331-C438-3C6E-B889-77AE067DE476` / `062abd8a9baa24052a7fadcbb7c99dc507fc80d51b8197a2ca0d6868c7eda561`; Mac UUIDs are `97010FC5-A7B9-3148-9B2D-7906D4ED0D9B` and `B88F9531-0261-36DD-9C29-0B5EAA729A24`, with hash `cd2c3f69300c40b13cb4e1a4f3b653dd48459940487453507ae71b95e470c019`. Exact retained-artifact and retained CloudKit-export preflight is **61/5/0**, including the expected warning that online probes were omitted from that local run. Online preflight is **63/4/1** solely because production backend `.15` has not been deployed to reviewed source `.16`; Apple notification routing and the QBO callback pass. The first Mac attempt exposed a stale local Xcode test service and an iOS-only root swipe in the test; after one controlled service recycle and platform-adaptive assertion boundary, the direct Payments → Find → authorized customer result → Command Center path passed. No provider authorization, QBO/payment mutation, customer message, backend deployment, Apple capability, Production CloudKit promotion, upload, or production-data change occurred.
@@ -261,9 +270,18 @@ the Apple notification route rejects malformed input with HTTP 400 and the QBO c
 5. **Supplier account manager / business owner:** Approve Johnstone, Lennox,
    or other vendor terms, branch/account pricing, ordering authority, and test
    credentials before any server connector can send an order.
-6. **Field operations lead:** Run a physical-device acceptance script covering
-   no-network field documentation, CloudKit recovery, iPad-to-iPhone Handoff,
-   declined/interrupted payment recovery, dispatch overrides, and each role.
+6. **Field operations lead:** Run the executable, privacy-minimal
+   `Tools/physical_device_acceptance.py` gate using
+   `PHYSICAL_DEVICE_ACCEPTANCE.md`. It inventories current artifacts, signing,
+   and connected iPad/iPhone readiness without installing or mutating anything;
+   generates an exact-build structured record; and refuses to pass stale,
+   incomplete, evidence-free, privacy-unsafe, or unauthorized Production QBO /
+   CloudKit acceptance. The required scenarios cover no-network Service, Repair,
+   and Replacement work, two-device CloudKit recovery/conflict/account loss,
+   iPad/Mac-to-iPhone Handoff expiry and revocation, technician-created QBO
+   items/invoice lines with duplicate recovery, supported payment recovery,
+   Google integrations, APNs, equipment scanning, dispatch overrides, logout,
+   device loss, accessibility, and every role.
 
 Until the gates above are evidenced, the current source is not represented as
 external TestFlight or App Store submission ready. A locally validated prior
