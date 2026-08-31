@@ -2,6 +2,34 @@
 
 This audit compares GunnAire Ops with the practical operating capabilities described by ten leading field-service suites: ServiceTitan, Housecall Pro, FieldPulse, FieldEdge, Jobber, Workiz, Service Fusion, Simpro, ServiceM8, and ServiceTrade. BuildOps was also consulted for commercial-HVAC workflow coverage. It distinguishes implemented workflows from vendor- or provider-dependent capabilities that cannot be represented honestly as live until the business has credentials, contracts, and production approval.
 
+## Current ten-suite source cross-check
+
+Revalidated on 2026-08-31 against the vendors' current first-party product
+pages. This is a capability benchmark, not a ranking and not a claim that a
+provider-owned payment, location, communications, financing, AI, or supplier
+service is live in GunnAire Ops.
+
+| Suite | Current first-party emphasis | GunnAire evidence boundary |
+| --- | --- | --- |
+| [ServiceTitan](https://www.servicetitan.com/features) | Dispatch, mobile field work, estimates, inventory/procurement, equipment history, payroll/time, project billing, reporting, payments, and QuickBooks/accounting integrations. | The native service lifecycle, Week Board, equipment/system history, forms, time attestation, inventory/purchasing, progress billing, reporting, and idempotent QBO queues are implemented. GPS, automated routing, AI, and live provider acceptance remain gated. |
+| [Housecall Pro](https://www.housecallpro.com/features/) | Scheduling/dispatch, estimates/invoices, payments, pricebook, job costing, recurring plans, online booking, customer portal, communications, reviews, financing, GPS, and QuickBooks. | Matching native operations are implemented; public intake and expiring portal summaries fail closed until production enablement. Automated SMS/reviews, live GPS, financing, and card-present processing remain provider/consent gates. |
+| [FieldPulse](https://www.fieldpulse.com/features) | CRM, scheduling/routing, field estimates/invoices, customer booking/portal, payments, and integrations. | Customer/property/equipment continuity, dispatch, field billing, approvals, public request intake, portal links, and provider integration boundaries are present. Production portal/payment/provider acceptance remains external. |
+| [FieldEdge](https://fieldedge.com/) | Customer/service history, dispatch, technician sales, good-better-best pricebook, field invoices/payments, service agreements, reporting, and QuickBooks synchronization. | Equipment history, proposal sets, dispatch, field invoice items, agreements, collection Handoff, reports, and QBO lineage/recovery are implemented. The approved realm and physical payment acceptance are still required. |
+| [Jobber](https://www.getjobber.com/features/) | Request-to-payment work orders, recurring scheduling, checklists/photos, client hub, quotes, invoicing, payments, communications, routing, notifications, job profitability, and QuickBooks Online. | The same operational chain is covered with type-aware forms/files, maintenance visits, role-scoped Find, conservative profitability, and QBO synchronization. Unattended messaging and customer mutations remain disabled pending consent/provider controls. |
+| [Workiz](https://www.workiz.com/features/) | Scheduling/dispatch, estimates/proposals, invoicing, inventory, online booking, mobile work, communications, reporting, route planning, QuickBooks, and newer AI assistance. | Core operational equivalents and reviewed provider handoffs exist. Automated scheduling/marketing, phone recording, AI call/dispatch, and live routing are intentionally not represented as active without approved policy, providers, retention, and human oversight. |
+| [Service Fusion](https://www.servicefusion.com/field-service-management-software) | Customer management, estimates, dispatch, offline technician work, work orders, invoices/payments, notifications, GPS/fleet, and QuickBooks. | Offline field capture/recovery, customer/jobs, billing, push boundary, fleet readiness, and QBO queues are implemented. APNs, production portal, payments, and telemetry require their documented external acceptance. |
+| [Simpro](https://www.simprogroup.com/features) | Quotes/projects, scheduling, mobile forms/assets/time, maintenance, inventory/procurement, job costing, payments, reporting, fleet, and accounting integrations. | GunnAire covers project milestones, asset/equipment history, maintenance, purchasing, serialized use, time review, gross-profit reporting, fleet readiness, and accounting handoff. Supplier catalogs, telematics, and payment providers remain gated. |
+| [ServiceM8](https://www.servicem8.com/us/feature-overview) | Apple-focused mobile/offline work, history, forms/PDFs, signatures, asset/QR workflows, time, booking, payments, customer communication, QuickBooks, and newer AI/phone tools. | iPad-first offline work, generated files, approvals, equipment labels, time, intake, Gmail/Messages drafts, and QBO item/invoice sync are implemented. Automated phone/AI, unattended customer sends, and direct card acceptance remain outside the approved boundary. |
+| [ServiceTrade](https://servicetrade.com/products/servicetrade-platform/features/) | Commercial scheduling/dispatch, technician asset history, inspections, timecards, parts, projects, proposals/contracts, portal/reporting, and accounting integrations. | Commercial-HVAC lifecycle coverage includes installed-system history, required inspections, employee attestation/office approval, parts/procurement, project billing, agreements, reporting, and provider-safe accounting publication. Live customer/provider acceptance remains required. |
+
+The cross-check does not expose a new provider-independent core workflow gap.
+It reinforces four production gates already kept visible in the app and release
+evidence: approved automated communications, consented live location/routing,
+customer-authenticated portal mutations, and provider-backed AI/payment/
+financing/supplier services. Implementing any of those as a local imitation
+would weaken identity, consent, reconciliation, or privacy controls rather than
+complete the business suite.
+
 ## Benchmark conclusion
 
 Across the compared products, the consistent operational core is customer and equipment history; intake; drag-and-drop-style scheduling/dispatch; technician qualification and availability; estimates; approval; job execution; forms/photos/signatures; invoice/payment; agreements; inventory/pricebook; QuickBooks; communication; and reporting. GunnAire Ops implements that connected HVAC lifecycle with an iPad/Mac-first workspace and an intentionally narrower phone workflow for field staff.
