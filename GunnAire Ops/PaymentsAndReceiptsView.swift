@@ -151,6 +151,14 @@ struct PaymentsAndReceiptsView: View {
         AppIdentity.currentEmail
     }
 
+    private var disablesRemoteRefreshForScreenshotFixture: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-appStoreScreenshotFixtures")
+        #else
+        false
+        #endif
+    }
+
     private var outstandingInvoices: [(invoice: Invoice, balanceDue: Double)] {
         visibleInvoices
             .compactMap { invoice in
@@ -697,12 +705,17 @@ struct PaymentsAndReceiptsView: View {
                 selectedWorkspace = .collect
             }
             applyPendingIntentInvoiceIfNeeded()
-            if isAdminUser, GunnAireBackendService.isConfigured, sharedPaymentCollections.isEmpty {
+            if !disablesRemoteRefreshForScreenshotFixture,
+               isAdminUser,
+               GunnAireBackendService.isConfigured,
+               sharedPaymentCollections.isEmpty {
                 Task {
                     await refreshSharedPaymentCollections()
                 }
             }
-            if GunnAireBackendService.isConfigured, fieldPaymentAssignments.isEmpty {
+            if !disablesRemoteRefreshForScreenshotFixture,
+               GunnAireBackendService.isConfigured,
+               fieldPaymentAssignments.isEmpty {
                 Task {
                     await refreshFieldPaymentAssignments()
                 }

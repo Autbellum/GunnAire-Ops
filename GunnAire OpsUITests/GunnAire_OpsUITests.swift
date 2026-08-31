@@ -5162,17 +5162,31 @@ final class GunnAire_OpsUITests: XCTestCase {
                 workspace.buttons["Systems"].tap()
                 XCTAssertTrue(app.staticTexts["Equipment Profiles"].waitForExistence(timeout: 3))
                 let editEquipment = app.buttons["EditEquipment-\(screenshotEquipmentID)"]
+                let assetLabel = app.buttons["EquipmentAssetLabel-\(screenshotEquipmentID)"]
+                let actionsMenu = app.buttons["EquipmentActionsMenu-\(screenshotEquipmentID)"]
                 let customerForm = app.collectionViews.firstMatch
+                let visibleCustomerFormBottom = customerForm.frame.maxY - 80
                 for _ in 0..<10 {
-                    if editEquipment.waitForExistence(timeout: 1), editEquipment.isHittable {
+                    if editEquipment.waitForExistence(timeout: 1),
+                       editEquipment.isHittable,
+                       assetLabel.exists,
+                       assetLabel.isHittable,
+                       actionsMenu.exists,
+                       actionsMenu.isHittable,
+                       actionsMenu.frame.midY < visibleCustomerFormBottom {
                         break
                     }
                     customerForm.swipeUp()
                 }
                 XCTAssertTrue(editEquipment.waitForExistence(timeout: 5))
                 XCTAssertTrue(editEquipment.isHittable)
-                editEquipment.tap()
-                XCTAssertTrue(app.staticTexts["Heat Pump"].waitForExistence(timeout: 3))
+                XCTAssertTrue(assetLabel.exists)
+                XCTAssertTrue(assetLabel.isHittable)
+                XCTAssertTrue(actionsMenu.exists)
+                XCTAssertTrue(actionsMenu.isHittable)
+                XCTAssertLessThan(actionsMenu.frame.midY, visibleCustomerFormBottom)
+                XCTAssertFalse(app.buttons["EquipmentStatus-\(screenshotEquipmentID)"].exists)
+                XCTAssertFalse(app.buttons["DeleteEquipment-\(screenshotEquipmentID)"].exists)
             }
         )
         captureAppStoreScreenshot(
@@ -5188,7 +5202,19 @@ final class GunnAire_OpsUITests: XCTestCase {
                 "-GunnAirePendingInvoiceID", screenshotInvoiceID,
                 "-GunnAirePendingOpenPaymentCollection", "YES"
             ],
-            expectedNavigationTitle: "Record Payment"
+            expectedNavigationTitle: "Record Payment",
+            afterLaunch: { app in
+                let staleServerError = app.staticTexts.matching(
+                    NSPredicate(
+                        format: "label CONTAINS[c] %@",
+                        "before accessing the shared business server"
+                    )
+                ).firstMatch
+                XCTAssertFalse(
+                    staleServerError.exists,
+                    "App Store payment fixture exposed a stale shared-server authentication error"
+                )
+            }
         )
         captureAppStoreScreenshot(
             name: "06-quickbooks-sales",
@@ -5244,12 +5270,30 @@ final class GunnAire_OpsUITests: XCTestCase {
             app.descendants(matching: .any)["SidebarAccountIdentity"].exists,
             "App Store screenshot \(name) exposed the signed-in account identity"
         )
+        waitForSystemBannerToClear(beforeCapturing: name)
 
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
         app.terminate()
+    }
+
+    @MainActor
+    private func waitForSystemBannerToClear(beforeCapturing screenshotName: String) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let banner = springboard.descendants(matching: .any)["NotificationShortLookView"]
+        guard banner.exists else { return }
+
+        let bannerCleared = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: banner
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [bannerCleared], timeout: 12),
+            .completed,
+            "System notification obscured App Store screenshot \(screenshotName)"
+        )
     }
 
     @MainActor

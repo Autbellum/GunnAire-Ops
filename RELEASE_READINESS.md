@@ -271,7 +271,7 @@ explicit owner authorization through 2026-08-27:
 - Support metadata and copyright were corrected, public privacy and
   data-deletion pages were published and verified live, and the App Privacy
   declaration was drafted without final submission. Accessibility declarations,
-  pricing/availability confirmation, screenshots, Content Rights, DSA setup,
+  pricing/availability confirmation, screenshot upload, Content Rights, DSA setup,
   and the final privacy submission remain incomplete.
 - The source now declares `ITSAppUsesNonExemptEncryption = false` for the
   app's exempt use of Apple platform encryption and uses a valid empty
@@ -283,11 +283,17 @@ explicit owner authorization through 2026-08-27:
   content, dimension, and no-alpha visual QA. They have not been uploaded to
   App Store Connect.
 
-- The six current iPad and six current iPhone assets were regenerated from the
-  passing current-source screenshot fixtures; the capture assertion rejects any
-  image that exposes the signed-in sidebar identity. Normal authenticated use
-  retains account context. The iPhone fixture also verifies the compact Customer
-  Systems action layout introduced for installed equipment.
+- On 2026-08-31, the six current iPad and six current iPhone assets were
+  regenerated from focused current-source screenshot fixtures that each passed
+  1/1 on iOS 26.5. The capture assertion rejects an exposed signed-in sidebar
+  identity, verifies compact Edit/QR/More equipment actions with lifecycle and
+  delete actions hidden in the closed menu, and waits for any SpringBoard
+  notification banner to clear before attaching an image. Normal authenticated
+  use retains account context. The deterministic payment fixture skips its
+  automatic shared-server refreshes, preventing a live backend request and a
+  stale missing-session error behind the payment sheet. The twelve final PNGs
+  were visually inspected and mechanically verified for the required dimensions
+  and opaque RGB format.
 - The fixed iPad Pro 13-inch and iPhone 17 Pro Max build-for-testing results both
   succeeded with zero errors, warnings, or analyzer warnings.
 

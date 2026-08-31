@@ -11,7 +11,7 @@ capture production customer records for App Store assets.
 - `Screenshots/iPhone-6.9-inch`: six 1320 x 2868 portrait PNG files.
 
 Every checked-in PNG has no alpha channel. These sizes are accepted by Apple's
-13-inch iPad and 6.9-inch iPhone screenshot slots as of 2026-08-26. Reconfirm
+13-inch iPad and 6.9-inch iPhone screenshot slots as of 2026-08-31. Reconfirm
 the current requirements before a later release:
 https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications
 
@@ -23,6 +23,23 @@ The order is intentional:
 4. Job billing and invoice creation
 5. Field payment collection
 6. QuickBooks invoice publication
+
+## Current-source verification
+
+Both focused capture workflows passed on 2026-08-31: 1/1 on an iPad Pro
+13-inch (M5) simulator and 1/1 on an iPhone 17 Pro Max simulator, each running
+iOS 26.5. The twelve exported attachments were mapped by their manifests,
+visually inspected, and mechanically verified for the expected dimensions and
+an opaque RGB pixel format before replacing this retained set.
+
+The capture contract verifies that the deterministic fixtures never expose the
+signed-in sidebar identity. Customer Systems must show the compact Edit, QR,
+and More actions while lifecycle and delete actions remain hidden in the closed
+menu. Immediately before each attachment, the test also waits for any
+SpringBoard notification banner to disappear and fails instead of retaining an
+obscured image. The payment fixture suppresses its automatic shared-server
+refreshes only during deterministic capture, so it neither contacts the live
+backend nor exposes a missing-session error behind the payment sheet.
 
 ## Regeneration
 
@@ -61,6 +78,7 @@ Before replacing or uploading the checked-in files, verify all of the following:
 - Correct portrait orientation, device size, and no alpha channel.
 - No production or personally identifying customer data.
 - No clipped controls, wrapped action labels, keyboards, alerts, or spinners.
+- No system notification banner obscuring any app content.
 - The displayed customer, equipment, job, invoice, and amount agree.
 - QuickBooks and payment screens describe actual connection state and do not
   imply a successful live sync or card capture that did not occur.
