@@ -33,6 +33,24 @@ and schema status as of 2026-08-30.
   gated on a participating certified payment service provider, Account Holder
   entitlement approval, provider integration, and signed physical-iPhone
   acceptance.
+- Exact build `1.0 (2026083021)` is retained as a development-signed iOS
+  Release archive and universal arm64/x86_64 Mac Catalyst Release app. Strict
+  signature verification confirms Apple login, CloudKit, Push Notifications,
+  and Associated Domains in both products. The iOS app/dSYM UUID matches at
+  `7C335331-C438-3C6E-B889-77AE067DE476`; Mac app/dSYM UUIDs match at
+  `97010FC5-A7B9-3148-9B2D-7906D4ED0D9B` and
+  `B88F9531-0261-36DD-9C29-0B5EAA729A24`. Exact retained-artifact and CloudKit
+  export preflight reports **61 checks, 5 expected warnings, and 0 failures**;
+  one warning records that online probes were intentionally omitted. The
+  read-only online probe reports **63/4/1** solely because production remains
+  backend `2026.08.30.15` while source expects undeployed `.16`; Apple
+  notification routing and the QBO callback pass. Complete iPad and Mac logic
+  suites pass **672/672** each; role-scoped iPad Find/navigation passes **4/4**,
+  direct Mac global Find passes **1/1** after a controlled stale-test-service
+  recycle, and the compact field iPhone Find passes **1/1**. This authorization
+  and navigation increment changes no SwiftData field, CloudKit schema,
+  backend contract, Apple capability, provider credential, QBO mapping, or
+  accounting record.
 - Exact build `1.0 (2026083020)` is retained as a development-signed iOS
   Release archive and universal arm64/x86_64 Mac Catalyst Release app under
   `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30`. Strict

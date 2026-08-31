@@ -43,6 +43,7 @@ struct ContentView: View {
 
     @State private var selectedSidebarItem: SidebarItem? = .commandCenter
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    @State private var showingAppWideFind = false
     
     @State private var showingSettings = false
     @State private var restrictedRouteTitle: String?
@@ -218,7 +219,18 @@ struct ContentView: View {
             .scrollContentBackground(.automatic)
             .navigationTitle("GunnAire Ops")
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Button {
+                        openAppWideFind()
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .accessibilityLabel("Find customers and work")
+                    .accessibilityHint("Opens the role-authorized Command Center search.")
+                    .accessibilityIdentifier("GlobalFindButton")
+                    .keyboardShortcut("k", modifiers: .command)
+                    .tint(Color.brandGold)
+
                     Button {
                         showingSettings = true
                     } label: {
@@ -241,7 +253,7 @@ struct ContentView: View {
                     } else if let selectedSidebarItem, visibleSidebarItems.contains(selectedSidebarItem) {
                         switch selectedSidebarItem {
                         case .commandCenter:
-                            OperationsDashboardView()
+                            OperationsDashboardView(showingCommandPalette: $showingAppWideFind)
                         case .timeClock:
                             TimeClockView()
                         case .scheduleAndJobs:
@@ -671,6 +683,19 @@ struct ContentView: View {
             prefersContactlessGuide: true
         )
         applyPendingAppRouteIfNeeded()
+    }
+
+    /// Keeps global Find compact: the sidebar owns one magnifying-glass entry,
+    /// while Command Center owns the query UI and all role-scoped handoffs.
+    /// Selecting Command Center first also makes Command-K deterministic from
+    /// every iPad and Mac workspace without duplicating business queries here.
+    private func openAppWideFind() {
+        guard visibleSidebarItems.contains(.commandCenter) else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            selectedSidebarItem = .commandCenter
+            columnVisibility = prefersPersistentSidebar ? .doubleColumn : .detailOnly
+        }
+        showingAppWideFind = true
     }
 
     private func applyPendingAppRouteIfNeeded() {

@@ -7786,6 +7786,162 @@ struct GunnAire_OpsTests {
         ).isEmpty)
     }
 
+    @Test func commandCenterFindAndDashboardScopeEveryRoleAtTheQueryBoundary() {
+        let standard = AppUser(email: "standard-find@gunnaire.com", role: .standard)
+        let field = AppUser(email: "field-find@gunnaire.com", role: .fieldTechnician)
+        let dispatcher = AppUser(email: "dispatch-find@gunnaire.com", role: .dispatcher)
+        let accounting = AppUser(email: "accounting-find@gunnaire.com", role: .accounting)
+        let admin = AppUser(email: "admin-find@gunnaire.com", role: .admin)
+        let users = [standard, field, dispatcher, accounting, admin]
+
+        let fieldTechnician = Technician(name: "Find Field", contactInfo: field.email)
+        let otherTechnician = Technician(name: "Find Other", contactInfo: "other-find@gunnaire.com")
+        let technicians = [fieldTechnician, otherTechnician]
+        let assignedCustomer = Customer(name: "Assigned Find Customer")
+        let unrelatedCustomer = Customer(name: "Unrelated Find Customer")
+        let customers = [assignedCustomer, unrelatedCustomer]
+        let assignedJob = ServiceCall(
+            type: .service,
+            scheduledDate: Date(),
+            assignedTechnician: fieldTechnician,
+            customer: assignedCustomer
+        )
+        let unrelatedJob = ServiceCall(
+            type: .replacement,
+            scheduledDate: Date().addingTimeInterval(3_600),
+            assignedTechnician: otherTechnician,
+            customer: unrelatedCustomer
+        )
+        let jobs = [assignedJob, unrelatedJob]
+        let assignedInvoice = Invoice(serviceCallID: assignedJob.id, customer: assignedCustomer, amount: 189)
+        let unrelatedInvoice = Invoice(serviceCallID: unrelatedJob.id, customer: unrelatedCustomer, amount: 9_500)
+        let standaloneInvoice = Invoice(customer: unrelatedCustomer, amount: 75)
+        let invoices = [assignedInvoice, unrelatedInvoice, standaloneInvoice]
+        let assignedEstimate = Estimate(serviceCallID: assignedJob.id, customer: assignedCustomer, amount: 300)
+        let unrelatedEstimate = Estimate(serviceCallID: unrelatedJob.id, customer: unrelatedCustomer, amount: 10_000)
+        let estimates = [assignedEstimate, unrelatedEstimate]
+        let assignedPayment = Payment(invoice: assignedInvoice, amount: 100)
+        let unrelatedPayment = Payment(invoice: unrelatedInvoice, amount: 500)
+        let payments = [assignedPayment, unrelatedPayment]
+        let assignedContract = RecurringMaintenanceContract(
+            customer: assignedCustomer,
+            schedulePattern: "every 6 months",
+            nextDate: Date()
+        )
+        let unrelatedContract = RecurringMaintenanceContract(
+            customer: unrelatedCustomer,
+            schedulePattern: "yearly",
+            nextDate: Date()
+        )
+
+        func access(_ user: AppUser) -> OperationsAccessCapabilities {
+            OperationsAccessPolicy.capabilities(email: user.email, users: users)
+        }
+        func customerIDs(_ user: AppUser) -> Set<UUID> {
+            OperationsAccessPolicy.searchableCustomerIDs(email: user.email, users: users, customers: customers)
+        }
+        func jobIDs(_ user: AppUser) -> Set<UUID> {
+            OperationsAccessPolicy.visibleServiceCallIDs(
+                email: user.email,
+                users: users,
+                serviceCalls: jobs,
+                technicians: technicians
+            )
+        }
+        func invoiceIDs(_ user: AppUser) -> Set<UUID> {
+            OperationsAccessPolicy.visibleInvoiceIDs(
+                email: user.email,
+                users: users,
+                serviceCalls: jobs,
+                invoices: invoices,
+                technicians: technicians
+            )
+        }
+        func estimateIDs(_ user: AppUser) -> Set<UUID> {
+            OperationsAccessPolicy.visibleEstimateIDs(email: user.email, users: users, estimates: estimates)
+        }
+        func paymentIDs(_ user: AppUser) -> Set<UUID> {
+            OperationsAccessPolicy.visiblePaymentIDs(
+                email: user.email,
+                users: users,
+                serviceCalls: jobs,
+                invoices: invoices,
+                payments: payments,
+                technicians: technicians
+            )
+        }
+
+        #expect(customerIDs(field).isEmpty)
+        #expect(jobIDs(field) == [assignedJob.id])
+        #expect(invoiceIDs(field) == [assignedInvoice.id])
+        #expect(estimateIDs(field).isEmpty)
+        #expect(paymentIDs(field) == [assignedPayment.id])
+        #expect(access(field).findPrompt == "Job, Invoice, Address")
+        #expect(access(field).canShowRecentPayments == false)
+        #expect(access(field).canManageDispatch == false)
+        #expect(OperationsAccessPolicy.dashboardCustomerIDs(
+            email: field.email,
+            users: users,
+            customers: customers,
+            serviceCalls: jobs,
+            invoices: invoices,
+            technicians: technicians
+        ) == [assignedCustomer.id])
+        #expect(OperationsAccessPolicy.visibleContractIDs(
+            customerIDs: [assignedCustomer.id],
+            contracts: [assignedContract, unrelatedContract]
+        ) == [assignedContract.id])
+        #expect(OperationsAccessPolicy.visibleTechnicianIDs(
+            email: field.email,
+            users: users,
+            technicians: technicians
+        ) == [fieldTechnician.id])
+
+        #expect(customerIDs(standard) == Set(customers.map(\.id)))
+        #expect(jobIDs(standard) == Set(jobs.map(\.id)))
+        #expect(invoiceIDs(standard).isEmpty)
+        #expect(estimateIDs(standard).isEmpty)
+        #expect(paymentIDs(standard).isEmpty)
+        #expect(access(standard).findPrompt == "Customer, Job, Address")
+        #expect(access(standard).canManageDispatch == false)
+
+        #expect(customerIDs(dispatcher) == Set(customers.map(\.id)))
+        #expect(jobIDs(dispatcher) == Set(jobs.map(\.id)))
+        #expect(invoiceIDs(dispatcher).isEmpty)
+        #expect(estimateIDs(dispatcher) == Set(estimates.map(\.id)))
+        #expect(paymentIDs(dispatcher).isEmpty)
+        #expect(access(dispatcher).findPrompt == "Customer, Job, Estimate, Address")
+        #expect(access(dispatcher).canManageDispatch)
+
+        #expect(customerIDs(accounting) == Set(customers.map(\.id)))
+        #expect(jobIDs(accounting).isEmpty)
+        #expect(invoiceIDs(accounting) == Set(invoices.map(\.id)))
+        #expect(estimateIDs(accounting).isEmpty)
+        #expect(paymentIDs(accounting) == Set(payments.map(\.id)))
+        #expect(access(accounting).findPrompt == "Customer, Invoice, Address")
+        #expect(access(accounting).canViewFinancials)
+        #expect(access(accounting).canShowRecentPayments)
+        #expect(access(accounting).canOpenReports)
+        #expect(access(accounting).canOpenSync == false)
+        #expect(access(accounting).canManageQuickBooks == false)
+
+        #expect(customerIDs(admin) == Set(customers.map(\.id)))
+        #expect(jobIDs(admin) == Set(jobs.map(\.id)))
+        #expect(invoiceIDs(admin) == Set(invoices.map(\.id)))
+        #expect(estimateIDs(admin) == Set(estimates.map(\.id)))
+        #expect(paymentIDs(admin) == Set(payments.map(\.id)))
+        #expect(access(admin).findPrompt == "Customer, Job, Invoice, Estimate, Address")
+        #expect(access(admin).canManageDispatch)
+        #expect(access(admin).canOpenSync)
+        #expect(access(admin).canManageQuickBooks)
+        #expect(access(admin).canShowBusinessOverview)
+
+        #expect(OperationsAccessPolicy.capabilities(
+            email: "unknown-find@gunnaire.com",
+            users: users
+        ) == .denied)
+    }
+
     @Test func adminPriceAdjustmentRequiresReasonAndPersistsImmutableAuditEvidence() throws {
         let technician = AppUser(email: "tech@gunnaire.com", role: .fieldTechnician)
         let admin = AppUser(email: "admin@gunnaire.com", role: .admin)

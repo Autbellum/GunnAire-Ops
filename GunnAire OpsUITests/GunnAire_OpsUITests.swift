@@ -106,6 +106,148 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testGlobalFindReturnsToCommandCenterFromAnyIPadWorkspace() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 6))
+        app.staticTexts["Payments"].tap()
+        XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 3))
+
+        let globalFind = app.buttons["GlobalFindButton"]
+        XCTAssertTrue(globalFind.waitForExistence(timeout: 3))
+        globalFind.tap()
+
+        XCTAssertTrue(app.navigationBars["Find"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.searchFields.firstMatch.placeholderValue, "Customer, Job, Invoice, Estimate, Address")
+        app.searchFields.firstMatch.tap()
+        app.searchFields.firstMatch.typeText("UI Test Collectible Customer")
+        XCTAssertTrue(app.buttons["CommandFindCustomer-\(screenshotCustomerID)"].exists)
+
+#if !targetEnvironment(macCatalyst)
+        // Touch platforms can scroll the sheet from the application root. On
+        // Mac Catalyst that synthetic gesture has no application hit point;
+        // the Mac acceptance path instead proves the global entry, role-aware
+        // prompt, authorized customer result, dismissal, and return below.
+        let jobResult = app.buttons["CommandFindJob-\(screenshotServiceCallID)"]
+        for _ in 0..<3 where !jobResult.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(jobResult.waitForExistence(timeout: 3))
+        let invoiceResult = app.buttons["CommandFindInvoice-\(screenshotInvoiceID)"]
+        for _ in 0..<3 where !invoiceResult.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(invoiceResult.waitForExistence(timeout: 3))
+#endif
+
+        app.buttons["Close"].tap()
+        XCTAssertTrue(app.navigationBars["Command Center"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testFieldFindExposesOnlyAssignedJobAndCollectibleInvoiceContext() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 6))
+        let globalFind = app.buttons["GlobalFindButton"]
+        XCTAssertTrue(globalFind.waitForExistence(timeout: 3))
+        globalFind.tap()
+
+        XCTAssertTrue(app.navigationBars["Find"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.searchFields.firstMatch.placeholderValue, "Job, Invoice, Address")
+        XCTAssertFalse(app.buttons["CommandFindCustomer-\(screenshotCustomerID)"].exists)
+        XCTAssertTrue(app.buttons["CommandFindJob-\(screenshotServiceCallID)"].exists)
+        XCTAssertTrue(app.buttons["CommandFindInvoice-\(screenshotInvoiceID)"].exists)
+        XCTAssertFalse(app.buttons["CommandFindOpenReports"].exists)
+        XCTAssertFalse(app.buttons["CommandFindOpenSync"].exists)
+    }
+
+    @MainActor
+    func testCompactFieldCommandCenterKeepsItsFocusedFindEntry() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Command Center"].waitForExistence(timeout: 6))
+        let commandFind = app.buttons["CommandCenterToolbarFindButton"]
+        XCTAssertTrue(commandFind.waitForExistence(timeout: 3))
+        commandFind.tap()
+
+        XCTAssertTrue(app.navigationBars["Find"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.searchFields.firstMatch.placeholderValue, "Job, Invoice, Address")
+        XCTAssertTrue(app.buttons["CommandFindJob-\(screenshotServiceCallID)"].exists)
+        XCTAssertTrue(app.buttons["CommandFindInvoice-\(screenshotInvoiceID)"].exists)
+        XCTAssertFalse(app.buttons["CommandFindCustomer-\(screenshotCustomerID)"].exists)
+    }
+
+    @MainActor
+    func testAccountingFindShowsFinancialResultsWithoutDispatchOrAdminActions() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAccounting",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 6))
+        let globalFind = app.buttons["GlobalFindButton"]
+        XCTAssertTrue(globalFind.waitForExistence(timeout: 3))
+        globalFind.tap()
+
+        XCTAssertTrue(app.navigationBars["Find"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.searchFields.firstMatch.placeholderValue, "Customer, Invoice, Address")
+        XCTAssertTrue(app.buttons["CommandFindCustomer-\(screenshotCustomerID)"].exists)
+        XCTAssertFalse(app.buttons["CommandFindJob-\(screenshotServiceCallID)"].exists)
+        XCTAssertTrue(app.buttons["CommandFindInvoice-\(screenshotInvoiceID)"].exists)
+        XCTAssertTrue(app.buttons["CommandFindOpenInvoices"].exists)
+        XCTAssertTrue(app.buttons["CommandFindOpenReports"].exists)
+        XCTAssertFalse(app.buttons["CommandFindOpenSchedule"].exists)
+        XCTAssertFalse(app.buttons["CommandFindOpenSync"].exists)
+    }
+
+    @MainActor
+    func testStandardCommandCenterNeverOffersTechnicianAssignmentMutation() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedStandard",
+            "-uiTestSeedScheduleAuthorization"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Command Center"].waitForExistence(timeout: 6))
+        let unassignedRow = app.descendants(matching: .any)["CommandCenterDispatchJob-\(unassignedScheduleServiceCallID)"]
+        for _ in 0..<12 where !unassignedRow.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(unassignedRow.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["CommandCenterAssign-\(unassignedScheduleServiceCallID)"].exists)
+    }
+
+    @MainActor
     func testCloudKitContinuityWarningIsCompactAndExplainsOfflineRecovery() throws {
         let app = XCUIApplication()
         app.launchArguments = [
