@@ -512,17 +512,22 @@ enum GunnAireBackendService {
     }
 
     private struct SupplierOrderPayload: Codable {
+        struct Line: Codable {
+            let lineID: String
+            let itemName: String
+            let internalSKU: String?
+            let supplierPartNumber: String?
+            let quantity: Double
+            let expectedUnitCost: Double
+        }
+
         let contractVersion: Int
         let connectorKind: SupplierConnectorKind
         let purchaseOrderID: String
         let purchaseOrderNumber: String
         let serviceCallID: String?
         let vendorName: String
-        let itemName: String
-        let internalSKU: String?
-        let supplierPartNumber: String?
-        let quantity: Double
-        let expectedUnitCost: Double
+        let lines: [Line]
         let expectedShippingCost: Double
         let currencyCode: String
         let supplierLocation: String?
@@ -531,6 +536,13 @@ enum GunnAireBackendService {
     }
 
     private struct SupplierOrderAcceptanceWire: Codable {
+        struct ConfirmedLine: Codable {
+            let lineID: String
+            let supplierPartNumber: String?
+            let confirmedQuantity: Double
+            let confirmedUnitCost: Double
+        }
+
         let contractVersion: Int
         let purchaseOrderID: String
         let purchaseOrderNumber: String
@@ -538,7 +550,7 @@ enum GunnAireBackendService {
         let externalOrderID: String
         let reference: String
         let supplierLocation: String?
-        let confirmedUnitCost: Double
+        let confirmedLines: [ConfirmedLine]
         let confirmedShippingCost: Double
         let currencyCode: String
         let confirmedByEmail: String
@@ -958,17 +970,22 @@ enum GunnAireBackendService {
         supplierLocation: String?
     ) async throws -> SupplierConnectorOrderAcceptance {
         let payload = SupplierOrderPayload(
-            contractVersion: 1,
+            contractVersion: SupplierConnectorContract.currentVersion,
             connectorKind: connectorKind,
             purchaseOrderID: order.id.uuidString.lowercased(),
             purchaseOrderNumber: order.number,
             serviceCallID: order.serviceCallID?.uuidString.lowercased(),
             vendorName: order.vendorName,
-            itemName: order.itemName,
-            internalSKU: order.itemSKU?.nilIfBlank,
-            supplierPartNumber: order.vendorPartNumber?.nilIfBlank,
-            quantity: order.quantity,
-            expectedUnitCost: order.unitCost,
+            lines: order.purchaseOrderLines.map { line in
+                SupplierOrderPayload.Line(
+                    lineID: line.id.uuidString.lowercased(),
+                    itemName: line.itemName,
+                    internalSKU: line.itemSKU?.nilIfBlank,
+                    supplierPartNumber: line.vendorPartNumber?.nilIfBlank,
+                    quantity: line.quantity,
+                    expectedUnitCost: line.unitCost
+                )
+            },
             expectedShippingCost: order.shippingCost,
             currencyCode: "USD",
             supplierLocation: supplierLocation?.nilIfBlank,
@@ -986,7 +1003,8 @@ enum GunnAireBackendService {
         let wire = try JSONDecoder().decode(SupplierOrderResponse.self, from: data).acceptance
         guard let purchaseOrderID = UUID(uuidString: wire.purchaseOrderID),
               let confirmedAt = supplierConnectorDate(from: wire.confirmedAt),
-              let priceAvailabilityCheckedAt = supplierConnectorDate(from: wire.priceAvailabilityCheckedAt) else {
+              let priceAvailabilityCheckedAt = supplierConnectorDate(from: wire.priceAvailabilityCheckedAt),
+              wire.confirmedLines.allSatisfy({ UUID(uuidString: $0.lineID) != nil }) else {
             throw GunnAireBackendError.invalidResponse
         }
         return SupplierConnectorOrderAcceptance(
@@ -997,7 +1015,15 @@ enum GunnAireBackendService {
             externalOrderID: wire.externalOrderID,
             reference: wire.reference,
             supplierLocation: wire.supplierLocation,
-            confirmedUnitCost: wire.confirmedUnitCost,
+            confirmedLines: wire.confirmedLines.compactMap { line in
+                guard let lineID = UUID(uuidString: line.lineID) else { return nil }
+                return SupplierConnectorAcceptedLine(
+                    lineID: lineID,
+                    supplierPartNumber: line.supplierPartNumber,
+                    confirmedQuantity: line.confirmedQuantity,
+                    confirmedUnitCost: line.confirmedUnitCost
+                )
+            },
             confirmedShippingCost: wire.confirmedShippingCost,
             currencyCode: wire.currencyCode,
             confirmedByEmail: wire.confirmedByEmail,

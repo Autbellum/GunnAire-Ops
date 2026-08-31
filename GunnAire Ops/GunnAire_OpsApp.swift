@@ -156,6 +156,12 @@ private enum GunnAireUITestFixtures {
     private static let fleetEventID = UUID(uuidString: "A1000000-0000-4000-8000-000000000040")!
     private static let fieldExpenseClaimID = UUID(uuidString: "A1000000-0000-4000-8000-000000000041")!
     private static let operationalAlertID = UUID(uuidString: "A1000000-0000-4000-8000-000000000042")!
+    private static let businessTaskID = UUID(uuidString: "A1000000-0000-4000-8000-000000000043")!
+    private static let businessTaskOperationID = UUID(uuidString: "A1000000-0000-4000-8000-000000000044")!
+    private static let timeOffRequestID = UUID(uuidString: "A1000000-0000-4000-8000-000000000045")!
+    private static let timeOffOperationID = UUID(uuidString: "A1000000-0000-4000-8000-000000000046")!
+    private static let timeOffTechnicianID = UUID(uuidString: "A1000000-0000-4000-8000-000000000047")!
+    private static let routeServiceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000048")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -192,6 +198,9 @@ private enum GunnAireUITestFixtures {
         let isFleetFixture = arguments.contains("-uiTestSeedFleetReadiness")
         let isFieldExpenseFixture = arguments.contains("-uiTestSeedFieldExpenseReview")
         let isOperationalAlertFixture = arguments.contains("-uiTestSeedOperationalAlert")
+        let isBusinessTaskFixture = arguments.contains("-uiTestSeedBusinessTask")
+        let isTimeOffRequestFixture = arguments.contains("-uiTestSeedTimeOffRequest")
+        let isTechnicianRouteFixture = arguments.contains("-uiTestSeedTechnicianRoute")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
         for user in appUsers where
@@ -244,6 +253,7 @@ private enum GunnAireUITestFixtures {
             call.id == projectServiceCallID ||
             call.id == unassignedScheduleServiceCallID ||
             call.id == equipmentDecisionHistoryCallID ||
+            call.id == routeServiceCallID ||
             call.linkedEstimateID == estimateID ? call.id : nil
         })
         for call in calls where fixtureCallIDs.contains(call.id) {
@@ -306,12 +316,39 @@ private enum GunnAireUITestFixtures {
         for alert in operationalAlerts where alert.id == operationalAlertID {
             context.delete(alert)
         }
+        let businessTaskEvents = try context.fetch(FetchDescriptor<BusinessTaskEvent>())
+        for event in businessTaskEvents where event.taskID == businessTaskID {
+            context.delete(event)
+        }
+        let businessTasks = try context.fetch(FetchDescriptor<BusinessTask>())
+        for task in businessTasks where task.id == businessTaskID {
+            context.delete(task)
+        }
+        let availabilityEvents = try context.fetch(FetchDescriptor<TechnicianAvailabilityEvent>())
+        for event in availabilityEvents where event.requestID == timeOffRequestID {
+            context.delete(event)
+        }
+        let timeOffRequests = try context.fetch(FetchDescriptor<TechnicianTimeOffRequest>())
+        for request in timeOffRequests where request.id == timeOffRequestID {
+            context.delete(request)
+        }
+        let availabilityBlocks = try context.fetch(FetchDescriptor<TechnicianAvailabilityBlock>())
+        for block in availabilityBlocks where block.sourceTimeOffRequestID == timeOffRequestID {
+            context.delete(block)
+        }
+        let workShifts = try context.fetch(FetchDescriptor<TechnicianWorkShift>())
+        for shift in workShifts where shift.technicianID == technicianID || shift.technicianID == timeOffTechnicianID {
+            context.delete(shift)
+        }
         let customers = try context.fetch(FetchDescriptor<Customer>())
         for customer in customers where customer.id == customerID {
             context.delete(customer)
         }
         let technicians = try context.fetch(FetchDescriptor<Technician>())
-        for technician in technicians where technician.id == technicianID || technician.contactInfo == GunnAireUITestIdentity.technicianEmail {
+        for technician in technicians where
+            technician.id == technicianID ||
+            technician.id == timeOffTechnicianID ||
+            technician.contactInfo == GunnAireUITestIdentity.technicianEmail {
             context.delete(technician)
         }
         let inventoryMovements = try context.fetch(FetchDescriptor<InventoryMovement>())
@@ -401,7 +438,9 @@ private enum GunnAireUITestFixtures {
             isServicePackageFixture ||
             isWarrantyClaimFixture ||
             isFieldExpenseFixture ||
-            isOperationalAlertFixture else { return }
+            isOperationalAlertFixture ||
+            isTimeOffRequestFixture ||
+            isTechnicianRouteFixture else { return }
 
         let customer = Customer(
             id: customerID,
@@ -735,6 +774,20 @@ private enum GunnAireUITestFixtures {
         context.insert(equipment)
         context.insert(serviceLocation)
         context.insert(call)
+        if isTechnicianRouteFixture {
+            context.insert(ServiceCall(
+                id: routeServiceCallID,
+                googleEventManagedByApp: true,
+                eventTitle: "Follow-up airflow repair",
+                siteAddress: "200 Route Test Road, Clemmons, NC",
+                type: .repair,
+                scheduledDate: scheduledDate.addingTimeInterval(2 * 60 * 60),
+                duration: 90 * 60,
+                assignedTechnician: technician,
+                customer: customer,
+                status: .scheduled
+            ))
+        }
         if isOperationalAlertFixture {
             context.insert(CustomerOperationalAlert(
                 id: operationalAlertID,
@@ -747,6 +800,50 @@ private enum GunnAireUITestFixtures {
                 detail: "Administrator review is required before dispatching or starting another visit.",
                 createdByEmail: AppAccess.primaryAdminEmail
             ))
+        }
+        if isBusinessTaskFixture {
+            let createdTask = try BusinessTaskPolicy.makeTask(
+                title: "Confirm roof access before dispatch",
+                taskDescription: "Call the property manager and record the approved access plan.",
+                priority: .urgent,
+                assignedToEmail: AppAccess.primaryAdminEmail,
+                dueAt: Date().addingTimeInterval(-3_600),
+                customerID: customer.id,
+                customerName: customer.name,
+                serviceLocationID: serviceLocation.id,
+                serviceLocationName: serviceLocation.displayName,
+                serviceCallID: call.id,
+                serviceCallSummary: "\(call.type.displayName) • \(call.scheduledDate.formatted(date: .abbreviated, time: .omitted))",
+                actorEmail: AppAccess.primaryAdminEmail,
+                creationOperationID: businessTaskOperationID
+            )
+            createdTask.task.id = businessTaskID
+            createdTask.event.taskID = businessTaskID
+            context.insert(createdTask.task)
+            context.insert(createdTask.event)
+        }
+        if isTimeOffRequestFixture {
+            let timeOffTechnician = Technician(
+                id: timeOffTechnicianID,
+                name: "UI Time-Off Technician",
+                contactInfo: "time-off-review-fixture@gunnaire.com"
+            )
+            context.insert(timeOffTechnician)
+            let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date().addingTimeInterval(86_400)
+            let startsAt = Calendar.current.date(bySettingHour: 8, minute: 0, second: 0, of: tomorrow) ?? tomorrow
+            let createdRequest = try TechnicianTimeOffPolicy.makeRequest(
+                technicianID: timeOffTechnician.id,
+                technicianName: timeOffTechnician.name,
+                actorEmail: GunnAireUITestIdentity.technicianEmail,
+                startsAt: startsAt,
+                endsAt: startsAt.addingTimeInterval(8 * 3_600),
+                privateReason: "Private appointment",
+                operationID: timeOffOperationID
+            )
+            createdRequest.request.id = timeOffRequestID
+            createdRequest.event.requestID = timeOffRequestID
+            context.insert(createdRequest.request)
+            context.insert(createdRequest.event)
         }
         if isWarrantyClaimFixture {
             let evidence = ServiceDocumentAttachment(

@@ -23,12 +23,11 @@ credential rotation, production restores, or customer communications.
 
    ```sh
    python3 Tools/release_preflight.py \
-     --archive /private/tmp/GunnAireOps-current-2026083001-qbo-vendor-ios-devsigned.xcarchive \
-     --mac-app "/private/tmp/GunnAireOps-current-2026083001-qbo-vendor-mac-devsigned.xcarchive/Products/Applications/GunnAire Ops.app" \
-     --mac-result /private/tmp/GunnAireOps-qbo-vendor-release-mac-2026083001.xcresult \
-     --cloudkit-development-export /Users/gunnaire/Downloads/cloudkit-development-8.ckdb \
-     --cloudkit-production-export /Users/gunnaire/Downloads/cloudkit-production-7.ckdb \
-     --online
+     --archive "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083012 Current Source).xcarchive" \
+     --mac-app "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083012 Current Source Mac Catalyst).app" \
+     --mac-result "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/GunnAire Ops 1.0 (2026083012 Current Source Mac Catalyst).xcresult" \
+     --cloudkit-development-export /Users/gunnaire/Downloads/cloudkit-development-11.ckdb \
+     --cloudkit-production-export /Users/gunnaire/Downloads/cloudkit-production-7.ckdb
    ```
 
    The utility validates source/archive version parity, strict signing,
@@ -37,7 +36,9 @@ credential rotation, production restores, or customer communications.
    login scope, the exact universal Mac Catalyst Release app/result, privacy
    manifests, hardened runtime, release configuration, QBO/Google OAuth
    identifiers, app/dSYM UUIDs, binary hygiene, and the exact additive CloudKit
-   delta. Development-signing warnings are expected until the Apple
+   delta including record system fields and security grants. Build 3012's exact
+   local run passes 61 checks with four expected warnings and zero failures.
+   Development-signing warnings are expected until the Apple
    Distribution private key is installed. Use
    `--require-app-store-signing` only for the final upload candidate.
 2. Install the canonical dependency set with `python3 -m pip install -r requirements.txt`.

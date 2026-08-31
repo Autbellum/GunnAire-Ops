@@ -429,6 +429,84 @@ enum ProjectBillingPolicy {
         }
     }
 
+    /// Produces a durable progress-invoice snapshot whose net subtotal equals
+    /// the exact milestone cents. A contract-level discount is allocated
+    /// proportionally and becomes an exact fixed discount on that milestone;
+    /// its original reason and authorization evidence remain attached.
+    static func progressDocumentSnapshotJSON(
+        from sourceJSON: String?,
+        targetAmount: Double
+    ) throws -> String {
+        let source = CatalogLineItemSnapshot.decoded(from: sourceJSON)
+        guard !source.isEmpty,
+              targetAmount.isFinite,
+              targetAmount > 0 else {
+            throw ProjectBillingValidationError.missingCatalogSnapshot
+        }
+
+        guard let sourceDiscount = CatalogLineItemSnapshot.documentDiscount(from: sourceJSON) else {
+            let snapshots = try progressSnapshots(from: source, targetAmount: targetAmount)
+            guard let encoded = CatalogLineItemSnapshot.encoded(snapshots: snapshots),
+                  BillingDocumentDiscountPolicy.currencyCents(
+                    BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: encoded) ?? -1
+                  ) == BillingDocumentDiscountPolicy.currencyCents(targetAmount) else {
+                throw ProjectBillingValidationError.invalidPersistedPlan
+            }
+            return encoded
+        }
+
+        let sourceGross = source.reduce(0) { $0 + $1.unitPrice * $1.quantity }
+        guard sourceGross.isFinite,
+              sourceGross > 0,
+              let sourceDiscountAmount = sourceDiscount.amount(for: sourceGross),
+              sourceDiscountAmount > 0,
+              sourceDiscountAmount < sourceGross else {
+            throw ProjectBillingValidationError.invalidPersistedPlan
+        }
+
+        let netFraction = (sourceGross - sourceDiscountAmount) / sourceGross
+        guard netFraction.isFinite, netFraction > 0 else {
+            throw ProjectBillingValidationError.invalidPersistedPlan
+        }
+        let targetGross = BillingDocumentDiscountPolicy.roundCurrency(targetAmount / netFraction)
+        let snapshots = try progressSnapshots(from: source, targetAmount: targetGross)
+        let allocatedGross = BillingDocumentDiscountPolicy.roundCurrency(
+            snapshots.reduce(0) { $0 + $1.unitPrice * $1.quantity }
+        )
+        let allocatedDiscountAmount = BillingDocumentDiscountPolicy.roundCurrency(allocatedGross - targetAmount)
+        if BillingDocumentDiscountPolicy.currencyCents(allocatedDiscountAmount) == 0 {
+            guard let encoded = CatalogLineItemSnapshot.encoded(snapshots: snapshots),
+                  BillingDocumentDiscountPolicy.currencyCents(
+                    BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: encoded) ?? -1
+                  ) == BillingDocumentDiscountPolicy.currencyCents(targetAmount) else {
+                throw ProjectBillingValidationError.invalidPersistedPlan
+            }
+            return encoded
+        }
+        guard allocatedDiscountAmount > 0,
+              allocatedDiscountAmount < allocatedGross else {
+            throw ProjectBillingValidationError.invalidPersistedPlan
+        }
+
+        let milestoneDiscount = AuthorizedDocumentDiscount(
+            kind: .fixedAmount,
+            value: allocatedDiscountAmount,
+            grossSubtotalAtAuthorization: allocatedGross,
+            reason: sourceDiscount.reason,
+            authorizedByEmail: sourceDiscount.authorizedByEmail,
+            authorizedAt: sourceDiscount.authorizedAt
+        )
+        guard let encoded = CatalogLineItemSnapshot.encoded(
+            snapshots: snapshots,
+            documentDiscount: milestoneDiscount
+        ), BillingDocumentDiscountPolicy.currencyCents(
+            BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: encoded) ?? -1
+        ) == BillingDocumentDiscountPolicy.currencyCents(targetAmount) else {
+            throw ProjectBillingValidationError.invalidPersistedPlan
+        }
+        return encoded
+    }
+
     static func summary(
         milestones: [ProjectMilestone],
         invoices: [Invoice],

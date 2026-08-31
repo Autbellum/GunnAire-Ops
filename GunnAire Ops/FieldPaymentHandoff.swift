@@ -51,16 +51,7 @@ final class FieldPaymentHandoff: ObservableObject {
         guard canStartFromCurrentDevice, amount > 0 else { return false }
 
         end()
-        let activity = NSUserActivity(activityType: Self.activityType)
-        activity.title = "Collect field payment"
-        // The destination resolves the current balance from its authorized local
-        // invoice. Do not place customer or financial values in Handoff metadata.
-        activity.userInfo = ["invoiceID": invoiceID.uuidString]
-        activity.requiredUserInfoKeys = ["invoiceID"]
-        activity.isEligibleForHandoff = true
-        activity.isEligibleForSearch = false
-        activity.isEligibleForPublicIndexing = false
-        activity.isEligibleForPrediction = false
+        let activity = Self.makeActivity(invoiceID: invoiceID)
         activity.becomeCurrent()
         currentActivity = activity
         activeInvoiceID = invoiceID
@@ -81,8 +72,25 @@ final class FieldPaymentHandoff: ObservableObject {
         activeInvoiceID = nil
     }
 
-    static func invoiceID(from activity: NSUserActivity) -> UUID? {
+    static func makeActivity(invoiceID: UUID, now: Date = Date()) -> NSUserActivity {
+        let activity = NSUserActivity(activityType: activityType)
+        activity.title = "Collect field payment"
+        // The destination resolves the current balance from its authorized local
+        // invoice. Do not place customer or financial values in Handoff metadata.
+        activity.userInfo = ["invoiceID": invoiceID.uuidString]
+        activity.requiredUserInfoKeys = ["invoiceID"]
+        activity.expirationDate = now.addingTimeInterval(validityDuration)
+        activity.isEligibleForHandoff = true
+        activity.isEligibleForSearch = false
+        activity.isEligibleForPublicIndexing = false
+        activity.isEligibleForPrediction = false
+        return activity
+    }
+
+    static func invoiceID(from activity: NSUserActivity, now: Date = Date()) -> UUID? {
         guard activity.activityType == activityType,
+              let expirationDate = activity.expirationDate,
+              expirationDate > now,
               let rawID = activity.userInfo?["invoiceID"] as? String else {
             return nil
         }

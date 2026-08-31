@@ -390,7 +390,12 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     private static func refreshFailureMessage(statusCode: Int, raw: String?) -> String {
-        let detail = raw?.isEmpty == false ? " Intuit detail: \(String(raw!.prefix(700)))" : ""
+        let detail: String
+        if let raw, !raw.isEmpty {
+            detail = " Intuit detail: \(String(raw.prefix(700)))"
+        } else {
+            detail = ""
+        }
         switch statusCode {
         case 400, 401, 403:
             return "QuickBooks token refresh was rejected (HTTP \(statusCode)). The saved refresh token is expired, revoked, already rotated, or belongs to different production credentials. Disconnect QuickBooks, then connect again with a QuickBooks company admin.\(detail)"
@@ -2060,6 +2065,84 @@ struct QuickBooksLineItem: Codable {
     let DetailType: String
     let Description: String?
     let SalesItemLineDetail: QuickBooksSalesItemLineDetail
+    let DiscountLineDetail: QuickBooksDiscountLineDetail?
+
+    init(
+        Amount: Double,
+        DetailType: String,
+        Description: String?,
+        SalesItemLineDetail: QuickBooksSalesItemLineDetail,
+        DiscountLineDetail: QuickBooksDiscountLineDetail? = nil
+    ) {
+        self.Amount = Amount
+        self.DetailType = DetailType
+        self.Description = Description
+        self.SalesItemLineDetail = SalesItemLineDetail
+        self.DiscountLineDetail = DiscountLineDetail
+    }
+
+    static func documentDiscount(
+        amount: Double,
+        discount: AuthorizedDocumentDiscount
+    ) -> QuickBooksLineItem {
+        QuickBooksLineItem(
+            Amount: amount,
+            DetailType: "DiscountLineDetail",
+            Description: discount.reason,
+            SalesItemLineDetail: QuickBooksSalesItemLineDetail(
+                ItemRef: QuickBooksReference(value: "", name: nil)
+            ),
+            DiscountLineDetail: QuickBooksDiscountLineDetail(
+                PercentBased: discount.kind == .percentage,
+                DiscountPercent: discount.kind == .percentage ? discount.value : nil
+            )
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case Amount, DetailType, Description, SalesItemLineDetail, DiscountLineDetail
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let amount = try? container.decode(Double.self, forKey: .Amount) {
+            Amount = amount
+        } else if let amount = try? container.decode(Int.self, forKey: .Amount) {
+            Amount = Double(amount)
+        } else if let amount = try? container.decode(String.self, forKey: .Amount),
+                  let parsed = Double(amount) {
+            Amount = parsed
+        } else {
+            Amount = 0
+        }
+        DetailType = try container.decode(String.self, forKey: .DetailType)
+        Description = try container.decodeIfPresent(String.self, forKey: .Description)
+        SalesItemLineDetail = try container.decodeIfPresent(
+            QuickBooksSalesItemLineDetail.self,
+            forKey: .SalesItemLineDetail
+        ) ?? QuickBooksSalesItemLineDetail(ItemRef: QuickBooksReference(value: "", name: nil))
+        DiscountLineDetail = try container.decodeIfPresent(
+            QuickBooksDiscountLineDetail.self,
+            forKey: .DiscountLineDetail
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(Amount, forKey: .Amount)
+        try container.encode(DetailType, forKey: .DetailType)
+        try container.encodeIfPresent(Description, forKey: .Description)
+        if DetailType == "DiscountLineDetail" {
+            try container.encodeIfPresent(DiscountLineDetail, forKey: .DiscountLineDetail)
+        } else {
+            try container.encode(SalesItemLineDetail, forKey: .SalesItemLineDetail)
+        }
+    }
+}
+
+struct QuickBooksDiscountLineDetail: Codable {
+    let PercentBased: Bool
+    let DiscountPercent: Double?
 }
 
 struct QuickBooksSalesItemLineDetail: Codable {
@@ -2407,6 +2490,7 @@ struct QuickBooksEstimateCreate: Codable {
     let BillEmail: QuickBooksEmailAddress?
     let ShipAddr: QuickBooksAddress?
     let GlobalTaxCalculation: String?
+    let ApplyTaxAfterDiscount: Bool?
 
     init(
         CustomerRef: QuickBooksReference,
@@ -2414,7 +2498,8 @@ struct QuickBooksEstimateCreate: Codable {
         PrivateNote: String?,
         BillEmail: QuickBooksEmailAddress? = nil,
         ShipAddr: QuickBooksAddress? = nil,
-        GlobalTaxCalculation: String? = nil
+        GlobalTaxCalculation: String? = nil,
+        ApplyTaxAfterDiscount: Bool? = nil
     ) {
         self.CustomerRef = CustomerRef
         self.Line = Line
@@ -2422,6 +2507,7 @@ struct QuickBooksEstimateCreate: Codable {
         self.BillEmail = BillEmail
         self.ShipAddr = ShipAddr
         self.GlobalTaxCalculation = GlobalTaxCalculation
+        self.ApplyTaxAfterDiscount = ApplyTaxAfterDiscount
     }
 }
 
@@ -2639,6 +2725,7 @@ struct QuickBooksInvoiceCreate: Codable {
     let ShipAddr: QuickBooksAddress?
     let DueDate: String?
     let GlobalTaxCalculation: String?
+    let ApplyTaxAfterDiscount: Bool?
 
     init(
         CustomerRef: QuickBooksReference,
@@ -2647,7 +2734,8 @@ struct QuickBooksInvoiceCreate: Codable {
         BillEmail: QuickBooksEmailAddress? = nil,
         ShipAddr: QuickBooksAddress? = nil,
         DueDate: String? = nil,
-        GlobalTaxCalculation: String? = nil
+        GlobalTaxCalculation: String? = nil,
+        ApplyTaxAfterDiscount: Bool? = nil
     ) {
         self.CustomerRef = CustomerRef
         self.Line = Line
@@ -2656,6 +2744,7 @@ struct QuickBooksInvoiceCreate: Codable {
         self.ShipAddr = ShipAddr
         self.DueDate = DueDate
         self.GlobalTaxCalculation = GlobalTaxCalculation
+        self.ApplyTaxAfterDiscount = ApplyTaxAfterDiscount
     }
 }
 
@@ -2670,6 +2759,7 @@ struct QuickBooksInvoiceUpdate: Codable {
     let ShipAddr: QuickBooksAddress?
     let DueDate: String?
     let GlobalTaxCalculation: String?
+    let ApplyTaxAfterDiscount: Bool?
 
     init(
         Id: String,
@@ -2680,7 +2770,8 @@ struct QuickBooksInvoiceUpdate: Codable {
         BillEmail: QuickBooksEmailAddress? = nil,
         ShipAddr: QuickBooksAddress? = nil,
         DueDate: String? = nil,
-        GlobalTaxCalculation: String? = nil
+        GlobalTaxCalculation: String? = nil,
+        ApplyTaxAfterDiscount: Bool? = nil
     ) {
         self.Id = Id
         self.SyncToken = SyncToken
@@ -2692,6 +2783,7 @@ struct QuickBooksInvoiceUpdate: Codable {
         self.ShipAddr = ShipAddr
         self.DueDate = DueDate
         self.GlobalTaxCalculation = GlobalTaxCalculation
+        self.ApplyTaxAfterDiscount = ApplyTaxAfterDiscount
     }
 }
 

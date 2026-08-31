@@ -77,8 +77,7 @@ struct AppRootView: View {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         let email: String
-        if arguments.contains("-uiTestAuthenticatedAdmin") ||
-            arguments.contains("-appStoreScreenshotFixtures") {
+        if arguments.contains("-uiTestAuthenticatedAdmin") {
             email = AppAccess.primaryAdminEmail
         } else if arguments.contains("-uiTestAuthenticatedAccounting") {
             email = GunnAireUITestIdentity.accountingEmail
@@ -86,6 +85,8 @@ struct AppRootView: View {
             email = GunnAireUITestIdentity.technicianEmail
         } else if arguments.contains("-uiTestAuthenticatedStandard") {
             email = GunnAireUITestIdentity.standardEmail
+        } else if arguments.contains("-appStoreScreenshotFixtures") {
+            email = AppAccess.primaryAdminEmail
         } else {
             return
         }

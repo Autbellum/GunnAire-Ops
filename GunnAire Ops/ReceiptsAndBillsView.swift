@@ -3356,9 +3356,11 @@ private struct SupplierOrderConfirmationSheet: View {
     }
 
     private var canSubmitConnector: Bool {
-        order.lineCount == 1 &&
-            selectedConnectorKind != nil &&
-            (order.itemSKU?.nilIfBlank != nil || order.vendorPartNumber?.nilIfBlank != nil)
+        selectedConnectorKind != nil &&
+            !order.purchaseOrderLines.isEmpty &&
+            order.purchaseOrderLines.allSatisfy {
+                $0.itemSKU?.nilIfBlank != nil || $0.vendorPartNumber?.nilIfBlank != nil
+            }
     }
 
     var body: some View {
@@ -3413,15 +3415,14 @@ private struct SupplierOrderConfirmationSheet: View {
                             .disabled(!canSubmitConnector || isSubmittingConnector)
                             .accessibilityIdentifier("SubmitSupplierConnectorOrder")
 
-                            if order.lineCount > 1 {
-                                Text("Approved connector contract v1 accepts one item per order. Confirm this multi-line order manually until the supplier adapter supports line arrays.")
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                            }
+                            Text("Contract v\(SupplierConnectorContract.currentVersion) submits and reconciles all \(order.lineCount) purchase-order line\(order.lineCount == 1 ? "" : "s") by stable line ID.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
 
-                            if order.itemSKU?.nilIfBlank == nil,
-                               order.vendorPartNumber?.nilIfBlank == nil {
-                                Text("Add an internal SKU or supplier part number before using a connector.")
+                            if order.purchaseOrderLines.contains(where: {
+                                $0.itemSKU?.nilIfBlank == nil && $0.vendorPartNumber?.nilIfBlank == nil
+                            }) {
+                                Text("Add an internal SKU or supplier part number to every line before using a connector.")
                                     .font(.caption)
                                     .foregroundStyle(.orange)
                             }

@@ -69,12 +69,14 @@ struct BillingDocumentsView: View {
     @State private var newlyCreatedLineItems: [UUID: Item] = [:]
     @State private var selectedItemQuantities: [UUID: Double] = [:]
     @State private var selectedItemPriceAdjustments: [UUID: AuthorizedLinePriceAdjustment] = [:]
+    @State private var selectedDocumentDiscount: AuthorizedDocumentDiscount?
     @State private var selectedItemEquipmentIDs: [UUID: UUID] = [:]
     @State private var selectedItemAssemblySnapshots: [UUID: CatalogLineAssemblySnapshot] = [:]
     @State private var selectedItemizedAssemblyMemberships: [UUID: Set<UUID>] = [:]
     @State private var selectedInvoicePaymentTerms: InvoicePaymentTerms = .dueOnReceipt
     @State private var invoiceCustomDueDate = Calendar.current.startOfDay(for: Date())
     @State private var itemPendingPriceAdjustment: Item?
+    @State private var showingDocumentDiscountEditor = false
     @State private var newItemName = ""
     @State private var newItemType: CatalogItemType = .service
     @State private var newItemSKU = ""
@@ -177,8 +179,28 @@ struct BillingDocumentsView: View {
         ) ? call : nil
     }
 
-    private var selectedTotal: Double {
+    private var selectedGrossSubtotal: Double {
         selectedLineItems.reduce(0) { $0 + effectiveUnitPrice(for: $1) * lineItemQuantity(for: $1) }
+    }
+
+    private var selectedDiscountAmount: Double? {
+        selectedDocumentDiscount?.amount(for: selectedGrossSubtotal)
+    }
+
+    private var selectedTotal: Double {
+        max(
+            BillingDocumentDiscountPolicy.roundCurrency(
+                selectedGrossSubtotal - (selectedDiscountAmount ?? 0)
+            ),
+            0
+        )
+    }
+
+    private var documentDiscountValidationMessage: String? {
+        BillingDocumentDiscountPolicy.validationMessage(
+            for: selectedDocumentDiscount,
+            grossSubtotal: selectedGrossSubtotal
+        )
     }
 
     private var selectedHasTaxableLines: Bool {
@@ -484,7 +506,8 @@ struct BillingDocumentsView: View {
             quantities: selectedItemQuantities,
             priceAdjustments: selectedItemPriceAdjustments,
             servicedEquipment: selectedLineEquipmentSnapshots,
-            assemblies: selectedItemAssemblySnapshots
+            assemblies: selectedItemAssemblySnapshots,
+            documentDiscount: selectedDocumentDiscount
         )
     }
 
@@ -652,6 +675,7 @@ struct BillingDocumentsView: View {
         isCreatingDocument ||
             customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             selectedItems.isEmpty ||
+            documentDiscountValidationMessage != nil ||
             (selectedDocumentKind == .invoice && invoiceWorkflowBlockedMessage != nil)
     }
 
@@ -659,6 +683,7 @@ struct BillingDocumentsView: View {
         isCreatingDocument ||
             customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             selectedItems.isEmpty ||
+            documentDiscountValidationMessage != nil ||
             invoiceWorkflowBlockedMessage != nil
     }
 
@@ -2003,6 +2028,19 @@ GunnAire
                 )
                 .tint(Color.brandGold)
             }
+            .sheet(isPresented: $showingDocumentDiscountEditor) {
+                DocumentDiscountSheet(
+                    grossSubtotal: selectedGrossSubtotal,
+                    existingDiscount: selectedDocumentDiscount,
+                    onAuthorize: { kind, value, reason in
+                        authorizeDocumentDiscount(kind: kind, value: value, reason: reason)
+                    },
+                    onRemove: {
+                        selectedDocumentDiscount = nil
+                    }
+                )
+                .tint(Color.brandGold)
+            }
             .sheet(item: $agreementBillingCandidatePendingReview) { candidate in
                 if let agreement = maintenanceAgreement(for: candidate),
                    let billingItem = billingCatalogItem(for: candidate) {
@@ -2896,9 +2934,6 @@ GunnAire
                         .buttonStyle(.bordered)
                     }
 
-                    Text("Total: \(selectedTotal, format: .currency(code: "USD"))")
-                        .font(.headline)
-
                     lineItemBuilderView
 
                     VStack(alignment: .leading, spacing: 4) {
@@ -3512,12 +3547,8 @@ GunnAire
                             .buttonStyle(.bordered)
                         }
 
-                        HStack {
-                            Text(selectedHasTaxableLines ? "Subtotal" : "Total")
-                            Spacer()
-                            Text(selectedTotal, format: .currency(code: "USD"))
-                                .font(.headline)
-                        }
+                        documentDiscountControls
+                        documentSubtotalSummary
 
                         if selectedHasTaxableLines {
                             Label(
@@ -3558,7 +3589,12 @@ GunnAire
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(isCreatingDocument || customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedItems.isEmpty)
+                            .disabled(
+                                isCreatingDocument ||
+                                customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                                selectedItems.isEmpty ||
+                                documentDiscountValidationMessage != nil
+                            )
                         }
 
                         if workspaceMode.showsInvoiceBuilder {
@@ -3575,6 +3611,11 @@ GunnAire
                                     .font(.caption)
                                     .foregroundColor(.orange)
                             }
+                        }
+                        if let message = documentDiscountValidationMessage {
+                            Text(message)
+                                .font(.caption)
+                                .foregroundColor(.orange)
                         }
                         if let selectedLaborCosting, selectedLaborCosting.uncostedMinutes > 0 {
                             Text(uncostedLaborDescription(selectedLaborCosting.uncostedMinutes))
@@ -3646,6 +3687,82 @@ GunnAire
                     }
                 }
 
+    }
+
+    @ViewBuilder
+    private var documentDiscountControls: some View {
+        if let discount = selectedDocumentDiscount {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline) {
+                    Label("Document Discount", systemImage: "tag.fill")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    if let selectedDiscountAmount {
+                        Text("−\(selectedDiscountAmount.formatted(.currency(code: "USD")))")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.green)
+                    } else {
+                        Text("Reauthorization required")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                Text("\(discount.valueDisplayName) • \(discount.reason)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("AuthorizedDocumentDiscount")
+                if let documentDiscountValidationMessage {
+                    Label(documentDiscountValidationMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                if canAuthorizePriceAdjustments {
+                    Button("Edit Document Discount") {
+                        showingDocumentDiscountEditor = true
+                    }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("DocumentDiscountAction")
+                }
+            }
+            .padding(.vertical, 2)
+        } else if canAuthorizePriceAdjustments, !selectedLineItems.isEmpty {
+            Button {
+                showingDocumentDiscountEditor = true
+            } label: {
+                Label("Add Document Discount", systemImage: "tag")
+            }
+            .font(.caption)
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("DocumentDiscountAction")
+        }
+    }
+
+    @ViewBuilder
+    private var documentSubtotalSummary: some View {
+        if selectedDocumentDiscount != nil {
+            HStack {
+                Text("Items Subtotal")
+                Spacer()
+                Text(selectedGrossSubtotal, format: .currency(code: "USD"))
+                    .foregroundStyle(.secondary)
+            }
+            if let selectedDiscountAmount {
+                HStack {
+                    Text("Discount")
+                    Spacer()
+                    Text("−\(selectedDiscountAmount.formatted(.currency(code: "USD")))")
+                        .foregroundStyle(.green)
+                }
+            }
+        }
+        HStack {
+            Text(selectedHasTaxableLines ? "Taxable Subtotal" : "Total")
+            Spacer()
+            Text(selectedTotal, format: .currency(code: "USD"))
+                .font(.headline)
+                .accessibilityIdentifier("DocumentNetSubtotal")
+        }
     }
 
     @ViewBuilder
@@ -3794,6 +3911,9 @@ GunnAire
                                 }
                             }
                         }
+
+                        documentDiscountControls
+                        documentSubtotalSummary
 
                         if !catalogItemsAwaitingReview.isEmpty && !canApprovePricebookItems {
                             Label(
@@ -4345,15 +4465,13 @@ GunnAire
 
         do {
             try ProjectBillingPolicy.validatePersistedPlan(currentProjectMilestones, contractAmount: estimate.amount)
-            let progressSnapshots = try ProjectBillingPolicy.progressSnapshots(
-                from: estimate.catalogLineSnapshots,
+            let snapshotJSON = try ProjectBillingPolicy.progressDocumentSnapshotJSON(
+                from: estimate.catalogSnapshotJSON,
                 targetAmount: milestone.plannedAmount
             )
-            guard let snapshotJSON = CatalogLineItemSnapshot.encoded(snapshots: progressSnapshots) else {
-                throw ProjectBillingValidationError.missingCatalogSnapshot
-            }
-            let snapshotTotal = progressSnapshots.reduce(0) { $0 + $1.unitPrice * $1.quantity }
-            guard abs(snapshotTotal - milestone.plannedAmount) < 0.01 else {
+            guard BillingDocumentDiscountPolicy.currencyCents(
+                BillingDocumentDiscountPolicy.netSubtotal(snapshotJSON: snapshotJSON) ?? -1
+            ) == BillingDocumentDiscountPolicy.currencyCents(milestone.plannedAmount) else {
                 throw ProjectBillingValidationError.invalidPersistedPlan
             }
             let invoiceCreatedAt = Date()
@@ -7068,10 +7186,11 @@ GunnAire
 
         let restoredItems = restoredCatalogItems(snapshotJSON: catalogSnapshotJSON, lineItemSummary: lineItemSummary)
         let snapshots = CatalogLineItemSnapshot.decoded(from: catalogSnapshotJSON)
-        if restoredItems.isEmpty, activeServiceCall != nil {
+        if restoredItems.isEmpty {
             clearSelectedCatalogLines()
         } else {
             selectedItems = Set(restoredItems.map(\.id))
+            selectedDocumentDiscount = CatalogLineItemSnapshot.documentDiscount(from: catalogSnapshotJSON)
             selectedItemQuantities = Dictionary(
                 uniqueKeysWithValues: snapshots.map { ($0.catalogItemID, $0.quantity) }
             )
@@ -7360,9 +7479,11 @@ GunnAire
         guard prepareEstimateDocumentationForQuickBooksSend(estimate) else {
             return
         }
-        let email = estimate.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEmail = estimate.customer.email?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let email = trimmedEmail.flatMap { $0.isEmpty ? nil : $0 }
         actionMessage = "Prepared estimate PDF and attachments. Sending estimate through QuickBooks..."
-        QuickBooksDataAPI.shared.sendEstimate(id: quickBooksID, to: email?.isEmpty == false ? email : nil) { result in
+        QuickBooksDataAPI.shared.sendEstimate(id: quickBooksID, to: email) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success:
@@ -7371,9 +7492,11 @@ GunnAire
                         estimate.status = "sent"
                     }
                     try? modelContext.save()
-                    actionMessage = email?.isEmpty == false
-                        ? "Estimate sent through QuickBooks to \(email!)."
-                        : "Estimate sent through QuickBooks."
+                    if let email {
+                        actionMessage = "Estimate sent through QuickBooks to \(email)."
+                    } else {
+                        actionMessage = "Estimate sent through QuickBooks."
+                    }
                 case .failure(let error):
                     actionMessage = "QuickBooks estimate send failed: \(error.localizedDescription)"
                 }
@@ -7394,9 +7517,11 @@ GunnAire
         guard prepareInvoiceDocumentationForQuickBooksSend(invoice) else {
             return
         }
-        let email = invoice.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEmail = invoice.customer.email?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let email = trimmedEmail.flatMap { $0.isEmpty ? nil : $0 }
         actionMessage = "Prepared service report and invoice attachments. Sending invoice through QuickBooks..."
-        QuickBooksDataAPI.shared.sendInvoice(id: quickBooksID, to: email?.isEmpty == false ? email : nil) { result in
+        QuickBooksDataAPI.shared.sendInvoice(id: quickBooksID, to: email) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success:
@@ -7405,9 +7530,11 @@ GunnAire
                         invoice.status = "sent"
                     }
                     try? modelContext.save()
-                    actionMessage = email?.isEmpty == false
-                        ? "Invoice sent through QuickBooks to \(email!)."
-                        : "Invoice sent through QuickBooks."
+                    if let email {
+                        actionMessage = "Invoice sent through QuickBooks to \(email)."
+                    } else {
+                        actionMessage = "Invoice sent through QuickBooks."
+                    }
                 case .failure(let error):
                     actionMessage = "QuickBooks invoice send failed: \(error.localizedDescription)"
                 }
@@ -7835,6 +7962,7 @@ GunnAire
         selectedItems.removeAll()
         selectedItemQuantities.removeAll()
         selectedItemPriceAdjustments.removeAll()
+        selectedDocumentDiscount = nil
         selectedItemEquipmentIDs.removeAll()
         selectedItemAssemblySnapshots.removeAll()
         selectedItemizedAssemblyMemberships.removeAll()
@@ -7918,6 +8046,26 @@ GunnAire
         selectedItemPriceAdjustments.removeValue(forKey: item.id)
     }
 
+    private func authorizeDocumentDiscount(
+        kind: BillingDocumentDiscountKind,
+        value: Double,
+        reason: String
+    ) -> String? {
+        do {
+            selectedDocumentDiscount = try BillingDocumentDiscountPolicy.authorize(
+                kind: kind,
+                value: value,
+                grossSubtotal: selectedGrossSubtotal,
+                reason: reason,
+                actorEmail: currentUserEmail,
+                users: users
+            )
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     private func resolveCustomerForDocument() -> Customer {
         let trimmedName = customerName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedPhone = customerPhone.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -7944,6 +8092,10 @@ GunnAire
 
     private func createDocument() {
         guard !selectedLineItems.isEmpty else { return }
+        if let documentDiscountValidationMessage {
+            actionMessage = documentDiscountValidationMessage
+            return
+        }
 
         isCreatingDocument = true
         let customer = resolveCustomerForDocument()
@@ -8158,7 +8310,8 @@ GunnAire
                     PrivateNote: quickBooksPrivateNote(for: estimate),
                     BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
                     ShipAddr: estimate.siteAddress.flatMap(nilIfBlank).map { QuickBooksAddress(Line1: $0) },
-                    GlobalTaxCalculation: "TaxExcluded"
+                    GlobalTaxCalculation: "TaxExcluded",
+                    ApplyTaxAfterDiscount: estimate.documentDiscount == nil ? nil : true
                 )
                 liveAPI.fetchEstimates { fetchResult in
                     DispatchQueue.main.async {
@@ -8239,13 +8392,20 @@ GunnAire
             existing: entries.isEmpty ? nil : entries.joined(separator: "\n"),
             snapshotJSON: estimate.catalogSnapshotJSON
         )
-        return QuickBooksEstimateLineage.appendingLineage(to: adjustedNote, for: estimate)
+        let discountedNote = BillingDocumentDiscountAudit.quickBooksPrivateNote(
+            existing: adjustedNote,
+            snapshotJSON: estimate.catalogSnapshotJSON
+        )
+        return QuickBooksEstimateLineage.appendingLineage(to: discountedNote, for: estimate)
     }
 
     private func quickBooksPrivateNote(for invoice: Invoice) -> String? {
         QuickBooksInvoiceLineage.appendingLineage(
-            to: BillingPriceAdjustmentAudit.quickBooksPrivateNote(
-                existing: invoice.accountingPrivateNote,
+            to: BillingDocumentDiscountAudit.quickBooksPrivateNote(
+                existing: BillingPriceAdjustmentAudit.quickBooksPrivateNote(
+                    existing: invoice.accountingPrivateNote,
+                    snapshotJSON: invoice.catalogSnapshotJSON
+                ),
                 snapshotJSON: invoice.catalogSnapshotJSON
             ),
             for: invoice
@@ -8304,7 +8464,8 @@ GunnAire
             BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
             ShipAddr: invoice.siteAddress.flatMap(nilIfBlank).map { QuickBooksAddress(Line1: $0) },
             DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
-            GlobalTaxCalculation: "TaxExcluded"
+            GlobalTaxCalculation: "TaxExcluded",
+            ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true
         )
         liveAPI.fetchInvoices { fetchResult in
             DispatchQueue.main.async {
@@ -8383,7 +8544,8 @@ GunnAire
                         BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
                         ShipAddr: invoice.siteAddress.flatMap(nilIfBlank).map { QuickBooksAddress(Line1: $0) },
                         DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
-                        GlobalTaxCalculation: "TaxExcluded"
+                        GlobalTaxCalculation: "TaxExcluded",
+                        ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true
                     )
                     liveAPI.updateInvoice(payload) { updateResult in
                         DispatchQueue.main.async {
@@ -9922,6 +10084,117 @@ private struct LinePriceAdjustmentSheet: View {
                 }
             }
         }
+    }
+}
+
+private struct DocumentDiscountSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let grossSubtotal: Double
+    let existingDiscount: AuthorizedDocumentDiscount?
+    let onAuthorize: (BillingDocumentDiscountKind, Double, String) -> String?
+    let onRemove: () -> Void
+
+    @State private var kind: BillingDocumentDiscountKind
+    @State private var valueText: String
+    @State private var reason: String
+    @State private var validationMessage: String?
+
+    init(
+        grossSubtotal: Double,
+        existingDiscount: AuthorizedDocumentDiscount?,
+        onAuthorize: @escaping (BillingDocumentDiscountKind, Double, String) -> String?,
+        onRemove: @escaping () -> Void
+    ) {
+        self.grossSubtotal = grossSubtotal
+        self.existingDiscount = existingDiscount
+        self.onAuthorize = onAuthorize
+        self.onRemove = onRemove
+        let initialKind = existingDiscount?.kind ?? .percentage
+        _kind = State(initialValue: initialKind)
+        _valueText = State(
+            initialValue: existingDiscount.map {
+                $0.value.formatted(.number.precision(.fractionLength(0...2)))
+            } ?? ""
+        )
+        _reason = State(initialValue: existingDiscount?.reason ?? "")
+    }
+
+    private var parsedValue: Double? {
+        CatalogItemAmountParser.parse(valueText)
+    }
+
+    private var canAuthorize: Bool {
+        parsedValue.map { $0 > 0 } == true &&
+        reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+        reason.count <= 240
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Document Discount") {
+                    LabeledContent("Items Subtotal", value: grossSubtotal.formatted(.currency(code: "USD")))
+                    Picker("Discount Type", selection: $kind) {
+                        ForEach(BillingDocumentDiscountKind.allCases) { option in
+                            Text(option.displayName).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("DocumentDiscountKind")
+
+                    TextField(kind == .percentage ? "Percent" : "Amount", text: $valueText)
+                        .keyboardType(.decimalPad)
+                        .accessibilityIdentifier("DocumentDiscountValue")
+                    TextField("Customer-visible reason", text: $reason, axis: .vertical)
+                        .lineLimit(2...4)
+                        .accessibilityIdentifier("DocumentDiscountReason")
+                    Text("The discount is locked to this exact set of lines. Editing quantity or price requires administrator reauthorization.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let existingDiscount {
+                    Section("Authorization") {
+                        LabeledContent(
+                            "Authorized",
+                            value: existingDiscount.authorizedAt.formatted(date: .abbreviated, time: .shortened)
+                        )
+                        Button("Remove Document Discount", role: .destructive) {
+                            onRemove()
+                            dismiss()
+                        }
+                    }
+                }
+
+                if let validationMessage {
+                    Section {
+                        Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+            .navigationTitle(existingDiscount == nil ? "Add Discount" : "Edit Discount")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Authorize") {
+                        guard let parsedValue else { return }
+                        if let errorMessage = onAuthorize(kind, parsedValue, reason) {
+                            validationMessage = errorMessage
+                        } else {
+                            dismiss()
+                        }
+                    }
+                    .disabled(!canAuthorize)
+                    .accessibilityIdentifier("AuthorizeDocumentDiscount")
+                }
+            }
+        }
+        .frame(minWidth: 500, minHeight: 520)
     }
 }
 

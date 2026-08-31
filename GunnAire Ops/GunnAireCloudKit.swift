@@ -377,7 +377,7 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
 enum GunnAireCloudKitSchemaBootstrap {
     static let initializeArgument = "-initializeCloudKitSchema"
     static let cleanupArgument = "-cleanupCloudKitSchemaBootstrap"
-    static let schemaVersion = 19
+    static let schemaVersion = 22
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
@@ -454,6 +454,12 @@ enum GunnAireCloudKitSchemaBootstrap {
     /// changing the process arguments or completion state used by the app.
     static func seedDevelopmentSchemaForTesting(in modelContext: ModelContext) throws {
         try seedDevelopmentSchema(in: modelContext)
+    }
+
+    /// Keeps marker cleanup directly testable so bounded model fields cannot
+    /// silently strand synthetic records in CloudKit Development.
+    static func cleanupDevelopmentSchemaForTesting(in modelContext: ModelContext) throws {
+        try cleanup(in: modelContext)
     }
 
     private static func seedDevelopmentSchema(in modelContext: ModelContext) throws {
@@ -713,6 +719,19 @@ enum GunnAireCloudKitSchemaBootstrap {
             submittedAt: now,
             createdAt: now
         )
+        try fieldExpenseClaim.approve(
+            reviewerEmail: bootstrapEmail,
+            reviewerRole: .admin,
+            note: marker,
+            hasReceipt: true,
+            now: now
+        )
+        try fieldExpenseClaim.markReimbursed(
+            reference: marker,
+            actorEmail: bootstrapEmail,
+            actorRole: .admin,
+            now: now
+        )
         let operationalAlert = CustomerOperationalAlert(
             customerID: customer.id,
             customerName: customer.name,
@@ -724,6 +743,124 @@ enum GunnAireCloudKitSchemaBootstrap {
             createdAt: now,
             createdByEmail: bootstrapEmail
         )
+        try CustomerOperationalAlertPolicy.resolve(
+            operationalAlert,
+            actorEmail: bootstrapEmail,
+            note: marker,
+            now: now,
+            resolutionOperationID: UUID()
+        )
+        let businessTask = BusinessTask(
+            creationOperationID: UUID(),
+            title: marker,
+            taskDescription: marker,
+            priority: .urgent,
+            assignedToEmail: bootstrapEmail,
+            dueAt: now,
+            customerID: customer.id,
+            customerName: customer.name,
+            serviceLocationID: serviceLocation.id,
+            serviceLocationName: serviceLocation.displayName,
+            serviceCallID: serviceCall.id,
+            serviceCallSummary: marker,
+            estimateID: estimate.id,
+            estimateSummary: marker,
+            createdAt: now,
+            createdByEmail: bootstrapEmail
+        )
+        businessTask.completedAt = now
+        businessTask.completedByEmail = bootstrapEmail
+        businessTask.completionNote = marker
+        businessTask.completionOperationID = UUID()
+        businessTask.cancelledAt = now
+        businessTask.cancelledByEmail = bootstrapEmail
+        businessTask.cancellationReason = marker
+        businessTask.cancellationOperationID = UUID()
+        let businessTaskEvent = BusinessTaskEvent(
+            operationID: UUID(),
+            taskID: businessTask.id,
+            kind: .updated,
+            occurredAt: now,
+            actorEmail: bootstrapEmail,
+            detail: marker,
+            titleSnapshot: marker,
+            assignedToEmailSnapshot: bootstrapEmail,
+            dueAtSnapshot: now,
+            priority: .urgent
+        )
+        let timeOffRequest = TechnicianTimeOffRequest(
+            creationOperationID: UUID(),
+            technicianID: technician.id,
+            technicianNameSnapshot: technician.name,
+            requestedByEmail: bootstrapEmail,
+            startsAt: now,
+            endsAt: now.addingTimeInterval(3_600),
+            privateReason: marker,
+            createdAt: now
+        )
+        timeOffRequest.status = .approved
+        timeOffRequest.updatedAt = now
+        timeOffRequest.reviewedAt = now
+        timeOffRequest.reviewedByEmail = bootstrapEmail
+        timeOffRequest.privateReviewNote = marker
+        timeOffRequest.reviewOperationID = UUID()
+        timeOffRequest.withdrawnAt = now
+        timeOffRequest.withdrawnByEmail = bootstrapEmail
+        timeOffRequest.withdrawalOperationID = UUID()
+        timeOffRequest.cancelledAt = now
+        timeOffRequest.cancelledByEmail = bootstrapEmail
+        timeOffRequest.cancellationReason = marker
+        timeOffRequest.cancellationOperationID = UUID()
+        timeOffRequest.status = .cancelled
+        let availabilityBlock = TechnicianAvailabilityBlock(
+            creationOperationID: UUID(),
+            technicianID: technician.id,
+            startsAt: timeOffRequest.startsAt,
+            endsAt: timeOffRequest.endsAt,
+            kind: .timeOff,
+            reason: marker,
+            createdAt: now,
+            createdByEmail: bootstrapEmail,
+            sourceTimeOffRequestID: timeOffRequest.id
+        )
+        availabilityBlock.cancelledAt = now
+        availabilityBlock.cancelledByEmail = bootstrapEmail
+        availabilityBlock.cancellationReason = marker
+        availabilityBlock.cancellationOperationID = UUID()
+        timeOffRequest.approvedAvailabilityBlockID = availabilityBlock.id
+        let availabilityEvent = TechnicianAvailabilityEvent(
+            operationID: UUID(),
+            requestID: timeOffRequest.id,
+            availabilityBlockID: availabilityBlock.id,
+            kind: .blockCancelled,
+            technicianID: technician.id,
+            technicianNameSnapshot: technician.name,
+            startsAt: timeOffRequest.startsAt,
+            endsAt: timeOffRequest.endsAt,
+            actorEmail: bootstrapEmail,
+            occurredAt: now,
+            privateDetail: marker,
+            requestStatus: .cancelled
+        )
+        let workShift = TechnicianWorkShift(
+            creationOperationID: UUID(),
+            technicianID: technician.id,
+            technicianNameSnapshot: technician.name,
+            weekday: .monday,
+            startMinute: 8 * 60,
+            durationMinutes: 9 * 60,
+            kind: .regular,
+            effectiveFrom: now,
+            effectiveUntil: now.addingTimeInterval(7 * 86_400),
+            timeZoneIdentifier: "America/New_York",
+            note: marker,
+            createdAt: now,
+            createdByEmail: bootstrapEmail
+        )
+        workShift.retiredAt = now
+        workShift.retiredByEmail = bootstrapEmail
+        workShift.retirementReason = marker
+        workShift.retirementOperationID = UUID()
 
         let models: [any PersistentModel] = [
             item,
@@ -733,12 +870,8 @@ enum GunnAireCloudKitSchemaBootstrap {
             correctiveFollowUp,
             customer,
             technician,
-            TechnicianAvailabilityBlock(
-                technicianID: technician.id,
-                startsAt: now,
-                endsAt: now.addingTimeInterval(3_600),
-                reason: marker
-            ),
+            availabilityBlock,
+            workShift,
             maintenanceAgreement,
             invoice,
             estimate,
@@ -829,6 +962,10 @@ enum GunnAireCloudKitSchemaBootstrap {
             fleetEvent,
             fieldExpenseClaim,
             operationalAlert,
+            businessTask,
+            businessTaskEvent,
+            timeOffRequest,
+            availabilityEvent,
         ]
 
         for model in models {
@@ -838,7 +975,22 @@ enum GunnAireCloudKitSchemaBootstrap {
     }
 
     private static func cleanup(in modelContext: ModelContext) throws {
-        for value in try modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>()) where value.title == marker {
+        for value in try modelContext.fetch(FetchDescriptor<TechnicianWorkShift>()) where value.technicianNameSnapshot == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<TechnicianAvailabilityEvent>()) where value.privateDetail == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<TechnicianTimeOffRequest>()) where value.technicianNameSnapshot == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<BusinessTaskEvent>()) where value.detail == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<BusinessTask>()) where value.title == marker {
+            modelContext.delete(value)
+        }
+        for value in try modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>()) where value.createdByEmail == bootstrapEmail {
             modelContext.delete(value)
         }
         for value in try modelContext.fetch(FetchDescriptor<FieldExpenseClaim>()) where value.claimantEmail == bootstrapEmail {

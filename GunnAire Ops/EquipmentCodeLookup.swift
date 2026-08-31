@@ -65,10 +65,10 @@ nonisolated enum EquipmentNameplateParser {
         ("Samsung", ["SAMSUNG"])
     ]
 
-    private static let modelPattern = try! NSRegularExpression(
+    private static let modelPattern = try? NSRegularExpression(
         pattern: #"(?i)(?:^|\s)(?:MODEL(?:\s*(?:NUMBER|NO\.?|#))?|M\s*/\s*N)\s*[:#=\-]?\s*([A-Z0-9][A-Z0-9._/\-]{2,47})"#
     )
-    private static let serialPattern = try! NSRegularExpression(
+    private static let serialPattern = try? NSRegularExpression(
         pattern: #"(?i)(?:^|\s)(?:SERIAL(?:\s*(?:NUMBER|NO\.?|#))?|S\s*/\s*N|SN)\s*[:#=\-]?\s*([A-Z0-9][A-Z0-9._/\-]{2,47})"#
     )
 
@@ -112,16 +112,18 @@ nonisolated enum EquipmentNameplateParser {
 
     private static func labeledIdentifier(
         in lines: [String],
-        pattern: NSRegularExpression,
+        pattern: NSRegularExpression?,
         standaloneLabels: [String]
     ) -> String? {
-        for line in lines {
-            let range = NSRange(line.startIndex..<line.endIndex, in: line)
-            guard let match = pattern.firstMatch(in: line, range: range),
-                  match.numberOfRanges > 1,
-                  let valueRange = Range(match.range(at: 1), in: line) else { continue }
-            let value = cleanIdentifier(String(line[valueRange]))
-            if isPlausibleIdentifier(value) { return value }
+        if let pattern {
+            for line in lines {
+                let range = NSRange(line.startIndex..<line.endIndex, in: line)
+                guard let match = pattern.firstMatch(in: line, range: range),
+                      match.numberOfRanges > 1,
+                      let valueRange = Range(match.range(at: 1), in: line) else { continue }
+                let value = cleanIdentifier(String(line[valueRange]))
+                if isPlausibleIdentifier(value) { return value }
+            }
         }
 
         for index in lines.indices.dropLast() {

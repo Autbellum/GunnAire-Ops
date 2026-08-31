@@ -7,6 +7,8 @@ struct ScheduleView: View {
     @Query(sort: [SortDescriptor(\ServiceCall.scheduledDate)]) private var serviceCalls: [ServiceCall]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \TechnicianAvailabilityBlock.startsAt, order: .forward) private var technicianAvailabilityBlocks: [TechnicianAvailabilityBlock]
+    @Query(sort: \TechnicianWorkShift.createdAt, order: .reverse) private var technicianWorkShifts: [TechnicianWorkShift]
+    @Query(sort: \TechnicianTimeOffRequest.createdAt, order: .reverse) private var technicianTimeOffRequests: [TechnicianTimeOffRequest]
     @Query private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -244,9 +246,17 @@ struct ScheduleView: View {
         return AppAccess.canManageDispatch(email: email, users: users)
     }
 
+    private var isFieldTechnician: Bool {
+        AppAccess.activeRole(email: AppIdentity.currentEmail, users: users) == .fieldTechnician
+    }
+
     private var canCollectFieldPayments: Bool {
         let email = AppIdentity.currentEmail
         return AppAccess.canCollectFieldPayments(email: email, users: users)
+    }
+
+    private var pendingTimeOffRequestCount: Int {
+        technicianTimeOffRequests.filter { $0.status == .pending }.count
     }
 
     var body: some View {
@@ -288,6 +298,23 @@ struct ScheduleView: View {
                             if selectedDayCalls.isEmpty {
                                 emptyDayState
                             } else {
+                                if isFieldTechnician, selectedDayCalls.count > 1 {
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        TechnicianTravelDisclosure(
+                                            calls: selectedDayCalls,
+                                            accessibilityPrefix: "Field"
+                                        )
+                                        Text(TechnicianTravelDisclosure.footerText)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .padding(14)
+                                    .background(
+                                        .ultraThinMaterial,
+                                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    )
+                                }
+
                                 LazyVStack(spacing: 10) {
                                     if canManageDispatch {
                                         ForEach(selectedDayCalls) { call in
@@ -337,7 +364,10 @@ struct ScheduleView: View {
                                 Button {
                                     showingAvailabilityBlocks = true
                                 } label: {
-                                    Label("Availability", systemImage: "person.badge.clock")
+                                    Label(
+                                        pendingTimeOffRequestCount == 0 ? "Availability" : "Availability \(pendingTimeOffRequestCount)",
+                                        systemImage: "person.badge.clock"
+                                    )
                                 }
                                 .tint(Color.brandGold)
                                 .accessibilityIdentifier("ManageTechnicianAvailability")
@@ -479,6 +509,9 @@ struct ScheduleView: View {
                         DispatchWeekBoardView(
                             initialDate: selectedDate,
                             calls: callsForSignedInUser,
+                            technicians: assignableTechnicians,
+                            availabilityBlocks: technicianAvailabilityBlocks,
+                            workShifts: technicianWorkShifts,
                             operationalAlerts: operationalAlerts,
                             onMove: { callID, targetDay, overrideReason in
                                 moveCallFromDispatchBoard(
@@ -1133,21 +1166,41 @@ struct ScheduleView: View {
 
                         if canManageDispatch {
                             if let signedInTechnician {
-                                Button("Assign To Me") {
-                                    assign(job, to: signedInTechnician)
+                                Button(assignToMeTitle(for: job, technician: signedInTechnician)) {
+                                    if let nextStart = nextAvailableStart(for: signedInTechnician, call: job),
+                                       nextStart > job.scheduledDate {
+                                        assign(job, to: signedInTechnician, reschedulingTo: nextStart)
+                                    } else {
+                                        assign(job, to: signedInTechnician)
+                                    }
                                 }
                                 .buttonStyle(.bordered)
                                 .tint(Color.brandGold)
+                                .disabled(
+                                    nextAvailableStart(for: signedInTechnician, call: job) == nil &&
+                                        TechnicianWorkShiftPolicy.hasConfiguredSchedule(
+                                            technicianID: signedInTechnician.id,
+                                            shifts: technicianWorkShifts
+                                        )
+                                )
                             }
 
                             if !assignableTechnicians.isEmpty {
                                 Menu {
                                     ForEach(assignableTechnicians) { technician in
-                                        if let nextAvailableStart = nextAvailableStart(for: technician, proposedStart: job.scheduledDate, duration: job.duration),
+                                        let proposedStart = nextAvailableStart(for: technician, call: job)
+                                        if let nextAvailableStart = proposedStart,
                                            nextAvailableStart > job.scheduledDate {
                                             Button("\(AppAccess.scheduleLabel(for: technician)) • move to \(nextAvailableStart.formatted(date: .omitted, time: .shortened))") {
                                                 assign(job, to: technician, reschedulingTo: nextAvailableStart)
                                             }
+                                        } else if proposedStart == nil,
+                                                  TechnicianWorkShiftPolicy.hasConfiguredSchedule(
+                                                    technicianID: technician.id,
+                                                    shifts: technicianWorkShifts
+                                                  ) {
+                                            Button("\(AppAccess.scheduleLabel(for: technician)) • no scheduled hours") {}
+                                                .disabled(true)
                                         } else {
                                             Button(AppAccess.scheduleLabel(for: technician)) {
                                                 assign(job, to: technician)
@@ -1462,10 +1515,22 @@ struct ScheduleView: View {
                     }
                     .buttonStyle(.bordered)
                 } else if canManageDispatch, call.assignedTechnician == nil, let signedInTechnician {
-                    Button("Assign To Me") {
-                        assign(call, to: signedInTechnician)
+                    Button(assignToMeTitle(for: call, technician: signedInTechnician)) {
+                        if let nextStart = nextAvailableStart(for: signedInTechnician, call: call),
+                           nextStart > call.scheduledDate {
+                            assign(call, to: signedInTechnician, reschedulingTo: nextStart)
+                        } else {
+                            assign(call, to: signedInTechnician)
+                        }
                     }
                     .buttonStyle(.bordered)
+                    .disabled(
+                        nextAvailableStart(for: signedInTechnician, call: call) == nil &&
+                            TechnicianWorkShiftPolicy.hasConfiguredSchedule(
+                                technicianID: signedInTechnician.id,
+                                shifts: technicianWorkShifts
+                            )
+                    )
                 } else if isAdminUser && call.isReadyToCreateBillingDocument {
                     Button("Invoice") {
                         openDocumentationInCloseout = false
@@ -2001,13 +2066,19 @@ GunnAire
     private func maintenanceReminderEmailDraft(for contract: RecurringMaintenanceContract) -> (to: String, subject: String, body: String)? {
         guard let email = contract.customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
               !email.isEmpty else { return nil }
+        let reminderDetail: String
+        if contract.needsRenewalAttention, let termEndsOn = contract.termEndsOn {
+            reminderDetail = "Your \(contract.displayName) is due for renewal on \(termEndsOn.formatted(date: .abbreviated, time: .omitted))."
+        } else {
+            reminderDetail = "This is a reminder that your \(contract.schedulePattern) maintenance visit is due on \(contract.nextDate.formatted(date: .abbreviated, time: .omitted))."
+        }
         return (
             to: email,
             subject: contract.needsRenewalAttention ? "Maintenance Agreement Renewal From GunnAire" : "Maintenance Reminder From GunnAire",
             body: """
 Hello \(contract.customer.name),
 
-\(contract.needsRenewalAttention && contract.termEndsOn != nil ? "Your \(contract.displayName) is due for renewal on \(contract.termEndsOn!.formatted(date: .abbreviated, time: .omitted))." : "This is a reminder that your \(contract.schedulePattern) maintenance visit is due on \(contract.nextDate.formatted(date: .abbreviated, time: .omitted)).")
+\(reminderDetail)
 
 Reply to this email if you would like us to schedule your visit.
 
@@ -2327,6 +2398,7 @@ GunnAire
             proposedStart: proposedStart,
             serviceCalls: serviceCalls,
             availabilityBlocks: technicianAvailabilityBlocks,
+            workShifts: technicianWorkShifts,
             technicians: technicians
         )
         let overrideDecision = DispatchBoardScheduling.conflictOverrideDecision(
@@ -2457,14 +2529,27 @@ GunnAire
         publishToGoogleCalendar(call)
     }
 
-    private func nextAvailableStart(for technician: Technician, proposedStart: Date, duration: TimeInterval) -> Date? {
+    private func nextAvailableStart(for technician: Technician, call: ServiceCall) -> Date? {
         TechnicianDispatchAvailability.nextAvailableStart(
             technicianID: technician.id,
-            proposedStart: proposedStart,
-            duration: duration,
+            proposedStart: call.scheduledDate,
+            duration: call.duration,
             serviceCalls: serviceCalls,
-            availabilityBlocks: technicianAvailabilityBlocks
+            availabilityBlocks: technicianAvailabilityBlocks,
+            workShifts: technicianWorkShifts,
+            urgency: call.dispatchUrgency
         )
+    }
+
+    private func assignToMeTitle(for call: ServiceCall, technician: Technician) -> String {
+        guard let nextStart = nextAvailableStart(for: technician, call: call) else {
+            return TechnicianWorkShiftPolicy.hasConfiguredSchedule(
+                technicianID: technician.id,
+                shifts: technicianWorkShifts
+            ) ? "Assign To Me • no scheduled hours" : "Assign To Me"
+        }
+        guard nextStart > call.scheduledDate else { return "Assign To Me" }
+        return "Assign To Me • move to \(nextStart.formatted(date: .omitted, time: .shortened))"
     }
 
 }
@@ -2585,6 +2670,7 @@ enum DispatchBoardScheduling {
         proposedStart: Date,
         serviceCalls: [ServiceCall],
         availabilityBlocks: [TechnicianAvailabilityBlock],
+        workShifts: [TechnicianWorkShift] = [],
         technicians: [Technician]
     ) -> String? {
         let proposedEnd = proposedStart.addingTimeInterval(max(call.duration, 60))
@@ -2611,15 +2697,48 @@ enum DispatchBoardScheduling {
             }) {
                 return "\(technicianName) is marked \(block.dispatchLabel.lowercased()) during that time."
             }
+            let coverage = TechnicianWorkShiftPolicy.coverage(
+                technicianID: technicianID,
+                start: proposedStart,
+                end: proposedEnd,
+                shifts: workShifts,
+                allowOnCall: call.dispatchUrgency == .priority || call.dispatchUrgency == .emergency
+            )
+            if coverage == .offDuty {
+                let rawCoverage = TechnicianWorkShiftPolicy.coverage(
+                    technicianID: technicianID,
+                    start: proposedStart,
+                    end: proposedEnd,
+                    shifts: workShifts,
+                    allowOnCall: true
+                )
+                if rawCoverage == .onCall && call.dispatchUrgency == .normal {
+                    return "\(technicianName) is on call, not in regular hours, during that time."
+                }
+                return "\(technicianName) is off duty during that time."
+            }
         }
         return nil
     }
+}
+
+private struct DispatchCapacityDaySelection: Identifiable {
+    let day: Date
+    let daySnapshot: DispatchDayCapacitySnapshot
+    let technicianSnapshots: [DispatchTechnicianCapacitySnapshot]
+    let technicianDaySchedules: [DispatchTechnicianDayScheduleSnapshot]
+    let serviceCalls: [ServiceCall]
+
+    var id: Date { Calendar.current.startOfDay(for: day) }
 }
 
 private struct DispatchWeekBoardView: View {
     @Environment(\.dismiss) private var dismiss
 
     let calls: [ServiceCall]
+    let technicians: [Technician]
+    let availabilityBlocks: [TechnicianAvailabilityBlock]
+    let workShifts: [TechnicianWorkShift]
     let operationalAlerts: [CustomerOperationalAlert]
     let onMove: (UUID, Date, String?) -> DispatchBoardMoveResult
 
@@ -2627,15 +2746,22 @@ private struct DispatchWeekBoardView: View {
     @State private var actionMessage: String?
     @State private var lastMoveSucceeded = false
     @State private var editingCall: ServiceCall?
+    @State private var capacitySelection: DispatchCapacityDaySelection?
     @State private var pendingConflictOverride: DispatchConflictOverrideRequest?
 
     init(
         initialDate: Date,
         calls: [ServiceCall],
+        technicians: [Technician],
+        availabilityBlocks: [TechnicianAvailabilityBlock],
+        workShifts: [TechnicianWorkShift],
         operationalAlerts: [CustomerOperationalAlert],
         onMove: @escaping (UUID, Date, String?) -> DispatchBoardMoveResult
     ) {
         self.calls = calls
+        self.technicians = technicians
+        self.availabilityBlocks = availabilityBlocks
+        self.workShifts = workShifts
         self.operationalAlerts = operationalAlerts
         self.onMove = onMove
         _weekAnchor = State(initialValue: DispatchBoardScheduling.startOfWeek(containing: initialDate))
@@ -2662,9 +2788,15 @@ private struct DispatchWeekBoardView: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
-                    Label("Drag a job to another day. Its time stays the same.", systemImage: "hand.draw")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label("Drag a job to another day. Its time stays the same.", systemImage: "hand.draw")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text("Capacity uses recurring regular hours, unavailable time, and scheduled duration. On-call is separate; travel time is not estimated.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                     Spacer()
                     Text("\(visibleCalls.count) job\(visibleCalls.count == 1 ? "" : "s")")
                         .font(.caption.weight(.semibold))
@@ -2701,7 +2833,7 @@ private struct DispatchWeekBoardView: View {
                         Label("Previous week", systemImage: "chevron.left")
                     }
                     Button("Today") {
-                        withAnimation { weekAnchor = DispatchBoardScheduling.startOfWeek(containing: Date()) }
+                        weekAnchor = DispatchBoardScheduling.startOfWeek(containing: Date())
                     }
                     Button {
                         moveWeek(by: 1)
@@ -2713,6 +2845,16 @@ private struct DispatchWeekBoardView: View {
             .fullScreenCover(item: $editingCall) { call in
                 EditServiceCallView(call: call)
                     .tint(Color.brandGold)
+            }
+            .sheet(item: $capacitySelection) { selection in
+                DispatchTechnicianCapacityDetailView(
+                    day: selection.day,
+                    daySnapshot: selection.daySnapshot,
+                    technicianSnapshots: selection.technicianSnapshots,
+                    technicianDaySchedules: selection.technicianDaySchedules,
+                    serviceCalls: selection.serviceCalls
+                )
+                .tint(Color.brandGold)
             }
             .sheet(item: $pendingConflictOverride) { request in
                 DispatchConflictOverrideSheet(request: request) { reason in
@@ -2730,6 +2872,20 @@ private struct DispatchWeekBoardView: View {
 
     private func dayColumn(_ day: Date) -> some View {
         let dayCalls = calls(on: day)
+        let capacity = DispatchCapacityPolicy.snapshot(
+            for: day,
+            technicians: technicians,
+            serviceCalls: calls,
+            availabilityBlocks: availabilityBlocks,
+            workShifts: workShifts
+        )
+        let technicianCapacity = DispatchCapacityPolicy.technicianSnapshots(
+            for: day,
+            technicians: technicians,
+            serviceCalls: calls,
+            availabilityBlocks: availabilityBlocks,
+            workShifts: workShifts
+        )
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -2744,6 +2900,12 @@ private struct DispatchWeekBoardView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
+
+            capacitySummary(
+                capacity,
+                technicians: technicianCapacity,
+                for: day
+            )
 
             if dayCalls.isEmpty {
                 ContentUnavailableView("Open day", systemImage: "calendar.badge.plus")
@@ -2773,6 +2935,211 @@ private struct DispatchWeekBoardView: View {
             return true
         }
         .accessibilityHint("Drop a job here to keep its appointment time and move it to this day.")
+    }
+
+    private func capacitySummary(
+        _ snapshot: DispatchDayCapacitySnapshot,
+        technicians technicianSnapshots: [DispatchTechnicianCapacitySnapshot],
+        for day: Date
+    ) -> some View {
+        let tint = capacityTint(snapshot.status)
+        return Button {
+            let technicianDaySchedules = DispatchCapacityPolicy.technicianDaySchedules(
+                for: day,
+                technicians: technicians,
+                serviceCalls: calls,
+                availabilityBlocks: availabilityBlocks,
+                workShifts: workShifts
+            )
+            let serviceCallIDs = Set(
+                technicianDaySchedules.flatMap(\.appointments).compactMap(\.serviceCallID)
+            )
+            capacitySelection = DispatchCapacityDaySelection(
+                day: day,
+                daySnapshot: snapshot,
+                technicianSnapshots: technicianSnapshots,
+                technicianDaySchedules: technicianDaySchedules,
+                serviceCalls: calls.filter { serviceCallIDs.contains($0.id) }
+            )
+        } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Label(capacityPrimaryText(snapshot), systemImage: capacitySystemImage(snapshot.status))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tint)
+                        .lineLimit(2)
+                    Spacer(minLength: 2)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+
+                if snapshot.staffedRegularMinutes > 0 {
+                    ProgressView(value: snapshot.regularUtilization)
+                        .tint(tint)
+                        .accessibilityHidden(true)
+                }
+
+                if snapshot.configuredTechnicianCount > 0 {
+                    Text("\(compactDuration(snapshot.staffedRegularMinutes)) staffed • \(compactDuration(snapshot.bookedConfiguredMinutes)) booked")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else {
+                    Text("Add recurring technician hours")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                if snapshot.onCallCapacityMinutes > 0 {
+                    Text("\(compactDuration(snapshot.openOnCallMinutes)) on-call open")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                if snapshot.unassignedJobCount > 0 {
+                    Text("\(snapshot.unassignedJobCount) unassigned • \(compactDuration(snapshot.unassignedMinutes)) demand")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                }
+
+                if snapshot.bookedUnconfiguredMinutes > 0 {
+                    Text("\(compactDuration(snapshot.bookedUnconfiguredMinutes)) outside plan")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                } else if snapshot.unconfiguredTechnicianCount > 0 {
+                    Text("\(snapshot.unconfiguredTechnicianCount) technician\(snapshot.unconfiguredTechnicianCount == 1 ? "" : "s") unconfigured")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(tint.opacity(0.09), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(capacityAccessibilityLabel(snapshot, for: day))
+        .accessibilityHint("Open the technician capacity breakdown for \(day.formatted(.dateTime.weekday(.wide))).")
+        .accessibilityIdentifier(capacityIdentifier(for: day))
+    }
+
+    private func capacityIdentifier(for day: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: day)
+        return String(
+            format: "DispatchCapacityDate-%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
+    }
+
+    private func capacityPrimaryText(_ snapshot: DispatchDayCapacitySnapshot) -> String {
+        switch snapshot.status {
+        case .unconfigured:
+            "Hours not configured"
+        case .overbooked:
+            "\(compactDuration(snapshot.overbookedMinutes)) over plan"
+        case .full where snapshot.staffedRegularMinutes == 0:
+            "No regular hours"
+        case .full:
+            "Fully booked"
+        case .tight:
+            "\(compactDuration(snapshot.openRegularMinutes)) open • tight"
+        case .available:
+            "\(compactDuration(snapshot.openRegularMinutes)) open"
+        }
+    }
+
+    private func capacityAccessibilityLabel(_ snapshot: DispatchDayCapacitySnapshot, for day: Date) -> String {
+        var parts = [
+            "\(day.formatted(.dateTime.weekday(.wide))) capacity",
+            capacityAccessibilityPrimaryText(snapshot)
+        ]
+        if snapshot.configuredTechnicianCount > 0 {
+            parts.append("\(spokenDuration(snapshot.staffedRegularMinutes)) staffed")
+            parts.append("\(spokenDuration(snapshot.bookedConfiguredMinutes)) booked")
+        } else {
+            parts.append("Add recurring technician hours")
+        }
+        if snapshot.onCallCapacityMinutes > 0 {
+            parts.append("\(spokenDuration(snapshot.openOnCallMinutes)) of \(spokenDuration(snapshot.onCallCapacityMinutes)) on-call reserve open")
+        }
+        if snapshot.unassignedJobCount > 0 {
+            parts.append("\(snapshot.unassignedJobCount) unassigned job\(snapshot.unassignedJobCount == 1 ? "" : "s"), \(spokenDuration(snapshot.unassignedMinutes)) demand")
+        }
+        if snapshot.bookedUnconfiguredMinutes > 0 {
+            parts.append("\(spokenDuration(snapshot.bookedUnconfiguredMinutes)) booked outside configured hours")
+        } else if snapshot.unconfiguredTechnicianCount > 0 {
+            parts.append("\(snapshot.unconfiguredTechnicianCount) technician\(snapshot.unconfiguredTechnicianCount == 1 ? "" : "s") unconfigured")
+        }
+        return parts.joined(separator: ". ")
+    }
+
+    private func capacityAccessibilityPrimaryText(_ snapshot: DispatchDayCapacitySnapshot) -> String {
+        switch snapshot.status {
+        case .unconfigured:
+            "Hours not configured"
+        case .overbooked:
+            "\(spokenDuration(snapshot.overbookedMinutes)) over plan"
+        case .full where snapshot.staffedRegularMinutes == 0:
+            "No regular hours"
+        case .full:
+            "Fully booked"
+        case .tight:
+            "\(spokenDuration(snapshot.openRegularMinutes)) open, tight"
+        case .available:
+            "\(spokenDuration(snapshot.openRegularMinutes)) open"
+        }
+    }
+
+    private func compactDuration(_ minutes: Int) -> String {
+        let safeMinutes = max(minutes, 0)
+        let hours = safeMinutes / 60
+        let remainder = safeMinutes % 60
+        if hours == 0 { return "\(remainder)m" }
+        if remainder == 0 { return "\(hours)h" }
+        return "\(hours)h \(remainder)m"
+    }
+
+    private func spokenDuration(_ minutes: Int) -> String {
+        let safeMinutes = max(minutes, 0)
+        let hours = safeMinutes / 60
+        let remainder = safeMinutes % 60
+        var parts: [String] = []
+        if hours > 0 {
+            parts.append("\(hours) hour\(hours == 1 ? "" : "s")")
+        }
+        if remainder > 0 || parts.isEmpty {
+            parts.append("\(remainder) minute\(remainder == 1 ? "" : "s")")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private func capacityTint(_ status: DispatchDayCapacityStatus) -> Color {
+        switch status {
+        case .unconfigured: .secondary
+        case .available: .green
+        case .tight, .full: .orange
+        case .overbooked: .red
+        }
+    }
+
+    private func capacitySystemImage(_ status: DispatchDayCapacityStatus) -> String {
+        switch status {
+        case .unconfigured: "questionmark.circle"
+        case .available: "checkmark.circle.fill"
+        case .tight: "exclamationmark.circle.fill"
+        case .full: "calendar.badge.exclamationmark"
+        case .overbooked: "exclamationmark.triangle.fill"
+        }
     }
 
     @ViewBuilder
@@ -2908,8 +3275,791 @@ private struct DispatchWeekBoardView: View {
 
     private func moveWeek(by offset: Int) {
         guard let next = Calendar.current.date(byAdding: .day, value: offset * 7, to: weekAnchor) else { return }
-        withAnimation { weekAnchor = next }
+        weekAnchor = next
         actionMessage = nil
+    }
+}
+
+private struct DispatchTechnicianCapacityDetailView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let day: Date
+    let daySnapshot: DispatchDayCapacitySnapshot
+    let technicianSnapshots: [DispatchTechnicianCapacitySnapshot]
+    let technicianDaySchedules: [DispatchTechnicianDayScheduleSnapshot]
+    let serviceCalls: [ServiceCall]
+
+    private var sortedTechnicians: [DispatchTechnicianCapacitySnapshot] {
+        technicianSnapshots.sorted { lhs, rhs in
+            let leftRank = attentionRank(lhs)
+            let rightRank = attentionRank(rhs)
+            if leftRank != rightRank { return leftRank < rightRank }
+            return lhs.technicianName.localizedCaseInsensitiveCompare(rhs.technicianName) == .orderedAscending
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Day summary") {
+                    daySummary
+                }
+
+                Section("Technicians") {
+                    if sortedTechnicians.isEmpty {
+                        ContentUnavailableView(
+                            "No assignable technicians",
+                            systemImage: "person.2.slash",
+                            description: Text("Add an active technician before planning team capacity.")
+                        )
+                    } else {
+                        ForEach(sortedTechnicians) { snapshot in
+                            if let schedule = technicianDaySchedules.first(where: {
+                                $0.technicianID == snapshot.technicianID
+                            }) {
+                                NavigationLink {
+                                    DispatchTechnicianDayScheduleView(
+                                        day: day,
+                                        capacitySnapshot: snapshot,
+                                        scheduleSnapshot: schedule,
+                                        serviceCalls: serviceCalls
+                                    )
+                                } label: {
+                                    technicianRow(snapshot)
+                                }
+                                .accessibilityElement(children: .combine)
+                                .accessibilityLabel(technicianAccessibilityLabel(snapshot))
+                                .accessibilityHint("Shows this technician's appointments and availability for the day.")
+                                .accessibilityIdentifier("DispatchTechnicianCapacity-\(snapshot.technicianID.uuidString)")
+                            } else {
+                                technicianRow(snapshot)
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Team Capacity")
+            .navigationSubtitle(day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day().year()))
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("DispatchCapacityDetailDone")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .accessibilityIdentifier("DispatchCapacityDetail")
+    }
+
+    private var daySummary: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(dayStatusText, systemImage: statusSystemImage(daySnapshot.status))
+                .font(.headline)
+                .foregroundStyle(statusTint(daySnapshot.status))
+
+            if daySnapshot.configuredTechnicianCount > 0 {
+                Text("\(compactDuration(daySnapshot.staffedRegularMinutes)) staffed • \(compactDuration(daySnapshot.bookedConfiguredMinutes)) booked • \(compactDuration(daySnapshot.openRegularMinutes)) open")
+                    .font(.subheadline)
+            } else {
+                Text("Recurring technician hours are not configured.")
+                    .font(.subheadline)
+            }
+
+            if daySnapshot.onCallCapacityMinutes > 0 {
+                Text("\(compactDuration(daySnapshot.openOnCallMinutes)) of \(compactDuration(daySnapshot.onCallCapacityMinutes)) on-call reserve open")
+                    .font(.subheadline)
+            }
+
+            if daySnapshot.unassignedJobCount > 0 {
+                Label(
+                    "\(daySnapshot.unassignedJobCount) unassigned • \(compactDuration(daySnapshot.unassignedMinutes)) demand",
+                    systemImage: "person.crop.circle.badge.questionmark"
+                )
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.orange)
+            }
+
+            if daySnapshot.bookedUnconfiguredMinutes > 0 {
+                Label(
+                    "\(compactDuration(daySnapshot.bookedUnconfiguredMinutes)) booked outside configured plans",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.orange)
+            }
+
+            Text("Regular hours are reduced by unavailable time. On-call remains separate, and travel time is not estimated.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func technicianRow(_ snapshot: DispatchTechnicianCapacitySnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(displayName(snapshot.technicianName))
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer()
+                Label(technicianStatusText(snapshot), systemImage: statusSystemImage(snapshot.status))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(statusTint(snapshot.status))
+                    .labelStyle(.titleAndIcon)
+                    .lineLimit(1)
+            }
+
+            if snapshot.isConfigured {
+                Text("\(compactDuration(snapshot.staffedRegularMinutes)) staffed • \(compactDuration(snapshot.bookedMinutes)) booked • \(compactDuration(snapshot.openRegularMinutes)) open")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Add recurring hours before relying on this technician for capacity.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            if snapshot.onCallCapacityMinutes > 0 {
+                Text("\(compactDuration(snapshot.openOnCallMinutes)) of \(compactDuration(snapshot.onCallCapacityMinutes)) on-call open")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if snapshot.unavailableMinutes > 0 {
+                Text("\(compactDuration(snapshot.unavailableMinutes)) unavailable during planned hours")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if snapshot.overbookedMinutes > 0 {
+                Text("\(compactDuration(snapshot.overbookedMinutes)) outside plan or overlapping")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var dayStatusText: String {
+        switch daySnapshot.status {
+        case .unconfigured: "Hours not configured"
+        case .overbooked: "\(compactDuration(daySnapshot.overbookedMinutes)) over plan"
+        case .full where daySnapshot.staffedRegularMinutes == 0: "No regular hours"
+        case .full: "Fully booked"
+        case .tight: "\(compactDuration(daySnapshot.openRegularMinutes)) open • tight"
+        case .available: "\(compactDuration(daySnapshot.openRegularMinutes)) open"
+        }
+    }
+
+    private func technicianStatusText(_ snapshot: DispatchTechnicianCapacitySnapshot) -> String {
+        switch snapshot.status {
+        case .unconfigured:
+            "Hours not configured"
+        case .overbooked:
+            "\(compactDuration(snapshot.overbookedMinutes)) outside plan"
+        case .full where snapshot.staffedRegularMinutes == 0 && snapshot.onCallCapacityMinutes > 0:
+            "On-call only"
+        case .full where snapshot.staffedRegularMinutes == 0:
+            "Not scheduled"
+        case .full:
+            "Fully booked"
+        case .tight:
+            "\(compactDuration(snapshot.openRegularMinutes)) open • tight"
+        case .available:
+            "\(compactDuration(snapshot.openRegularMinutes)) open"
+        }
+    }
+
+    private func attentionRank(_ snapshot: DispatchTechnicianCapacitySnapshot) -> Int {
+        if snapshot.overbookedMinutes > 0 { return 0 }
+        if !snapshot.isConfigured && snapshot.bookedMinutes > 0 { return 1 }
+        switch snapshot.status {
+        case .full: return 2
+        case .tight: return 3
+        case .available: return 4
+        case .unconfigured: return 5
+        case .overbooked: return 0
+        }
+    }
+
+    private func displayName(_ rawValue: String) -> String {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Unnamed technician" : trimmed
+    }
+
+    private func technicianAccessibilityLabel(_ snapshot: DispatchTechnicianCapacitySnapshot) -> String {
+        var parts = [displayName(snapshot.technicianName), technicianStatusText(snapshot)]
+        if snapshot.isConfigured {
+            parts.append("\(spokenDuration(snapshot.staffedRegularMinutes)) staffed")
+            parts.append("\(spokenDuration(snapshot.bookedMinutes)) booked")
+            parts.append("\(spokenDuration(snapshot.openRegularMinutes)) open")
+        } else {
+            parts.append("Add recurring hours before relying on this technician for capacity")
+        }
+        if snapshot.onCallCapacityMinutes > 0 {
+            parts.append("\(spokenDuration(snapshot.openOnCallMinutes)) of \(spokenDuration(snapshot.onCallCapacityMinutes)) on-call open")
+        }
+        if snapshot.unavailableMinutes > 0 {
+            parts.append("\(spokenDuration(snapshot.unavailableMinutes)) unavailable during planned hours")
+        }
+        if snapshot.overbookedMinutes > 0 {
+            parts.append("\(spokenDuration(snapshot.overbookedMinutes)) outside plan or overlapping")
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    private func compactDuration(_ minutes: Int) -> String {
+        let safeMinutes = max(minutes, 0)
+        let hours = safeMinutes / 60
+        let remainder = safeMinutes % 60
+        if hours == 0 { return "\(remainder)m" }
+        if remainder == 0 { return "\(hours)h" }
+        return "\(hours)h \(remainder)m"
+    }
+
+    private func spokenDuration(_ minutes: Int) -> String {
+        let safeMinutes = max(minutes, 0)
+        let hours = safeMinutes / 60
+        let remainder = safeMinutes % 60
+        var parts: [String] = []
+        if hours > 0 {
+            parts.append("\(hours) hour\(hours == 1 ? "" : "s")")
+        }
+        if remainder > 0 || parts.isEmpty {
+            parts.append("\(remainder) minute\(remainder == 1 ? "" : "s")")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private func statusTint(_ status: DispatchDayCapacityStatus) -> Color {
+        switch status {
+        case .unconfigured: .secondary
+        case .available: .green
+        case .tight, .full: .orange
+        case .overbooked: .red
+        }
+    }
+
+    private func statusSystemImage(_ status: DispatchDayCapacityStatus) -> String {
+        switch status {
+        case .unconfigured: "questionmark.circle"
+        case .available: "checkmark.circle.fill"
+        case .tight: "exclamationmark.circle.fill"
+        case .full: "calendar.badge.exclamationmark"
+        case .overbooked: "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+private enum TechnicianRouteEstimateState: Equatable {
+    case idle
+    case loading
+    case estimate(AppleMapsTravelEstimate)
+    case failed
+}
+
+/// Compact route awareness shared by dispatch and the signed-in field
+/// technician. Callers must pass only the appointments already authorized for
+/// that surface; this view never queries broader schedule data itself.
+private struct TechnicianTravelDisclosure: View {
+    static let footerText = "Optional Apple Maps estimates require a connection and account for expected traffic. They are informational only and never change appointments, capacity, or promised arrival windows."
+
+    let calls: [ServiceCall]
+    let accessibilityPrefix: String
+
+    @State private var isExpanded = false
+    @State private var estimateStates: [String: TechnicianRouteEstimateState] = [:]
+    @State private var activeLegID: String?
+    @State private var activeEstimator: AppleMapsTravelEstimator?
+
+    private var routeLegs: [TechnicianRouteLegSnapshot] {
+        TechnicianRoutePolicy.appointmentTravelLegs(from: calls)
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            ForEach(routeLegs) { leg in
+                routeLegRow(leg)
+                if leg.id != routeLegs.last?.id {
+                    Divider()
+                }
+            }
+        } label: {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Travel between appointments")
+                        .font(.headline)
+                    Text("\(routeLegs.count) scheduled \(routeLegs.count == 1 ? "leg" : "legs")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "car")
+                    .foregroundStyle(Color.brandGold)
+            }
+            .accessibilityHint("Expands optional Apple Maps estimates between adjacent appointments.")
+        }
+        .onChange(of: isExpanded) { _, expanded in
+            if !expanded {
+                cancelActiveEstimate()
+            }
+        }
+        .onDisappear {
+            cancelActiveEstimate()
+        }
+    }
+
+    private func routeLegRow(_ leg: TechnicianRouteLegSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(leg.originTitle) → \(leg.destinationTitle)")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+                Text(scheduledGapDescription(leg.scheduledGapMinutes))
+                    .font(.caption)
+                    .foregroundStyle(leg.scheduledGapMinutes < 0 ? .orange : .secondary)
+            }
+
+            routeEstimateContent(for: leg)
+        }
+        .padding(.vertical, 6)
+    }
+
+    @ViewBuilder
+    private func routeEstimateContent(for leg: TechnicianRouteLegSnapshot) -> some View {
+        switch leg.readiness {
+        case .sameAddress:
+            Label("Same service address", systemImage: "mappin.and.ellipse")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .missingOriginAddress:
+            missingAddressLabel("Add the first appointment's service address to estimate this drive.")
+        case .missingDestinationAddress:
+            missingAddressLabel("Add the next appointment's service address to estimate this drive.")
+        case .missingBothAddresses:
+            missingAddressLabel("Add both service addresses to estimate this drive.")
+        case .ready:
+            switch estimateStates[leg.id] ?? .idle {
+            case .idle:
+                routeActions(for: leg, estimateButtonTitle: "Estimate drive")
+            case .loading:
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Estimating with Apple Maps…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Button("Cancel") {
+                        cancelActiveEstimate()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityIdentifier("\(accessibilityPrefix)TechnicianRouteCancel-\(leg.id)")
+                }
+            case let .estimate(estimate):
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(
+                        "\(travelDurationDescription(estimate.expectedTravelTime)) • \(distanceDescription(estimate.distanceMeters))",
+                        systemImage: "car.fill"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    Text(routeFitDescription(estimate: estimate, scheduledGapMinutes: leg.scheduledGapMinutes))
+                        .font(.caption)
+                        .foregroundStyle(routeFitTint(estimate: estimate, scheduledGapMinutes: leg.scheduledGapMinutes))
+                    routeActions(for: leg, estimateButtonTitle: "Refresh")
+                }
+            case .failed:
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Estimate unavailable. Schedule remains available offline.", systemImage: "wifi.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    routeActions(for: leg, estimateButtonTitle: "Retry")
+                }
+            }
+        }
+    }
+
+    private func missingAddressLabel(_ message: String) -> some View {
+        Label(message, systemImage: "mappin.slash")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    private func routeActions(
+        for leg: TechnicianRouteLegSnapshot,
+        estimateButtonTitle: String
+    ) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                requestEstimate(for: leg)
+            } label: {
+                Label(estimateButtonTitle, systemImage: "clock.arrow.circlepath")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .tint(Color.brandGold)
+            .accessibilityIdentifier("\(accessibilityPrefix)TechnicianRouteEstimate-\(leg.id)")
+            .accessibilityHint("Requests one traffic-aware estimate from Apple Maps. This does not change the schedule.")
+
+            if let routeURL = AppleMapsDirections.routeURL(
+                sourceAddress: leg.originAddress,
+                destinationAddress: leg.destinationAddress
+            ) {
+                Link(destination: routeURL) {
+                    Label("Open in Maps", systemImage: "map")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("\(accessibilityPrefix)TechnicianRouteOpenMaps-\(leg.id)")
+                .accessibilityHint("Opens driving directions between these two service addresses.")
+            }
+        }
+    }
+
+    private func requestEstimate(for leg: TechnicianRouteLegSnapshot) {
+        guard leg.readiness == .ready,
+              let originAddress = leg.originAddress,
+              let destinationAddress = leg.destinationAddress else { return }
+
+        if let activeLegID, activeLegID != leg.id {
+            estimateStates[activeLegID] = .idle
+        }
+        activeEstimator?.cancel()
+
+        let estimator = AppleMapsTravelEstimator()
+        activeEstimator = estimator
+        activeLegID = leg.id
+        estimateStates[leg.id] = .loading
+
+        estimator.estimate(
+            originAddress: originAddress,
+            destinationAddress: destinationAddress,
+            plannedDepartureDate: leg.plannedDepartureDate
+        ) { result in
+            guard activeLegID == leg.id, activeEstimator === estimator else { return }
+            switch result {
+            case let .success(estimate):
+                estimateStates[leg.id] = .estimate(estimate)
+            case .failure:
+                estimateStates[leg.id] = .failed
+            }
+            activeLegID = nil
+            activeEstimator = nil
+        }
+    }
+
+    private func cancelActiveEstimate() {
+        activeEstimator?.cancel()
+        if let activeLegID {
+            estimateStates[activeLegID] = .idle
+        }
+        activeLegID = nil
+        activeEstimator = nil
+    }
+
+    private func scheduledGapDescription(_ minutes: Int) -> String {
+        switch minutes {
+        case let value where value > 0:
+            return "\(compactDuration(value)) scheduled gap"
+        case 0:
+            return "No scheduled gap"
+        default:
+            return "\(compactDuration(abs(minutes))) appointment overlap"
+        }
+    }
+
+    private func travelDurationDescription(_ duration: TimeInterval) -> String {
+        let minutes = max(Int(ceil(duration / 60)), 1)
+        return minutes == 1 ? "1 min" : "\(minutes) min"
+    }
+
+    private func distanceDescription(_ distanceMeters: Double) -> String {
+        let miles = max(distanceMeters, 0) / 1_609.344
+        if miles < 10 {
+            return String(format: "%.1f mi", miles)
+        }
+        return String(format: "%.0f mi", miles)
+    }
+
+    private func routeFitDescription(
+        estimate: AppleMapsTravelEstimate,
+        scheduledGapMinutes: Int
+    ) -> String {
+        let travelMinutes = max(Int(ceil(estimate.expectedTravelTime / 60)), 1)
+        guard scheduledGapMinutes > 0 else {
+            return "No drive time is reserved between these appointments."
+        }
+        let difference = scheduledGapMinutes - travelMinutes
+        if difference < 0 {
+            return "Estimate exceeds the scheduled gap by \(compactDuration(abs(difference)))."
+        }
+        return "\(compactDuration(difference)) remains in the scheduled gap."
+    }
+
+    private func routeFitTint(
+        estimate: AppleMapsTravelEstimate,
+        scheduledGapMinutes: Int
+    ) -> Color {
+        let travelMinutes = max(Int(ceil(estimate.expectedTravelTime / 60)), 1)
+        return scheduledGapMinutes >= travelMinutes ? .secondary : .orange
+    }
+
+    private func compactDuration(_ minutes: Int) -> String {
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        var parts: [String] = []
+        if hours > 0 {
+            parts.append("\(hours)h")
+        }
+        if remainder > 0 || parts.isEmpty {
+            parts.append("\(remainder)m")
+        }
+        return parts.joined(separator: " ")
+    }
+}
+
+private struct DispatchTechnicianDayScheduleView: View {
+    let day: Date
+    let capacitySnapshot: DispatchTechnicianCapacitySnapshot
+    let scheduleSnapshot: DispatchTechnicianDayScheduleSnapshot
+    let serviceCalls: [ServiceCall]
+
+    @State private var editingCall: ServiceCall?
+
+    private var availabilityEntries: [DispatchTechnicianDayScheduleEntry] {
+        scheduleSnapshot.entries.filter { $0.kind != .appointment }
+    }
+
+    private var routeCalls: [ServiceCall] {
+        scheduleSnapshot.appointments.compactMap(serviceCall(for:))
+    }
+
+    var body: some View {
+        List {
+            Section("Capacity") {
+                capacitySummary
+            }
+
+            Section("Appointments") {
+                if scheduleSnapshot.appointments.isEmpty {
+                    Label("No assigned appointments", systemImage: "calendar.badge.checkmark")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(scheduleSnapshot.appointments) { entry in
+                        if let call = serviceCall(for: entry) {
+                            Button {
+                                editingCall = call
+                            } label: {
+                                appointmentRow(entry)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("DispatchTechnicianDayJob-\(call.id.uuidString)")
+                        } else {
+                            appointmentRow(entry)
+                        }
+                    }
+                }
+            }
+
+            if routeCalls.count > 1 {
+                Section {
+                    TechnicianTravelDisclosure(
+                        calls: routeCalls,
+                        accessibilityPrefix: "Dispatch"
+                    )
+                } footer: {
+                    Text(TechnicianTravelDisclosure.footerText)
+                }
+            }
+
+            Section {
+                if availabilityEntries.isEmpty {
+                    Label("No hours or unavailable periods", systemImage: "calendar.badge.exclamationmark")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(availabilityEntries) { entry in
+                        availabilityRow(entry)
+                    }
+                }
+            } header: {
+                Text("Hours & availability")
+            } footer: {
+                Text("Read-only from synchronized schedule records already on this device. Private availability notes are hidden, and the schedule remains available without a route estimate.")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Technician Day")
+        .navigationSubtitle("\(displayName(scheduleSnapshot.technicianName)) • \(day.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))")
+        .fullScreenCover(item: $editingCall) { call in
+            EditServiceCallView(call: call)
+                .tint(Color.brandGold)
+        }
+        .accessibilityIdentifier("DispatchTechnicianDaySchedule")
+    }
+
+    private var capacitySummary: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label(capacityStatusText, systemImage: capacityStatusSystemImage)
+                .font(.headline)
+                .foregroundStyle(capacityStatusTint)
+
+            if capacitySnapshot.isConfigured {
+                Text("\(compactDuration(capacitySnapshot.staffedRegularMinutes)) staffed • \(compactDuration(capacitySnapshot.bookedMinutes)) booked • \(compactDuration(capacitySnapshot.openRegularMinutes)) open")
+                    .font(.subheadline)
+            } else {
+                Text("Recurring hours are not configured for this technician.")
+                    .font(.subheadline)
+            }
+
+            if capacitySnapshot.onCallCapacityMinutes > 0 {
+                Text("\(compactDuration(capacitySnapshot.openOnCallMinutes)) of \(compactDuration(capacitySnapshot.onCallCapacityMinutes)) on-call reserve open")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func appointmentRow(_ entry: DispatchTechnicianDayScheduleEntry) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: entry.isOutsidePlan ? "exclamationmark.triangle.fill" : "calendar")
+                .frame(width: 22)
+                .foregroundStyle(entry.isOutsidePlan ? .orange : Color.brandGold)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(entry.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                    Spacer(minLength: 8)
+                    Text(timeRange(entry))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                if let detail = entry.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                if entry.isOutsidePlan {
+                    Text("Outside configured hours or overlaps another appointment")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(appointmentAccessibilityLabel(entry))
+        .accessibilityHint(entry.serviceCallID == nil ? "" : "Opens this job.")
+    }
+
+    private func availabilityRow(_ entry: DispatchTechnicianDayScheduleEntry) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: availabilitySystemImage(entry.kind))
+                .frame(width: 22)
+                .foregroundStyle(availabilityTint(entry.kind))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.title)
+                    .font(.headline)
+                Text(timeRange(entry))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(entry.title), \(timeRange(entry))")
+    }
+
+    private var capacityStatusText: String {
+        switch capacitySnapshot.status {
+        case .unconfigured: "Hours not configured"
+        case .overbooked: "\(compactDuration(capacitySnapshot.overbookedMinutes)) outside plan"
+        case .full where capacitySnapshot.staffedRegularMinutes == 0 && capacitySnapshot.onCallCapacityMinutes > 0:
+            "On-call only"
+        case .full where capacitySnapshot.staffedRegularMinutes == 0: "Not scheduled"
+        case .full: "Fully booked"
+        case .tight: "\(compactDuration(capacitySnapshot.openRegularMinutes)) open • tight"
+        case .available: "\(compactDuration(capacitySnapshot.openRegularMinutes)) open"
+        }
+    }
+
+    private var capacityStatusSystemImage: String {
+        switch capacitySnapshot.status {
+        case .unconfigured: "questionmark.circle"
+        case .available: "checkmark.circle.fill"
+        case .tight: "exclamationmark.circle.fill"
+        case .full: "calendar.badge.exclamationmark"
+        case .overbooked: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var capacityStatusTint: Color {
+        switch capacitySnapshot.status {
+        case .unconfigured: .secondary
+        case .available: .green
+        case .tight, .full: .orange
+        case .overbooked: .red
+        }
+    }
+
+    private func serviceCall(for entry: DispatchTechnicianDayScheduleEntry) -> ServiceCall? {
+        guard let serviceCallID = entry.serviceCallID else { return nil }
+        return serviceCalls.first { $0.id == serviceCallID }
+    }
+
+    private func timeRange(_ entry: DispatchTechnicianDayScheduleEntry) -> String {
+        "\(entry.startsAt.formatted(date: .omitted, time: .shortened))–\(entry.endsAt.formatted(date: .omitted, time: .shortened))"
+    }
+
+    private func displayName(_ rawValue: String) -> String {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Unnamed technician" : trimmed
+    }
+
+    private func appointmentAccessibilityLabel(_ entry: DispatchTechnicianDayScheduleEntry) -> String {
+        var parts = [entry.title, timeRange(entry)]
+        if let detail = entry.detail, !detail.isEmpty {
+            parts.append(detail)
+        }
+        if entry.isOutsidePlan {
+            parts.append("Outside configured hours or overlaps another appointment")
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    private func availabilitySystemImage(_ kind: DispatchTechnicianDayScheduleEntryKind) -> String {
+        switch kind {
+        case .regularHours: "clock.fill"
+        case .onCallHours: "phone.badge.waveform.fill"
+        case .unavailable: "person.crop.circle.badge.xmark"
+        case .appointment: "calendar"
+        }
+    }
+
+    private func availabilityTint(_ kind: DispatchTechnicianDayScheduleEntryKind) -> Color {
+        switch kind {
+        case .regularHours: .green
+        case .onCallHours: .blue
+        case .unavailable: .orange
+        case .appointment: Color.brandGold
+        }
+    }
+
+    private func compactDuration(_ minutes: Int) -> String {
+        let safeMinutes = max(minutes, 0)
+        let hours = safeMinutes / 60
+        let remainder = safeMinutes % 60
+        if hours == 0 { return "\(remainder)m" }
+        if remainder == 0 { return "\(hours)h" }
+        return "\(hours)h \(remainder)m"
     }
 }
 

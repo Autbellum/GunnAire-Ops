@@ -54,6 +54,7 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
     case pricebookReviewRequired(String)
     case missingQuickBooksItemMapping(String)
     case invalidLineAmount(String)
+    case invalidDocumentDiscount
     case amountMismatch(expected: Double, mapped: Double)
 
     var errorDescription: String? {
@@ -68,6 +69,8 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
             return "\(name) is not linked to a QuickBooks product or service. Review and publish the catalog item first."
         case .invalidLineAmount(let name):
             return "\(name) has an invalid quantity or price. Correct the line in Job Billing before publishing to QuickBooks."
+        case .invalidDocumentDiscount:
+            return "The document discount no longer matches its authorized line-item subtotal. Reauthorize or remove it in Job Billing before publishing to QuickBooks."
         case .amountMismatch(let expected, let mapped):
             return "The local document subtotal \(expected.formatted(.currency(code: "USD"))) does not match its mapped QuickBooks lines \(mapped.formatted(.currency(code: "USD"))). Review the line items before retrying."
         }
@@ -102,7 +105,7 @@ enum QuickBooksDocumentLinePublication {
         }
         try QuickBooksCatalogMappingIntegrity.validateDocumentItems(documentItems, against: catalogItems)
 
-        let lines = try zip(snapshots, documentItems).map { snapshot, item in
+        var lines = try zip(snapshots, documentItems).map { snapshot, item in
             guard snapshot.quantity.isFinite,
                   snapshot.quantity > 0,
                   snapshot.unitPrice.isFinite,
@@ -133,7 +136,15 @@ enum QuickBooksDocumentLinePublication {
             )
         }
 
-        let mappedTotal = lines.reduce(0) { $0 + $1.Amount }
+        let grossSubtotal = lines.reduce(0) { $0 + $1.Amount }
+        var mappedTotal = grossSubtotal
+        if let discount = CatalogLineItemSnapshot.documentDiscount(from: snapshotJSON) {
+            guard let discountAmount = discount.amount(for: grossSubtotal) else {
+                throw QuickBooksDocumentLinePublicationError.invalidDocumentDiscount
+            }
+            lines.append(.documentDiscount(amount: discountAmount, discount: discount))
+            mappedTotal -= discountAmount
+        }
         guard currencyCents(expectedSubtotal) != nil,
               currencyCents(expectedSubtotal) == currencyCents(mappedTotal) else {
             throw QuickBooksDocumentLinePublicationError.amountMismatch(
@@ -210,8 +221,11 @@ enum QuickBooksInvoicePublicationRecovery {
                 return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
             },
             privateNote: QuickBooksInvoiceLineage.appendingLineage(
-                to: BillingPriceAdjustmentAudit.quickBooksPrivateNote(
-                    existing: invoice.accountingPrivateNote,
+                to: BillingDocumentDiscountAudit.quickBooksPrivateNote(
+                    existing: BillingPriceAdjustmentAudit.quickBooksPrivateNote(
+                        existing: invoice.accountingPrivateNote,
+                        snapshotJSON: invoice.catalogSnapshotJSON
+                    ),
                     snapshotJSON: invoice.catalogSnapshotJSON
                 ),
                 for: invoice
@@ -293,6 +307,10 @@ enum QuickBooksEstimatePublicationRecovery {
             existing: estimate.notes,
             snapshotJSON: estimate.catalogSnapshotJSON
         )
+        let discountedNote = BillingDocumentDiscountAudit.quickBooksPrivateNote(
+            existing: adjustedNote,
+            snapshotJSON: estimate.catalogSnapshotJSON
+        )
         return QuickBooksEstimatePublicationInputs(
             customerRef: QuickBooksReference(value: customerID, name: estimate.customer.name),
             lines: lines,
@@ -300,7 +318,7 @@ enum QuickBooksEstimatePublicationRecovery {
                 let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
                 return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
             },
-            privateNote: QuickBooksEstimateLineage.appendingLineage(to: adjustedNote, for: estimate),
+            privateNote: QuickBooksEstimateLineage.appendingLineage(to: discountedNote, for: estimate),
             shipAddress: estimate.siteAddress.flatMap { address in
                 let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
                 return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
@@ -3884,7 +3902,8 @@ struct QuickBooksManagementView: View {
                         PrivateNote: inputs.privateNote,
                         BillEmail: inputs.billEmail,
                         ShipAddr: inputs.shipAddress,
-                        GlobalTaxCalculation: "TaxExcluded"
+                        GlobalTaxCalculation: "TaxExcluded",
+                        ApplyTaxAfterDiscount: estimate.documentDiscount == nil ? nil : true
                     )
                     liveAPI.createEstimate(payload) { createResult in
                         DispatchQueue.main.async {
@@ -3997,7 +4016,8 @@ struct QuickBooksManagementView: View {
                             BillEmail: inputs.billEmail,
                             ShipAddr: inputs.shipAddress,
                             DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
-                            GlobalTaxCalculation: "TaxExcluded"
+                            GlobalTaxCalculation: "TaxExcluded",
+                            ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true
                         )
                         quickBooksDataAPI.updateInvoice(payload) { updateResult in
                             DispatchQueue.main.async {
@@ -4015,7 +4035,8 @@ struct QuickBooksManagementView: View {
                 BillEmail: inputs.billEmail,
                 ShipAddr: inputs.shipAddress,
                 DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
-                GlobalTaxCalculation: "TaxExcluded"
+                GlobalTaxCalculation: "TaxExcluded",
+                ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true
             )
             quickBooksDataAPI.fetchInvoices { fetchResult in
                 DispatchQueue.main.async {

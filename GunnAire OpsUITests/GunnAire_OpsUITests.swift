@@ -22,6 +22,26 @@ final class GunnAire_OpsUITests: XCTestCase {
     private let warrantyClaimID = "A1000000-0000-4000-8000-000000000037"
     private let fieldExpenseClaimID = "A1000000-0000-4000-8000-000000000041"
     private let operationalAlertID = "A1000000-0000-4000-8000-000000000042"
+    private let businessTaskID = "A1000000-0000-4000-8000-000000000043"
+    private let timeOffRequestID = "A1000000-0000-4000-8000-000000000045"
+
+    private func dispatchCapacityIdentifier(for date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "DispatchCapacityDate-%04d-%02d-%02d",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0
+        )
+    }
+
+    private func startOfDispatchWeek(containing date: Date) -> Date {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: date)
+        let weekday = calendar.component(.weekday, from: day)
+        let offsetFromMonday = (weekday + 5) % 7
+        return calendar.date(byAdding: .day, value: -offsetFromMonday, to: day) ?? day
+    }
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
@@ -83,6 +103,148 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         app.staticTexts["Payments"].tap()
         XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testGlobalFindReturnsToCommandCenterFromAnyIPadWorkspace() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 6))
+        app.staticTexts["Payments"].tap()
+        XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 3))
+
+        let globalFind = app.buttons["GlobalFindButton"]
+        XCTAssertTrue(globalFind.waitForExistence(timeout: 3))
+        globalFind.tap()
+
+        XCTAssertTrue(app.navigationBars["Find"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.searchFields.firstMatch.placeholderValue, "Customer, Job, Invoice, Estimate, Address")
+        app.searchFields.firstMatch.tap()
+        app.searchFields.firstMatch.typeText("UI Test Collectible Customer")
+        XCTAssertTrue(app.buttons["CommandFindCustomer-\(screenshotCustomerID)"].exists)
+
+#if !targetEnvironment(macCatalyst)
+        // Touch platforms can scroll the sheet from the application root. On
+        // Mac Catalyst that synthetic gesture has no application hit point;
+        // the Mac acceptance path instead proves the global entry, role-aware
+        // prompt, authorized customer result, dismissal, and return below.
+        let jobResult = app.buttons["CommandFindJob-\(screenshotServiceCallID)"]
+        for _ in 0..<3 where !jobResult.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(jobResult.waitForExistence(timeout: 3))
+        let invoiceResult = app.buttons["CommandFindInvoice-\(screenshotInvoiceID)"]
+        for _ in 0..<3 where !invoiceResult.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(invoiceResult.waitForExistence(timeout: 3))
+#endif
+
+        app.buttons["Close"].tap()
+        XCTAssertTrue(app.navigationBars["Command Center"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testFieldFindExposesOnlyAssignedJobAndCollectibleInvoiceContext() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 6))
+        let globalFind = app.buttons["GlobalFindButton"]
+        XCTAssertTrue(globalFind.waitForExistence(timeout: 3))
+        globalFind.tap()
+
+        XCTAssertTrue(app.navigationBars["Find"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.searchFields.firstMatch.placeholderValue, "Job, Invoice, Address")
+        XCTAssertFalse(app.buttons["CommandFindCustomer-\(screenshotCustomerID)"].exists)
+        XCTAssertTrue(app.buttons["CommandFindJob-\(screenshotServiceCallID)"].exists)
+        XCTAssertTrue(app.buttons["CommandFindInvoice-\(screenshotInvoiceID)"].exists)
+        XCTAssertFalse(app.buttons["CommandFindOpenReports"].exists)
+        XCTAssertFalse(app.buttons["CommandFindOpenSync"].exists)
+    }
+
+    @MainActor
+    func testCompactFieldCommandCenterKeepsItsFocusedFindEntry() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Command Center"].waitForExistence(timeout: 6))
+        let commandFind = app.buttons["CommandCenterToolbarFindButton"]
+        XCTAssertTrue(commandFind.waitForExistence(timeout: 3))
+        commandFind.tap()
+
+        XCTAssertTrue(app.navigationBars["Find"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.searchFields.firstMatch.placeholderValue, "Job, Invoice, Address")
+        XCTAssertTrue(app.buttons["CommandFindJob-\(screenshotServiceCallID)"].exists)
+        XCTAssertTrue(app.buttons["CommandFindInvoice-\(screenshotInvoiceID)"].exists)
+        XCTAssertFalse(app.buttons["CommandFindCustomer-\(screenshotCustomerID)"].exists)
+    }
+
+    @MainActor
+    func testAccountingFindShowsFinancialResultsWithoutDispatchOrAdminActions() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAccounting",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 6))
+        let globalFind = app.buttons["GlobalFindButton"]
+        XCTAssertTrue(globalFind.waitForExistence(timeout: 3))
+        globalFind.tap()
+
+        XCTAssertTrue(app.navigationBars["Find"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.searchFields.firstMatch.placeholderValue, "Customer, Invoice, Address")
+        XCTAssertTrue(app.buttons["CommandFindCustomer-\(screenshotCustomerID)"].exists)
+        XCTAssertFalse(app.buttons["CommandFindJob-\(screenshotServiceCallID)"].exists)
+        XCTAssertTrue(app.buttons["CommandFindInvoice-\(screenshotInvoiceID)"].exists)
+        XCTAssertTrue(app.buttons["CommandFindOpenInvoices"].exists)
+        XCTAssertTrue(app.buttons["CommandFindOpenReports"].exists)
+        XCTAssertFalse(app.buttons["CommandFindOpenSchedule"].exists)
+        XCTAssertFalse(app.buttons["CommandFindOpenSync"].exists)
+    }
+
+    @MainActor
+    func testStandardCommandCenterNeverOffersTechnicianAssignmentMutation() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedStandard",
+            "-uiTestSeedScheduleAuthorization"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Command Center"].waitForExistence(timeout: 6))
+        let unassignedRow = app.descendants(matching: .any)["CommandCenterDispatchJob-\(unassignedScheduleServiceCallID)"]
+        for _ in 0..<12 where !unassignedRow.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(unassignedRow.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["CommandCenterAssign-\(unassignedScheduleServiceCallID)"].exists)
     }
 
     @MainActor
@@ -467,6 +629,48 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "Field technician own performance scorecard"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
+    func testFieldTechnicianSignsTheCurrentWeeklyTimeSnapshot() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedTeamTimeReview",
+            "-appStoreScreenshotFixtures",
+            "-GunnAirePendingAppRoute", "timeClock"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Time Clock"].waitForExistence(timeout: 8))
+        let signSnapshot = app.buttons["SignTimesheetSnapshot"]
+        for _ in 0..<8 where !signSnapshot.exists || !signSnapshot.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(signSnapshot.waitForExistence(timeout: 3))
+        XCTAssertTrue(signSnapshot.isEnabled)
+        XCTAssertTrue(app.staticTexts["Ready for your sign-off"].exists)
+        signSnapshot.tap()
+
+        let confirm = app.buttons.matching(identifier: "ConfirmTimesheetSignOff").firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 3))
+        confirm.tap()
+
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH 'Signed '")
+        ).firstMatch.waitForExistence(timeout: 3))
+        XCTAssertFalse(signSnapshot.isEnabled)
+        XCTAssertFalse(app.descendants(matching: .any)["SidebarAccountIdentity"].exists)
+        XCTAssertFalse(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
+        ).firstMatch.exists)
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Field technician weekly time snapshot signed without account email"
         attachment.lifetime = .keepAlways
         add(attachment)
     }
@@ -965,6 +1169,78 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testFieldTechnicianScheduleShowsOnlyAuthorizedAdjacentTravel() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedScheduleAuthorization",
+            "-uiTestSeedTechnicianRoute"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        if !schedule.waitForExistence(timeout: 2) {
+            let sidebarButton = app.buttons["GunnAire Ops"]
+            XCTAssertTrue(sidebarButton.waitForExistence(timeout: 3))
+            sidebarButton.tap()
+        }
+        XCTAssertTrue(schedule.waitForExistence(timeout: 3))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        XCTAssertFalse(app.buttons["DispatchWeekBoard"].exists)
+        XCTAssertFalse(app.buttons["AddServiceCall"].exists)
+        XCTAssertFalse(app.staticTexts["Unassigned confidential dispatch job"].exists)
+        XCTAssertFalse(app.buttons["OpenServiceCall-\(unassignedScheduleServiceCallID)"].exists)
+
+        let routeDisclosure = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] 'Travel between appointments'")
+        ).firstMatch
+        for _ in 0..<8 where !routeDisclosure.exists {
+            XCTAssertFalse(app.staticTexts["Unassigned confidential dispatch job"].exists)
+            app.swipeUp()
+        }
+        XCTAssertTrue(routeDisclosure.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(routeDisclosure.label.localizedCaseInsensitiveContains("travel between appointments"), routeDisclosure.label)
+        XCTAssertTrue(routeDisclosure.label.localizedCaseInsensitiveContains("2 scheduled legs"), routeDisclosure.label)
+        XCTAssertFalse(routeDisclosure.label.localizedCaseInsensitiveContains("@gunnaire.com"), routeDisclosure.label)
+        routeDisclosure.tap()
+
+        let authorizedRouteTitle = app.staticTexts["Comfort Care maintenance → Follow-up airflow repair"]
+        XCTAssertTrue(authorizedRouteTitle.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["30m appointment overlap"].exists)
+        XCTAssertFalse(authorizedRouteTitle.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        let routeLegID = "A1000000-0000-4000-8000-000000000012-A1000000-0000-4000-8000-000000000048"
+        let estimateRoute = app.buttons["FieldTechnicianRouteEstimate-\(routeLegID)"]
+        for _ in 0..<4 where !estimateRoute.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(estimateRoute.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.buttons["FieldTechnicianRouteOpenMaps-\(routeLegID)"].exists)
+        XCTAssertFalse(app.buttons["DispatchTechnicianRouteEstimate-\(routeLegID)"].exists)
+        XCTAssertFalse(app.staticTexts["Unassigned confidential dispatch job"].exists)
+        XCTAssertFalse(app.buttons["OpenServiceCall-\(unassignedScheduleServiceCallID)"].exists)
+
+        let routeFooter = app.staticTexts.matching(
+            NSPredicate(
+                format: "label == %@",
+                "Optional Apple Maps estimates require a connection and account for expected traffic. They are informational only and never change appointments, capacity, or promised arrival windows."
+            )
+        ).firstMatch
+        XCTAssertTrue(routeFooter.exists)
+
+        let evidence = XCTAttachment(screenshot: app.screenshot())
+        evidence.name = "Field technician authorized day with compact adjacent travel"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+    }
+
+    @MainActor
     func testFieldJobDirectionsStayVisibleFromScheduleToJobDetails() throws {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = XCUIApplication()
@@ -1215,7 +1491,8 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-enableSplashVideo", "NO",
             "-disableCloudKitForTesting",
             "-uiTestAuthenticatedAdmin",
-            "-uiTestSeedCollectibleJob"
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedTechnicianRoute"
         ]
         app.launch()
 
@@ -1232,6 +1509,76 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Drag a job to another day. Its time stays the same."].exists)
         XCTAssertTrue(app.buttons["Today"].exists)
         XCTAssertTrue(app.buttons["Done"].exists)
+
+        let capacity = app.descendants(matching: .any)[dispatchCapacityIdentifier(for: Date())]
+        XCTAssertTrue(capacity.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(capacity.label.localizedCaseInsensitiveContains("capacity"))
+        XCTAssertFalse(capacity.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        capacity.tap()
+        XCTAssertTrue(app.navigationBars["Team Capacity"].waitForExistence(timeout: 3), app.debugDescription)
+        let technicianCapacity = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH 'DispatchTechnicianCapacity-'")
+        ).firstMatch
+        XCTAssertTrue(technicianCapacity.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("UI Test Technician"))
+        XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("hours not configured"))
+        XCTAssertFalse(technicianCapacity.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+        XCTAssertTrue(app.staticTexts["Regular hours are reduced by unavailable time. On-call remains separate, and travel time is not estimated."].exists)
+
+        technicianCapacity.tap()
+        XCTAssertTrue(app.navigationBars["Technician Day"].waitForExistence(timeout: 3), app.debugDescription)
+        let technicianDay = app.descendants(matching: .any)["DispatchTechnicianDaySchedule"]
+        XCTAssertTrue(technicianDay.waitForExistence(timeout: 3), app.debugDescription)
+        let dayJob = app.descendants(matching: .any)["DispatchTechnicianDayJob-A1000000-0000-4000-8000-000000000002"]
+        XCTAssertTrue(dayJob.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(dayJob.label.localizedCaseInsensitiveContains("Collectible HVAC service"), dayJob.label)
+        XCTAssertTrue(dayJob.label.localizedCaseInsensitiveContains("outside configured hours"), dayJob.label)
+        XCTAssertFalse(dayJob.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        let routeDisclosure = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] 'Travel between appointments'")
+        ).firstMatch
+        XCTAssertTrue(routeDisclosure.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(routeDisclosure.label.localizedCaseInsensitiveContains("travel between appointments"), routeDisclosure.label)
+        XCTAssertTrue(routeDisclosure.label.localizedCaseInsensitiveContains("1 scheduled leg"), routeDisclosure.label)
+        routeDisclosure.tap()
+
+        let routeLegID = "A1000000-0000-4000-8000-000000000002-A1000000-0000-4000-8000-000000000048"
+        let routeTitle = app.staticTexts["Collectible HVAC service → Follow-up airflow repair"]
+        XCTAssertTrue(routeTitle.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["1h scheduled gap"].exists)
+        XCTAssertFalse(routeTitle.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+        XCTAssertTrue(app.buttons["DispatchTechnicianRouteEstimate-\(routeLegID)"].exists)
+        XCTAssertTrue(app.buttons["DispatchTechnicianRouteOpenMaps-\(routeLegID)"].exists)
+        let routeFooter = app.staticTexts.matching(
+            NSPredicate(
+                format: "label == %@",
+                "Optional Apple Maps estimates require a connection and account for expected traffic. They are informational only and never change appointments, capacity, or promised arrival windows."
+            )
+        ).firstMatch
+        XCTAssertTrue(routeFooter.exists)
+
+        let dayEvidence = XCTAttachment(screenshot: app.screenshot())
+        dayEvidence.name = "Technician day appointments, compact route awareness, and private-note-safe availability"
+        dayEvidence.lifetime = .keepAlways
+        add(dayEvidence)
+
+        routeDisclosure.tap()
+        technicianDay.swipeDown()
+        let editableDayJob = app.descendants(matching: .any)["DispatchTechnicianDayJob-A1000000-0000-4000-8000-000000000002"]
+        XCTAssertTrue(editableDayJob.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(editableDayJob.isHittable, app.debugDescription)
+        editableDayJob.tap()
+        XCTAssertTrue(app.navigationBars["Edit Service Call"].waitForExistence(timeout: 3))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Technician Day"].waitForExistence(timeout: 3))
+        let teamCapacityBack = app.navigationBars["Technician Day"].buttons["Team Capacity"]
+        XCTAssertTrue(teamCapacityBack.waitForExistence(timeout: 2), app.debugDescription)
+        teamCapacityBack.tap()
+        XCTAssertTrue(app.navigationBars["Team Capacity"].waitForExistence(timeout: 3))
+        app.buttons["DispatchCapacityDetailDone"].tap()
+        XCTAssertTrue(app.navigationBars["Dispatch Week"].waitForExistence(timeout: 3))
 
         let seededJob = app.descendants(matching: .any)["DispatchJobCard-A1000000-0000-4000-8000-000000000002"]
         XCTAssertTrue(seededJob.waitForExistence(timeout: 3))
@@ -1709,6 +2056,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(stagePicker.buttons["Billing"].isSelected)
         XCTAssertFalse(app.buttons["Create Invoice"].exists)
         XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].exists)
+        XCTAssertFalse(app.buttons["DocumentDiscountAction"].exists)
 
         let servicedSystemPicker = app.descendants(matching: .any)["LineEquipmentPicker-\(catalogItemID)"]
         XCTAssertTrue(servicedSystemPicker.waitForExistence(timeout: 3))
@@ -1961,6 +2309,83 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdministratorAuthorizesDocumentDiscountWithoutChangingCatalogLines() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        app.staticTexts["Schedule & Jobs"].tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let documentation = app.buttons["OpenDocumentation-\(screenshotServiceCallID)"]
+        for _ in 0..<6 where !documentation.exists || !documentation.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(documentation.waitForExistence(timeout: 3))
+        documentation.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        stagePicker.buttons["Billing"].tap()
+
+        let discountAction = app.buttons["DocumentDiscountAction"]
+        for _ in 0..<7 where !discountAction.exists || !discountAction.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(discountAction.waitForExistence(timeout: 3))
+        XCTAssertEqual(discountAction.label, "Add Document Discount")
+        discountAction.tap()
+
+        XCTAssertTrue(app.navigationBars["Add Discount"].waitForExistence(timeout: 3))
+        let discountValue = app.textFields["DocumentDiscountValue"]
+        XCTAssertTrue(discountValue.waitForExistence(timeout: 3))
+        discountValue.tap()
+        discountValue.typeText("10")
+
+        let reason = app.textFields["DocumentDiscountReason"]
+        XCTAssertTrue(reason.waitForExistence(timeout: 3))
+        reason.tap()
+        reason.typeText("Maintenance plan member benefit")
+        if app.keyboards.firstMatch.exists {
+            app.typeKey(.escape, modifierFlags: [])
+        }
+
+        let authorize = app.buttons["AuthorizeDocumentDiscount"]
+        XCTAssertTrue(authorize.waitForExistence(timeout: 3))
+        XCTAssertTrue(authorize.isEnabled)
+        authorize.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        let summary = app.staticTexts["AuthorizedDocumentDiscount"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 3))
+        XCTAssertTrue(summary.label.contains("10%"))
+        XCTAssertTrue(summary.label.contains("Maintenance plan member benefit"))
+        XCTAssertFalse(summary.label.contains("@"))
+        XCTAssertTrue(app.staticTexts["−$18.90"].exists)
+        let netSubtotal = app.staticTexts["DocumentNetSubtotal"]
+        for _ in 0..<3 where !netSubtotal.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(netSubtotal.waitForExistence(timeout: 3))
+        XCTAssertTrue(netSubtotal.label.contains("$170.10"))
+
+        let updateInvoice = app.buttons["Update Invoice"]
+        for _ in 0..<6 where !updateInvoice.exists || !updateInvoice.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(updateInvoice.waitForExistence(timeout: 3))
+        XCTAssertTrue(updateInvoice.isEnabled)
+        updateInvoice.tap()
+        XCTAssertTrue(app.staticTexts["QuickBooks update pending"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testTaxableBillingShowsOneClearQuickBooksTotalHandoff() throws {
         let app = XCUIApplication()
         app.launchArguments = [
@@ -1992,7 +2417,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         XCTAssertTrue(notice.waitForExistence(timeout: 3))
         XCTAssertTrue(notice.label.contains("QuickBooks calculates sales tax"))
-        XCTAssertTrue(app.staticTexts["Subtotal"].exists)
+        XCTAssertTrue(app.staticTexts["DocumentNetSubtotal"].exists)
         XCTAssertFalse(app.staticTexts["Sales Tax Rate"].exists)
         XCTAssertTrue(app.buttons["Discount / Adjust"].exists)
     }
@@ -3138,6 +3563,252 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdministratorCompletesAuditedCustomerJobTaskFromCommandCenter() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedBusinessTask"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Command Center"].waitForExistence(timeout: 5))
+
+        let taskQuickAction = app.buttons["Tasks"]
+        XCTAssertTrue(taskQuickAction.waitForExistence(timeout: 3))
+        taskQuickAction.tap()
+        XCTAssertTrue(app.navigationBars["Team Tasks"].waitForExistence(timeout: 3))
+
+        let taskRow = app.buttons["BusinessTask-\(businessTaskID)"]
+        XCTAssertTrue(taskRow.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(taskRow.label.localizedCaseInsensitiveContains("overdue"))
+        XCTAssertFalse(taskRow.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+        taskRow.tap()
+        XCTAssertTrue(app.navigationBars["Task Details"].waitForExistence(timeout: 3))
+
+        let completionNote = app.descendants(matching: .any)["BusinessTaskCompletionNote"]
+        XCTAssertTrue(completionNote.waitForExistence(timeout: 3))
+        completionNote.tap()
+        completionNote.typeText("Property manager confirmed the roof key and access window.")
+        let complete = app.buttons["CompleteBusinessTask"]
+        XCTAssertTrue(complete.isEnabled)
+        complete.tap()
+
+        XCTAssertTrue(app.buttons["Reopen Task"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Property manager confirmed the roof key and access window."].exists)
+        app.navigationBars["Task Details"].buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Team Tasks"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["No Open Tasks"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["BusinessTask-\(businessTaskID)"].exists)
+    }
+
+    @MainActor
+    func testAdministratorApprovesTimeOffWithoutMovingAssignedJobsOrExposingPrivateReasonOnDashboard() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedTimeOffRequest"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Command Center"].waitForExistence(timeout: 5))
+        let reviewPriority = app.buttons["ReviewTimeOffRequest"]
+        XCTAssertTrue(reviewPriority.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(reviewPriority.label.localizedCaseInsensitiveContains("capacity review required"))
+        XCTAssertFalse(reviewPriority.label.localizedCaseInsensitiveContains("private appointment"))
+        XCTAssertFalse(reviewPriority.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+        reviewPriority.tap()
+
+        XCTAssertTrue(app.navigationBars["Time-Off Review"].waitForExistence(timeout: 3))
+        let request = app.buttons["TimeOffRequest-\(timeOffRequestID)"]
+        XCTAssertTrue(request.waitForExistence(timeout: 3), app.debugDescription)
+        request.tap()
+
+        XCTAssertTrue(app.navigationBars["Time-Off Request"].waitForExistence(timeout: 3))
+        let privateReason = app.descendants(matching: .any)["TimeOffPrivateReasonValue"]
+        XCTAssertTrue(privateReason.exists)
+        XCTAssertTrue(privateReason.label.localizedCaseInsensitiveContains("Private appointment"))
+        let approve = app.buttons["ApproveTimeOffRequest"]
+        XCTAssertTrue(approve.exists)
+        XCTAssertTrue(approve.isEnabled)
+        approve.tap()
+
+        XCTAssertTrue(app.navigationBars["Time-Off Review"].waitForExistence(timeout: 3))
+        let approvedHistory = app.buttons["TimeOffRequestHistory-\(timeOffRequestID)"]
+        XCTAssertTrue(approvedHistory.waitForExistence(timeout: 3))
+        XCTAssertTrue(approvedHistory.label.localizedCaseInsensitiveContains("Approved"))
+        XCTAssertFalse(app.buttons["TimeOffRequest-\(timeOffRequestID)"].exists)
+    }
+
+    @MainActor
+    func testAdministratorCreatesAndRetiresCompactRecurringTechnicianHours() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-appStoreScreenshotFixtures"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 6))
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        if !schedule.waitForExistence(timeout: 2) {
+            let sidebar = app.buttons["GunnAire Ops"]
+            XCTAssertTrue(sidebar.waitForExistence(timeout: 3))
+            sidebar.tap()
+        }
+        XCTAssertTrue(schedule.waitForExistence(timeout: 3))
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let availability = app.buttons["ManageTechnicianAvailability"]
+        XCTAssertTrue(availability.waitForExistence(timeout: 3), app.debugDescription)
+        availability.tap()
+        XCTAssertTrue(app.navigationBars["Technician Availability"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Jordan Lee"].exists)
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] 'No recurring hours are configured'")
+        ).firstMatch.exists)
+
+        let addShift = app.buttons["AddRecurringTechnicianShift"]
+        XCTAssertTrue(addShift.waitForExistence(timeout: 3))
+        addShift.tap()
+        XCTAssertTrue(app.navigationBars["Recurring Work Shift"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Regular"].exists)
+        XCTAssertTrue(app.switches["RecurringShiftDay-2"].isEnabled)
+        if !app.switches["RecurringShiftDay-6"].exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(app.switches["RecurringShiftDay-6"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.switches["RecurringShiftDay-6"].isEnabled)
+
+        let save = app.buttons["SaveRecurringTechnicianShift"]
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        XCTAssertTrue(app.navigationBars["Technician Availability"].waitForExistence(timeout: 4))
+
+        let shiftRows = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH 'TechnicianWorkShift-'")
+        )
+        XCTAssertTrue(shiftRows.firstMatch.waitForExistence(timeout: 3), app.debugDescription)
+        let activeShiftCount = app.staticTexts["ActiveTechnicianWorkShiftCount"]
+        XCTAssertTrue(activeShiftCount.waitForExistence(timeout: 2))
+        XCTAssertEqual(activeShiftCount.label, "5 active")
+        XCTAssertTrue(shiftRows.firstMatch.label.localizedCaseInsensitiveContains("regular"))
+        XCTAssertFalse(shiftRows.firstMatch.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        let created = XCTAttachment(screenshot: app.screenshot())
+        created.name = "Compact recurring technician hours without account email"
+        created.lifetime = .keepAlways
+        add(created)
+
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+        let weekBoard = app.buttons["Week Board"]
+        XCTAssertTrue(weekBoard.waitForExistence(timeout: 3))
+        weekBoard.tap()
+        XCTAssertTrue(app.navigationBars["Dispatch Week"].waitForExistence(timeout: 3))
+        let nextWeek = app.buttons["Next week"]
+        XCTAssertTrue(nextWeek.exists)
+        nextWeek.tap()
+        let nextMonday = Calendar.current.date(
+            byAdding: .day,
+            value: 7,
+            to: startOfDispatchWeek(containing: Date())
+        ) ?? Date()
+        let mondayCapacity = app.descendants(matching: .any)[dispatchCapacityIdentifier(for: nextMonday)]
+        XCTAssertTrue(mondayCapacity.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(mondayCapacity.label.localizedCaseInsensitiveContains("9 hours open"))
+        XCTAssertTrue(mondayCapacity.label.localizedCaseInsensitiveContains("9 hours staffed"))
+        XCTAssertTrue(mondayCapacity.label.localizedCaseInsensitiveContains("0 minutes booked"))
+        XCTAssertFalse(mondayCapacity.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        mondayCapacity.tap()
+        XCTAssertTrue(app.navigationBars["Team Capacity"].waitForExistence(timeout: 3), app.debugDescription)
+        let technicianCapacity = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH 'DispatchTechnicianCapacity-' AND label CONTAINS[c] '9 hours staffed'"
+            )
+        ).firstMatch
+        XCTAssertTrue(technicianCapacity.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("9 hours staffed"), technicianCapacity.label)
+        XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("0 minutes booked"), technicianCapacity.label)
+        XCTAssertTrue(technicianCapacity.label.localizedCaseInsensitiveContains("9 hours open"), technicianCapacity.label)
+        XCTAssertFalse(technicianCapacity.label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        technicianCapacity.tap()
+        XCTAssertTrue(app.navigationBars["Technician Day"].waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["No assigned appointments"].waitForExistence(timeout: 2), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Regular hours"].waitForExistence(timeout: 2), app.debugDescription)
+        XCTAssertFalse(app.descendants(matching: .any)["DispatchTechnicianDaySchedule"].label.localizedCaseInsensitiveContains("@gunnaire.com"))
+
+        let scheduleEvidence = XCTAttachment(screenshot: app.screenshot())
+        scheduleEvidence.name = "Configured technician day hours without dashboard overload"
+        scheduleEvidence.lifetime = .keepAlways
+        add(scheduleEvidence)
+
+        let teamCapacityBack = app.navigationBars["Technician Day"].buttons["Team Capacity"]
+        XCTAssertTrue(teamCapacityBack.waitForExistence(timeout: 2), app.debugDescription)
+        teamCapacityBack.tap()
+        XCTAssertTrue(app.navigationBars["Team Capacity"].waitForExistence(timeout: 3))
+
+        let detailEvidence = XCTAttachment(screenshot: app.screenshot())
+        detailEvidence.name = "Progressive technician capacity detail without account email"
+        detailEvidence.lifetime = .keepAlways
+        add(detailEvidence)
+
+        app.buttons["DispatchCapacityDetailDone"].tap()
+        XCTAssertTrue(app.navigationBars["Dispatch Week"].waitForExistence(timeout: 3))
+
+        let capacityEvidence = XCTAttachment(screenshot: app.screenshot())
+        capacityEvidence.name = "Weekly dispatch capacity from recurring technician hours"
+        capacityEvidence.lifetime = .keepAlways
+        add(capacityEvidence)
+
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+        XCTAssertTrue(availability.waitForExistence(timeout: 3))
+        availability.tap()
+        XCTAssertTrue(app.navigationBars["Technician Availability"].waitForExistence(timeout: 3))
+        XCTAssertEqual(activeShiftCount.label, "5 active")
+
+        shiftRows.firstMatch.swipeLeft()
+        let retire = app.buttons["Retire"]
+        XCTAssertTrue(retire.waitForExistence(timeout: 3))
+        retire.tap()
+        XCTAssertTrue(app.navigationBars["Retire Work Shift"].waitForExistence(timeout: 3))
+        let reason = app.descendants(matching: .any)["RecurringShiftRetirementReason"]
+        XCTAssertTrue(reason.exists)
+        reason.tap()
+        reason.typeText("Changed summer coverage hours")
+        let confirm = app.buttons["ConfirmRecurringShiftRetirement"]
+        XCTAssertTrue(confirm.isEnabled)
+        confirm.tap()
+
+        XCTAssertTrue(app.navigationBars["Technician Availability"].waitForExistence(timeout: 4))
+        XCTAssertEqual(activeShiftCount.label, "4 active")
+        let retiredHistory = app.buttons["Retired History"]
+        for _ in 0..<3 where !retiredHistory.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(retiredHistory.waitForExistence(timeout: 3))
+        retiredHistory.tap()
+        let retirementReason = app.staticTexts["Retired: Changed summer coverage hours"]
+        if !retirementReason.waitForExistence(timeout: 2) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(retirementReason.waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testEquipmentProfileActionsStayCompactAndRequireDeleteConfirmation() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -4254,6 +4925,35 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Waiting for the assigned invoice"].waitForExistence(timeout: 3))
         app.buttons["Dismiss"].tap()
         XCTAssertFalse(app.staticTexts["Waiting for the assigned invoice"].exists)
+    }
+
+    @MainActor
+    func testExpiredFieldCollectionHandoffClearsWithoutOpeningAnInvoice() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        let expiresAt = Date().addingTimeInterval(10).timeIntervalSince1970
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-GunnAirePendingAppRoute", "payments",
+            "-GunnAirePendingInvoiceID", "B2000000-0000-4000-8000-000000000002",
+            "-GunnAirePendingOpenPaymentCollection", "YES",
+            "-GunnAirePendingContactlessPaymentGuide", "YES",
+            "-GunnAirePendingPaymentCollectionExpiresAt", String(expiresAt)
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Waiting for the assigned invoice"].waitForExistence(timeout: 5))
+
+        let expiredMessage = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@", "nearby-device handoff expired")
+        ).firstMatch
+        XCTAssertTrue(expiredMessage.waitForExistence(timeout: 15))
+        XCTAssertFalse(app.staticTexts["Waiting for the assigned invoice"].exists)
+        XCTAssertFalse(app.navigationBars["Contactless Payment"].exists)
+        XCTAssertFalse(app.navigationBars["Record Payment"].exists)
     }
 
     @MainActor

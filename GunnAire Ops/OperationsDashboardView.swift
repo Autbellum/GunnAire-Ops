@@ -2,12 +2,14 @@ import SwiftUI
 import SwiftData
 
 struct OperationsDashboardView: View {
+    @Binding private var showingCommandPalette: Bool
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \ServiceCall.scheduledDate, order: .forward) private var serviceCalls: [ServiceCall]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \TechnicianAvailabilityBlock.startsAt, order: .forward) private var technicianAvailabilityBlocks: [TechnicianAvailabilityBlock]
+    @Query(sort: \TechnicianWorkShift.createdAt, order: .reverse) private var technicianWorkShifts: [TechnicianWorkShift]
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -23,6 +25,8 @@ struct OperationsDashboardView: View {
     @Query(sort: \Vendor.name, order: .forward) private var vendors: [Vendor]
     @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
     @Query(sort: \FleetVehicle.unitNumber, order: .forward) private var fleetVehicles: [FleetVehicle]
+    @Query(sort: \BusinessTask.dueAt, order: .forward) private var businessTasks: [BusinessTask]
+    @Query(sort: \TechnicianTimeOffRequest.createdAt, order: .reverse) private var timeOffRequests: [TechnicianTimeOffRequest]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
@@ -30,45 +34,107 @@ struct OperationsDashboardView: View {
     @AppStorage("onsitePaymentProcessorReady") private var onsitePaymentProcessorReady = false
     @AppStorage("requireWorkPerformedLogForCloseout") private var requireWorkPerformedLogForCloseout = true
     @State private var dispatchMessage: String?
-    @State private var showingCommandPalette = false
     @State private var isBusinessOverviewExpanded = false
     @State private var isOperationalStatusExpanded = false
     @State private var showingFleetWorkspace = false
+    @State private var showingBusinessTasks = false
+    @State private var showingTimeOffRequests = false
 
     private let calendar = Calendar.current
 
+    init(showingCommandPalette: Binding<Bool>) {
+        _showingCommandPalette = showingCommandPalette
+    }
+
     private var currentUserEmail: String? {
         AppIdentity.currentEmail
+    }
+
+    private var operationsAccess: OperationsAccessCapabilities {
+        OperationsAccessPolicy.capabilities(email: currentUserEmail, users: users)
     }
 
     /// CloudKit may hydrate relationship records after their owning records.
     /// Keep the command center available while those links converge instead of
     /// dereferencing the models' intentionally optional-at-rest relationships.
     private var dashboardServiceCalls: [ServiceCall] {
-        serviceCalls.filter { $0.customer != nil }
+        let visibleIDs = OperationsAccessPolicy.visibleServiceCallIDs(
+            email: currentUserEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+        return serviceCalls.filter { visibleIDs.contains($0.id) }
+    }
+
+    private var dashboardCustomers: [Customer] {
+        let visibleIDs = OperationsAccessPolicy.dashboardCustomerIDs(
+            email: currentUserEmail,
+            users: users,
+            customers: customers,
+            serviceCalls: serviceCalls,
+            invoices: invoices,
+            technicians: technicians
+        )
+        return customers.filter { visibleIDs.contains($0.id) }
+    }
+
+    private var searchableCustomers: [Customer] {
+        let visibleIDs = OperationsAccessPolicy.searchableCustomerIDs(
+            email: currentUserEmail,
+            users: users,
+            customers: customers
+        )
+        return customers.filter { visibleIDs.contains($0.id) }
     }
 
     private var dashboardContracts: [RecurringMaintenanceContract] {
-        recurringContracts.filter { $0.customer != nil }
+        let customerIDs = Set(dashboardCustomers.map(\.id))
+        let visibleIDs = OperationsAccessPolicy.visibleContractIDs(
+            customerIDs: customerIDs,
+            contracts: recurringContracts
+        )
+        return recurringContracts.filter { visibleIDs.contains($0.id) }
     }
 
     private var dashboardEstimates: [Estimate] {
-        estimates.filter { $0.customer != nil }
+        let visibleIDs = OperationsAccessPolicy.visibleEstimateIDs(
+            email: currentUserEmail,
+            users: users,
+            estimates: estimates
+        )
+        return estimates.filter { visibleIDs.contains($0.id) }
     }
 
     private var dashboardInvoices: [Invoice] {
-        invoices.filter { $0.customer != nil }
+        let visibleIDs = OperationsAccessPolicy.visibleInvoiceIDs(
+            email: currentUserEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            invoices: invoices,
+            technicians: technicians
+        )
+        return invoices.filter { visibleIDs.contains($0.id) }
     }
 
     private var dashboardPayments: [Payment] {
-        payments.filter { payment in
-            guard let invoice = payment.invoice else { return false }
-            return invoice.customer != nil
-        }
+        let visibleIDs = OperationsAccessPolicy.visiblePaymentIDs(
+            email: currentUserEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            invoices: invoices,
+            payments: payments,
+            technicians: technicians
+        )
+        return payments.filter { visibleIDs.contains($0.id) }
     }
 
     private var dashboardCommunications: [CustomerCommunication] {
-        customerCommunications.filter { $0.customer != nil }
+        let visibleIDs = OperationsAccessPolicy.visibleCommunicationIDs(
+            customerIDs: Set(dashboardCustomers.map(\.id)),
+            communications: customerCommunications
+        )
+        return customerCommunications.filter { visibleIDs.contains($0.id) }
     }
 
     private var assignableTechnicians: [Technician] {
@@ -76,11 +142,20 @@ struct OperationsDashboardView: View {
     }
 
     private var canViewFinancials: Bool {
-        AppAccess.isAdmin(email: currentUserEmail, users: users)
+        operationsAccess.canViewFinancials
     }
 
     private var canCollectFieldPayments: Bool {
-        AppAccess.canCollectFieldPayments(email: currentUserEmail, users: users)
+        operationsAccess.canCollectPayments
+    }
+
+    private var visibleTechnicians: [Technician] {
+        let visibleIDs = OperationsAccessPolicy.visibleTechnicianIDs(
+            email: currentUserEmail,
+            users: users,
+            technicians: technicians
+        )
+        return technicians.filter { visibleIDs.contains($0.id) }
     }
 
     private var isAdminUser: Bool {
@@ -120,6 +195,34 @@ struct OperationsDashboardView: View {
                 }
                 return $0.unitNumber.localizedCaseInsensitiveCompare($1.unitNumber) == .orderedAscending
             }
+    }
+
+    private var visibleBusinessTasks: [BusinessTask] {
+        let visibleCallIDs = AppAccess.visibleServiceCallIDs(
+            email: currentUserEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+        return BusinessTaskPolicy.visibleTasks(
+            from: businessTasks,
+            email: currentUserEmail,
+            users: users,
+            visibleServiceCallIDs: visibleCallIDs
+        )
+    }
+
+    private var openBusinessTasks: [BusinessTask] {
+        visibleBusinessTasks.filter(\.isOpen)
+    }
+
+    private var canReviewTimeOffRequests: Bool {
+        AppAccess.canReviewTimeOffRequests(email: currentUserEmail, users: users)
+    }
+
+    private var pendingTimeOffRequests: [TechnicianTimeOffRequest] {
+        guard canReviewTimeOffRequests else { return [] }
+        return TechnicianTimeOffPolicy.ordered(timeOffRequests.filter { $0.status == .pending })
     }
 
     private var todayCalls: [ServiceCall] {
@@ -170,7 +273,8 @@ struct OperationsDashboardView: View {
     }
 
     private var maintenanceAlerts: [RecurringMaintenanceContract] {
-        dashboardContracts
+        guard operationsAccess.canSearchJobs else { return [] }
+        return dashboardContracts
             .filter { $0.active && ($0.isOverdue || $0.isUpcoming || $0.needsReminder) }
             .sorted { $0.nextDate < $1.nextDate }
     }
@@ -211,7 +315,10 @@ struct OperationsDashboardView: View {
     }
 
     private var openTimeEntries: [TimeEntry] {
-        timeEntries.filter(\.isOpen)
+        let visibleEmails = Set(visibleTechnicians.map { AppAccess.normalizedEmail($0.contactInfo) })
+        return timeEntries.filter {
+            $0.isOpen && visibleEmails.contains(AppAccess.normalizedEmail($0.userEmail))
+        }
     }
 
     private var monthInvoiceTotal: Double {
@@ -249,6 +356,8 @@ struct OperationsDashboardView: View {
             quickBooksAttentionInvoices.first != nil,
             quickBooksAttentionPayments.first != nil,
             followUpCalls.first != nil,
+            openBusinessTasks.first != nil,
+            pendingTimeOffRequests.first != nil,
             fleetAttentionVehicles.first != nil,
             upcomingCalls.first != nil
         ]
@@ -279,7 +388,7 @@ struct OperationsDashboardView: View {
     }
 
     private var clearTechnicianCountToday: Int {
-        technicians.filter { technician in
+        visibleTechnicians.filter { technician in
             todayCalls.allSatisfy { !$0.includesAssignedTechnician(technician.id) }
         }
         .count
@@ -291,7 +400,7 @@ struct OperationsDashboardView: View {
 
     private var suiteSnapshot: BusinessSuiteSnapshot {
         BusinessSuiteIntelligence.snapshot(
-            customers: customers,
+            customers: dashboardCustomers,
             serviceCalls: dashboardServiceCalls,
             technicians: technicians,
             contracts: dashboardContracts,
@@ -313,7 +422,7 @@ struct OperationsDashboardView: View {
 
     private var accountSnapshots: [CustomerIntelligenceSnapshot] {
         CustomerIntelligence.snapshots(
-            customers: customers,
+            customers: dashboardCustomers,
             serviceCalls: dashboardServiceCalls,
             invoices: dashboardInvoices,
             estimates: dashboardEstimates,
@@ -354,8 +463,10 @@ struct OperationsDashboardView: View {
                         headerSection
                         metricsGrid
                         priorityQueueSection
-                        dispatchIntelligenceSection
-                        if canViewFinancials {
+                        if operationsAccess.canSearchJobs {
+                            dispatchIntelligenceSection
+                        }
+                        if operationsAccess.canShowBusinessOverview {
                             DisclosureGroup(isExpanded: $isBusinessOverviewExpanded) {
                                 VStack(alignment: .leading, spacing: 18) {
                                     suiteSynchronizationSection
@@ -395,23 +506,31 @@ struct OperationsDashboardView: View {
                     } label: {
                         Label("Find", systemImage: "magnifyingglass")
                     }
+                    .accessibilityIdentifier("CommandCenterToolbarFindButton")
                     .tint(Color.brandGold)
                 }
             }
             .sheet(isPresented: $showingCommandPalette) {
                 OperationsCommandPalette(
-                    customers: customers,
+                    customers: searchableCustomers,
                     serviceCalls: dashboardServiceCalls,
                     invoices: dashboardInvoices,
                     estimates: dashboardEstimates,
                     payments: dashboardPayments,
-                    canViewFinancials: canViewFinancials,
-                    canCollectFieldPayments: canCollectFieldPayments
+                    access: operationsAccess
                 )
                     .tint(Color.brandGold)
             }
             .sheet(isPresented: $showingFleetWorkspace) {
                 FleetWorkspaceView()
+                    .tint(Color.brandGold)
+            }
+            .sheet(isPresented: $showingBusinessTasks) {
+                BusinessTaskWorkspaceView()
+                    .tint(Color.brandGold)
+            }
+            .sheet(isPresented: $showingTimeOffRequests) {
+                TechnicianTimeOffWorkspaceSheet()
                     .tint(Color.brandGold)
             }
         }
@@ -464,11 +583,21 @@ struct OperationsDashboardView: View {
             Label("Find", systemImage: "magnifyingglass")
                 .frame(maxWidth: .infinity)
         }
+        .accessibilityIdentifier("CommandCenterQuickFindButton")
+
+        if operationsAccess.canOpenSchedule {
+            Button {
+                GunnAireAppIntentRouter.store(.schedule)
+            } label: {
+                Label("Schedule", systemImage: "calendar.badge.clock")
+                    .frame(maxWidth: .infinity)
+            }
+        }
 
         Button {
-            GunnAireAppIntentRouter.store(.schedule)
+            showingBusinessTasks = true
         } label: {
-            Label("Schedule", systemImage: "calendar.badge.clock")
+            Label("Tasks", systemImage: "checklist")
                 .frame(maxWidth: .infinity)
         }
 
@@ -481,24 +610,28 @@ struct OperationsDashboardView: View {
             }
         }
 
-        Button {
-            GunnAireAppIntentRouter.store(.sync)
-        } label: {
-            Label("Sync", systemImage: "arrow.triangle.2.circlepath")
-                .frame(maxWidth: .infinity)
+        if operationsAccess.canOpenSync {
+            Button {
+                GunnAireAppIntentRouter.store(.sync)
+            } label: {
+                Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+                    .frame(maxWidth: .infinity)
+            }
         }
     }
 
     private var metricsGrid: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
-            metricCard(
-                title: "Today",
-                value: "\(todayCalls.count)",
-                detail: "\(inProgressCalls.count) active",
-                systemImage: "calendar",
-                tint: Color.brandGold
-            )
-            if canViewFinancials {
+            if operationsAccess.canSearchJobs {
+                metricCard(
+                    title: "Today",
+                    value: "\(todayCalls.count)",
+                    detail: "\(inProgressCalls.count) active",
+                    systemImage: "calendar",
+                    tint: Color.brandGold
+                )
+            }
+            if operationsAccess.canOpenDocumentation && canViewFinancials {
                 metricCard(
                     title: "Ready To Bill",
                     value: "\(readyToBillCalls.count)",
@@ -516,20 +649,24 @@ struct OperationsDashboardView: View {
                     tint: overdueInvoices.isEmpty ? Color.brandGold : .red
                 )
             }
-            metricCard(
-                title: "Agreements",
-                value: "\(maintenanceAlerts.count)",
-                detail: "\(dashboardContracts.filter(\.active).count) active",
-                systemImage: "repeat.circle",
-                tint: maintenanceAlerts.isEmpty ? Color.brandGold : .orange
-            )
-            metricCard(
-                title: "Field Team",
-                value: "\(openTimeEntries.count)",
-                detail: "\(unassignedUpcomingCalls.count) unassigned",
-                systemImage: "person.2.badge.gearshape",
-                tint: unassignedUpcomingCalls.isEmpty ? Color.brandGold : .blue
-            )
+            if operationsAccess.canSearchJobs {
+                metricCard(
+                    title: "Agreements",
+                    value: "\(maintenanceAlerts.count)",
+                    detail: "\(dashboardContracts.filter(\.active).count) active",
+                    systemImage: "repeat.circle",
+                    tint: maintenanceAlerts.isEmpty ? Color.brandGold : .orange
+                )
+            }
+            if operationsAccess.canSearchJobs || AppAccess.canReviewTeamTime(email: currentUserEmail, users: users) {
+                metricCard(
+                    title: "Field Team",
+                    value: "\(openTimeEntries.count)",
+                    detail: operationsAccess.canSearchJobs ? "\(unassignedUpcomingCalls.count) unassigned" : "open time entries",
+                    systemImage: "person.2.badge.gearshape",
+                    tint: unassignedUpcomingCalls.isEmpty ? Color.brandGold : .blue
+                )
+            }
             if canViewFinancials {
                 metricCard(
                     title: "Sync Risk",
@@ -650,7 +787,11 @@ struct OperationsDashboardView: View {
                         tint: invoice.needsQuickBooksAttention ? .red : .orange,
                         actionTitle: "Review"
                     ) {
-                        GunnAireAppIntentRouter.storeQuickBooksRoute(workspace: .sales)
+                        if operationsAccess.canManageQuickBooks {
+                            GunnAireAppIntentRouter.storeQuickBooksRoute(workspace: .sales)
+                        } else {
+                            GunnAireAppIntentRouter.store(.invoices)
+                        }
                     }
                 }
 
@@ -678,6 +819,37 @@ struct OperationsDashboardView: View {
                     ) {
                         GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
                     }
+                }
+
+                if let task = openBusinessTasks.first {
+                    priorityRow(
+                        title: task.isOverdue() ? "Overdue team task" : "Team task",
+                        subtitle: task.linkedRecordSummary ?? "Internal follow-up",
+                        value: AppAccess.inferredDisplayName(fromEmail: task.assignedToEmail),
+                        systemImage: task.priority.systemImage,
+                        tint: task.isOverdue() || task.priority == .urgent ? .red : Color.brandGold,
+                        actionTitle: "Review"
+                    ) {
+                        showingBusinessTasks = true
+                    }
+                    .accessibilityIdentifier("ReviewBusinessTask")
+                }
+
+                if let request = pendingTimeOffRequests.first {
+                    priorityRow(
+                        title: "Time-off request",
+                        subtitle: "\(request.technicianNameSnapshot) • capacity review required",
+                        value: request.startsAt.formatted(date: .abbreviated, time: .omitted),
+                        systemImage: "calendar.badge.clock",
+                        tint: .orange,
+                        actionTitle: "Review"
+                    ) {
+                        showingTimeOffRequests = true
+                    }
+                    .accessibilityLabel(
+                        "Time-off request, \(request.technicianNameSnapshot), capacity review required, \(request.startsAt.formatted(date: .abbreviated, time: .omitted)), Review"
+                    )
+                    .accessibilityIdentifier("ReviewTimeOffRequest")
                 }
 
                 if let vehicle = fleetAttentionVehicles.first {
@@ -730,9 +902,9 @@ struct OperationsDashboardView: View {
                 dispatchMetric(
                     title: "Capacity",
                     value: "\(clearTechnicianCountToday)",
-                    detail: "\(technicians.count) technicians",
+                    detail: "\(visibleTechnicians.count) technicians",
                     systemImage: "person.2.wave.2",
-                    tint: clearTechnicianCountToday == 0 && !technicians.isEmpty ? .orange : .green
+                    tint: clearTechnicianCountToday == 0 && !visibleTechnicians.isEmpty ? .orange : .green
                 )
                 dispatchMetric(
                     title: "Risk Flags",
@@ -769,7 +941,7 @@ struct OperationsDashboardView: View {
                 dispatchMetric(
                     title: "Watched Accounts",
                     value: "\(atRiskAccountCount)",
-                    detail: "\(customers.count) total",
+                    detail: "\(dashboardCustomers.count) total",
                     systemImage: "person.crop.circle.badge.exclamationmark",
                     tint: atRiskAccountCount == 0 ? .green : .orange
                 )
@@ -789,7 +961,7 @@ struct OperationsDashboardView: View {
                 )
             }
 
-            if customers.isEmpty {
+            if dashboardCustomers.isEmpty {
                 emptyState("No customer accounts are on file yet.")
             } else if activeAccountSnapshots.isEmpty {
                 emptyState("Customer accounts are current across payments, agreements, and scheduled work.")
@@ -837,7 +1009,7 @@ struct OperationsDashboardView: View {
 
     private var fieldTeamSection: some View {
         dashboardSection(title: "Field Team", systemImage: "person.2") {
-            if technicians.isEmpty && unassignedUpcomingCalls.isEmpty && visibleFleetVehicles.isEmpty && !isAdminUser {
+            if visibleTechnicians.isEmpty && unassignedUpcomingCalls.isEmpty && visibleFleetVehicles.isEmpty && !isAdminUser {
                 emptyState("No technicians or upcoming assignments yet.")
             } else {
                 if !visibleFleetVehicles.isEmpty || isAdminUser {
@@ -921,19 +1093,22 @@ struct OperationsDashboardView: View {
 
     private var systemsSection: some View {
         dashboardSection(title: "Connected Systems", systemImage: "point.3.connected.trianglepath.dotted") {
-            systemRow(
-                title: "Google Calendar",
-                status: googleAuth.isAuthenticated ? "Connected" : "Disconnected",
-                detail: "\(linkedCalendarJobCount) linked jobs",
-                systemImage: "calendar.badge.checkmark",
-                tint: googleAuth.isAuthenticated ? .green : .orange
-            ) {
-                GunnAireAppIntentRouter.store(.sync)
+            if operationsAccess.canSearchJobs || operationsAccess.canOpenSync {
+                systemRow(
+                    title: "Google Calendar",
+                    status: googleAuth.isAuthenticated ? "Connected" : "Disconnected",
+                    detail: "\(linkedCalendarJobCount) linked jobs",
+                    systemImage: "calendar.badge.checkmark",
+                    tint: googleAuth.isAuthenticated ? .green : .orange
+                ) {
+                    GunnAireAppIntentRouter.store(operationsAccess.canOpenSync ? .sync : .schedule)
+                }
             }
 
-            Divider()
-
             if canViewFinancials {
+                if operationsAccess.canSearchJobs || operationsAccess.canOpenSync {
+                    Divider()
+                }
                 systemRow(
                     title: "QuickBooks",
                     status: QuickBooksDataAPI.shared.isAuthenticated ? "Connected" : "Disconnected",
@@ -941,7 +1116,7 @@ struct OperationsDashboardView: View {
                     systemImage: "banknote",
                     tint: QuickBooksDataAPI.shared.isAuthenticated ? .green : .orange
                 ) {
-                    GunnAireAppIntentRouter.store(.quickBooks)
+                    GunnAireAppIntentRouter.store(operationsAccess.canManageQuickBooks ? .quickBooks : .invoices)
                 }
             }
 
@@ -1318,7 +1493,9 @@ struct OperationsDashboardView: View {
                     Label("Docs", systemImage: "doc.text")
                 }
 
-                if call.assignedTechnician == nil && !technicians.isEmpty {
+                if operationsAccess.canManageDispatch,
+                   call.assignedTechnician == nil,
+                   !assignableTechnicians.isEmpty {
                     assignmentMenu(for: call)
                 }
 
@@ -1338,6 +1515,7 @@ struct OperationsDashboardView: View {
             .tint(Color.brandGold)
         }
         .padding(.vertical, 2)
+        .accessibilityIdentifier("CommandCenterDispatchJob-\(call.id.uuidString)")
     }
 
     private func priorityRow(
@@ -1496,7 +1674,7 @@ struct OperationsDashboardView: View {
     }
 
     private var technicianLoads: [TechnicianLoad] {
-        technicians
+        visibleTechnicians
             .map { technician in
                 let todaysJobs = todayCalls.filter { $0.includesAssignedTechnician(technician.id) }
                 let weekJobs = upcomingCalls.filter { $0.includesAssignedTechnician(technician.id) }
@@ -1652,6 +1830,7 @@ struct OperationsDashboardView: View {
         } label: {
             Label("Assign", systemImage: "person.crop.circle.badge.plus")
         }
+        .accessibilityIdentifier("CommandCenterAssign-\(call.id.uuidString)")
     }
 
     private func assignmentTitle(for call: ServiceCall, technician: Technician) -> String {
@@ -1660,17 +1839,47 @@ struct OperationsDashboardView: View {
         let qualificationSuffix = qualification.assignmentNotice.map { " • \($0)" } ?? ""
         let areaMatch = technician.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
         let areaSuffix = areaMatch == .covered ? "" : " • \(areaMatch.dispatchDetail.lowercased())"
-        guard let nextStart = nextAvailableStart(for: technician, proposedStart: call.scheduledDate, duration: call.duration),
-              nextStart > call.scheduledDate else {
-            return technicianLabel + qualificationSuffix + areaSuffix
+        guard let nextStart = nextAvailableStart(for: technician, call: call) else {
+            let scheduleSuffix = TechnicianWorkShiftPolicy.hasConfiguredSchedule(
+                technicianID: technician.id,
+                shifts: technicianWorkShifts
+            ) ? " • no scheduled hours" : ""
+            return technicianLabel + scheduleSuffix + qualificationSuffix + areaSuffix
+        }
+        guard nextStart > call.scheduledDate else {
+            let coverage = TechnicianWorkShiftPolicy.coverage(
+                technicianID: technician.id,
+                start: call.scheduledDate,
+                end: call.scheduledDate.addingTimeInterval(max(call.duration, 60)),
+                shifts: technicianWorkShifts,
+                allowOnCall: call.dispatchUrgency == .priority || call.dispatchUrgency == .emergency
+            )
+            let scheduleSuffix = coverage == .onCall ? " • on call" : ""
+            return technicianLabel + scheduleSuffix + qualificationSuffix + areaSuffix
         }
         return "\(technicianLabel) • move to \(nextStart.formatted(date: .omitted, time: .shortened))\(qualificationSuffix)\(areaSuffix)"
     }
 
     private func assign(_ call: ServiceCall, to technician: Technician) {
+        guard AppAccess.canPerformScheduleMutation(
+            .assignTechnician,
+            email: currentUserEmail,
+            users: users
+        ) else {
+            dispatchMessage = "Your business account has read-only schedule access. Dispatch or an administrator must assign technicians."
+            return
+        }
         let originalStart = call.scheduledDate
         let previousTechnician = call.assignedTechnician?.name
-        let nextStart = nextAvailableStart(for: technician, proposedStart: call.scheduledDate, duration: call.duration)
+        let nextStart = nextAvailableStart(for: technician, call: call)
+        if nextStart == nil,
+           TechnicianWorkShiftPolicy.hasConfiguredSchedule(
+            technicianID: technician.id,
+            shifts: technicianWorkShifts
+           ) {
+            dispatchMessage = "\(technician.name) has no eligible recurring hours in the next \(TechnicianWorkShiftPolicy.recommendationHorizonDays) days. Review Technician Availability before assigning this job."
+            return
+        }
         call.assignedTechnician = technician
         if GoogleCalendarScheduleSync.shouldSelectGoogleCalendarBeforeCreate(for: call) {
             call.googleCalendarID = ServiceCalendarRouting.assignedCalendarID(for: technician)
@@ -1726,41 +1935,45 @@ struct OperationsDashboardView: View {
 
     private func bestTechnician(for call: ServiceCall) -> Technician? {
         assignableTechnicians
+            .compactMap { technician in
+                nextAvailableStart(for: technician, call: call).map { (technician, $0) }
+            }
             .sorted { lhs, rhs in
-                let lhsQualification = lhs.qualification(for: call.equipmentType)
-                let rhsQualification = rhs.qualification(for: call.equipmentType)
+                let lhsQualification = lhs.0.qualification(for: call.equipmentType)
+                let rhsQualification = rhs.0.qualification(for: call.equipmentType)
                 if lhsQualification.dispatchRank != rhsQualification.dispatchRank {
                     return lhsQualification.dispatchRank < rhsQualification.dispatchRank
                 }
-                let lhsArea = lhs.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
-                let rhsArea = rhs.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
+                let lhsArea = lhs.0.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
+                let rhsArea = rhs.0.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
                 if lhsArea != rhsArea {
                     return lhsArea < rhsArea
                 }
-                let lhsStart = nextAvailableStart(for: lhs, proposedStart: call.scheduledDate, duration: call.duration) ?? call.scheduledDate
-                let rhsStart = nextAvailableStart(for: rhs, proposedStart: call.scheduledDate, duration: call.duration) ?? call.scheduledDate
-                if lhsStart != rhsStart {
-                    return lhsStart < rhsStart
+                if lhs.1 != rhs.1 {
+                    return lhs.1 < rhs.1
                 }
 
-                let lhsWeekLoad = upcomingCalls.filter { $0.includesAssignedTechnician(lhs.id) }.count
-                let rhsWeekLoad = upcomingCalls.filter { $0.includesAssignedTechnician(rhs.id) }.count
+                let lhsWeekLoad = upcomingCalls.filter { $0.includesAssignedTechnician(lhs.0.id) }.count
+                let rhsWeekLoad = upcomingCalls.filter { $0.includesAssignedTechnician(rhs.0.id) }.count
                 if lhsWeekLoad != rhsWeekLoad {
                     return lhsWeekLoad < rhsWeekLoad
                 }
 
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                return lhs.0.name.localizedCaseInsensitiveCompare(rhs.0.name) == .orderedAscending
             }
+            .map { $0.0 }
             .first
     }
 
-    private func nextAvailableStart(for technician: Technician, proposedStart: Date, duration: TimeInterval) -> Date? {
+    private func nextAvailableStart(for technician: Technician, call: ServiceCall) -> Date? {
         TechnicianDispatchAvailability.nextAvailableStart(
             technicianID: technician.id,
-            proposedStart: proposedStart,
-            duration: duration,
+            proposedStart: call.scheduledDate,
+            duration: call.duration,
             serviceCalls: dashboardServiceCalls,
-            availabilityBlocks: technicianAvailabilityBlocks
+            availabilityBlocks: technicianAvailabilityBlocks,
+            workShifts: technicianWorkShifts,
+            urgency: call.dispatchUrgency
         )
     }
 
@@ -1918,8 +2131,7 @@ private struct OperationsCommandPalette: View {
     let invoices: [Invoice]
     let estimates: [Estimate]
     let payments: [Payment]
-    let canViewFinancials: Bool
-    let canCollectFieldPayments: Bool
+    let access: OperationsAccessCapabilities
 
     @State private var searchText = ""
 
@@ -1997,18 +2209,28 @@ private struct OperationsCommandPalette: View {
         NavigationStack {
             List {
                 quickActionsSection
-                customersSection
-                jobsSection
-                if canViewFinancials {
+                if access.canSearchCustomers {
+                    customersSection
+                }
+                if access.canSearchJobs {
+                    jobsSection
+                }
+                if access.canSearchInvoices {
                     invoicesSection
+                }
+                if access.canSearchEstimates {
                     estimatesSection
                 }
-                if canViewFinancials && trimmedSearch.isEmpty {
+                if access.canShowRecentPayments && trimmedSearch.isEmpty {
                     recentPaymentsSection
                 }
             }
             .navigationTitle("Find")
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: canViewFinancials ? "Customer, job, invoice, address" : "Customer, job, address")
+            .searchable(
+                text: $searchText,
+                placement: .navigationBarDrawer(displayMode: .always),
+                prompt: access.findPrompt
+            )
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
@@ -2019,21 +2241,41 @@ private struct OperationsCommandPalette: View {
 
     private var quickActionsSection: some View {
         Section("Quick Actions") {
-            commandButton("Open Schedule", detail: "Calendar and dispatch board", systemImage: "calendar.badge.clock") {
-                GunnAireAppIntentRouter.store(.schedule)
+            if access.canOpenSchedule {
+                commandButton("Open Schedule", detail: "Calendar and dispatch board", systemImage: "calendar.badge.clock") {
+                    GunnAireAppIntentRouter.store(.schedule)
+                }
+                .accessibilityIdentifier("CommandFindOpenSchedule")
             }
-            if canCollectFieldPayments {
+            if access.canCollectPayments {
                 commandButton("Collect Payment", detail: "Open payment collection", systemImage: "creditcard") {
                     GunnAireAppIntentRouter.store(.payments)
                 }
+                .accessibilityIdentifier("CommandFindCollectPayment")
             }
-            if canViewFinancials {
+            if access.canOpenDocumentation {
                 commandButton("Job Documentation", detail: "Estimate, invoice, and closeout queue", systemImage: "book") {
                     GunnAireAppIntentRouter.store(.documentation)
                 }
+                .accessibilityIdentifier("CommandFindOpenDocumentation")
             }
-            commandButton("Sync Systems", detail: canViewFinancials ? "Google, QuickBooks, and integrations" : "Google Calendar and field sync", systemImage: "arrow.triangle.2.circlepath") {
-                GunnAireAppIntentRouter.store(.sync)
+            if access.canOpenInvoices && !access.canOpenSchedule {
+                commandButton("Open Invoices", detail: "Billing and QuickBooks status", systemImage: "doc.text") {
+                    GunnAireAppIntentRouter.store(.invoices)
+                }
+                .accessibilityIdentifier("CommandFindOpenInvoices")
+            }
+            if access.canOpenReports && !access.canOpenSchedule {
+                commandButton("Open Reports", detail: "Financial and operating results", systemImage: "chart.bar.xaxis") {
+                    GunnAireAppIntentRouter.store(.reports)
+                }
+                .accessibilityIdentifier("CommandFindOpenReports")
+            }
+            if access.canOpenSync {
+                commandButton("Sync Systems", detail: "Google, QuickBooks, and integrations", systemImage: "arrow.triangle.2.circlepath") {
+                    GunnAireAppIntentRouter.store(.sync)
+                }
+                .accessibilityIdentifier("CommandFindOpenSync")
             }
         }
     }
@@ -2050,6 +2292,7 @@ private struct OperationsCommandPalette: View {
                     ) {
                         GunnAireAppIntentRouter.storeCustomerRoute(customer.id)
                     }
+                    .accessibilityIdentifier("CommandFindCustomer-\(customer.id.uuidString)")
                 }
             }
         }
@@ -2067,6 +2310,7 @@ private struct OperationsCommandPalette: View {
                     ) {
                         GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
                     }
+                    .accessibilityIdentifier("CommandFindJob-\(call.id.uuidString)")
                 }
             }
         }
@@ -2084,6 +2328,7 @@ private struct OperationsCommandPalette: View {
                     ) {
                         GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
                     }
+                    .accessibilityIdentifier("CommandFindInvoice-\(invoice.id.uuidString)")
                 }
             }
         }
@@ -2105,6 +2350,7 @@ private struct OperationsCommandPalette: View {
                             GunnAireAppIntentRouter.store(.estimates)
                         }
                     }
+                    .accessibilityIdentifier("CommandFindEstimate-\(estimate.id.uuidString)")
                 }
             }
         }
@@ -2159,5 +2405,5 @@ private struct OperationsCommandPalette: View {
 }
 
 #Preview {
-    OperationsDashboardView()
+    OperationsDashboardView(showingCommandPalette: .constant(false))
 }

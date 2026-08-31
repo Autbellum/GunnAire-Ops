@@ -207,8 +207,7 @@ enum AppIdentity {
         // UI-test roles must be deterministic even when the simulator clone
         // contains a previously persisted Apple or Google session.
         let arguments = ProcessInfo.processInfo.arguments
-        if arguments.contains("-uiTestAuthenticatedAdmin") ||
-            arguments.contains("-appStoreScreenshotFixtures") {
+        if arguments.contains("-uiTestAuthenticatedAdmin") {
             return AppAccess.primaryAdminEmail
         }
         if arguments.contains("-uiTestAuthenticatedAccounting") {
@@ -219,6 +218,9 @@ enum AppIdentity {
         }
         if arguments.contains("-uiTestAuthenticatedStandard") {
             return GunnAireUITestIdentity.standardEmail
+        }
+        if arguments.contains("-appStoreScreenshotFixtures") {
+            return AppAccess.primaryAdminEmail
         }
         #endif
 

@@ -154,6 +154,44 @@ enum AppAccess {
         return matches[0].id
     }
 
+    /// Time-off requests are employee-originated capacity changes. A field
+    /// account may submit only for the one technician profile whose email
+    /// exactly matches that account; ambiguous or missing mappings fail closed.
+    static func timeOffRequestTechnicianID(
+        email: String?,
+        users: [AppUser],
+        technicians: [Technician]
+    ) -> UUID? {
+        ownPerformanceTechnicianID(email: email, users: users, technicians: technicians)
+    }
+
+    static func canSubmitTimeOffRequest(
+        email: String?,
+        users: [AppUser],
+        technicians: [Technician]
+    ) -> Bool {
+        timeOffRequestTechnicianID(email: email, users: users, technicians: technicians) != nil
+    }
+
+    static func canReviewTimeOffRequests(email: String?, users: [AppUser]) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        return role == .dispatcher || role == .admin
+    }
+
+    static func canWithdrawTimeOffRequest(
+        _ request: TechnicianTimeOffRequest,
+        email: String?,
+        users: [AppUser]
+    ) -> Bool {
+        guard activeRole(email: email, users: users) == .fieldTechnician,
+              request.status == .pending else { return false }
+        return normalizedEmail(email) == request.requestedByEmail
+    }
+
+    static func canCancelAvailabilityBlock(email: String?, users: [AppUser]) -> Bool {
+        canReviewTimeOffRequests(email: email, users: users)
+    }
+
     static func canViewBillingFinancialDetails(email: String?, users: [AppUser]) -> Bool {
         canViewFinancialManagement(email: email, users: users)
     }
@@ -370,6 +408,81 @@ enum AppAccess {
             if role == .admin { return true }
             return role == .dispatcher && kind != .doNotService
         }
+    }
+
+    /// Internal team tasks are operational coordination, not customer-facing
+    /// messages or accounting mutations. Dispatch/Admin can coordinate the
+    /// company queue; other approved roles can keep their own assigned work.
+    /// A field technician may originate a task only from a job that already
+    /// passes the normal job-access boundary.
+    static func canCreateBusinessTask(
+        assignedToEmail: String,
+        serviceCallID: UUID?,
+        email: String?,
+        users: [AppUser],
+        visibleServiceCallIDs: Set<UUID> = []
+    ) -> Bool {
+        guard let role = activeRole(email: email, users: users) else { return false }
+        let actor = normalizedEmail(email)
+        let assignee = normalizedEmail(assignedToEmail)
+        guard !assignee.isEmpty, isActiveBusinessTaskAssignee(assignee, users: users) else { return false }
+        switch role {
+        case .admin, .dispatcher:
+            return true
+        case .accounting, .standard:
+            return assignee == actor
+        case .fieldTechnician:
+            guard assignee == actor, let serviceCallID else { return false }
+            return visibleServiceCallIDs.contains(serviceCallID)
+        }
+    }
+
+    static func canUpdateBusinessTask(
+        _ task: BusinessTask,
+        email: String?,
+        users: [AppUser]
+    ) -> Bool {
+        guard task.isOpen, let role = activeRole(email: email, users: users) else { return false }
+        if role == .admin || role == .dispatcher { return true }
+        return task.assignedToEmail == normalizedEmail(email)
+    }
+
+    static func canCompleteBusinessTask(
+        _ task: BusinessTask,
+        email: String?,
+        users: [AppUser]
+    ) -> Bool {
+        canUpdateBusinessTask(task, email: email, users: users)
+    }
+
+    static func canCancelBusinessTask(
+        _ task: BusinessTask,
+        email: String?,
+        users: [AppUser]
+    ) -> Bool {
+        guard task.isOpen, let role = activeRole(email: email, users: users) else { return false }
+        return role == .admin || role == .dispatcher
+    }
+
+    static func canReopenBusinessTask(
+        _ task: BusinessTask,
+        email: String?,
+        users: [AppUser]
+    ) -> Bool {
+        guard task.status == .completed,
+              let role = activeRole(email: email, users: users) else { return false }
+        if role == .admin || role == .dispatcher { return true }
+        return task.assignedToEmail == normalizedEmail(email)
+    }
+
+    static func businessTaskAssigneeEmails(users: [AppUser]) -> [String] {
+        var emails = Set(users.filter(\.isActive).map { normalizedEmail($0.email) }.filter { !$0.isEmpty })
+        emails.insert(primaryAdminEmail)
+        return emails.sorted()
+    }
+
+    private static func isActiveBusinessTaskAssignee(_ email: String, users: [AppUser]) -> Bool {
+        isPrimaryAdmin(email) || users.contains { $0.isActive && normalizedEmail($0.email) == email }
     }
 
     /// Assigned technicians can present or capture a customer-approved service

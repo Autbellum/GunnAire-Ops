@@ -161,11 +161,19 @@ final class Estimate {
     }
 
     var subtotalAmount: Double {
-        if hasTaxableLines,
-           let snapshotSubtotal = BillingTaxPolicy.snapshotSubtotal(catalogSnapshotJSON) {
-            return snapshotSubtotal
-        }
         return max(amount - salesTaxAmount, 0)
+    }
+
+    var grossSubtotalAmount: Double {
+        BillingTaxPolicy.snapshotGrossSubtotal(catalogSnapshotJSON) ?? subtotalAmount
+    }
+
+    var documentDiscount: AuthorizedDocumentDiscount? {
+        CatalogLineItemSnapshot.documentDiscount(from: catalogSnapshotJSON)
+    }
+
+    var documentDiscountAmount: Double {
+        documentDiscount?.amount(for: grossSubtotalAmount) ?? 0
     }
 
     var hasTaxableLines: Bool {

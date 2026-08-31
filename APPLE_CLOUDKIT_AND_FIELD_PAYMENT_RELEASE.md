@@ -13,36 +13,130 @@ and schema status as of 2026-08-30.
   Domains, iCloud/CloudKit, Push Notifications, and Sign in with Apple enabled.
   Sign in with Apple is primary, and the assigned container is
   `iCloud.com.gunnaire.businesssuite`. In-App Purchase is Apple-managed and
-  enabled automatically.
+  shown enabled and non-editable by the portal. The inspection clicked no Save
+  button, changed no capability or container, and submitted no request. Exact
+  retained evidence is
+  `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/apple-app-id-capabilities-2026083015.json`.
 - Handoff does not have an App ID checkbox. The app declares
   `com.gunnaire.businesssuite.field-payment-handoff` in `NSUserActivityTypes`;
   signed physical Mac/iPad-to-iPhone acceptance remains required. Native
-  MapKit/Apple Maps URLs and the system Mail and Messages composers do not need
-  the portal's Maps or Messages Collaboration capabilities. Those unrelated
-  capabilities remain off deliberately.
+  MapKit geocoding/directions, Apple Maps URLs, and the system Mail and Messages
+  composers do not need the portal's Maps or Messages Collaboration
+  capabilities. The route estimate uses only staff-entered service addresses,
+  requests no device location, and adds no location usage description. Those
+  unrelated portal capabilities remain off deliberately.
+- The selected App ID's Capability Requests list shows no Tap to Pay on
+  iPhone, Proximity Reader, or payment-acceptance request or assignment.
+  GunnAire's current field-payment workflow hands a verified QBO invoice to
+  QuickBooks Mobile/GoPayment and therefore does not add the native payment
+  acceptance entitlement. A future embedded ProximityReader flow remains
+  gated on a participating certified payment service provider, Account Holder
+  entitlement approval, provider integration, and signed physical-iPhone
+  acceptance.
+- Exact build `1.0 (2026083021)` is retained as a development-signed iOS
+  Release archive and universal arm64/x86_64 Mac Catalyst Release app. Strict
+  signature verification confirms Apple login, CloudKit, Push Notifications,
+  and Associated Domains in both products. The iOS app/dSYM UUID matches at
+  `7C335331-C438-3C6E-B889-77AE067DE476`; Mac app/dSYM UUIDs match at
+  `97010FC5-A7B9-3148-9B2D-7906D4ED0D9B` and
+  `B88F9531-0261-36DD-9C29-0B5EAA729A24`. Exact retained-artifact and CloudKit
+  export preflight reports **61 checks, 5 expected warnings, and 0 failures**;
+  one warning records that online probes were intentionally omitted. The
+  read-only online probe reports **63/4/1** solely because production remains
+  backend `2026.08.30.15` while source expects undeployed `.16`; Apple
+  notification routing and the QBO callback pass. Complete iPad and Mac logic
+  suites pass **672/672** each; role-scoped iPad Find/navigation passes **4/4**,
+  direct Mac global Find passes **1/1** after a controlled stale-test-service
+  recycle, and the compact field iPhone Find passes **1/1**. This authorization
+  and navigation increment changes no SwiftData field, CloudKit schema,
+  backend contract, Apple capability, provider credential, QBO mapping, or
+  accounting record.
+- Exact build `1.0 (2026083020)` is retained as a development-signed iOS
+  Release archive and universal arm64/x86_64 Mac Catalyst Release app under
+  `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30`. Strict
+  signature verification confirms Apple login, CloudKit, Push Notifications,
+  and Associated Domains in both products. The iOS app/dSYM UUID matches at
+  `8924005C-2D14-3B0A-8309-48B7CE5BE564`; Mac app/dSYM UUIDs match at
+  `28FB2D3B-F171-3C24-BDFA-2F1DE56ECC94` and
+  `02C8193A-987A-35CE-953A-78F9D3A691C3`. Exact retained-artifact and CloudKit
+  preflight passes **61 checks, 4 expected warnings, and 0 failures**. The
+  read-only online probe passes every unchanged production route but reports
+  **63/3/1** because production remains backend `2026.08.30.15` while source is
+  undeployed `2026.08.30.16`. Complete iPad and Mac logic suites pass
+  **671/671** each; the iPhone Handoff lifecycle passes **3/3**, and the iPad
+  origin journey passes **1/1**. This build adds no SwiftData field, CloudKit
+  schema, backend contract, Apple capability, provider credential, or
+  accounting mutation.
+- Exact build `1.0 (2026083019)` is retained as a development-signed iOS
+  Release archive and universal arm64/x86_64 Mac Catalyst Release app under
+  `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30`. Strict
+  signature verification confirms Apple login, CloudKit, Push Notifications,
+  and Associated Domains in both products. The iOS app/dSYM UUID matches at
+  `F5B71EF8-AAB7-3616-8C4F-0F85F276BC7F`; Mac app/dSYM UUIDs match at
+  `CDA62558-5A45-3673-AD64-47C7C58B44F8` and
+  `5BE78D12-A4A3-3973-8C33-3099DCAA27D8`. Exact retained-artifact and CloudKit
+  preflight passes **61 checks, 4 expected warnings, and 0 failures**. The
+  read-only online probe passes every unchanged production route but reports
+  **63/3/1** because production remains backend `2026.08.30.15` while source is
+  undeployed `2026.08.30.16`. An Apple Distribution private key, separate Mac
+  distribution signing, signed representative-device acceptance, and App
+  Store upload remain external release gates.
+- Build `2026083019` changes no SwiftData field or CloudKit schema. Weekly
+  employee attestation reuses the existing versioned `reviewAuditJSON`; its
+  period, employee workflow-revision IDs, and SHA-256 snapshot digest bind the
+  signature to the exact closed, job-valid entries, and any later addition or
+  correction request requires another review. Office approval and QBO state do
+  not alter that employee digest. Approved-time CSV export fails closed until each employee snapshot is
+  signed and every entry office-approved. It retains entry/job/QBO evidence but
+  performs no wage, overtime, tax, commission, deduction, or net-pay math.
+  Explicit UI-test roles now win over the screenshot-fixture fallback, allowing
+  a privacy-safe technician screenshot without changing that account into an
+  Administrator. Complete iPad and Mac logic suites pass **671/671** each, and
+  the exact technician sign-off journey passes **1/1**; unchanged backend source
+  `.16` retains its prior **70/70** result. No CloudKit bootstrap, Development
+  mutation, Production promotion, provider authorization, accounting write,
+  refund, or payment was required or performed.
 - Production remains schema v15 across 24 record types in retained export
   `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
   `f81de36537620a10fe34fde22883a94dc6f5b00deea6fec08004160c0aae7594`.
-  The signed isolated bootstrap initialized Development schema v16 and exported
-  `/Users/gunnaire/Downloads/cloudkit-development-9.ckdb`, SHA-256
-  `faf57f850f598380e4786581269d66d6ddaf07ea52fa4136b20133bc59116fd8`.
-- Working source schema v16 adds sixteen optional fields to
-  `CD_ServiceDocumentAttachment`: the previously unstaged customer/equipment,
-  estimate, invoice, backend, shared-company, and QBO linkage/status fields plus
-  the Google Drive file ID, trusted web link, sync state/detail/time, and archive
-  actor. The isolated Debug bootstrap now writes every one of those optional
-  values, and its unit contract asserts the complete seed. The release preflight
-  accepts only the exact additive v16 delta or an exact post-promotion match; it
-  no longer lets a matching v15 Development/Production export masquerade as
-  current readiness.
-- Schema v16 initialization and marker cleanup completed in CloudKit
-  Development. Local mirroring metadata records successful setup/import/export
-  events, no pending upload or delete, and no synthetic marker record after the
-  cleanup passes. The fresh Development export differs from v15 Production by
-  exactly the sixteen approved optional attachment fields with zero removed or
-  changed Production fields. Complete signed two-device file/link merge
-  acceptance, review the pending schema in CloudKit Console, and only then
-  promote the reviewed schema to Production.
+  The signed isolated bootstrap now initializes the complete Development schema
+  v22 across 33 record types. Fresh export
+  `/Users/gunnaire/Downloads/cloudkit-development-11.ckdb` has SHA-256
+  `9d357a64b9b17b7efcc8256c5c0d8bb6670b86357e2b48a145d95a5603f77f8b`.
+- Source schema v22 retains the exact v16 attachment delta;
+  adds the v17 fleet vehicle/event pair and attachment linkage; the v18 field
+  expense record and receipt linkage; the v19 customer operational-alert record;
+  the v20 business-task/event pair; and the v21 technician-time-off
+  request/event pair plus seven audit/cancellation fields on
+  `CD_TechnicianAvailabilityBlock`; then adds the v22 19-field
+  `CD_TechnicianWorkShift` record for regular/on-call weekly capacity,
+  effective dates, time zone, stable creation evidence, and reason-required
+  retirement history. The isolated Debug bootstrap writes every optional value
+  through v22, and unit contracts assert the complete seed. The signed staging
+  run exposed and fixed ten previously absent optional values: six expense
+  review/reimbursement fields and four operational-alert resolution fields.
+  The release
+  preflight accepts only the exact cumulative additive v22 delta or an
+  exact post-promotion match, requires each new record family to be all-or-none,
+  and rejects partial v21 availability-block fields or a partial v22 shift
+  record.
+- Exact export comparison proves Development differs from Production by only
+  the nine approved additive record families and 212 additive fields across 11
+  affected record types. No existing Production field, system field, or
+  security grant is removed or changed, and every added record uses the
+  approved system fields and default private-database grants. The exact schema
+  audit passes **9/9**; the strengthened verifier regression suite passes
+  **5/5**.
+- Versioned marker cleanup identifies the synthetic operational alert by the
+  dedicated bootstrap actor rather than its title, because CloudKit truncates
+  that title to 32 characters. A regression now proves cleanup removes the
+  complete 32-model synthetic graph. The final signed cleanup left zero marker
+  strings, only the 16 intended starter rows, no pending bootstrap process, and
+  **29/29** successful CloudKit mirroring events with zero failures.
+- Production was not promoted. Complete representative signed two-device
+  iPad/Mac/iPhone role, offline, conflict, and reconnect acceptance before
+  deploying the reviewed v22 schema. After promotion, export Production again
+  and require exact Development/Production parity before business use.
 
 Historical deployment evidence follows:
 
@@ -250,9 +344,11 @@ Backend source `2026.08.30.15` is deployed and passes the 69-test suite. Native 
 The Payments workspace can hand an unpaid invoice from the iPad or Mac to the
 company iPhone with Apple Handoff. The handoff contains only an invoice
 identifier; the receiving device resolves the current balance from its
-authorized local invoice. A new activity invalidates the prior one, expires
-after 30 minutes, exposes **Stop Field Handoff** from the origin, and is
-invalidated on app sign-out or credential revocation.
+authorized local invoice. A new activity invalidates the prior one, embeds an
+exact 30-minute `NSUserActivity` expiration that survives origin-process
+suspension or termination, exposes **Stop Field Handoff** from the origin, and
+is invalidated on app sign-out or credential revocation. A receiver rejects a
+missing or expired deadline before routing.
 It never transfers an amount, card data, customer contact details, processor
 tokens, or QuickBooks credentials. Apple Handoff and the separate-account
 server assignment both open the same dedicated contactless guide only after the
@@ -281,11 +377,14 @@ instead of a horizontally clipped row: narrow devices retain a compact column,
 while iPad and Mac use the available width for multiple columns.
 
 If the authorized CloudKit invoice graph has not arrived yet, the app retains
-an account-bound deferred invoice identifier across navigation and relaunch,
-shows a retry/dismiss recovery row, and automatically retries when the invoice
-becomes visible. The route opens payment entry only for an invoice the current
-role can see with a remaining balance. It is cleared on settlement, dismissal,
-restricted routing, sign-out, or business-account mismatch.
+the invoice, contactless-guide preference, and the same expiration as one
+account-bound deferred route across navigation and relaunch, shows a
+retry/dismiss recovery row, and automatically retries when the invoice becomes
+visible. Expiration clears the route automatically and points staff to the
+existing server field-collection tasks instead of leaving an indefinite wait.
+The route opens payment entry only for an invoice the current role can see with
+a remaining balance. It is also cleared on settlement, dismissal, restricted
+routing, sign-out, or business-account mismatch.
 
 The shared server permits only one active field collection assignment per
 invoice. It derives the collector from the authenticated principal instead of

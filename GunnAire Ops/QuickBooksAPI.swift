@@ -22,6 +22,7 @@ final class QuickBooksAuthAPI: ObservableObject {
     private let callbackScheme = Config.QuickBooks.callbackScheme
     private let environment = Config.QuickBooks.environment
     private var activeAuthSession: ASWebAuthenticationSession?
+    private var activePresentationContext: ASWebAuthenticationPresentationContextProviding?
     private var pendingOAuthState: String?
     
     @Published private(set) var isAuthenticated: Bool = false
@@ -85,7 +86,10 @@ final class QuickBooksAuthAPI: ObservableObject {
             url: authURL,
             callbackURLScheme: resolvedCallbackScheme
         ) { [weak self] callbackURL, error in
-            defer { self?.activeAuthSession = nil }
+            defer {
+                self?.activeAuthSession = nil
+                self?.activePresentationContext = nil
+            }
             guard let self = self, let callbackURL = callbackURL else {
                 completion(Result<Void, Error>.failure(error ?? QBOError.unknown))
                 return
@@ -94,9 +98,11 @@ final class QuickBooksAuthAPI: ObservableObject {
         }
         session.presentationContextProvider = presentationContext
         session.prefersEphemeralWebBrowserSession = false
+        activePresentationContext = presentationContext
         activeAuthSession = session
         if !session.start() {
             activeAuthSession = nil
+            activePresentationContext = nil
             completion(Result<Void, Error>.failure(QBOError.unknown))
         }
     }
@@ -108,6 +114,7 @@ final class QuickBooksAuthAPI: ObservableObject {
         tokenExpiry = nil
         pendingOAuthState = nil
         activeAuthSession = nil
+        activePresentationContext = nil
         QuickBooksDataAPI.shared.resetConnectionForReconnect()
     }
 

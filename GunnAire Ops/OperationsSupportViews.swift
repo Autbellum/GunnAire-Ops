@@ -21,6 +21,8 @@ enum CustomerDataMaintenance {
         var serviceLocations = 0
         var customerCommunications = 0
         var operationalAlerts = 0
+        var businessTasks = 0
+        var businessTaskEvents = 0
     }
 
     private static let genericCalendarCustomerNames: Set<String> = [
@@ -74,6 +76,8 @@ enum CustomerDataMaintenance {
         let serviceLocations = (try? modelContext.fetch(FetchDescriptor<CustomerServiceLocation>())) ?? []
         let customerCommunications = (try? modelContext.fetch(FetchDescriptor<CustomerCommunication>())) ?? []
         let operationalAlerts = (try? modelContext.fetch(FetchDescriptor<CustomerOperationalAlert>())) ?? []
+        let businessTasks = (try? modelContext.fetch(FetchDescriptor<BusinessTask>())) ?? []
+        let businessTaskEvents = (try? modelContext.fetch(FetchDescriptor<BusinessTaskEvent>())) ?? []
 
         var summary = DeletionSummary()
         for customer in genericCustomers {
@@ -90,7 +94,9 @@ enum CustomerDataMaintenance {
                 equipmentProfiles: equipmentProfiles,
                 serviceLocations: serviceLocations,
                 customerCommunications: customerCommunications,
-                operationalAlerts: operationalAlerts
+                operationalAlerts: operationalAlerts,
+                businessTasks: businessTasks,
+                businessTaskEvents: businessTaskEvents
             ))
         }
         try? modelContext.save()
@@ -110,7 +116,9 @@ enum CustomerDataMaintenance {
         equipmentProfiles: [CustomerEquipment],
         serviceLocations: [CustomerServiceLocation],
         customerCommunications: [CustomerCommunication],
-        operationalAlerts: [CustomerOperationalAlert]
+        operationalAlerts: [CustomerOperationalAlert],
+        businessTasks: [BusinessTask] = [],
+        businessTaskEvents: [BusinessTaskEvent] = []
     ) -> DeletionSummary {
         var summary = DeletionSummary()
         let customerID = customer.id
@@ -165,6 +173,16 @@ enum CustomerDataMaintenance {
             modelContext.delete(alert)
             summary.operationalAlerts += 1
         }
+        let customerTasks = businessTasks.filter { $0.customerID == customerID }
+        let customerTaskIDs = Set(customerTasks.map(\.id))
+        for event in businessTaskEvents where customerTaskIDs.contains(event.taskID) {
+            modelContext.delete(event)
+            summary.businessTaskEvents += 1
+        }
+        for task in customerTasks {
+            modelContext.delete(task)
+            summary.businessTasks += 1
+        }
         modelContext.delete(customer)
         summary.customers += 1
         return summary
@@ -185,6 +203,8 @@ private extension CustomerDataMaintenance.DeletionSummary {
         serviceLocations += other.serviceLocations
         customerCommunications += other.customerCommunications
         operationalAlerts += other.operationalAlerts
+        businessTasks += other.businessTasks
+        businessTaskEvents += other.businessTaskEvents
     }
 
     var deletedAnything: Bool {
@@ -2539,12 +2559,15 @@ private struct CustomerEditorView: View {
     @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var recurringContracts: [RecurringMaintenanceContract]
     @Query(sort: \TimeEntry.clockIn, order: .reverse) private var timeEntries: [TimeEntry]
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
+    @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \ServiceDocumentAttachment.createdAt, order: .reverse) private var documentAttachments: [ServiceDocumentAttachment]
     @Query(sort: \CustomerEquipment.name, order: .forward) private var equipmentProfiles: [CustomerEquipment]
     @Query(sort: \CustomerCommunication.createdAt, order: .reverse) private var customerCommunications: [CustomerCommunication]
     @Query(sort: \CustomerServiceLocation.name, order: .forward) private var serviceLocations: [CustomerServiceLocation]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
     @Query(sort: \CustomerOperationalAlert.createdAt, order: .reverse) private var operationalAlerts: [CustomerOperationalAlert]
+    @Query(sort: \BusinessTask.dueAt, order: .forward) private var businessTasks: [BusinessTask]
+    @Query(sort: \BusinessTaskEvent.occurredAt, order: .reverse) private var businessTaskEvents: [BusinessTaskEvent]
 
     let customer: Customer
 
@@ -2610,6 +2633,7 @@ private struct CustomerEditorView: View {
     @State private var newServiceLocationIsPrimary = false
     @State private var selectedEquipmentServiceLocationID: UUID?
     @State private var showingOperationalAlerts = false
+    @State private var showingBusinessTasks = false
 
     private var customerServiceCalls: [ServiceCall] {
         serviceCalls.filter { $0.customer.id == customer.id }
@@ -2836,6 +2860,53 @@ private struct CustomerEditorView: View {
         }
     }
 
+    private var visibleCustomerBusinessTasks: [BusinessTask] {
+        let visibleCallIDs = AppAccess.visibleServiceCallIDs(
+            email: currentEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+        return BusinessTaskPolicy.visibleTasks(
+            from: businessTasks,
+            email: currentEmail,
+            users: users,
+            visibleServiceCallIDs: visibleCallIDs
+        ).filter { $0.customerID == customer.id }
+    }
+
+    private var openCustomerBusinessTasks: [BusinessTask] {
+        visibleCustomerBusinessTasks.filter(\.isOpen)
+    }
+
+    @ViewBuilder
+    private var customerTeamTaskSection: some View {
+        Section("Team Tasks") {
+            if openCustomerBusinessTasks.isEmpty {
+                Label("No open customer tasks", systemImage: "checkmark.circle")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(openCustomerBusinessTasks.prefix(3)) { task in
+                    BusinessTaskCompactRow(task: task)
+                }
+                if openCustomerBusinessTasks.count > 3 {
+                    Text("+ \(openCustomerBusinessTasks.count - 3) more open task\(openCustomerBusinessTasks.count - 3 == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Button {
+                showingBusinessTasks = true
+            } label: {
+                Label("Manage Team Tasks", systemImage: "checklist")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("ManageCustomerBusinessTasks")
+        }
+    }
+
     private var customerFileImporterContentTypes: [UTType] {
         forcedCustomerAttachmentKind == .customerProfilePhoto
             ? [.image]
@@ -3009,6 +3080,8 @@ private struct CustomerEditorView: View {
                     Text("Operational Alerts")
                         .accessibilityIdentifier("CustomerOperationalAlertSummary")
                 }
+
+                customerTeamTaskSection
 
                 Section("Account Intelligence") {
                     if canViewFinancials {
@@ -3591,6 +3664,10 @@ private struct CustomerEditorView: View {
             }
             .sheet(isPresented: $showingOperationalAlerts) {
                 CustomerOperationalAlertManagementView(customer: customer)
+            }
+            .sheet(isPresented: $showingBusinessTasks) {
+                BusinessTaskWorkspaceView(initialCustomerID: customer.id)
+                    .tint(Color.brandGold)
             }
             .fullScreenCover(isPresented: $showingEquipmentScanner) {
                 EquipmentBarcodeScannerSheet { payload in
@@ -5330,7 +5407,9 @@ private struct CustomerEditorView: View {
             equipmentProfiles: equipmentProfiles,
             serviceLocations: serviceLocations,
             customerCommunications: customerCommunications,
-            operationalAlerts: operationalAlerts
+            operationalAlerts: operationalAlerts,
+            businessTasks: businessTasks,
+            businessTaskEvents: businessTaskEvents
         )
         try? modelContext.save()
         dismiss()

@@ -1,21 +1,22 @@
 # Supplier connector readiness
 
-The app's **Receipts & Bills** workspace includes an admin-only, job-linked purchase-order trail. It records the selected preferred vendor, supplier part number, quantity, expected cost, freight, creator, and draft-to-ordered-to-received lifecycle before a supplier bill is attached or posted to QuickBooks. A draft cannot become Ordered until an administrator records the supplier channel, acknowledgement/order reference, optional branch, accepted unit/freight costs, actor, and time; receiving is blocked until that evidence exists. This manual confirmation records an order accepted through an approved external channel—it does not submit an order to a supplier by itself.
+The app's **Receipts & Bills** workspace includes an admin-only, job-linked purchase-order trail. It records the selected preferred vendor, every line's item/SKU/supplier-part identity, quantity, expected and accepted cost, freight, creator, and draft-to-ordered-to-received lifecycle before a supplier bill is attached or posted to QuickBooks. A draft cannot become Ordered until an administrator records the supplier channel, acknowledgement/order reference, optional branch, accepted per-line/freight costs, actor, and time; receiving is blocked until that evidence exists. This manual confirmation records an order accepted through an approved external channel—it does not submit an order to a supplier by itself.
 
 GunnAire Ops keeps operational inventory and purchase intent separate from supplier and QBO accounting records. A server-side connector owns each supplier credential, account number, catalog agreement, order approval policy, idempotency key, and audit trail. The iOS app may search approved catalogs and submit a purchase request; it must not include a vendor secret or place an order directly.
 
 ## Implemented connector boundary
 
-Backend source `2026.08.28.13` provides the provider-neutral ordering boundary without pretending that a supplier connection exists:
+Backend source `2026.08.30.16` provides provider-neutral ordering contract version 2 without pretending that a supplier connection exists:
 
 - `GET /api/supplier-connectors` is Admin-only and returns readiness, capabilities, and onboarding links without returning credentials, account identifiers, or configuration values.
-- `POST /api/supplier-connectors/orders` is Admin-only, requires a stable `Idempotency-Key`, accepts a strict minimum purchase-order snapshot, rejects extra or secret-shaped fields, and supports USD only.
+- `POST /api/supplier-connectors/orders` is Admin-only, requires a stable `Idempotency-Key`, accepts a strict purchase-order snapshot with one to one hundred stable-ID lines, rejects extra or secret-shaped fields, and supports USD only. Every line requires a bounded item name, internal SKU and/or supplier part number, positive quantity, and nonnegative expected unit cost.
 - The adapter registry is empty by default. An unavailable connector is rejected before an order-attempt row is created.
 - The server permits only one active or accepted connector submission per local purchase order. A repeated key can replay only the retained acknowledgement for the same exact request hash.
 - An interrupted or uncertain provider result is never submitted again. The adapter must reconcile the original key through `recover_order`; otherwise the attempt remains visibly unknown for supplier-account review.
-- Only a validated, sanitized acknowledgement can mark the attempt accepted. The app verifies its purchase-order identity, supplier/connector match, cost, currency, timestamp, original Admin actor, external order ID, and idempotency key before storing immutable evidence and changing the local draft to Ordered.
+- Only a validated, sanitized acknowledgement can mark the attempt accepted. The server and app require the exact requested line-ID set, no duplicate or foreign lines, exact quantities, compatible supplier part numbers, valid per-line confirmed costs, purchase-order identity, supplier/connector match, currency, timestamp, original Admin actor, external order ID, and idempotency key before storing immutable evidence and changing the local draft to Ordered. A mismatch remains an unknown provider outcome and never becomes a partial acceptance.
+- Discovery exposes the contract version. An active legacy version-1 adapter is shown as upgrade-required and cannot submit through the version-2 app.
 
-In **Receipts & Bills → Purchasing → Confirm Order**, the app shows this path only for a server-reported ready connector that matches the selected vendor. The existing manual portal/email/phone/counter confirmation remains available when no approved adapter is active. Installing an adapter is a deployment change and still requires supplier onboarding, reviewed credentials, a provider test account, and production authorization.
+In **Receipts & Bills → Purchasing → Confirm Order**, the app shows this path only for a server-reported contract-v2 ready connector that matches the selected vendor and when every line has an internal SKU or supplier part number. The existing manual portal/email/phone/counter confirmation remains available when no approved adapter is active. Installing an adapter is a deployment change and still requires supplier onboarding, reviewed credentials, a provider test account, and production authorization. Production currently remains backend `2026.08.30.15`; source `.16` has not been deployed and no adapter is registered.
 
 ## Johnstone Supply
 

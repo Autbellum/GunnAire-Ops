@@ -9,6 +9,9 @@ enum GunnAireModelSchema {
             CustomerServiceLocation.self,
             Technician.self,
             TechnicianAvailabilityBlock.self,
+            TechnicianWorkShift.self,
+            TechnicianTimeOffRequest.self,
+            TechnicianAvailabilityEvent.self,
             RecurringMaintenanceContract.self,
             Invoice.self,
             Estimate.self,
@@ -30,6 +33,8 @@ enum GunnAireModelSchema {
             FleetVehicleEvent.self,
             FieldExpenseClaim.self,
             CustomerOperationalAlert.self,
+            BusinessTask.self,
+            BusinessTaskEvent.self,
         ])
     }
 }
