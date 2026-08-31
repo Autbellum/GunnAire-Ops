@@ -37,9 +37,10 @@ signed-in sidebar identity. Customer Systems must show the compact Edit, QR,
 and More actions while lifecycle and delete actions remain hidden in the closed
 menu. Immediately before each attachment, the test also waits for any
 SpringBoard notification banner to disappear and fails instead of retaining an
-obscured image. The payment fixture suppresses its automatic shared-server
-refreshes only during deterministic capture, so it neither contacts the live
-backend nor exposes a missing-session error behind the payment sheet.
+obscured image. The UI-test process sets an intentionally unsupported backend
+authentication mode for deterministic capture only. That keeps the backend
+unconfigured for every fixture launch, so no live request or missing-session
+error can appear without changing the production app's refresh behavior.
 
 ## Regeneration
 

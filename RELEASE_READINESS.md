@@ -289,11 +289,12 @@ explicit owner authorization through 2026-08-27:
   identity, verifies compact Edit/QR/More equipment actions with lifecycle and
   delete actions hidden in the closed menu, and waits for any SpringBoard
   notification banner to clear before attaching an image. Normal authenticated
-  use retains account context. The deterministic payment fixture skips its
-  automatic shared-server refreshes, preventing a live backend request and a
-  stale missing-session error behind the payment sheet. The twelve final PNGs
-  were visually inspected and mechanically verified for the required dimensions
-  and opaque RGB format.
+  use retains account context. The UI-test process sets an intentionally
+  unsupported backend authentication mode for fixture launches only. That
+  leaves the shared backend unconfigured during capture, preventing a live
+  request or stale missing-session error without changing production refresh
+  behavior. The twelve final PNGs were visually inspected and mechanically
+  verified for the required dimensions and opaque RGB format.
 - The fixed iPad Pro 13-inch and iPhone 17 Pro Max build-for-testing results both
   succeeded with zero errors, warnings, or analyzer warnings.
 

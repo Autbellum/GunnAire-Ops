@@ -5244,6 +5244,10 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-disableCloudKitForTesting",
             "-appStoreScreenshotFixtures"
         ]
+        // Keep App Store fixture capture deterministic without changing the
+        // production app. An unsupported test-process auth mode makes the
+        // shared backend intentionally unconfigured for these launches only.
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
         if let route {
             app.launchArguments += ["-GunnAirePendingAppRoute", route]
         }
