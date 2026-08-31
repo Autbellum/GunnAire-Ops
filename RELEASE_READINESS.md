@@ -17,6 +17,12 @@ no connected iPhone. Device output retains only a hashed reference, model, OS,
 and readiness state. The generated exact-build record cannot pass without every
 required workflow, evidence reference, operator/timestamp/device summary, and
 explicit authorization references for any Production QBO or CloudKit claim.
+The existing read-only GitHub **Backend regression** pull-request workflow now
+compiles both Backend and Tools and runs the complete **70 backend + 11
+CloudKit/release/acceptance** checks on Python 3.13 and 3.14. It receives only
+`contents: read`, uses no provider secret, and performs no online probe or
+production mutation. Its established status-check names remain unchanged for
+branch-policy compatibility.
 
 The remaining release gates are external and deliberately unclaimed: Apple Distribution signing/export because this Mac has no Distribution private key, representative signed iPad/Mac/iPhone and two-device CloudKit/Handoff acceptance, reviewed Production promotion of CloudKit v22, provider acceptance for QBO/payment/supplier behavior, and Apple/provider approval before any embedded Tap to Pay implementation. No live QBO transaction, card payment, supplier order, customer message, Production CloudKit promotion, App Store upload, or production-data mutation occurred during this pass.
 

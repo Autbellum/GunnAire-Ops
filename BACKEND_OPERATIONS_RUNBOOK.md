@@ -48,12 +48,22 @@ credential rotation, production restores, or customer communications.
    python3 -m unittest discover -s Backend -p 'test_*.py' -v
    ```
 
+   Then run the CloudKit, release, and signed-device tooling regression:
+
+   ```sh
+   python3 -m unittest discover -s Tools -p 'test_*.py' -v
+   ```
+
    Source `2026.08.30.16` has 70 expected tests. A different count requires
-   review before deployment even when the discovered subset is green.
-   The same suite must pass in the **Backend regression** GitHub workflow on
-   Python 3.13 and the production-aligned Python 3.14 job. A green workflow is
-   evidence for the reviewed commit; it does not itself authorize Render to
-   deploy that commit.
+   review before deployment even when the discovered subset is green. Tools has
+   11 expected CloudKit/release/acceptance tests. Both suites must pass in the
+   **Backend regression** GitHub workflow on Python 3.13 and the
+   production-aligned Python 3.14 job. The established status-check names remain
+   unchanged even though each job now runs both suites. The workflow has
+   read-only repository contents permission and performs no online probe,
+   CloudKit promotion, accounting/payment mutation, device installation, or
+   provider call. A green workflow is evidence for the reviewed commit; it does
+   not itself authorize Render to deploy that commit.
 4. Record the current GitHub commit, `/health` response, and deployment ID.
    Confirm a recent verified off-host backup exists before a release that adds
    database tables. The `.12` Apple identity tables, `.13` supplier-attempt
