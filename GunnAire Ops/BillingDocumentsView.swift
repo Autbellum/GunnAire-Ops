@@ -2413,6 +2413,28 @@ GunnAire
         }
     }
 
+    @ViewBuilder
+    private func catalogSyncStateLabel(for item: Item) -> some View {
+        let state = item.quickBooksCatalogSyncState
+        if state == "needs_review" {
+            Label("Admin pricebook review", systemImage: "person.badge.clock")
+                .font(.caption2)
+                .foregroundStyle(Color.orange)
+                .accessibilityIdentifier("CatalogSyncState-\(item.id.uuidString)")
+        } else if isQuickBooksConnected, state != "synced" {
+            let needsAttention = state == "needs_attention"
+            Label(
+                needsAttention
+                    ? "QBO needs attention"
+                    : (state == "pending_update" ? "QBO update pending" : "QBO publication pending"),
+                systemImage: needsAttention ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath"
+            )
+            .font(.caption2)
+            .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
+            .accessibilityIdentifier("CatalogSyncState-\(item.id.uuidString)")
+        }
+    }
+
     private func populateCustomerFields(from customer: Customer) {
         customerSearchText = customer.name
         customerName = customer.name
@@ -3498,6 +3520,7 @@ GunnAire
                                                     .font(.caption2)
                                                     .foregroundColor(.secondary)
                                             }
+                                            catalogSyncStateLabel(for: item)
                                         }
                                         Spacer()
                                         VStack(alignment: .trailing, spacing: 4) {
@@ -3854,18 +3877,7 @@ GunnAire
                                                     .lineLimit(1)
                                             }
                                             itemMetaText(for: item)
-                                            if item.requiresPricebookReview {
-                                                Label("Admin pricebook review", systemImage: "person.badge.clock")
-                                                    .font(.caption2)
-                                                    .foregroundStyle(Color.orange)
-                                            } else if isQuickBooksConnected, item.quickBooksCatalogSyncState != "synced" {
-                                                Label(
-                                                    item.needsQuickBooksAttention ? "QBO needs attention" : "QBO pending",
-                                                    systemImage: item.needsQuickBooksAttention ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath"
-                                                )
-                                                .font(.caption2)
-                                                .foregroundStyle(item.needsQuickBooksAttention ? Color.orange : Color.secondary)
-                                            }
+                                            catalogSyncStateLabel(for: item)
                                         }
                                         Spacer()
                                         Text(item.unitPrice, format: .currency(code: "USD"))

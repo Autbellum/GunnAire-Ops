@@ -450,6 +450,7 @@ enum QuickBooksCatalogPublicationRecovery {
         items
             .filter { item in
                 !item.requiresPricebookReview &&
+                item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
                 item.quickBooksCatalogSyncState != "synced" &&
                 !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             }
@@ -846,6 +847,10 @@ struct QuickBooksManagementView: View {
         ProcessInfo.processInfo.arguments.contains("-uiTestSeedCatalogMappingConflict")
     }
 
+    private var catalogComparisonUnavailableFixtureRequested: Bool {
+        ProcessInfo.processInfo.arguments.contains("-uiTestCatalogComparisonUnavailable")
+    }
+
     private var accountingMappingFixtureRequested: Bool {
         ProcessInfo.processInfo.arguments.contains("-uiTestSeedQBOAccountingMappings")
     }
@@ -1027,6 +1032,22 @@ struct QuickBooksManagementView: View {
             localItems: localCatalogItems,
             remoteItems: items
         )
+    }
+
+    private var stagedCatalogReconciliationItems: [Item] {
+        localCatalogItems
+            .filter(\.hasPendingQuickBooksCatalogUpdate)
+            .sorted { lhs, rhs in
+                if lhs.needsQuickBooksAttention != rhs.needsQuickBooksAttention {
+                    return lhs.needsQuickBooksAttention
+                }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+
+    private var catalogItemsAwaitingLiveComparison: [Item] {
+        let comparedItemIDs = Set(catalogReconciliationEntries.map { $0.localItem.id })
+        return stagedCatalogReconciliationItems.filter { !comparedItemIDs.contains($0.id) }
     }
 
     private var catalogMappingConflicts: [QuickBooksCatalogMappingConflict] {
@@ -1585,7 +1606,7 @@ struct QuickBooksManagementView: View {
                         }
                     }
 
-                    if !catalogReconciliationEntries.isEmpty {
+                    if !stagedCatalogReconciliationItems.isEmpty {
                         Section(
                             header: Text("Catalog Reconciliation")
                                 .foregroundColor(Color.brandGold)
@@ -1596,6 +1617,49 @@ struct QuickBooksManagementView: View {
                                 .foregroundStyle(.secondary)
 
                             DisclosureGroup(isExpanded: $showCatalogReconciliationQueue) {
+                                if !catalogItemsAwaitingLiveComparison.isEmpty {
+                                    Label(
+                                        "Waiting for a live QuickBooks comparison",
+                                        systemImage: "icloud.and.arrow.down"
+                                    )
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.orange)
+                                    .accessibilityIdentifier("QuickBooksCatalogComparisonWaiting")
+
+                                    Text("The local changes remain saved and no QuickBooks update has been sent. Reconnect or refresh before choosing which version wins.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+
+                                    ForEach(catalogItemsAwaitingLiveComparison) { item in
+                                        HStack(alignment: .firstTextBaseline) {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(item.name)
+                                                    .font(.subheadline.weight(.semibold))
+                                                if let quickBooksID = item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                                   !quickBooksID.isEmpty {
+                                                    Text("QBO \(quickBooksID) • Staged locally")
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                            }
+                                            Spacer()
+                                            if item.needsQuickBooksAttention {
+                                                Image(systemName: "exclamationmark.triangle.fill")
+                                                    .foregroundStyle(.orange)
+                                                    .accessibilityLabel("Needs attention")
+                                            }
+                                        }
+                                        .accessibilityIdentifier("QuickBooksCatalogComparisonWaitingItem-\(item.id.uuidString)")
+                                    }
+
+                                    Button(isLoading ? "Refreshing..." : "Refresh QuickBooks") {
+                                        syncAllQuickBooksData()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .disabled(!isAuthenticated || isLoading)
+                                    .accessibilityIdentifier("RefreshQuickBooksCatalogComparison")
+                                }
+
                                 ForEach(catalogReconciliationEntries) { entry in
                                     VStack(alignment: .leading, spacing: 10) {
                                         HStack(alignment: .firstTextBaseline) {
@@ -1653,7 +1717,7 @@ struct QuickBooksManagementView: View {
                                 }
                             } label: {
                                 Label(
-                                    "Review \(catalogReconciliationEntries.count) staged \(catalogReconciliationEntries.count == 1 ? "item" : "items")",
+                                    "Review \(stagedCatalogReconciliationItems.count) staged \(stagedCatalogReconciliationItems.count == 1 ? "item" : "items")",
                                     systemImage: "arrow.left.arrow.right.square"
                                 )
                             }
@@ -2520,7 +2584,9 @@ struct QuickBooksManagementView: View {
                     }
                     #if DEBUG
                     if catalogReconciliationFixtureRequested {
-                        items = Self.catalogReconciliationFixtureItems
+                        items = catalogComparisonUnavailableFixtureRequested
+                            ? []
+                            : Self.catalogReconciliationFixtureItems
                         showCatalogReconciliationQueue = true
                     }
                     if accountingMappingFixtureRequested {
@@ -2534,7 +2600,9 @@ struct QuickBooksManagementView: View {
                     if catalogReconciliationFixtureRequested || accountingMappingFixtureRequested {
                         statusMessage = accountingMappingFixtureRequested
                             ? "Accounting mapping preview loaded."
-                            : "Catalog reconciliation preview loaded."
+                            : (catalogComparisonUnavailableFixtureRequested
+                                ? "Catalog comparison unavailable preview loaded."
+                                : "Catalog reconciliation preview loaded.")
                         return
                     }
                     #endif
@@ -2804,7 +2872,7 @@ struct QuickBooksManagementView: View {
 
     private func retryCatalogPublication(_ item: Item) {
         guard !item.requiresPricebookReview,
-              item.quickBooksCatalogSyncState != "synced" else { return }
+              item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else { return }
 
         activeCatalogPublicationID = item.id
         item.quickBooksSyncStatus = "pending"

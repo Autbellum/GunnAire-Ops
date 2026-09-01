@@ -18925,6 +18925,47 @@ struct GunnAire_OpsTests {
         #expect(integrations.detail.contains("1 communication"))
     }
 
+    @Test func businessSuiteKeepsLinkedCatalogUpdatesVisibleBeforeLiveQuickBooksComparison() {
+        let stagedItem = Item(
+            quickBooksID: "QBO-STAGED-COMMAND-1",
+            quickBooksSyncStatus: "pending_update",
+            quickBooksSyncDetail: "Administrator-approved price change is waiting for comparison.",
+            name: "Staged Compressor Repair",
+            unitPrice: 2_400
+        )
+
+        let pending = BusinessSuiteIntelligence.syncAttentionSummary(
+            serviceCalls: [],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            attachments: [],
+            timeEntries: [],
+            items: [stagedItem],
+            googleConnected: true,
+            quickBooksConnected: true,
+            sharedServerConfigured: false
+        )
+        #expect(pending.pricebookCount == 1)
+        #expect(pending.total == 1)
+
+        stagedItem.quickBooksSyncStatus = "synced"
+        let reconciled = BusinessSuiteIntelligence.syncAttentionSummary(
+            serviceCalls: [],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            attachments: [],
+            timeEntries: [],
+            items: [stagedItem],
+            googleConnected: true,
+            quickBooksConnected: true,
+            sharedServerConfigured: false
+        )
+        #expect(reconciled.pricebookCount == 0)
+        #expect(reconciled.total == 0)
+    }
+
     @Test func businessSuiteSurfacesTechnicalReportActionsAndOpenConcerns() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let customer = Customer(name: "Documentation Command Customer", address: "700 Report Ave")
@@ -20810,6 +20851,24 @@ struct GunnAire_OpsTests {
         let syncedItem = Item(quickBooksID: "QBO-ITEM-77", name: "Diagnostic Visit", unitPrice: 189)
         #expect(syncedItem.quickBooksCatalogSyncState == "synced")
         #expect(syncedItem.needsQuickBooksAttention == false)
+
+        let stagedUpdate = Item(
+            quickBooksID: "QBO-ITEM-78",
+            quickBooksSyncStatus: "pending_update",
+            name: "Updated Diagnostic Visit",
+            unitPrice: 209
+        )
+        #expect(stagedUpdate.quickBooksCatalogSyncState == "pending_update")
+        #expect(stagedUpdate.hasPendingQuickBooksCatalogUpdate)
+        #expect(stagedUpdate.needsQuickBooksAttention == false)
+
+        stagedUpdate.quickBooksSyncStatus = "needs_attention"
+        #expect(stagedUpdate.quickBooksCatalogSyncState == "needs_attention")
+        #expect(stagedUpdate.needsQuickBooksAttention)
+
+        stagedUpdate.quickBooksSyncStatus = "unexpected_legacy_value"
+        #expect(stagedUpdate.quickBooksCatalogSyncState == "needs_attention")
+        #expect(stagedUpdate.needsQuickBooksAttention)
     }
 
     @Test func servicePackageOnlyEditDoesNotStageAFalseQuickBooksCatalogUpdate() {

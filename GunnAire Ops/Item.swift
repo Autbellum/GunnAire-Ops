@@ -777,9 +777,10 @@ private struct CatalogDocumentSnapshotEnvelope: Codable {
 final class Item {
     var id: UUID = UUID()
     var quickBooksID: String?
-    /// `pending`, `synced`, or `needs_attention`. This is intentionally stored
-    /// with the pricebook item so an offline-created line can be retried after
-    /// the originating invoice screen has been dismissed.
+    /// `pending`, `pending_update`, `synced`, `needs_review`, or
+    /// `needs_attention`. This is intentionally stored with the pricebook item
+    /// so offline creation and administrator-staged changes remain recoverable
+    /// after the originating screen has been dismissed.
     var quickBooksSyncStatus: String = "pending"
     var quickBooksSyncDetail: String?
     var quickBooksLastSyncedAt: Date?
@@ -932,14 +933,45 @@ final class Item {
     }
 
     var needsQuickBooksAttention: Bool {
-        quickBooksSyncStatus == "needs_attention"
+        quickBooksCatalogSyncState == "needs_attention"
     }
 
+    /// Operational catalog state shown outside the provider reconciliation
+    /// console. A durable staged update must never look synced merely because
+    /// the item already owns a QuickBooks ID. Creation and update recovery stay
+    /// separate: callers that create missing QBO items must still require an
+    /// empty `quickBooksID` explicitly.
     var quickBooksCatalogSyncState: String {
-        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            return "synced"
+        let status = quickBooksSyncStatus
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let hasQuickBooksID = quickBooksID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty == false
+
+        if requiresPricebookReview || status == "needs_review" {
+            return "needs_review"
         }
-        return quickBooksSyncStatus
+        if status == "needs_attention" {
+            return "needs_attention"
+        }
+        if !hasQuickBooksID {
+            switch status {
+            case "", "pending", "pending_update", "synced":
+                return "pending"
+            default:
+                return "needs_attention"
+            }
+        }
+
+        switch status {
+        case "", "synced":
+            return "synced"
+        case "pending", "pending_update":
+            return "pending_update"
+        default:
+            return "needs_attention"
+        }
     }
 
     /// Finds the one local catalog record that can safely be reconciled with a

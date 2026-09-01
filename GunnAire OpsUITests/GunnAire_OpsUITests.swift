@@ -2304,6 +2304,11 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["UI Test Added Repair"].waitForExistence(timeout: 3))
+        let catalogState = app.staticTexts.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "CatalogSyncState-")
+        ).firstMatch
+        XCTAssertTrue(catalogState.waitForExistence(timeout: 3))
+        XCTAssertEqual(catalogState.label, "Admin pricebook review")
         let removeAddedRepair = app.buttons.matching(
             NSPredicate(format: "label == %@", "Remove UI Test Added Repair from invoice")
         ).firstMatch
@@ -4832,6 +4837,41 @@ final class GunnAire_OpsUITests: XCTestCase {
             object: nil
         )
         XCTAssertEqual(XCTWaiter.wait(for: [resolved], timeout: 3), .completed)
+    }
+
+    @MainActor
+    func testStagedCatalogUpdateRemainsVisibleWhileQuickBooksComparisonIsUnavailable() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedCatalogReconciliation",
+            "-uiTestCatalogComparisonUnavailable",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let waiting = app.staticTexts["QuickBooksCatalogComparisonWaiting"]
+        for _ in 0..<8 where !waiting.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waiting.waitForExistence(timeout: 3))
+        XCTAssertEqual(waiting.label, "Waiting for a live QuickBooks comparison")
+        XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].exists)
+        XCTAssertTrue(app.staticTexts["QBO QBO-UI-CATALOG-RECONCILE • Staged locally"].exists)
+        XCTAssertTrue(app.staticTexts["The local changes remain saved and no QuickBooks update has been sent. Reconnect or refresh before choosing which version wins."].exists)
+        let refresh = app.buttons["RefreshQuickBooksCatalogComparison"]
+        XCTAssertTrue(refresh.exists)
+        XCTAssertFalse(refresh.isEnabled)
+        XCTAssertFalse(app.buttons["Retry Catalog Publication"].exists)
     }
 
     @MainActor
