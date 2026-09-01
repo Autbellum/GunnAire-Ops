@@ -52,6 +52,7 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
     case missingCatalogSnapshot
     case missingCatalogItem(String)
     case pricebookReviewRequired(String)
+    case catalogItemArchived(String)
     case missingQuickBooksItemMapping(String)
     case invalidLineAmount(String)
     case invalidDocumentDiscount
@@ -65,6 +66,8 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
             return "The local catalog item for \(name) is missing. Open Job Billing and replace that line before retrying."
         case .pricebookReviewRequired(let name):
             return "\(name) needs administrator pricebook review before this document can publish to QuickBooks."
+        case .catalogItemArchived(let name):
+            return "\(name) is archived from new work. Restore and reconcile that pricebook item or replace the line before publishing to QuickBooks."
         case .missingQuickBooksItemMapping(let name):
             return "\(name) is not linked to a QuickBooks product or service. Review and publish the catalog item first."
         case .invalidLineAmount(let name):
@@ -100,6 +103,9 @@ enum QuickBooksDocumentLinePublication {
             }
             guard !item.requiresPricebookReview else {
                 throw QuickBooksDocumentLinePublicationError.pricebookReviewRequired(snapshot.name)
+            }
+            guard !item.isCatalogArchived else {
+                throw QuickBooksDocumentLinePublicationError.catalogItemArchived(snapshot.name)
             }
             return item
         }
@@ -349,6 +355,68 @@ enum PricebookReviewPublicationError: LocalizedError, Equatable {
     }
 }
 
+enum CatalogItemLifecycleError: LocalizedError {
+    case pendingDocuments(PricebookReviewDocumentImpact)
+    case activeAssemblyDependencies([String])
+    case activeAgreementDependencies([String])
+    case archivedCannotPublish(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .pendingDocuments(let impact):
+            return "Archive this item after its pending document work is resolved. \(impact.summary)"
+        case .activeAssemblyDependencies(let names):
+            return "Archive or revise the active service package\(names.count == 1 ? "" : "s") that still use this item: \(names.joined(separator: ", "))."
+        case .activeAgreementDependencies(let names):
+            return "Choose a replacement billing item for the active service agreement\(names.count == 1 ? "" : "s") before archiving: \(names.joined(separator: ", "))."
+        case .archivedCannotPublish(let name):
+            return "\(name) is archived and cannot be published as a new QuickBooks catalog item. Restore it first."
+        }
+    }
+}
+
+enum CatalogItemLifecyclePolicy {
+    static func validateArchive(
+        _ item: Item,
+        catalogItems: [Item],
+        estimates: [Estimate],
+        invoices: [Invoice],
+        agreements: [RecurringMaintenanceContract]
+    ) throws {
+        let impact = PricebookReviewQueue.documentImpact(
+            for: item,
+            estimates: estimates,
+            invoices: invoices
+        )
+        guard impact.totalCount == 0 else {
+            throw CatalogItemLifecycleError.pendingDocuments(impact)
+        }
+
+        let dependentPackages = catalogItems.filter { candidate in
+            candidate.id != item.id &&
+            candidate.isAvailableForNewWork &&
+            candidate.assemblyDefinition?.components.contains(where: { $0.itemID == item.id }) == true
+        }
+        guard dependentPackages.isEmpty else {
+            throw CatalogItemLifecycleError.activeAssemblyDependencies(
+                dependentPackages.map(\.name).sorted()
+            )
+        }
+
+        let dependentAgreements = agreements.filter { agreement in
+            agreement.billingCatalogItemID == item.id &&
+            agreement.active &&
+            agreement.lifecycleStatus != .cancelled &&
+            agreement.lifecycleStatus != .declined
+        }
+        guard dependentAgreements.isEmpty else {
+            throw CatalogItemLifecycleError.activeAgreementDependencies(
+                dependentAgreements.map { "\($0.customer?.name ?? "Customer unavailable") • \($0.displayName)" }.sorted()
+            )
+        }
+    }
+}
+
 enum PricebookReviewPublication {
     static func matchingRemoteItem(
         for localItem: Item,
@@ -450,6 +518,7 @@ enum QuickBooksCatalogPublicationRecovery {
         items
             .filter { item in
                 !item.requiresPricebookReview &&
+                !item.isCatalogArchived &&
                 item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
                 item.quickBooksCatalogSyncState != "synced" &&
                 !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -563,6 +632,15 @@ enum QuickBooksCatalogReconciliation {
                 )
             )
         }
+        if localItem.isAvailableForNewWork != (remoteItem.Active ?? true) {
+            result.append(
+                QuickBooksCatalogFieldDifference(
+                    field: "Availability",
+                    gunnAireValue: localItem.isAvailableForNewWork ? "Active" : "Archived",
+                    quickBooksValue: (remoteItem.Active ?? true) ? "Active" : "Inactive"
+                )
+            )
+        }
         appendTextDifference("Purchase description", localItem.purchaseDescription, remoteItem.PurchaseDesc, to: &result)
 
         let localVendorID = normalized(localItem.preferredVendorQuickBooksID ?? "")
@@ -623,7 +701,8 @@ enum QuickBooksCatalogReconciliation {
             Taxable: localItem.isTaxable,
             PrefVendorRef: localVendorID.flatMap { id in
                 id.isEmpty ? nil : QuickBooksReference(value: id, name: localItem.preferredVendorName)
-            }
+            },
+            Active: localItem.isAvailableForNewWork
         )
     }
 
@@ -693,6 +772,7 @@ struct QuickBooksCatalogAccountingSnapshot: Equatable {
     let isTaxable: Bool
     let purchaseDescription: String
     let preferredVendorQuickBooksID: String
+    let isActive: Bool
 
     init(item: Item) {
         self.init(
@@ -704,7 +784,8 @@ struct QuickBooksCatalogAccountingSnapshot: Equatable {
             purchaseCost: item.purchaseCost,
             isTaxable: item.isTaxable,
             purchaseDescription: item.purchaseDescription,
-            preferredVendorQuickBooksID: item.preferredVendorQuickBooksID
+            preferredVendorQuickBooksID: item.preferredVendorQuickBooksID,
+            isActive: item.isAvailableForNewWork
         )
     }
 
@@ -717,7 +798,8 @@ struct QuickBooksCatalogAccountingSnapshot: Equatable {
         purchaseCost: Double?,
         isTaxable: Bool,
         purchaseDescription: String?,
-        preferredVendorQuickBooksID: String?
+        preferredVendorQuickBooksID: String?,
+        isActive: Bool = true
     ) {
         self.name = Self.trimmed(name)
         self.itemType = itemType
@@ -728,6 +810,7 @@ struct QuickBooksCatalogAccountingSnapshot: Equatable {
         self.isTaxable = isTaxable
         self.purchaseDescription = Self.trimmed(purchaseDescription)
         self.preferredVendorQuickBooksID = Self.trimmed(preferredVendorQuickBooksID).lowercased()
+        self.isActive = isActive
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -739,7 +822,8 @@ struct QuickBooksCatalogAccountingSnapshot: Equatable {
         abs(lhs.purchaseCost - rhs.purchaseCost) < 0.005 &&
         lhs.isTaxable == rhs.isTaxable &&
         lhs.purchaseDescription == rhs.purchaseDescription &&
-        lhs.preferredVendorQuickBooksID == rhs.preferredVendorQuickBooksID
+        lhs.preferredVendorQuickBooksID == rhs.preferredVendorQuickBooksID &&
+        lhs.isActive == rhs.isActive
     }
 
     private static func trimmed(_ value: String?) -> String {
@@ -830,6 +914,7 @@ struct QuickBooksManagementView: View {
     @Query(sort: \Estimate.createdAt, order: .reverse) private var localEstimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var localInvoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var localPayments: [Payment]
+    @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var localMaintenanceAgreements: [RecurringMaintenanceContract]
     private let liveAPI = QuickBooksAPI.shared
 
     @State private var customers: [QuickBooksCustomer] = []
@@ -885,6 +970,7 @@ struct QuickBooksManagementView: View {
     @State private var showEstimatePublicationQueue = false
     @State private var showCatalogPublicationQueue = false
     @State private var showCatalogReconciliationQueue = false
+    @State private var showArchivedCatalogItems = false
     @State private var showEstimatesList = false
     @State private var showInvoicesList = false
     @State private var customerSearchText = ""
@@ -1102,6 +1188,12 @@ struct QuickBooksManagementView: View {
 
     private var localCatalogPublicationQueue: [Item] {
         QuickBooksCatalogPublicationRecovery.queuedItems(from: localCatalogItems)
+    }
+
+    private var archivedCatalogItems: [Item] {
+        localCatalogItems
+            .filter(\.isCatalogArchived)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var catalogReconciliationEntries: [QuickBooksCatalogReconciliationEntry] {
@@ -1577,7 +1669,7 @@ struct QuickBooksManagementView: View {
                             .accessibilityIdentifier("QuickBooksCatalogPublicationQueue")
                     ) {
                         if localCatalogPublicationQueue.isEmpty {
-                            Label("All approved local catalog items are linked to QuickBooks.", systemImage: "checkmark.circle.fill")
+                            Label("All active approved local catalog items are linked to QuickBooks.", systemImage: "checkmark.circle.fill")
                                 .foregroundStyle(.green)
                         } else {
                             Text("Retries first reconcile one unique QuickBooks name and SKU match. A new item is created only when no match exists.")
@@ -1904,6 +1996,11 @@ struct QuickBooksManagementView: View {
                                             Text(item.ItemType ?? "Unknown")
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
+                                            if item.Active == false {
+                                                Label("Inactive in QuickBooks", systemImage: "archivebox")
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundStyle(.secondary)
+                                            }
                                         }
                                         Spacer()
                                         if let price = item.UnitPrice {
@@ -1930,6 +2027,48 @@ struct QuickBooksManagementView: View {
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
                             .disabled(activeCatalogPublicationID != nil)
+                    }
+
+                    if !archivedCatalogItems.isEmpty {
+                        Section(
+                            header: Text("Archived Pricebook")
+                                .foregroundColor(Color.brandGold)
+                                .accessibilityIdentifier("ArchivedPricebookSection")
+                        ) {
+                            Text("Archived items stay in historical jobs, invoices, inventory, and purchasing records, but are unavailable for new work. Restore locally before reviewing any QuickBooks reactivation.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            DisclosureGroup(isExpanded: $showArchivedCatalogItems) {
+                                ForEach(archivedCatalogItems) { item in
+                                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(item.name)
+                                                .font(.subheadline.weight(.semibold))
+                                            Text([
+                                                item.sku.map { "SKU \($0)" },
+                                                item.quickBooksID.map { "QBO \($0)" },
+                                                item.quickBooksCatalogSyncState == "pending_update" ? "QBO archive pending" : nil
+                                            ].compactMap { $0 }.joined(separator: " • "))
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Button("Restore") {
+                                            restoreCatalogItem(item)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .accessibilityIdentifier("RestoreArchivedCatalogItem-\(item.id.uuidString)")
+                                    }
+                                    .padding(.vertical, 3)
+                                }
+                            } label: {
+                                Label(
+                                    "Review \(archivedCatalogItems.count) archived \(archivedCatalogItems.count == 1 ? "item" : "items")",
+                                    systemImage: "archivebox"
+                                )
+                            }
+                        }
                     }
 
                     Section(header: Text("Estimates").foregroundColor(Color.brandGold)) {
@@ -2561,7 +2700,10 @@ struct QuickBooksManagementView: View {
                     QuickBooksLocalCatalogItemEditView(
                         item: item,
                         catalogItems: localCatalogItems,
-                        vendors: vendors
+                        vendors: vendors,
+                        onSetArchived: { shouldArchive in
+                            try setCatalogItem(item, archived: shouldArchive)
+                        }
                     ) {
                         do {
                             try modelContext.save()
@@ -2970,6 +3112,64 @@ struct QuickBooksManagementView: View {
         publishApprovedCatalogItem(localItem)
     }
 
+    private func setCatalogItem(_ item: Item, archived: Bool) throws {
+        let priorReviewStatus = item.pricebookReviewStatus
+        let priorReviewer = item.pricebookReviewedByEmail
+        let priorReviewedAt = item.pricebookReviewedAt
+        let priorSyncStatus = item.quickBooksSyncStatus
+        let priorSyncDetail = item.quickBooksSyncDetail
+        let priorTimestamp = item.timestamp
+
+        if archived {
+            try CatalogItemLifecyclePolicy.validateArchive(
+                item,
+                catalogItems: localCatalogItems,
+                estimates: localEstimates,
+                invoices: localInvoices,
+                agreements: localMaintenanceAgreements
+            )
+            item.archiveFromPricebook(by: AppIdentity.currentEmail)
+        } else {
+            item.restoreToPricebook(by: AppIdentity.currentEmail)
+        }
+
+        do {
+            try modelContext.save()
+        } catch {
+            item.pricebookReviewStatus = priorReviewStatus
+            item.pricebookReviewedByEmail = priorReviewer
+            item.pricebookReviewedAt = priorReviewedAt
+            item.quickBooksSyncStatus = priorSyncStatus
+            item.quickBooksSyncDetail = priorSyncDetail
+            item.timestamp = priorTimestamp
+            throw error
+        }
+
+        if archived {
+            showArchivedCatalogItems = true
+            if item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                showCatalogReconciliationQueue = true
+                actionMessage = "Archived \(item.name) from new work. Review its staged QuickBooks deactivation in Catalog Reconciliation."
+            } else {
+                actionMessage = "Archived \(item.name) from new work. Historical documents and inventory evidence remain available."
+            }
+        } else if item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            showCatalogReconciliationQueue = true
+            actionMessage = "Restored \(item.name) for new work. Review its staged QuickBooks reactivation in Catalog Reconciliation."
+        } else {
+            showCatalogPublicationQueue = true
+            actionMessage = "Restored \(item.name) for new work. QuickBooks publication is pending."
+        }
+    }
+
+    private func restoreCatalogItem(_ item: Item) {
+        do {
+            try setCatalogItem(item, archived: false)
+        } catch {
+            actionMessage = "Could not restore \(item.name): \(error.localizedDescription)"
+        }
+    }
+
     private func approvePricebookItem(_ item: Item) {
         let reviewerEmail = AppIdentity.currentEmail
         item.approveForPricebook(by: reviewerEmail)
@@ -2993,6 +3193,7 @@ struct QuickBooksManagementView: View {
 
     private func retryCatalogPublication(_ item: Item) {
         guard !item.requiresPricebookReview,
+              !item.isCatalogArchived,
               item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else { return }
 
         activeCatalogPublicationID = item.id
@@ -3016,6 +3217,13 @@ struct QuickBooksManagementView: View {
     }
 
     private func publishApprovedCatalogItem(_ item: Item) {
+        guard !item.isCatalogArchived else {
+            markApprovedPricebookPublicationFailure(
+                item,
+                error: CatalogItemLifecycleError.archivedCannotPublish(item.name)
+            )
+            return
+        }
         actionMessage = "Approved \(item.name). Checking QuickBooks for an existing match..."
         liveAPI.fetchItems { result in
             DispatchQueue.main.async {
@@ -3025,13 +3233,23 @@ struct QuickBooksManagementView: View {
                 case .success(let remoteItems):
                     do {
                         if let existing = try PricebookReviewPublication.matchingRemoteItem(for: item, in: remoteItems) {
+                            let shouldStageReactivation = item.isAvailableForNewWork && existing.Active == false
                             try QuickBooksCatalogMappingIntegrity.validateAssignment(
                                 of: existing.Id,
                                 to: item,
                                 in: localCatalogItems
                             )
                             applyApprovedQuickBooksItem(existing, to: item)
-                            finishApprovedPricebookPublication(item, message: "Approved and linked \(item.name) to its existing QuickBooks catalog item.")
+                            if shouldStageReactivation {
+                                item.restoreToPricebook(by: AppIdentity.currentEmail)
+                                showCatalogReconciliationQueue = true
+                                finishApprovedPricebookPublication(
+                                    item,
+                                    message: "Linked \(item.name) to its inactive QuickBooks item. Review the staged reactivation before using it on new work."
+                                )
+                            } else {
+                                finishApprovedPricebookPublication(item, message: "Approved and linked \(item.name) to its existing QuickBooks catalog item.")
+                            }
                             return
                         }
                     } catch {
@@ -3084,6 +3302,7 @@ struct QuickBooksManagementView: View {
         item.quickBooksSyncStatus = "synced"
         item.quickBooksSyncDetail = nil
         item.quickBooksLastSyncedAt = Date()
+        item.applyQuickBooksCatalogAvailability(quickBooksItem.Active)
         item.name = quickBooksItem.Name
         item.itemTypeRawValue = quickBooksItem.ItemType ?? item.itemTypeRawValue
         item.unitPrice = quickBooksItem.UnitPrice ?? item.unitPrice
@@ -5783,6 +6002,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
     let item: Item
     let catalogItems: [Item]
     let vendors: [QuickBooksVendor]
+    let onSetArchived: (Bool) throws -> Void
     let onSaved: () -> Void
 
     @State private var name: String
@@ -5799,16 +6019,19 @@ private struct QuickBooksLocalCatalogItemEditView: View {
     @State private var assemblyComponents: [CatalogAssemblyComponentDefinition]
     @State private var assemblySearchText = ""
     @State private var assemblyValidationMessage: String?
+    @State private var lifecycleValidationMessage: String?
 
     init(
         item: Item,
         catalogItems: [Item],
         vendors: [QuickBooksVendor],
+        onSetArchived: @escaping (Bool) throws -> Void,
         onSaved: @escaping () -> Void
     ) {
         self.item = item
         self.catalogItems = catalogItems
         self.vendors = vendors
+        self.onSetArchived = onSetArchived
         self.onSaved = onSaved
         let assembly = item.assemblyDefinition
         _name = State(initialValue: item.name)
@@ -5881,7 +6104,8 @@ private struct QuickBooksLocalCatalogItemEditView: View {
             purchaseCost: parsedPurchaseCost,
             isTaxable: isTaxable,
             purchaseDescription: nilIfBlank(purchaseDescription),
-            preferredVendorQuickBooksID: selectedPreferredVendor?.Id ?? item.preferredVendorQuickBooksID
+            preferredVendorQuickBooksID: selectedPreferredVendor?.Id ?? item.preferredVendorQuickBooksID,
+            isActive: item.isAvailableForNewWork
         )
     }
 
@@ -5899,6 +6123,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
         return catalogItems
             .filter { candidate in
                 guard candidate.id != item.id,
+                      candidate.isAvailableForNewWork,
                       candidate.assemblyDefinition == nil,
                       !selectedIDs.contains(candidate.id) else { return false }
                 if query.isEmpty { return true }
@@ -5966,6 +6191,37 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                     Text("A linked preferred vendor can be replaced here. Removing it requires review in QuickBooks.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                Section("Availability") {
+                    Label(
+                        item.isCatalogArchived ? "Archived from new work" : "Available for new work",
+                        systemImage: item.isCatalogArchived ? "archivebox" : "checkmark.circle"
+                    )
+                    .foregroundStyle(item.isCatalogArchived ? Color.secondary : Color.green)
+
+                    Text("Historical jobs, invoices, inventory movements, and purchasing evidence keep this item. A linked QuickBooks activation change is always staged for explicit review.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if item.isCatalogArchived {
+                        Button("Restore to Pricebook") {
+                            setArchived(false)
+                        }
+                        .accessibilityIdentifier("RestoreCatalogItem")
+                    } else {
+                        Button("Archive from New Work", role: .destructive) {
+                            setArchived(true)
+                        }
+                        .accessibilityIdentifier("ArchiveCatalogItem")
+                    }
+
+                    if let lifecycleValidationMessage {
+                        Label(lifecycleValidationMessage, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("CatalogLifecycleValidation")
+                    }
                 }
 
                 if editableItemType == .service {
@@ -6099,6 +6355,16 @@ private struct QuickBooksLocalCatalogItemEditView: View {
 
     private func assemblyItem(_ itemID: UUID) -> Item? {
         catalogItems.first { $0.id == itemID }
+    }
+
+    private func setArchived(_ archived: Bool) {
+        do {
+            try onSetArchived(archived)
+            lifecycleValidationMessage = nil
+            dismiss()
+        } catch {
+            lifecycleValidationMessage = error.localizedDescription
+        }
     }
 
     private func assemblyItemName(_ itemID: UUID) -> String {

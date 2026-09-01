@@ -20247,6 +20247,150 @@ struct GunnAire_OpsTests {
         }
     }
 
+    @Test func catalogArchiveLifecycleBlocksActiveDependenciesAndStagesQuickBooksAvailability() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 920_000)
+        let item = Item(
+            quickBooksID: "QBO-ARCHIVE-1",
+            quickBooksSyncStatus: "synced",
+            name: "Legacy Contactor",
+            itemType: .nonInventory,
+            unitPrice: 425,
+            purchaseCost: 110,
+            sku: "CONT-LEGACY"
+        )
+        let snapshot = CatalogLineItemSnapshot.encoded(from: [item])
+        let pendingInvoice = Invoice(
+            customer: Customer(name: "Archive Policy Customer"),
+            catalogSnapshotJSON: snapshot,
+            amount: 425
+        )
+
+        #expect(throws: CatalogItemLifecycleError.self) {
+            try CatalogItemLifecyclePolicy.validateArchive(
+                item,
+                catalogItems: [item],
+                estimates: [],
+                invoices: [pendingInvoice],
+                agreements: []
+            )
+        }
+
+        let package = Item(name: "Legacy Contactor Repair", unitPrice: 795)
+        package.assemblyDefinition = CatalogAssemblyDefinition(
+            presentation: .flatRate,
+            components: [CatalogAssemblyComponentDefinition(itemID: item.id, quantity: 1)]
+        )
+        #expect(throws: CatalogItemLifecycleError.self) {
+            try CatalogItemLifecyclePolicy.validateArchive(
+                item,
+                catalogItems: [item, package],
+                estimates: [],
+                invoices: [],
+                agreements: []
+            )
+        }
+
+        package.archiveFromPricebook(by: "admin@gunnaire.com", at: now)
+        let agreement = RecurringMaintenanceContract(
+            customer: Customer(name: "Agreement Archive Customer"),
+            planName: "Comfort Plan",
+            schedulePattern: "Every 6 months",
+            nextDate: now.addingTimeInterval(86_400),
+            active: true,
+            lifecycle: MaintenanceAgreementLifecycle(
+                status: .active,
+                agreementPrice: 240,
+                billingInterval: .monthly,
+                billingCatalogItemID: item.id,
+                autoRenews: true,
+                createdAt: now
+            )
+        )
+        #expect(throws: CatalogItemLifecycleError.self) {
+            try CatalogItemLifecyclePolicy.validateArchive(
+                item,
+                catalogItems: [item, package],
+                estimates: [],
+                invoices: [],
+                agreements: [agreement]
+            )
+        }
+
+        agreement.active = false
+        try CatalogItemLifecyclePolicy.validateArchive(
+            item,
+            catalogItems: [item, package],
+            estimates: [],
+            invoices: [],
+            agreements: [agreement]
+        )
+        item.archiveFromPricebook(by: "ADMIN@GUNNAIRE.COM", at: now)
+        #expect(item.isCatalogArchived)
+        #expect(!item.isAvailableForNewWork)
+        #expect(item.quickBooksID == "QBO-ARCHIVE-1")
+        #expect(item.quickBooksCatalogSyncState == "pending_update")
+        #expect(item.pricebookReviewedByEmail == "admin@gunnaire.com")
+        #expect(item.pricebookReviewedAt == now)
+
+        let remote = try JSONDecoder().decode(
+            QuickBooksItem.self,
+            from: Data(#"{"Id":"QBO-ARCHIVE-1","SyncToken":"14","Name":"Legacy Contactor","Type":"NonInventory","Sku":"CONT-LEGACY","UnitPrice":425,"PurchaseCost":110,"Taxable":false,"Active":true}"#.utf8)
+        )
+        let differences = QuickBooksCatalogReconciliation.differences(
+            localItem: item,
+            remoteItem: remote
+        )
+        #expect(differences.contains { $0.field == "Availability" && $0.gunnAireValue == "Archived" })
+        let update = try QuickBooksCatalogReconciliation.updatePayload(
+            localItem: item,
+            currentRemoteItem: remote
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(update)) as? [String: Any]
+        )
+        #expect(object["Active"] as? Bool == false)
+        #expect(throws: QuickBooksDocumentLinePublicationError.self) {
+            try QuickBooksDocumentLinePublication.lines(
+                snapshotJSON: snapshot,
+                expectedSubtotal: 425,
+                catalogItems: [item]
+            )
+        }
+
+        item.restoreToPricebook(by: "admin@gunnaire.com", at: now.addingTimeInterval(60))
+        #expect(item.isAvailableForNewWork)
+        #expect(item.quickBooksCatalogSyncState == "pending_update")
+    }
+
+    @Test func archivedUnlinkedCatalogItemsStayOutOfNewWorkAndPublicationRecovery() {
+        let archived = Item(
+            quickBooksSyncStatus: "pending",
+            name: "Retired Compressor Add-on",
+            unitPrice: 1_200,
+            sku: "COMP-OLD"
+        )
+        archived.archiveFromPricebook(by: "admin@gunnaire.com")
+
+        #expect(archived.quickBooksCatalogSyncState == "archived")
+        #expect(QuickBooksCatalogPublicationRecovery.queuedItems(from: [archived]).isEmpty)
+        #expect(
+            Item.matchingLocalCatalogItem(
+                in: [archived],
+                quickBooksID: "QBO-NEW-ACTIVE",
+                name: "Retired Compressor Add-on",
+                sku: "COMP-OLD"
+            ) == nil
+        )
+
+        archived.restoreToPricebook(by: "admin@gunnaire.com")
+        #expect(archived.quickBooksCatalogSyncState == "pending")
+        #expect(QuickBooksCatalogPublicationRecovery.queuedItems(from: [archived]).map(\.id) == [archived.id])
+
+        archived.applyQuickBooksCatalogAvailability(false)
+        archived.quickBooksSyncStatus = "synced"
+        #expect(archived.quickBooksCatalogSyncState == "archived")
+    }
+
     @Test func quickBooksRefreshPreservesStagedCatalogEditsUntilAnAdministratorChoosesADirection() throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(

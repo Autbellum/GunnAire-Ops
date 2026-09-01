@@ -556,7 +556,8 @@ struct BillingDocumentsView: View {
             .compactMap { $0?.lowercased() }
             .joined(separator: " ")
             let matchesQuery = query.isEmpty || haystack.contains(query)
-            return matchesQuery && matchesCatalogFilter(item)
+            let isAvailable = item.isAvailableForNewWork || isCatalogItemSelected(item)
+            return isAvailable && matchesQuery && matchesCatalogFilter(item)
         }
     }
 
@@ -571,7 +572,11 @@ struct BillingDocumentsView: View {
     }
 
     private var unsyncedCatalogItems: [Item] {
-        items.filter { itemNeedsQuickBooksSync($0) && !$0.requiresPricebookReview }
+        items.filter {
+            itemNeedsQuickBooksSync($0) &&
+            !$0.requiresPricebookReview &&
+            !$0.isCatalogArchived
+        }
     }
 
     private var catalogItemsAwaitingReview: [Item] {
@@ -797,7 +802,8 @@ struct BillingDocumentsView: View {
                     serviceCalls: serviceCalls
                 ),
                 let item = items.first(where: { $0.id == candidate.billingCatalogItemID }),
-                !item.requiresPricebookReview else { return nil }
+                !item.requiresPricebookReview,
+                item.isAvailableForNewWork else { return nil }
                 return candidate
             }
             .sorted {
@@ -815,7 +821,8 @@ struct BillingDocumentsView: View {
                       agreement.agreementPrice.map({ $0 > 0.009 }) == true else { return false }
                 guard let billingCatalogItemID = agreement.billingCatalogItemID else { return true }
                 guard let item = items.first(where: { $0.id == billingCatalogItemID }),
-                      !item.requiresPricebookReview else { return true }
+                      !item.requiresPricebookReview,
+                      item.isAvailableForNewWork else { return true }
                 return agreement.billingInterval != .perVisit && agreement.billingAnchorDate == nil
             }
             .sorted {
@@ -2066,7 +2073,9 @@ GunnAire
             .sheet(item: $agreementBillingSetupPending) { agreement in
                 MaintenanceAgreementBillingSetupSheet(
                     agreement: agreement,
-                    billingItems: items.filter { !$0.requiresPricebookReview }
+                    billingItems: items.filter {
+                        !$0.requiresPricebookReview && $0.isAvailableForNewWork
+                    }
                 ) { itemID, anchorDate in
                     try configureMaintenanceAgreementBilling(
                         agreement,
@@ -2416,7 +2425,12 @@ GunnAire
     @ViewBuilder
     private func catalogSyncStateLabel(for item: Item) -> some View {
         let state = item.quickBooksCatalogSyncState
-        if state == "needs_review" {
+        if state == "archived" {
+            Label("Archived from new work", systemImage: "archivebox")
+                .font(.caption2)
+                .foregroundStyle(Color.secondary)
+                .accessibilityIdentifier("CatalogSyncState-\(item.id.uuidString)")
+        } else if state == "needs_review" {
             Label("Admin pricebook review", systemImage: "person.badge.clock")
                 .font(.caption2)
                 .foregroundStyle(Color.orange)
@@ -4338,7 +4352,9 @@ GunnAire
         for candidate: MaintenanceAgreementBillingCandidate
     ) -> Item? {
         items.first { item in
-            item.id == candidate.billingCatalogItemID && !item.requiresPricebookReview
+            item.id == candidate.billingCatalogItemID &&
+            !item.requiresPricebookReview &&
+            item.isAvailableForNewWork
         }
     }
 
@@ -4354,6 +4370,9 @@ GunnAire
         if item.requiresPricebookReview {
             return "\(item.name) is awaiting administrator pricebook review and cannot publish to QuickBooks yet."
         }
+        if item.isCatalogArchived {
+            return "\(item.name) is archived from new work. Choose an active billing item before releasing another agreement invoice."
+        }
         return "Set the first billing date before releasing \(agreement.billingInterval.displayName.lowercased()) invoices."
     }
 
@@ -4367,7 +4386,8 @@ GunnAire
         }
         guard MaintenanceAgreementBillingPolicy.isEligibleForBilling(agreement),
               let item = items.first(where: { $0.id == catalogItemID }),
-              !item.requiresPricebookReview else {
+              !item.requiresPricebookReview,
+              item.isAvailableForNewWork else {
             throw MaintenanceAgreementBillingWorkflowError.billingItemUnavailable
         }
 
@@ -6970,7 +6990,7 @@ GunnAire
     }
 
     private func publishCatalogItemIfPossible(_ item: Item) {
-        guard !item.requiresPricebookReview else { return }
+        guard !item.requiresPricebookReview, !item.isCatalogArchived else { return }
         guard isQuickBooksConnected, itemNeedsQuickBooksSync(item) else { return }
         prepareQuickBooksItemsForDocument([item]) { result in
             switch result {
@@ -7006,6 +7026,7 @@ GunnAire
         item.quickBooksSyncStatus = "synced"
         item.quickBooksSyncDetail = nil
         item.quickBooksLastSyncedAt = Date()
+        item.applyQuickBooksCatalogAvailability(quickBooksItem.Active)
         item.name = quickBooksItem.Name
         if let itemType = quickBooksItem.ItemType {
             item.itemTypeRawValue = itemType
@@ -7926,6 +7947,11 @@ GunnAire
             return
         }
 
+        guard item.isAvailableForNewWork else {
+            actionMessage = "\(item.name) is archived from new work. Ask an administrator to restore and reconcile it before adding it."
+            return
+        }
+
         do {
             let selection = try CatalogAssemblyPolicy.selection(root: item, catalogItems: items)
             let incomingIDs = Set(selection.lineItems.map(\.id))
@@ -8684,6 +8710,10 @@ GunnAire
             completion(.failure(PricebookPublicationError.reviewRequired(item.name)))
             return
         }
+        if let item = items.first(where: \.isCatalogArchived) {
+            completion(.failure(PricebookPublicationError.archived(item.name)))
+            return
+        }
         guard items.contains(where: itemNeedsQuickBooksSync) else {
             completion(.success(items))
             return
@@ -8702,19 +8732,25 @@ GunnAire
                     markQuickBooksCatalogSyncFailure(for: items.filter(itemNeedsQuickBooksSync), error: error)
                     completion(.failure(error))
                 case .success(let quickBooksItems):
-                    let activeQuickBooksItems = quickBooksItems.filter { $0.Active != false }
                     for item in items where itemNeedsQuickBooksSync(item) {
                         do {
                             if let quickBooksItem = try PricebookReviewPublication.matchingRemoteItem(
                                 for: item,
-                                in: activeQuickBooksItems
+                                in: quickBooksItems
                             ) {
                                 try QuickBooksCatalogMappingIntegrity.validateAssignment(
                                     of: quickBooksItem.Id,
                                     to: item,
                                     in: self.items
                                 )
+                                let shouldStageReactivation = item.isAvailableForNewWork && quickBooksItem.Active == false
                                 applyQuickBooksItem(quickBooksItem, to: item)
+                                if shouldStageReactivation {
+                                    item.restoreToPricebook(by: currentUserEmail)
+                                    saveQuickBooksSyncState()
+                                    completion(.failure(PricebookPublicationError.inactiveQuickBooksMatch(item.name)))
+                                    return
+                                }
                             }
                         } catch {
                             markQuickBooksCatalogSyncFailure(for: [item], error: error)
@@ -9888,7 +9924,9 @@ private struct DocumentationItemSelectorView: View {
 
     private var filteredItems: [Item] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let sortedItems = items.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let sortedItems = items
+            .filter { $0.isAvailableForNewWork || isSelected($0) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         guard !query.isEmpty else { return sortedItems }
         return sortedItems.filter { item in
             [
@@ -10016,6 +10054,11 @@ private struct DocumentationItemSelectorView: View {
                     Text(item.isTaxable ? "Taxable" : "Non-taxable")
                         .font(.caption2)
                         .foregroundColor(.secondary)
+                    if item.isCatalogArchived {
+                        Label("Archived • remove only", systemImage: "archivebox")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 Text(item.unitPrice, format: .currency(code: "USD"))
@@ -10271,11 +10314,17 @@ private enum CatalogItemAmountParser {
 
 enum PricebookPublicationError: LocalizedError, Equatable {
     case reviewRequired(String)
+    case archived(String)
+    case inactiveQuickBooksMatch(String)
 
     var errorDescription: String? {
         switch self {
         case .reviewRequired(let itemName):
             return "\(itemName) needs administrator pricebook review before it can publish to QuickBooks. The document remains saved locally."
+        case .archived(let itemName):
+            return "\(itemName) is archived from new work. Restore and reconcile it or replace the document line before publishing to QuickBooks."
+        case .inactiveQuickBooksMatch(let itemName):
+            return "\(itemName) matches an inactive QuickBooks item. The existing identity was linked safely; an administrator must review its staged reactivation before this document can publish."
         }
     }
 }

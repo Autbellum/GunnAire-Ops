@@ -284,7 +284,10 @@ struct ReceiptsAndBillsView: View {
 
     private var lowStockItems: [Item] {
         catalogItems.filter { item in
-            guard item.tracksInventory, let reorderPoint = item.reorderPoint, reorderPoint > 0 else { return false }
+            guard item.isAvailableForNewWork,
+                  item.tracksInventory,
+                  let reorderPoint = item.reorderPoint,
+                  reorderPoint > 0 else { return false }
             return InventoryLedger.availableQuantity(for: item.id, movements: inventoryMovements) <= reorderPoint
         }
     }
@@ -1106,7 +1109,7 @@ struct ReceiptsAndBillsView: View {
 
             Picker("Pricebook item", selection: $newPurchaseOrderItemID) {
                 Text("Manual part").tag(UUID?.none)
-                ForEach(catalogItems) { item in
+                ForEach(catalogItems.filter(\.isAvailableForNewWork)) { item in
                     Text(item.name).tag(UUID?.some(item.id))
                 }
             }

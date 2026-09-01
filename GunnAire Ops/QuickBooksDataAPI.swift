@@ -2736,6 +2736,7 @@ struct QuickBooksItemUpdate: Codable {
     let PurchaseCost: Double
     let Taxable: Bool
     let PrefVendorRef: QuickBooksReference?
+    let Active: Bool
 
     init(
         Id: String,
@@ -2747,7 +2748,8 @@ struct QuickBooksItemUpdate: Codable {
         UnitPrice: Double,
         PurchaseCost: Double,
         Taxable: Bool,
-        PrefVendorRef: QuickBooksReference?
+        PrefVendorRef: QuickBooksReference?,
+        Active: Bool = true
     ) {
         self.Id = Id
         self.SyncToken = SyncToken
@@ -2760,6 +2762,7 @@ struct QuickBooksItemUpdate: Codable {
         self.PurchaseCost = PurchaseCost
         self.Taxable = Taxable
         self.PrefVendorRef = PrefVendorRef
+        self.Active = Active
     }
 }
 

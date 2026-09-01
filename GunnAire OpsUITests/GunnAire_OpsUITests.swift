@@ -24,6 +24,7 @@ final class GunnAire_OpsUITests: XCTestCase {
     private let operationalAlertID = "A1000000-0000-4000-8000-000000000042"
     private let businessTaskID = "A1000000-0000-4000-8000-000000000043"
     private let timeOffRequestID = "A1000000-0000-4000-8000-000000000045"
+    private let archivedCatalogItemID = "A1000000-0000-4000-8000-000000000049"
     private let adminWorkspaceDestinations: [(sidebar: String, route: String, title: String)] = [
         ("Command Center", "commandCenter", "Command Center"),
         ("Clock In/Out", "timeClock", "Time Clock"),
@@ -5064,6 +5065,50 @@ final class GunnAire_OpsUITests: XCTestCase {
             object: nil
         )
         XCTAssertEqual(XCTWaiter.wait(for: [resolved], timeout: 3), .completed)
+    }
+
+    @MainActor
+    func testAdministratorRestoresArchivedCatalogItemIntoExplicitQuickBooksReconciliation() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedArchivedCatalog",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let archivedSection = app.staticTexts["ArchivedPricebookSection"]
+        for _ in 0..<10 where !archivedSection.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(archivedSection.waitForExistence(timeout: 3))
+        let disclosure = app.buttons["Review 1 archived item"]
+        XCTAssertTrue(disclosure.exists)
+        disclosure.tap()
+        XCTAssertTrue(app.staticTexts["Archived Blower Motor"].waitForExistence(timeout: 3))
+
+        let restore = app.buttons["RestoreArchivedCatalogItem-\(archivedCatalogItemID)"]
+        for _ in 0..<4 where !restore.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(restore.waitForExistence(timeout: 3))
+        restore.tap()
+
+        let archivedRemoved = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: archivedSection
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [archivedRemoved], timeout: 3), .completed)
+        XCTAssertTrue(app.staticTexts["QuickBooksCatalogComparisonWaiting"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["QBO QBO-UI-ARCHIVED-CATALOG • Staged locally"].exists)
     }
 
     @MainActor

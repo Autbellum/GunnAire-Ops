@@ -221,6 +221,7 @@ enum BusinessSuiteIntelligence {
         }
         let calendarLinkGaps = syncAttention.calendarCount
         let catalogItems = items.filter {
+            $0.isAvailableForNewWork &&
             !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         let unpricedCatalogItems = catalogItems.filter { $0.unitPrice <= 0 }
@@ -769,7 +770,11 @@ enum BusinessSuiteIntelligence {
                 ($0.needsQuickBooksAttention || $0.needsSharedCompanyQueueUpload)
         }.count
         let pricebookCount = items.filter { item in
-            item.requiresPricebookReview ||
+            if item.isCatalogArchived {
+                return item.quickBooksCatalogSyncState == "pending_update" ||
+                    item.quickBooksCatalogSyncState == "needs_attention"
+            }
+            return item.requiresPricebookReview ||
             item.needsQuickBooksAttention ||
             (quickBooksConnected && item.quickBooksCatalogSyncState != "synced")
         }.count

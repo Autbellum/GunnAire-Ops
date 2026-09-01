@@ -220,6 +220,7 @@ private enum GunnAireUITestFixtures {
     private static let timeOffOperationID = UUID(uuidString: "A1000000-0000-4000-8000-000000000046")!
     private static let timeOffTechnicianID = UUID(uuidString: "A1000000-0000-4000-8000-000000000047")!
     private static let routeServiceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000048")!
+    private static let archivedCatalogItemID = UUID(uuidString: "A1000000-0000-4000-8000-000000000049")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -238,6 +239,7 @@ private enum GunnAireUITestFixtures {
         let isPricebookReviewFixture = arguments.contains("-uiTestSeedPricebookReview")
         let isCatalogReconciliationFixture = arguments.contains("-uiTestSeedCatalogReconciliation")
         let isCatalogMappingConflictFixture = arguments.contains("-uiTestSeedCatalogMappingConflict")
+        let isArchivedCatalogFixture = arguments.contains("-uiTestSeedArchivedCatalog")
         let isSyncRecoveryFixture = arguments.contains("-uiTestSeedSyncRecovery")
         let isServiceRequestFixture = arguments.contains("-uiTestSeedServiceRequest")
         let isProjectMilestoneFixture = arguments.contains("-uiTestSeedProjectMilestones")
@@ -461,6 +463,7 @@ private enum GunnAireUITestFixtures {
             item.id == duplicateCatalogMappingItemID ||
             item.id == servicePackageComponentItemID ||
             item.id == servicePackageItemID ||
+            item.id == archivedCatalogItemID ||
             item.name == "UI Test Added Repair" ||
             item.name == "Offline Taxable Capacitor" {
             context.delete(item)
@@ -517,6 +520,25 @@ private enum GunnAireUITestFixtures {
             )
             context.insert(vehicle)
             context.insert(event)
+        }
+        if isArchivedCatalogFixture {
+            context.insert(
+                Item(
+                    id: archivedCatalogItemID,
+                    quickBooksID: "QBO-UI-ARCHIVED-CATALOG",
+                    quickBooksSyncStatus: "synced",
+                    pricebookReviewStatus: .archived,
+                    pricebookCreatedByEmail: AppAccess.primaryAdminEmail,
+                    pricebookReviewedByEmail: AppAccess.primaryAdminEmail,
+                    pricebookReviewedAt: Date(),
+                    name: "Archived Blower Motor",
+                    itemType: .nonInventory,
+                    unitPrice: 875,
+                    purchaseCost: 310,
+                    itemDescription: "Historical blower motor replacement",
+                    sku: "MOTOR-ARCHIVED"
+                )
+            )
         }
         try context.save()
 

@@ -131,6 +131,7 @@ enum QuickBooksLocalSync {
             item.quickBooksSyncStatus = "synced"
             item.quickBooksSyncDetail = nil
             item.quickBooksLastSyncedAt = Date()
+            item.applyQuickBooksCatalogAvailability(quickBooksItem.Active)
             item.name = quickBooksItem.Name
             item.itemTypeRawValue = quickBooksItem.ItemType ?? item.itemTypeRawValue
             item.unitPrice = quickBooksItem.UnitPrice ?? item.unitPrice

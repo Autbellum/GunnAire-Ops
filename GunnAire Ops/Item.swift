@@ -18,6 +18,7 @@ enum CatalogItemType: String, Codable, CaseIterable, Identifiable {
 enum PricebookReviewStatus: String, Codable, CaseIterable {
     case approved
     case needsReview = "needs_review"
+    case archived
 }
 
 /// A reusable service package can either remain one customer-facing flat-rate
@@ -777,7 +778,7 @@ private struct CatalogDocumentSnapshotEnvelope: Codable {
 final class Item {
     var id: UUID = UUID()
     var quickBooksID: String?
-    /// `pending`, `pending_update`, `synced`, `needs_review`, or
+    /// `pending`, `pending_update`, `synced`, `needs_review`, `archived`, or
     /// `needs_attention`. This is intentionally stored with the pricebook item
     /// so offline creation and administrator-staged changes remain recoverable
     /// after the originating screen has been dismissed.
@@ -887,6 +888,17 @@ final class Item {
         pricebookReviewStatus == .needsReview
     }
 
+    /// Archived items remain available to historical documents, inventory
+    /// movements, purchasing evidence, and service history, but cannot be
+    /// selected for new customer work or recurring billing.
+    var isCatalogArchived: Bool {
+        pricebookReviewStatus == .archived
+    }
+
+    var isAvailableForNewWork: Bool {
+        !isCatalogArchived
+    }
+
     var assemblyDefinition: CatalogAssemblyDefinition? {
         get { CatalogAssemblyDefinition.decoded(from: flatRateAssemblyJSON) }
         set { flatRateAssemblyJSON = newValue?.encodedJSON }
@@ -913,6 +925,39 @@ final class Item {
             quickBooksSyncStatus = "pending"
             quickBooksSyncDetail = "Pricebook review approved; QuickBooks publication is pending."
         }
+    }
+
+    func archiveFromPricebook(by reviewerEmail: String?, at date: Date = Date()) {
+        pricebookReviewStatus = .archived
+        pricebookReviewedByEmail = Self.normalizedOptionalValue(reviewerEmail)
+        pricebookReviewedAt = date
+        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            quickBooksSyncStatus = "pending_update"
+            quickBooksSyncDetail = "Pricebook archive is saved locally and waiting for explicit QuickBooks publication."
+        } else {
+            quickBooksSyncStatus = "archived"
+            quickBooksSyncDetail = nil
+        }
+        timestamp = date
+    }
+
+    func restoreToPricebook(by reviewerEmail: String?, at date: Date = Date()) {
+        pricebookReviewStatus = .approved
+        pricebookReviewedByEmail = Self.normalizedOptionalValue(reviewerEmail)
+        pricebookReviewedAt = date
+        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            quickBooksSyncStatus = "pending_update"
+            quickBooksSyncDetail = "Pricebook restoration is saved locally and waiting for explicit QuickBooks publication."
+        } else {
+            quickBooksSyncStatus = "pending"
+            quickBooksSyncDetail = "Pricebook restoration is saved locally; QuickBooks publication is pending."
+        }
+        timestamp = date
+    }
+
+    func applyQuickBooksCatalogAvailability(_ active: Bool?) {
+        guard let active else { return }
+        pricebookReviewStatus = active ? .approved : .archived
     }
 
     var hasPendingQuickBooksCatalogUpdate: Bool {
@@ -954,6 +999,12 @@ final class Item {
         }
         if status == "needs_attention" {
             return "needs_attention"
+        }
+        if isCatalogArchived {
+            if hasQuickBooksID && status == "pending_update" {
+                return "pending_update"
+            }
+            return "archived"
         }
         if !hasQuickBooksID {
             switch status {
@@ -998,6 +1049,7 @@ final class Item {
         guard !normalizedName.isEmpty else { return nil }
         let candidates = items.filter {
             normalizedCatalogValue($0.quickBooksID ?? "").isEmpty &&
+            !$0.isCatalogArchived &&
             normalizedCatalogValue($0.name) == normalizedName &&
             normalizedCatalogValuesAreCompatible($0.sku, sku)
         }
