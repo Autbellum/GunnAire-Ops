@@ -51,6 +51,51 @@ final class GunnAire_OpsUITests: XCTestCase {
         return XCTWaiter.wait(for: [hittable], timeout: timeout) == .completed
     }
 
+    @MainActor
+    private func assertAllAdminWorkspacesRemainReachable(in app: XCUIApplication) {
+        let sidebar = app.collectionViews["Sidebar"]
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+
+        // A prior launch may restore the native List's scroll position. Start
+        // at the top so this top-to-bottom journey never confuses a matching
+        // detail-pane heading with its sidebar destination.
+        for _ in 0..<12 {
+            sidebar.swipeDown()
+        }
+
+        let destinations: [(sidebar: String, title: String)] = [
+            ("Command Center", "Command Center"),
+            ("Clock In/Out", "Time Clock"),
+            ("Schedule & Jobs", "Schedule"),
+            ("Customers", "Customers"),
+            ("Onsite Documentation", "Onsite Documentation"),
+            ("Mail", "Mail"),
+            ("Estimates", "Estimates"),
+            ("Invoices", "Invoices"),
+            ("Payments", "Payments"),
+            ("Reports", "Business Reports"),
+            ("Receipts & Bills", "Receipts & Bills"),
+            ("Sync & Integrations", "Sync & Integrations"),
+            ("QuickBooks Management", "QuickBooks Management")
+        ]
+
+        for destination in destinations {
+            let sidebarItem = sidebar.staticTexts[destination.sidebar]
+            for _ in 0..<24 where !(sidebarItem.exists && sidebarItem.isHittable) {
+                sidebar.swipeUp()
+            }
+            XCTAssertTrue(
+                waitForHittable(sidebarItem),
+                "Missing reachable sidebar item: \(destination.sidebar)"
+            )
+            sidebarItem.tap()
+            XCTAssertTrue(
+                app.navigationBars[destination.title].waitForExistence(timeout: 3),
+                "Failed to open \(destination.title) from the iPad sidebar"
+            )
+        }
+    }
+
     private func replaceText(in field: XCUIElement, with replacement: String) {
         field.tap()
         field.typeKey("a", modifierFlags: .command)
@@ -377,28 +422,24 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let destinations: [(sidebar: String, title: String)] = [
-            ("Clock In/Out", "Time Clock"),
-            ("Customers", "Customers"),
-            ("Mail", "Mail"),
-            ("Estimates", "Estimates"),
-            ("Invoices", "Invoices"),
-            ("Reports", "Business Reports"),
-            ("Receipts & Bills", "Receipts & Bills"),
-            ("Sync & Integrations", "Sync & Integrations"),
-            ("Onsite Documentation", "Onsite Documentation"),
-            ("QuickBooks Management", "QuickBooks Management")
-        ]
+        assertAllAdminWorkspacesRemainReachable(in: app)
+    }
 
-        for destination in destinations {
-            let sidebarItem = app.staticTexts[destination.sidebar]
-            XCTAssertTrue(sidebarItem.waitForExistence(timeout: 3), "Missing sidebar item: \(destination.sidebar)")
-            sidebarItem.tap()
-            XCTAssertTrue(
-                app.navigationBars[destination.title].waitForExistence(timeout: 3),
-                "Failed to open \(destination.title) from the iPad sidebar"
-            )
-        }
+    /// At the largest accessibility text size the role-aware sidebar is
+    /// intentionally scrollable. Every workspace must remain discoverable and
+    /// tappable without shrinking text or replacing the native navigation.
+    @MainActor
+    func testMaximumDynamicTypeKeepsEveryAdminWorkspaceReachable() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestMaximumDynamicType"
+        ]
+        app.launch()
+
+        assertAllAdminWorkspacesRemainReachable(in: app)
     }
 
     @MainActor

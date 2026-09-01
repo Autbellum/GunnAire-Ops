@@ -11,6 +11,7 @@ import CoreImage
 import Foundation
 import PDFKit
 import SwiftData
+import SwiftUI
 import Vision
 
 @MainActor
@@ -724,6 +725,22 @@ struct GunnAire_OpsTests {
                 email: "  ",
                 processArguments: ["GunnAire Ops"]
             ) == "Signed in"
+        )
+    }
+
+    @Test func maximumDynamicTypeFixtureIsDebugOnlyAndDeterministic() {
+        #expect(
+            GunnAireAccessibilityTextSizePolicy.forcedDynamicTypeSize(
+                processArguments: [
+                    "GunnAire Ops",
+                    GunnAireAccessibilityTextSizePolicy.uiTestMaximumDynamicTypeArgument
+                ]
+            ) == .accessibility5
+        )
+        #expect(
+            GunnAireAccessibilityTextSizePolicy.forcedDynamicTypeSize(
+                processArguments: ["GunnAire Ops"]
+            ) == nil
         )
     }
 

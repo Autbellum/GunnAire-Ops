@@ -35,6 +35,33 @@ enum GunnAireAccessibilityMotionPolicy {
     }
 }
 
+enum GunnAireAccessibilityTextSizePolicy {
+    static let uiTestMaximumDynamicTypeArgument = "-uiTestMaximumDynamicType"
+
+    static func forcedDynamicTypeSize(
+        processArguments: [String]
+    ) -> DynamicTypeSize? {
+        #if DEBUG
+        processArguments.contains(uiTestMaximumDynamicTypeArgument) ? .accessibility5 : nil
+        #else
+        nil
+        #endif
+    }
+}
+
+private struct GunnAireAccessibilityTextSizeModifier: ViewModifier {
+    let forcedSize: DynamicTypeSize?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let forcedSize {
+            content.dynamicTypeSize(forcedSize)
+        } else {
+            content
+        }
+    }
+}
+
 extension EnvironmentValues {
     var gunnaireReduceMotion: Bool {
         GunnAireAccessibilityMotionPolicy.reduceMotionEnabled(
@@ -68,6 +95,13 @@ struct AppRootView: View {
                 }
             }
         }
+        .modifier(
+            GunnAireAccessibilityTextSizeModifier(
+                forcedSize: GunnAireAccessibilityTextSizePolicy.forcedDynamicTypeSize(
+                    processArguments: ProcessInfo.processInfo.arguments
+                )
+            )
+        )
         .onAppear {
             applyUITestAuthenticationIfRequested()
             if !GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
