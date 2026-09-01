@@ -32,6 +32,11 @@ EXPECTED_ASSOCIATED_DOMAIN = "applinks:gunnaire.com"
 EXPECTED_BACKEND_URL = "https://gunnaire-api.onrender.com"
 EXPECTED_QBO_REDIRECT = "https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback"
 EXPECTED_QBO_CALLBACK_SCHEME = "gunnaireops"
+EXPECTED_APP_STORE_METADATA_PATH = Path("AppStoreAssets") / "AppStoreSubmission.json"
+EXPECTED_APP_STORE_LOCALE = "en-US"
+EXPECTED_APP_STORE_PRIVACY_PURPOSE = (
+    "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+)
 EXPECTED_CLOUDKIT_V13_ADDITIONS = {
     "CD_Estimate": {
         "CD_salesTaxAmount": ("DOUBLE", "QUERYABLE", "SORTABLE"),
@@ -475,6 +480,155 @@ def load_plist(path: Path) -> dict[str, Any]:
     return value
 
 
+def load_json_object(path: Path) -> dict[str, Any]:
+    with path.open(encoding="utf-8") as stream:
+        value = json.load(stream)
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} is not a JSON object")
+    return value
+
+
+def is_https_url(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("https://") and len(value) > 8
+
+
+def forbidden_secret_fields(value: Any, path: str = "") -> list[str]:
+    matches: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if any(
+                fragment in normalized_key
+                for fragment in ("password", "clientsecret", "privatekey", "apitoken", "accesstoken", "refreshtoken")
+            ):
+                matches.append(child_path)
+            matches.extend(forbidden_secret_fields(child, child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            matches.extend(forbidden_secret_fields(child, f"{path}[{index}]"))
+    return matches
+
+
+def check_app_store_metadata(root: Path, results: Results) -> None:
+    metadata_path = root / EXPECTED_APP_STORE_METADATA_PATH
+    privacy_path = root / "GunnAire Ops" / "PrivacyInfo.xcprivacy"
+    try:
+        metadata = load_json_object(metadata_path)
+        privacy_manifest = load_plist(privacy_path)
+    except (OSError, ValueError, json.JSONDecodeError, plistlib.InvalidFileException) as error:
+        results.fail(f"App Store metadata inspection failed: {error}")
+        return
+
+    app = metadata.get("app")
+    app_review = metadata.get("appReview")
+    privacy = metadata.get("privacy")
+    if not isinstance(app, dict) or not isinstance(app_review, dict) or not isinstance(privacy, dict):
+        results.fail("App Store metadata contract is missing app, appReview, or privacy objects")
+        return
+
+    results.require(
+        metadata.get("schemaVersion") == 1
+        and app.get("bundleID") == EXPECTED_BUNDLE_ID
+        and app.get("primaryLocale") == EXPECTED_APP_STORE_LOCALE,
+        "App Store metadata contract identifies the GunnAire bundle and primary locale",
+        "App Store metadata contract has an unexpected schema, bundle identifier, or locale",
+    )
+    results.require(
+        is_https_url(app.get("privacyPolicyURL"))
+        and is_https_url(app.get("supportURL"))
+        and is_https_url(app.get("marketingURL")),
+        "App Store privacy, support, and marketing URLs use HTTPS",
+        "App Store privacy, support, and marketing URLs must all be explicit HTTPS URLs",
+    )
+    forbidden_fields = forbidden_secret_fields(metadata)
+    results.require(
+        not forbidden_fields
+        and app_review.get("requiresSignIn") is True
+        and app_review.get("credentialStorage") == "App Store Connect only",
+        "App Review sign-in is declared without committing credentials or secrets",
+        "App Review metadata must require sign-in, keep credentials only in App Store Connect, and contain no secret fields: "
+        f"{forbidden_fields}",
+    )
+
+    manifest_rows = privacy_manifest.get("NSPrivacyCollectedDataTypes", [])
+    contract_rows = privacy.get("dataTypes", [])
+    if not isinstance(manifest_rows, list) or not isinstance(contract_rows, list):
+        results.fail("Privacy data types must be arrays in both source manifests")
+        return
+
+    manifest_by_type: dict[str, dict[str, Any]] = {}
+    contract_by_type: dict[str, dict[str, Any]] = {}
+    duplicate_types: set[str] = set()
+    malformed_rows = False
+    for row in manifest_rows:
+        if not isinstance(row, dict):
+            malformed_rows = True
+            continue
+        data_type = row.get("NSPrivacyCollectedDataType")
+        if not isinstance(data_type, str) or not data_type:
+            malformed_rows = True
+            continue
+        if data_type in manifest_by_type:
+            duplicate_types.add(data_type)
+        manifest_by_type[data_type] = row
+    for row in contract_rows:
+        if not isinstance(row, dict):
+            malformed_rows = True
+            continue
+        data_type = row.get("manifestDataType")
+        if not isinstance(data_type, str) or not data_type:
+            malformed_rows = True
+            continue
+        if data_type in contract_by_type:
+            duplicate_types.add(data_type)
+        contract_by_type[data_type] = row
+
+    results.require(
+        not malformed_rows and not duplicate_types,
+        "App Store privacy contract contains unique, well-formed data-type answers",
+        f"App Store privacy contract contains malformed or duplicate data types: {sorted(duplicate_types)}",
+    )
+    results.require(
+        set(contract_by_type) == set(manifest_by_type),
+        "App Store privacy answers exactly cover every source privacy-manifest data type",
+        "App Store privacy answers and PrivacyInfo.xcprivacy differ: "
+        f"contract-only={sorted(set(contract_by_type) - set(manifest_by_type))}, "
+        f"manifest-only={sorted(set(manifest_by_type) - set(contract_by_type))}",
+    )
+
+    mismatches: list[str] = []
+    for data_type in sorted(set(contract_by_type) & set(manifest_by_type)):
+        contract_row = contract_by_type[data_type]
+        manifest_row = manifest_by_type[data_type]
+        contract_purposes = contract_row.get("purposes")
+        manifest_purposes = manifest_row.get("NSPrivacyCollectedDataTypePurposes")
+        if (
+            contract_row.get("linkedToUser")
+            != manifest_row.get("NSPrivacyCollectedDataTypeLinked")
+            or contract_row.get("tracking")
+            != manifest_row.get("NSPrivacyCollectedDataTypeTracking")
+            or not isinstance(contract_purposes, list)
+            or not isinstance(manifest_purposes, list)
+            or set(contract_purposes) != set(manifest_purposes)
+            or set(contract_purposes) != {EXPECTED_APP_STORE_PRIVACY_PURPOSE}
+            or not str(contract_row.get("category", "")).strip()
+            or not str(contract_row.get("displayName", "")).strip()
+            or not str(contract_row.get("usage", "")).strip()
+        ):
+            mismatches.append(data_type)
+    results.require(
+        not mismatches,
+        "App Store privacy linkage, tracking, purpose, labels, and usage explanations match the source manifest",
+        f"App Store privacy answers do not match PrivacyInfo.xcprivacy for: {mismatches}",
+    )
+    results.require(
+        privacy.get("tracking") is privacy_manifest.get("NSPrivacyTracking") is False,
+        "App Store metadata and source privacy manifest both declare no tracking",
+        "App Store metadata and source privacy manifest disagree about tracking",
+    )
+
+
 def configured_url_schemes(info: dict[str, Any]) -> set[str]:
     schemes: set[str] = set()
     for url_type in info.get("CFBundleURLTypes", []):
@@ -679,6 +833,8 @@ def check_source(root: Path, results: Results) -> tuple[str, str, str]:
         )
     except (OSError, ValueError) as error:
         results.fail(f"Source entitlement inspection failed: {error}")
+
+    check_app_store_metadata(root, results)
 
     return marketing_version, build_version, backend_version
 
