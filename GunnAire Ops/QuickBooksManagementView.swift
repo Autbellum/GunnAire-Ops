@@ -797,6 +797,28 @@ enum QuickBooksCatalogLocalCreationPolicy {
     }
 }
 
+enum QuickBooksTrackedPaymentPolicy {
+    static func linkedLocalInvoice(
+        for quickBooksInvoice: QuickBooksInvoice,
+        in localInvoices: [Invoice]
+    ) -> Invoice? {
+        let quickBooksID = normalized(quickBooksInvoice.Id)
+        let documentNumber = normalized(quickBooksInvoice.DocNumber)
+        let matches = localInvoices.filter { localInvoice in
+            let localQuickBooksID = normalized(localInvoice.quickBooksID)
+            return !localQuickBooksID.isEmpty &&
+                (localQuickBooksID == quickBooksID ||
+                 (!documentNumber.isEmpty && localQuickBooksID == documentNumber))
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+
+    private static func normalized(_ value: String?) -> String {
+        (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
 struct QuickBooksManagementView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var quickBooksDataAPI = QuickBooksDataAPI.shared
@@ -847,7 +869,6 @@ struct QuickBooksManagementView: View {
     @State private var syncResourceStatuses: [QuickBooksSyncResourceStatus] = Self.defaultSyncResourceStatuses
     @State private var lastSuccessfulSyncAt: Date? = UserDefaults.standard.object(forKey: "QuickBooksLastSuccessfulSyncAt") as? Date
     @State private var lastSyncStartedAt: Date?
-    @State private var activePaymentInvoiceID: String?
     @State private var activeEmailEstimateID: String?
     @State private var activeEmailInvoiceID: String?
     @State private var activeLocalEstimatePublicationID: UUID?
@@ -1040,7 +1061,13 @@ struct QuickBooksManagementView: View {
     }
 
     private var collectibleQuickBooksInvoices: [QuickBooksInvoice] {
-        invoices.filter { outstandingQuickBooksBalance(for: $0) > 0 }
+        invoices.filter { quickBooksInvoice in
+            guard outstandingQuickBooksBalance(for: quickBooksInvoice) > 0,
+                  let localInvoice = localInvoice(for: quickBooksInvoice) else {
+                return false
+            }
+            return localOutstandingBalance(for: localInvoice) > 0
+        }
     }
 
     private var collectibleLocalInvoices: [Invoice] {
@@ -1979,14 +2006,6 @@ struct QuickBooksManagementView: View {
                                         }
 
                                         HStack {
-                                            Button(activePaymentInvoiceID == invoice.Id ? "Processing..." : "Record QB Payment") {
-                                                takeLiveCustomerPayment(for: invoice)
-                                            }
-                                            .buttonStyle(.borderedProminent)
-                                            .tint(Color.brandGold)
-                                            .foregroundStyle(Color.primaryBlack)
-                                            .disabled(activePaymentInvoiceID != nil || outstandingQuickBooksBalance(for: invoice) <= 0)
-
                                             if let invoiceURL = liveInvoiceURL(for: invoice) {
                                                 Link("Open in QuickBooks", destination: invoiceURL)
                                                     .font(.caption)
@@ -3462,31 +3481,71 @@ struct QuickBooksManagementView: View {
     }
 
     private func createPayment(for invoice: QuickBooksInvoice, amount: Double, note: String?, paymentMethodRef: QuickBooksReference?) {
-        let payload = QuickBooksPaymentCreate(
-            CustomerRef: invoice.CustomerRef,
-            TotalAmt: amount,
-            PrivateNote: note,
-            PaymentRefNum: nil,
-            Line: [
-                QuickBooksPaymentLine(
-                    Amount: amount,
-                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoice.Id, TxnType: "Invoice")]
-                )
-            ],
-            PaymentMethodRef: paymentMethodRef,
-            CreditCardPayment: nil
+        guard let localInvoice = localInvoice(for: invoice) else {
+            actionMessage = "This QuickBooks invoice is not linked to a GunnAire invoice. Open it in QuickBooks instead of creating an untracked payment here."
+            return
+        }
+        guard localInvoice.isReadyForPaymentCollection else {
+            actionMessage = localInvoice.paymentCollectionBlockedMessage ?? "This invoice is not ready for payment collection."
+            return
+        }
+        let availableBalance = min(
+            outstandingQuickBooksBalance(for: invoice),
+            localOutstandingBalance(for: localInvoice)
         )
+        guard amount > 0, amount <= availableBalance + 0.005 else {
+            let balanceLabel = availableBalance.formatted(.currency(code: "USD"))
+            actionMessage = "Enter a payment no greater than the open balance of \(balanceLabel)."
+            return
+        }
 
-        performAction(message: "Recording payment in QuickBooks...") {
-            liveAPI.createPayment(payload) { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success(let payment):
-                        actionMessage = "Payment created: \(payment.Id)"
+        let methodName = paymentMethodRef?.displayName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let recordedMethod = methodName?.isEmpty == false ? methodName : nil
+        let localPayment = Payment(
+            invoice: localInvoice,
+            quickBooksAccountingSyncStatus: "pending",
+            quickBooksAccountingSyncDetail: "Saved locally; QuickBooks accounting publication is pending.",
+            processorSyncStatus: "recorded",
+            amount: amount,
+            method: recordedMethod ?? "manual payment",
+            notes: note
+        )
+        modelContext.insert(localPayment)
+        localInvoice.applyLocalPaymentAmount(amount)
+        localInvoice.status = availableBalance - amount <= 0.005 ? "paid" : "partial"
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.delete(localPayment)
+            actionMessage = "The payment could not be saved locally, so no QuickBooks request was sent: \(error.localizedDescription)"
+            return
+        }
+
+        performAction(message: "Payment saved locally. Publishing it to QuickBooks...") {
+            Task {
+                do {
+                    let quickBooksPayment = try await QuickBooksPaymentsService.shared
+                        .syncManualAccountingPayment(for: localPayment)
+                    await MainActor.run {
+                        localPayment.quickBooksID = quickBooksPayment.Id
+                        localPayment.quickBooksAccountingSyncStatus = "synced"
+                        localPayment.quickBooksAccountingSyncDetail = nil
+                        do {
+                            try modelContext.save()
+                            actionMessage = "Payment saved locally and linked to QuickBooks: \(quickBooksPayment.Id)."
+                        } catch {
+                            actionMessage = "QuickBooks accepted payment \(quickBooksPayment.Id), but its local link could not be saved. Retry the same payment from Payments; the recovery marker prevents another QuickBooks payment."
+                        }
                         syncAllQuickBooksData()
-                    case .failure(let error):
-                        actionMessage = "Payment creation failed: \(error.localizedDescription)"
+                    }
+                } catch {
+                    await MainActor.run {
+                        localPayment.quickBooksAccountingSyncStatus = "needs_attention"
+                        localPayment.quickBooksAccountingSyncDetail = error.localizedDescription
+                        try? modelContext.save()
                         isLoading = false
+                        actionMessage = "Payment is saved locally, but QuickBooks publication needs attention: \(error.localizedDescription)"
                     }
                 }
             }
@@ -3537,43 +3596,6 @@ struct QuickBooksManagementView: View {
         }
     }
 
-    private func takeLiveCustomerPayment(for invoice: QuickBooksInvoice) {
-        let amountDue = outstandingQuickBooksBalance(for: invoice)
-        guard amountDue > 0 else {
-            actionMessage = "This QuickBooks invoice is already paid."
-            return
-        }
-        activePaymentInvoiceID = invoice.Id
-        let payload = QuickBooksPaymentCreate(
-            CustomerRef: invoice.CustomerRef,
-            TotalAmt: amountDue,
-            PrivateNote: "Created from GunnAire Ops for invoice \(invoice.DocNumber ?? invoice.Id)",
-            PaymentRefNum: nil,
-            Line: [
-                QuickBooksPaymentLine(
-                    Amount: amountDue,
-                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoice.Id, TxnType: "Invoice")]
-                )
-            ],
-            PaymentMethodRef: nil,
-            CreditCardPayment: nil
-        )
-
-        liveAPI.createPayment(payload) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let payment):
-                    actionMessage = "Payment created: \(payment.Id) for invoice \(invoice.DocNumber ?? invoice.Id)"
-                    syncAllQuickBooksData()
-                case .failure(let error):
-                    actionMessage = "Payment failed for invoice \(invoice.DocNumber ?? invoice.Id): \(error.localizedDescription)"
-                    isLoading = false
-                }
-                activePaymentInvoiceID = nil
-            }
-        }
-    }
-
     private func processCardCharge(for invoice: Invoice, amount: Double, cardInput: QuickBooksPaymentsCardInput, note: String?) {
         guard quickBooksPaymentsEnabled else {
             actionMessage = quickBooksPaymentsUnavailableMessage
@@ -3583,7 +3605,9 @@ struct QuickBooksManagementView: View {
         performAction(message: "Processing QuickBooks card charge...") {
             Task {
                 do {
+                    let localPaymentID = UUID()
                     let result = try await QuickBooksPaymentsService.shared.processCardPayment(
+                        localPaymentID: localPaymentID,
                         invoice: invoice,
                         amount: amount,
                         cardInput: cardInput,
@@ -3594,6 +3618,7 @@ struct QuickBooksManagementView: View {
                     await MainActor.run {
                         modelContext.insert(
                             Payment(
+                                id: localPaymentID,
                                 invoice: invoice,
                                 quickBooksID: result.accountingPayment?.Id,
                                 quickBooksChargeID: result.charge.id,
@@ -4140,10 +4165,10 @@ struct QuickBooksManagementView: View {
     }
 
     private func localInvoice(for quickBooksInvoice: QuickBooksInvoice) -> Invoice? {
-        localInvoices.first {
-            ($0.quickBooksID == quickBooksInvoice.Id) ||
-            (($0.quickBooksID == quickBooksInvoice.DocNumber) && !(quickBooksInvoice.DocNumber ?? "").isEmpty)
-        }
+        QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
+            for: quickBooksInvoice,
+            in: localInvoices
+        )
     }
 
     private func retryLocalEstimatePublication(_ estimate: Estimate) {
@@ -5291,6 +5316,21 @@ private struct QuickBooksPaymentComposeView: View {
         return invoices.first
     }
 
+    private var enteredAmount: Double? {
+        Double(amountText)
+    }
+
+    private var selectedInvoiceBalance: Double {
+        max(selectedInvoice?.Balance ?? selectedInvoice?.TotalAmt ?? 0, 0)
+    }
+
+    private var canCreate: Bool {
+        guard selectedInvoice != nil,
+              let enteredAmount,
+              enteredAmount > 0 else { return false }
+        return enteredAmount <= selectedInvoiceBalance + 0.005
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -5317,6 +5357,11 @@ private struct QuickBooksPaymentComposeView: View {
 
                     TextField("Amount", text: $amountText)
                         .keyboardType(.decimalPad)
+                    if let enteredAmount, enteredAmount > selectedInvoiceBalance + 0.005 {
+                        Text("Amount exceeds the open invoice balance of \(selectedInvoiceBalance.formatted(.currency(code: "USD"))).")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
                     TextField("Notes", text: $note)
                 }
             }
@@ -5332,7 +5377,7 @@ private struct QuickBooksPaymentComposeView: View {
                         onAdd(selectedInvoice, amount, note.isEmpty ? nil : note, paymentMethodRef)
                         dismiss()
                     }
-                    .disabled(selectedInvoice == nil || Double(amountText) == nil)
+                    .disabled(!canCreate)
                 }
             }
             .onAppear {

@@ -1393,10 +1393,27 @@ final class QuickBooksDataAPI: ObservableObject {
         )
     }
 
-    func createPayment(_ payment: QuickBooksPaymentCreate, completion: @escaping (Result<QuickBooksPayment, Error>) -> Void) {
+    func createPayment(
+        _ payment: QuickBooksPaymentCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksPayment, Error>) -> Void
+    ) {
         let body = try? JSONEncoder().encode(payment)
+        let normalizedRequestID = requestID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let queryItems = normalizedRequestID?.isEmpty == false
+            ? [URLQueryItem(name: "requestid", value: normalizedRequestID)]
+            : []
         performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "payment", method: "POST", body: body, contentType: "application/json") },
+            {
+                self.authorizedRequest(
+                    path: "payment",
+                    queryItems: queryItems,
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
             decode: QuickBooksPaymentResponse.self
         ) { result in
             completion(result.flatMap {
@@ -1406,6 +1423,53 @@ final class QuickBooksDataAPI: ObservableObject {
                     entity: "payment"
                 )
             })
+        }
+    }
+
+    /// Requires a complete accounting-Payment snapshot before create. The
+    /// local Payment UUID is embedded as a non-PII marker and reused as the
+    /// Intuit request ID so an accepted response that was lost can be linked
+    /// on retry instead of creating a second payment against the invoice.
+    func recoverOrCreatePayment(
+        _ draft: QuickBooksAccountingPaymentDraft,
+        remotePayments: [QuickBooksPayment]? = nil,
+        completion: @escaping (Result<QuickBooksPayment, Error>) -> Void
+    ) {
+        let recoverOrCreate: ([QuickBooksPayment]) -> Void = { payments in
+            do {
+                if let existing = try QuickBooksAccountingPaymentCreateOperation.matchingRemotePayment(
+                    for: draft,
+                    in: payments
+                ) {
+                    completion(.success(existing))
+                    return
+                }
+                let payload = try QuickBooksAccountingPaymentCreateOperation.payload(for: draft)
+                self.createPayment(
+                    payload,
+                    requestID: QuickBooksAccountingPaymentCreateOperation.requestID(
+                        for: draft.localPaymentID
+                    ),
+                    completion: completion
+                )
+            } catch {
+                completion(.failure(error))
+            }
+        }
+
+        if let remotePayments {
+            recoverOrCreate(remotePayments)
+        } else {
+            fetchPayments { result in
+                switch result {
+                case .success(let payments):
+                    recoverOrCreate(payments)
+                case .failure(let error):
+                    // Never create after an incomplete or failed read; doing
+                    // so would reopen the duplicate-payment window.
+                    completion(.failure(error))
+                }
+            }
         }
     }
 
@@ -3571,6 +3635,162 @@ struct QuickBooksPaymentCreate: Codable {
     let Line: [QuickBooksPaymentLine]?
     let PaymentMethodRef: QuickBooksReference?
     let CreditCardPayment: QuickBooksCreditCardPayment?
+}
+
+struct QuickBooksAccountingPaymentDraft {
+    let localPaymentID: UUID
+    let payment: QuickBooksPaymentCreate
+}
+
+enum QuickBooksAccountingPaymentCreateOperationError: LocalizedError, Equatable {
+    case invalidCustomer
+    case invalidInvoice
+    case invalidAmount
+    case conflictingRemotePayment
+    case ambiguousRemotePayment
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidCustomer:
+            "The local payment needs a linked QuickBooks customer before publication. No QuickBooks payment was created."
+        case .invalidInvoice:
+            "The local payment must apply to exactly one linked QuickBooks invoice. No QuickBooks payment was created."
+        case .invalidAmount:
+            "The local payment amount must be greater than zero before publication. No QuickBooks payment was created."
+        case .conflictingRemotePayment:
+            "QuickBooks already has this GunnAire payment identity with different customer, invoice, or amount evidence. Reconcile it before retrying; no payment was created."
+        case .ambiguousRemotePayment:
+            "More than one QuickBooks payment carries this GunnAire payment identity. Reconcile the duplicates before retrying; no payment was created."
+        }
+    }
+}
+
+/// One durable local Payment owns one QBO accounting-Payment operation across
+/// manual collection, processor follow-up, and retry. A marker in PrivateNote
+/// makes an accepted-but-unacknowledged response recoverable after a complete
+/// paginated read; conflicting or duplicated marker evidence always fails
+/// closed rather than issuing another financial write.
+enum QuickBooksAccountingPaymentCreateOperation {
+    private static let markerPrefix = "GunnAire payment ID: "
+    private static let privateNoteLimit = 4_000
+
+    static func requestID(for localPaymentID: UUID) -> String {
+        "ga-payment-\(localPaymentID.uuidString.lowercased())"
+    }
+
+    static func marker(for localPaymentID: UUID) -> String {
+        "\(markerPrefix)\(localPaymentID.uuidString.lowercased())"
+    }
+
+    static func payload(for draft: QuickBooksAccountingPaymentDraft) throws -> QuickBooksPaymentCreate {
+        _ = try expectedEvidence(for: draft.payment)
+        let marker = marker(for: draft.localPaymentID)
+        let existingNote = trimmed(draft.payment.PrivateNote)
+        let note: String
+        if existingNote?
+            .split(whereSeparator: \.isNewline)
+            .contains(where: { normalizedText(String($0)) == normalizedText(marker) }) == true {
+            note = existingNote ?? marker
+        } else if let existingNote {
+            let allowedExistingCount = max(privateNoteLimit - marker.count - 1, 0)
+            note = "\(String(existingNote.prefix(allowedExistingCount)))\n\(marker)"
+        } else {
+            note = marker
+        }
+
+        return QuickBooksPaymentCreate(
+            CustomerRef: draft.payment.CustomerRef,
+            TotalAmt: draft.payment.TotalAmt,
+            PrivateNote: note,
+            PaymentRefNum: draft.payment.PaymentRefNum,
+            Line: draft.payment.Line,
+            PaymentMethodRef: draft.payment.PaymentMethodRef,
+            CreditCardPayment: draft.payment.CreditCardPayment
+        )
+    }
+
+    static func matchingRemotePayment(
+        for draft: QuickBooksAccountingPaymentDraft,
+        in remotePayments: [QuickBooksPayment]
+    ) throws -> QuickBooksPayment? {
+        let expected = try expectedEvidence(for: draft.payment)
+        let expectedMarker = normalizedText(marker(for: draft.localPaymentID))
+        let candidates = remotePayments.filter { payment in
+            markerLines(in: payment.PrivateNote).contains(expectedMarker)
+        }
+
+        guard !candidates.isEmpty else { return nil }
+        guard candidates.count == 1, let candidate = candidates.first else {
+            throw QuickBooksAccountingPaymentCreateOperationError.ambiguousRemotePayment
+        }
+
+        let remoteCustomerID = normalizedIdentifier(candidate.CustomerRef?.value)
+        let remoteInvoiceIDs = invoiceIDs(in: candidate.Line)
+        let remoteAmountCents = cents(candidate.TotalAmt)
+        guard remoteCustomerID == expected.customerID,
+              remoteInvoiceIDs == Set([expected.invoiceID]),
+              remoteAmountCents == expected.amountCents else {
+            throw QuickBooksAccountingPaymentCreateOperationError.conflictingRemotePayment
+        }
+        return candidate
+    }
+
+    private static func expectedEvidence(
+        for payment: QuickBooksPaymentCreate
+    ) throws -> (customerID: String, invoiceID: String, amountCents: Int64) {
+        let customerID = normalizedIdentifier(payment.CustomerRef?.value)
+        guard !customerID.isEmpty else {
+            throw QuickBooksAccountingPaymentCreateOperationError.invalidCustomer
+        }
+        let linkedInvoiceIDs = invoiceIDs(in: payment.Line)
+        guard linkedInvoiceIDs.count == 1, let invoiceID = linkedInvoiceIDs.first else {
+            throw QuickBooksAccountingPaymentCreateOperationError.invalidInvoice
+        }
+        guard let amountCents = cents(payment.TotalAmt), amountCents > 0 else {
+            throw QuickBooksAccountingPaymentCreateOperationError.invalidAmount
+        }
+        return (customerID, invoiceID, amountCents)
+    }
+
+    private static func markerLines(in note: String?) -> Set<String> {
+        Set(
+            (note ?? "")
+                .split(whereSeparator: \.isNewline)
+                .map { normalizedText(String($0)) }
+                .filter { $0.hasPrefix(normalizedText(markerPrefix)) }
+        )
+    }
+
+    private static func invoiceIDs(in lines: [QuickBooksPaymentLine]?) -> Set<String> {
+        Set(
+            (lines ?? [])
+                .flatMap { $0.LinkedTxn ?? [] }
+                .filter { normalizedText($0.TxnType) == "invoice" }
+                .map { normalizedIdentifier($0.TxnId) }
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    private static func cents(_ amount: Double) -> Int64? {
+        guard amount.isFinite else { return nil }
+        return Int64((amount * 100).rounded())
+    }
+
+    private static func normalizedIdentifier(_ value: String?) -> String {
+        (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func normalizedText(_ value: String?) -> String {
+        (value ?? "")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased()
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        let result = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result?.isEmpty == false ? result : nil
+    }
 }
 
 struct QuickBooksPaymentResponse: Codable {

@@ -4949,10 +4949,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["No field-created catalog items need review."].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Customers"].exists)
         XCTAssertTrue(app.staticTexts["Product Catalog"].exists)
+        XCTAssertFalse(app.buttons["Record QB Payment"].exists)
         XCTAssertFalse(app.staticTexts["Sync Health"].exists)
 
         workspacePicker.buttons["Payments"].tap()
         XCTAssertTrue(workspacePicker.buttons["Payments"].isSelected)
+        XCTAssertTrue(app.buttons["Record Payment"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["QuickBooksLinkedPaymentMethods"].exists)
     }
 

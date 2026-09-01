@@ -69,6 +69,7 @@ final class QuickBooksPaymentsService {
     }
 
     func processCardPayment(
+        localPaymentID: UUID,
         invoice: Invoice,
         amount: Double,
         cardInput: QuickBooksPaymentsCardInput,
@@ -80,7 +81,7 @@ final class QuickBooksPaymentsService {
             catalogItems: catalogItems
         )
 
-        let clientTransactionID = Self.chargeClientTransactionID(for: invoice, amount: amount)
+        let clientTransactionID = Self.chargeClientTransactionID(for: localPaymentID)
         let token = try await createCardToken(cardInput)
         let authorized = try await createAuthorization(
             amount: amount,
@@ -97,6 +98,7 @@ final class QuickBooksPaymentsService {
         let charge = authorized
 
         let accountingPayment = await syncAccountingPayment(
+            localPaymentID: localPaymentID,
             invoice: invoice,
             customerQBID: customerQBID,
             amount: amount,
@@ -119,6 +121,7 @@ final class QuickBooksPaymentsService {
     }
 
     func processBankPayment(
+        localPaymentID: UUID,
         invoice: Invoice,
         amount: Double,
         bankInput: QuickBooksPaymentsBankAccountInput,
@@ -130,7 +133,7 @@ final class QuickBooksPaymentsService {
             catalogItems: catalogItems
         )
 
-        let clientTransactionID = Self.chargeClientTransactionID(for: invoice, amount: amount)
+        let clientTransactionID = Self.chargeClientTransactionID(for: localPaymentID)
         let token = try await createBankAccountToken(bankInput)
         let charge = try await createBankCharge(
             amount: amount,
@@ -147,6 +150,7 @@ final class QuickBooksPaymentsService {
         )
 
         let accountingPayment = await syncAccountingPayment(
+            localPaymentID: localPaymentID,
             invoice: invoice,
             customerQBID: customerQBID,
             amount: amount,
@@ -236,11 +240,10 @@ final class QuickBooksPaymentsService {
             paymentKind: paymentKind(for: payment)
         )
 
-        return try await withCheckedThrowingContinuation { continuation in
-            api.createPayment(payload) { result in
-                continuation.resume(with: result)
-            }
-        }
+        return try await recoverOrCreateAccountingPayment(
+            localPaymentID: payment.id,
+            payload: payload
+        )
     }
 
     func syncManualAccountingPayment(for payment: Payment) async throws -> QuickBooksPayment {
@@ -266,11 +269,10 @@ final class QuickBooksPaymentsService {
             paymentKind: .manual(methodName: payment.method)
         )
 
-        return try await withCheckedThrowingContinuation { continuation in
-            api.createPayment(payload) { result in
-                continuation.resume(with: result)
-            }
-        }
+        return try await recoverOrCreateAccountingPayment(
+            localPaymentID: payment.id,
+            payload: payload
+        )
     }
 
     func retryRefundReceiptSync(for refundPayment: Payment) async throws -> QuickBooksRefundReceipt {
@@ -629,6 +631,7 @@ final class QuickBooksPaymentsService {
     }
 
     private func syncAccountingPayment(
+        localPaymentID: UUID,
         invoice: Invoice,
         customerQBID: String,
         amount: Double,
@@ -651,11 +654,10 @@ final class QuickBooksPaymentsService {
                 clientTransactionID: clientTransactionID,
                 paymentKind: paymentKind
             )
-            let payment = try await withCheckedThrowingContinuation { continuation in
-                api.createPayment(payload) { result in
-                    continuation.resume(with: result)
-                }
-            }
+            let payment = try await recoverOrCreateAccountingPayment(
+                localPaymentID: localPaymentID,
+                payload: payload
+            )
             return (payment, nil)
         } catch {
             return (nil, error.localizedDescription)
@@ -732,9 +734,8 @@ final class QuickBooksPaymentsService {
         return String(compact.prefix(21))
     }
 
-    private static func chargeClientTransactionID(for invoice: Invoice, amount: Double) -> String {
-        let cents = Int((amount * 100).rounded())
-        return "ga-charge-\(invoice.id.uuidString.lowercased())-\(cents)-\(UUID().uuidString.lowercased())"
+    private static func chargeClientTransactionID(for localPaymentID: UUID) -> String {
+        "ga-charge-\(localPaymentID.uuidString.lowercased())"
     }
 
     private static func refundClientTransactionID(for payment: Payment, amount: Double) -> String {
@@ -794,6 +795,21 @@ final class QuickBooksPaymentsService {
             PaymentMethodRef: paymentMethodRef,
             CreditCardPayment: creditCardPayment
         )
+    }
+
+    private func recoverOrCreateAccountingPayment(
+        localPaymentID: UUID,
+        payload: QuickBooksPaymentCreate
+    ) async throws -> QuickBooksPayment {
+        let draft = QuickBooksAccountingPaymentDraft(
+            localPaymentID: localPaymentID,
+            payment: payload
+        )
+        return try await withCheckedThrowingContinuation { continuation in
+            api.recoverOrCreatePayment(draft) { result in
+                continuation.resume(with: result)
+            }
+        }
     }
 
     private func resolvePaymentMethodReference(for kind: AccountingPaymentKind) async -> QuickBooksReference? {

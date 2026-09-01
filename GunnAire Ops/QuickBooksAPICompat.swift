@@ -141,8 +141,24 @@ final class QuickBooksAPI: ObservableObject {
         data.fetchPayments(completion: completion)
     }
     
-    func createPayment(_ payment: QuickBooksPaymentCreate, completion: @escaping (Result<QuickBooksPayment, Error>) -> Void) {
-        data.createPayment(payment, completion: completion)
+    func createPayment(
+        _ payment: QuickBooksPaymentCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksPayment, Error>) -> Void
+    ) {
+        data.createPayment(payment, requestID: requestID, completion: completion)
+    }
+
+    func recoverOrCreatePayment(
+        _ draft: QuickBooksAccountingPaymentDraft,
+        remotePayments: [QuickBooksPayment]? = nil,
+        completion: @escaping (Result<QuickBooksPayment, Error>) -> Void
+    ) {
+        data.recoverOrCreatePayment(
+            draft,
+            remotePayments: remotePayments,
+            completion: completion
+        )
     }
 
     func fetchSalesReceipts(completion: @escaping (Result<[QuickBooksSalesReceipt], Error>) -> Void) {

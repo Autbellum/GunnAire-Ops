@@ -9682,7 +9682,9 @@ private struct RecordInvoicePaymentView: View {
                 defer { isProcessingQuickBooksPayment = false }
 
                 do {
+                    let localPaymentID = UUID()
                     let result = try await QuickBooksPaymentsService.shared.processCardPayment(
+                        localPaymentID: localPaymentID,
                         invoice: invoice,
                         amount: paidAmount,
                         cardInput: QuickBooksPaymentsCardInput(
@@ -9711,6 +9713,7 @@ private struct RecordInvoicePaymentView: View {
                     }
 
                     let payment = Payment(
+                        id: localPaymentID,
                         invoice: invoice,
                         quickBooksID: result.accountingPayment?.Id,
                         quickBooksChargeID: result.charge.id,
@@ -9739,7 +9742,9 @@ private struct RecordInvoicePaymentView: View {
                 defer { isProcessingQuickBooksPayment = false }
 
                 do {
+                    let localPaymentID = UUID()
                     let result = try await QuickBooksPaymentsService.shared.processBankPayment(
+                        localPaymentID: localPaymentID,
                         invoice: invoice,
                         amount: paidAmount,
                         bankInput: QuickBooksPaymentsBankAccountInput(
@@ -9755,6 +9760,7 @@ private struct RecordInvoicePaymentView: View {
                     )
 
                     let payment = Payment(
+                        id: localPaymentID,
                         invoice: invoice,
                         quickBooksID: result.accountingPayment?.Id,
                         quickBooksChargeID: result.charge.id,

@@ -23923,6 +23923,172 @@ struct GunnAire_OpsTests {
         }
     }
 
+    @Test func quickBooksAccountingPaymentCreationIsIdempotentAndConflictAware() throws {
+        let localPaymentID = UUID(uuidString: "A9000000-0000-4000-8000-000000000001")!
+        let basePayment = QuickBooksPaymentCreate(
+            CustomerRef: QuickBooksReference(value: "customer-22", name: "Payment Customer"),
+            TotalAmt: 125,
+            PrivateNote: "Collected in the field",
+            PaymentRefNum: "AUTH-125",
+            Line: [
+                QuickBooksPaymentLine(
+                    Amount: 125,
+                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: "invoice-81", TxnType: "Invoice")]
+                )
+            ],
+            PaymentMethodRef: QuickBooksReference(value: "method-4", name: "QuickBooks Card"),
+            CreditCardPayment: nil
+        )
+        let draft = QuickBooksAccountingPaymentDraft(
+            localPaymentID: localPaymentID,
+            payment: basePayment
+        )
+
+        let requestID = QuickBooksAccountingPaymentCreateOperation.requestID(for: localPaymentID)
+        #expect(requestID == "ga-payment-a9000000-0000-4000-8000-000000000001")
+        #expect(requestID.count == 47)
+
+        let payload = try QuickBooksAccountingPaymentCreateOperation.payload(for: draft)
+        let marker = QuickBooksAccountingPaymentCreateOperation.marker(for: localPaymentID)
+        #expect(payload.PrivateNote == "Collected in the field\n\(marker)")
+        #expect(payload.CustomerRef?.value == "customer-22")
+        #expect(payload.Line?.first?.LinkedTxn?.first?.TxnId == "invoice-81")
+
+        let matchingRemote = try JSONDecoder().decode(
+            QuickBooksPayment.self,
+            from: Data("""
+            {
+              "Id": "payment-900",
+              "CustomerRef": {"value": "CUSTOMER-22", "name": "Payment Customer"},
+              "TotalAmt": "125.00",
+              "PrivateNote": "Collected in the field\\n\(marker)",
+              "PaymentRefNum": "AUTH-125",
+              "Line": [{"Amount": 125, "LinkedTxn": [{"TxnId": "INVOICE-81", "TxnType": "Invoice"}]}]
+            }
+            """.utf8)
+        )
+        #expect(
+            try QuickBooksAccountingPaymentCreateOperation.matchingRemotePayment(
+                for: draft,
+                in: [matchingRemote]
+            )?.Id == "payment-900"
+        )
+
+        let unrelatedRemote = try JSONDecoder().decode(
+            QuickBooksPayment.self,
+            from: Data("""
+            {
+              "Id": "payment-901",
+              "CustomerRef": {"value": "customer-22"},
+              "TotalAmt": 125,
+              "PrivateNote": "Another payment",
+              "Line": [{"Amount": 125, "LinkedTxn": [{"TxnId": "invoice-81", "TxnType": "Invoice"}]}]
+            }
+            """.utf8)
+        )
+        #expect(
+            try QuickBooksAccountingPaymentCreateOperation.matchingRemotePayment(
+                for: draft,
+                in: [unrelatedRemote]
+            ) == nil
+        )
+
+        let conflictingRemote = try JSONDecoder().decode(
+            QuickBooksPayment.self,
+            from: Data("""
+            {
+              "Id": "payment-902",
+              "CustomerRef": {"value": "customer-22"},
+              "TotalAmt": 124,
+              "PrivateNote": "\(marker)",
+              "Line": [{"Amount": 124, "LinkedTxn": [{"TxnId": "invoice-81", "TxnType": "Invoice"}]}]
+            }
+            """.utf8)
+        )
+        #expect(throws: QuickBooksAccountingPaymentCreateOperationError.conflictingRemotePayment) {
+            try QuickBooksAccountingPaymentCreateOperation.matchingRemotePayment(
+                for: draft,
+                in: [conflictingRemote]
+            )
+        }
+        #expect(throws: QuickBooksAccountingPaymentCreateOperationError.ambiguousRemotePayment) {
+            try QuickBooksAccountingPaymentCreateOperation.matchingRemotePayment(
+                for: draft,
+                in: [matchingRemote, matchingRemote]
+            )
+        }
+
+        let invalidDraft = QuickBooksAccountingPaymentDraft(
+            localPaymentID: localPaymentID,
+            payment: QuickBooksPaymentCreate(
+                CustomerRef: basePayment.CustomerRef,
+                TotalAmt: 125,
+                PrivateNote: nil,
+                PaymentRefNum: nil,
+                Line: nil,
+                PaymentMethodRef: nil,
+                CreditCardPayment: nil
+            )
+        )
+        #expect(throws: QuickBooksAccountingPaymentCreateOperationError.invalidInvoice) {
+            try QuickBooksAccountingPaymentCreateOperation.payload(for: invalidDraft)
+        }
+    }
+
+    @MainActor
+    @Test func quickBooksTrackedPaymentRequiresOneUnambiguousLocalInvoice() throws {
+        let remoteInvoice = try JSONDecoder().decode(
+            QuickBooksInvoice.self,
+            from: Data(#"{"Id":"qbo-invoice-81","DocNumber":"INV-81","CustomerRef":{"value":"customer-22","name":"Payment Customer"},"TotalAmt":125,"Balance":125}"#.utf8)
+        )
+        let customer = Customer(name: "Payment Customer")
+        let linkedInvoice = Invoice(
+            customer: customer,
+            quickBooksID: " QBO-INVOICE-81 ",
+            lineItemSummary: "Service",
+            amount: 125
+        )
+
+        #expect(
+            QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
+                for: remoteInvoice,
+                in: [linkedInvoice]
+            ) === linkedInvoice
+        )
+
+        let duplicateLink = Invoice(
+            customer: customer,
+            quickBooksID: "qbo-invoice-81",
+            lineItemSummary: "Duplicate legacy link",
+            amount: 125
+        )
+        #expect(
+            QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
+                for: remoteInvoice,
+                in: [linkedInvoice, duplicateLink]
+            ) == nil
+        )
+
+        let documentNumberLink = Invoice(
+            customer: customer,
+            quickBooksID: "inv-81",
+            lineItemSummary: "Legacy document-number link",
+            amount: 125
+        )
+        #expect(
+            QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
+                for: remoteInvoice,
+                in: [documentNumberLink]
+            ) === documentNumberLink
+        )
+        #expect(
+            QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
+                for: remoteInvoice,
+                in: [Invoice(customer: customer, lineItemSummary: "Unlinked", amount: 125)]
+            ) == nil
+        )
+    }
+
     @MainActor
     @Test func quickBooksPaymentRecoveryFailsClosedUntilCloudKitInvoiceLinkResolves() async {
         let customer = Customer(

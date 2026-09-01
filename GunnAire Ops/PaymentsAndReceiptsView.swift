@@ -1298,6 +1298,7 @@ struct PaymentsAndReceiptsView: View {
 
     @discardableResult
     private func saveLocalPayment(
+        id: UUID = UUID(),
         invoice: Invoice,
         amount: Double,
         quickBooksPaymentID: String? = nil,
@@ -1314,6 +1315,7 @@ struct PaymentsAndReceiptsView: View {
         processorOverride: String? = nil
     ) -> Payment {
         let payment = Payment(
+                id: id,
                 invoice: invoice,
                 quickBooksID: quickBooksPaymentID,
                 quickBooksChargeID: quickBooksChargeID,
@@ -1516,7 +1518,9 @@ struct PaymentsAndReceiptsView: View {
             defer { isProcessingQuickBooksPayment = false }
 
             do {
+                let localPaymentID = UUID()
                 let result = try await QuickBooksPaymentsService.shared.processCardPayment(
+                    localPaymentID: localPaymentID,
                     invoice: invoice,
                     amount: amount,
                     cardInput: quickBooksCardInput(for: invoice),
@@ -1528,6 +1532,7 @@ struct PaymentsAndReceiptsView: View {
                 }
                 authorizationReference = result.charge.authCode ?? authorizationReference
                 let payment = saveLocalPayment(
+                    id: localPaymentID,
                     invoice: invoice,
                     amount: amount,
                     quickBooksPaymentID: result.accountingPayment?.Id,
@@ -1559,7 +1564,9 @@ struct PaymentsAndReceiptsView: View {
             defer { isProcessingQuickBooksPayment = false }
 
             do {
+                let localPaymentID = UUID()
                 let result = try await QuickBooksPaymentsService.shared.processBankPayment(
+                    localPaymentID: localPaymentID,
                     invoice: invoice,
                     amount: amount,
                     bankInput: QuickBooksPaymentsBankAccountInput(
@@ -1575,6 +1582,7 @@ struct PaymentsAndReceiptsView: View {
                 )
                 authorizationReference = result.charge.authCode ?? authorizationReference
                 let payment = saveLocalPayment(
+                    id: localPaymentID,
                     invoice: invoice,
                     amount: amount,
                     quickBooksPaymentID: result.accountingPayment?.Id,
