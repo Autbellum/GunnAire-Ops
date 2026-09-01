@@ -20391,6 +20391,46 @@ struct GunnAire_OpsTests {
         #expect(archived.quickBooksCatalogSyncState == "archived")
     }
 
+    @Test func fieldCreatedCatalogItemStaysDocumentScopedUntilAdministratorApproval() {
+        let draft = Item(
+            quickBooksSyncStatus: "needs_review",
+            pricebookReviewStatus: .needsReview,
+            pricebookCreatedByEmail: "field@gunnaire.com",
+            name: "Field Diagnostic Add-on",
+            unitPrice: 85
+        )
+        let approved = Item(name: "Approved Diagnostic", unitPrice: 125)
+        let archived = Item(name: "Archived Diagnostic", unitPrice: 100)
+        archived.archiveFromPricebook(by: "admin@gunnaire.com")
+
+        #expect(!draft.isAvailableForNewWork)
+        #expect(
+            !CatalogItemSelectionPolicy.canAdd(
+                draft,
+                documentScopedReviewItemIDs: []
+            )
+        )
+        #expect(
+            CatalogItemSelectionPolicy.canAdd(
+                draft,
+                documentScopedReviewItemIDs: [draft.id]
+            )
+        )
+        #expect(
+            CatalogItemSelectionPolicy.canDisplay(
+                draft,
+                isSelected: true,
+                documentScopedReviewItemIDs: []
+            )
+        )
+        #expect(CatalogItemSelectionPolicy.canAdd(approved, documentScopedReviewItemIDs: []))
+        #expect(!CatalogItemSelectionPolicy.canAdd(archived, documentScopedReviewItemIDs: []))
+
+        draft.approveForPricebook(by: "admin@gunnaire.com")
+        #expect(draft.isAvailableForNewWork)
+        #expect(CatalogItemSelectionPolicy.canAdd(draft, documentScopedReviewItemIDs: []))
+    }
+
     @Test func quickBooksRefreshPreservesStagedCatalogEditsUntilAnAdministratorChoosesADirection() throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(
@@ -21389,6 +21429,53 @@ struct GunnAire_OpsTests {
         #expect(imported.unitPrice == 129)
         #expect(imported.quickBooksCatalogSyncState == "synced")
         #expect(imported.quickBooksLastSyncedAt != nil)
+    }
+
+    @MainActor
+    @Test func matchingQuickBooksImportLinksButNeverApprovesAFieldCreatedItem() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let fieldItem = Item(
+            quickBooksSyncStatus: "needs_review",
+            pricebookReviewStatus: .needsReview,
+            pricebookCreatedByEmail: "tech@gunnaire.com",
+            name: "Air Filter",
+            itemType: .nonInventory,
+            unitPrice: 89,
+            purchaseCost: 31,
+            sku: "FIELD-MERV-11"
+        )
+        context.insert(fieldItem)
+        try context.save()
+
+        let remoteData = Data(#"{"Id":"QBO-FILTER-MATCH","SyncToken":"9","Name":"Air Filter","Type":"NonInventory","Sku":"FIELD-MERV-11","UnitPrice":129,"PurchaseCost":44,"Active":true}"#.utf8)
+        let remoteItem = try JSONDecoder().decode(QuickBooksItem.self, from: remoteData)
+
+        try QuickBooksLocalSync.importSnapshot(
+            customers: [],
+            items: [remoteItem],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            vendors: [],
+            into: context
+        )
+
+        let storedItems = try context.fetch(FetchDescriptor<Item>())
+        #expect(storedItems.count == 1)
+        #expect(fieldItem.quickBooksID == "QBO-FILTER-MATCH")
+        #expect(fieldItem.requiresPricebookReview)
+        #expect(!fieldItem.isAvailableForNewWork)
+        #expect(fieldItem.pricebookReviewedByEmail == nil)
+        #expect(fieldItem.unitPrice == 89)
+        #expect(fieldItem.purchaseCost == 31)
+        #expect(fieldItem.quickBooksCatalogSyncState == "needs_review")
+        #expect(fieldItem.quickBooksSyncDetail?.contains("Administrator pricebook review") == true)
+        #expect(fieldItem.quickBooksLastSyncedAt != nil)
     }
 
     @Test func changeOrderKeepsOriginalApprovalAndIdentifiesTheRevisedProposal() async throws {

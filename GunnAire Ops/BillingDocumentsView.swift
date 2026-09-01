@@ -68,6 +68,7 @@ struct BillingDocumentsView: View {
     @State private var itemSearchText = ""
     @State private var catalogFilter: DocumentationCatalogFilter = .recommended
     @State private var newlyCreatedLineItems: [UUID: Item] = [:]
+    @State private var documentScopedReviewItemIDs: Set<UUID> = []
     @State private var selectedItemQuantities: [UUID: Double] = [:]
     @State private var selectedItemPriceAdjustments: [UUID: AuthorizedLinePriceAdjustment] = [:]
     @State private var selectedDocumentDiscount: AuthorizedDocumentDiscount?
@@ -92,7 +93,6 @@ struct BillingDocumentsView: View {
     @State private var actionMessage = ""
     @State private var isCreatingDocument = false
     @State private var isImportingQuickBooksItems = false
-    @State private var isPublishingQuickBooksItems = false
     @State private var syncingEstimateIDs: Set<UUID> = []
     @State private var didLoadInitialContext = false
     @State private var didAttemptInitialCatalogImport = false
@@ -556,8 +556,12 @@ struct BillingDocumentsView: View {
             .compactMap { $0?.lowercased() }
             .joined(separator: " ")
             let matchesQuery = query.isEmpty || haystack.contains(query)
-            let isAvailable = item.isAvailableForNewWork || isCatalogItemSelected(item)
-            return isAvailable && matchesQuery && matchesCatalogFilter(item)
+            let canDisplay = CatalogItemSelectionPolicy.canDisplay(
+                item,
+                isSelected: isCatalogItemSelected(item),
+                documentScopedReviewItemIDs: documentScopedReviewItemIDs
+            )
+            return canDisplay && matchesQuery && matchesCatalogFilter(item)
         }
     }
 
@@ -569,14 +573,6 @@ struct BillingDocumentsView: View {
         !newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         CatalogItemAmountParser.parseRequiredOrZero(newItemPrice) != nil &&
         CatalogItemAmountParser.isValidOptionalAmount(newItemCost)
-    }
-
-    private var unsyncedCatalogItems: [Item] {
-        items.filter {
-            itemNeedsQuickBooksSync($0) &&
-            !$0.requiresPricebookReview &&
-            !$0.isCatalogArchived
-        }
     }
 
     private var catalogItemsAwaitingReview: [Item] {
@@ -959,6 +955,9 @@ struct BillingDocumentsView: View {
 
     private var isQuickBooksConnected: Bool {
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksConnected") {
+            return true
+        }
         if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksDisconnected") {
             return false
         }
@@ -2011,6 +2010,7 @@ GunnAire
                     items: items,
                     selectedItems: selectedItems,
                     selectedItemizedAssemblyIDs: Set(selectedItemizedAssemblyMemberships.keys),
+                    documentScopedReviewItemIDs: documentScopedReviewItemIDs,
                     onToggle: toggleItem
                 )
             }
@@ -3814,27 +3814,8 @@ GunnAire
     @ViewBuilder
     private var lineItemBuilderView: some View {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Line Items")
-                                .font(.headline)
-                            Spacer()
-                            if isQuickBooksConnected {
-                                Button(isImportingQuickBooksItems ? "Importing..." : "Sync Catalog") {
-                                    importQuickBooksItems()
-                                }
-                                .font(.caption)
-                                .disabled(isImportingQuickBooksItems)
-
-                                if !unsyncedCatalogItems.isEmpty {
-                                    Button(isPublishingQuickBooksItems ? "Publishing..." : "Publish \(unsyncedCatalogItems.count) Pending") {
-                                        publishUnsyncedCatalogItems()
-                                    }
-                                    .font(.caption)
-                                    .disabled(isPublishingQuickBooksItems)
-                                    .accessibilityHint("Publishes locally created catalog items to QuickBooks before they are used on invoices.")
-                                }
-                            }
-                        }
+                        Text("Line Items")
+                            .font(.headline)
 
                         TextField("Search items to add", text: $itemSearchText)
                             .textInputAutocapitalization(.never)
@@ -6899,6 +6880,9 @@ GunnAire
 
     private func selectCreatedItem(_ item: Item) {
         newlyCreatedLineItems[item.id] = item
+        if item.requiresPricebookReview {
+            documentScopedReviewItemIDs.insert(item.id)
+        }
         selectedItems.insert(item.id)
         selectedItemQuantities[item.id] = selectedItemQuantities[item.id] ?? 1
         catalogFilter = .selected
@@ -6926,7 +6910,7 @@ GunnAire
     }
 
     private func importQuickBooksItems() {
-        guard isQuickBooksConnected else { return }
+        guard canApprovePricebookItems, isQuickBooksConnected else { return }
         isImportingQuickBooksItems = true
         actionMessage = "Loading QuickBooks catalog..."
         liveAPI.fetchItems { result in
@@ -6985,7 +6969,7 @@ GunnAire
     private func importQuickBooksItemsIfNeeded() {
         guard !didAttemptInitialCatalogImport else { return }
         didAttemptInitialCatalogImport = true
-        guard isQuickBooksConnected, items.isEmpty else { return }
+        guard canApprovePricebookItems, isQuickBooksConnected, items.isEmpty else { return }
         importQuickBooksItems()
     }
 
@@ -7002,26 +6986,8 @@ GunnAire
         }
     }
 
-    private func publishUnsyncedCatalogItems() {
-        let pendingItems = unsyncedCatalogItems
-        guard isQuickBooksConnected, !pendingItems.isEmpty else { return }
-        isPublishingQuickBooksItems = true
-        actionMessage = "Publishing \(pendingItems.count) catalog item\(pendingItems.count == 1 ? "" : "s") to QuickBooks..."
-        prepareQuickBooksItemsForDocument(pendingItems) { result in
-            isPublishingQuickBooksItems = false
-            switch result {
-            case .success(let syncedItems):
-                actionMessage = "Published \(syncedItems.count) catalog item\(syncedItems.count == 1 ? "" : "s") to QuickBooks."
-            case .failure(let error):
-                actionMessage = "QuickBooks catalog publish failed: \(error.localizedDescription)"
-            }
-        }
-    }
-
     private func applyQuickBooksItem(_ quickBooksItem: QuickBooksItem, to item: Item) {
-        if item.requiresPricebookReview {
-            item.approveForPricebook(by: "quickbooks-reconciliation")
-        }
+        guard !item.requiresPricebookReview else { return }
         item.quickBooksID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
         item.quickBooksSyncStatus = "synced"
         item.quickBooksSyncDetail = nil
@@ -7248,10 +7214,14 @@ GunnAire
 
         let restoredItems = restoredCatalogItems(snapshotJSON: catalogSnapshotJSON, lineItemSummary: lineItemSummary)
         let snapshots = CatalogLineItemSnapshot.decoded(from: catalogSnapshotJSON)
+        newlyCreatedLineItems.removeAll()
         if restoredItems.isEmpty {
             clearSelectedCatalogLines()
         } else {
             selectedItems = Set(restoredItems.map(\.id))
+            documentScopedReviewItemIDs = Set(
+                restoredItems.filter(\.requiresPricebookReview).map(\.id)
+            )
             selectedDocumentDiscount = CatalogLineItemSnapshot.documentDiscount(from: catalogSnapshotJSON)
             selectedItemQuantities = Dictionary(
                 uniqueKeysWithValues: snapshots.map { ($0.catalogItemID, $0.quantity) }
@@ -7947,8 +7917,13 @@ GunnAire
             return
         }
 
-        guard item.isAvailableForNewWork else {
-            actionMessage = "\(item.name) is archived from new work. Ask an administrator to restore and reconcile it before adding it."
+        guard CatalogItemSelectionPolicy.canAdd(
+            item,
+            documentScopedReviewItemIDs: documentScopedReviewItemIDs
+        ) else {
+            actionMessage = item.requiresPricebookReview
+                ? "\(item.name) is awaiting administrator review and remains limited to the document where it was created."
+                : "\(item.name) is archived from new work. Ask an administrator to restore and reconcile it before adding it."
             return
         }
 
@@ -8027,6 +8002,8 @@ GunnAire
 
     private func clearSelectedCatalogLines() {
         selectedItems.removeAll()
+        newlyCreatedLineItems.removeAll()
+        documentScopedReviewItemIDs.removeAll()
         selectedItemQuantities.removeAll()
         selectedItemPriceAdjustments.removeAll()
         selectedDocumentDiscount = nil
@@ -9917,6 +9894,7 @@ private struct DocumentationItemSelectorView: View {
     let items: [Item]
     let selectedItems: Set<UUID>
     let selectedItemizedAssemblyIDs: Set<UUID>
+    let documentScopedReviewItemIDs: Set<UUID>
     let onToggle: (Item) -> Void
 
     @State private var searchText = ""
@@ -9925,7 +9903,13 @@ private struct DocumentationItemSelectorView: View {
     private var filteredItems: [Item] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let sortedItems = items
-            .filter { $0.isAvailableForNewWork || isSelected($0) }
+            .filter {
+                CatalogItemSelectionPolicy.canDisplay(
+                    $0,
+                    isSelected: isSelected($0),
+                    documentScopedReviewItemIDs: documentScopedReviewItemIDs
+                )
+            }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         guard !query.isEmpty else { return sortedItems }
         return sortedItems.filter { item in

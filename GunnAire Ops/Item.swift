@@ -895,8 +895,12 @@ final class Item {
         pricebookReviewStatus == .archived
     }
 
+    /// Only an administrator-approved record is part of the reusable company
+    /// pricebook. A field-created draft stays usable on the document where it
+    /// originated through `CatalogItemSelectionPolicy`, but cannot leak into a
+    /// different job, agreement, purchase order, or replenishment suggestion.
     var isAvailableForNewWork: Bool {
-        !isCatalogArchived
+        pricebookReviewStatus == .approved
     }
 
     var assemblyDefinition: CatalogAssemblyDefinition? {
@@ -1070,6 +1074,28 @@ final class Item {
         guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               !normalized.isEmpty else { return nil }
         return normalized
+    }
+}
+
+/// Keeps a field-created pricebook draft scoped to the estimate or invoice
+/// where it originated until an administrator approves it. Selected archived
+/// or draft lines remain visible only so staff can review or remove historical
+/// document content; they are never silently reusable as new company work.
+enum CatalogItemSelectionPolicy {
+    static func canAdd(
+        _ item: Item,
+        documentScopedReviewItemIDs: Set<UUID>
+    ) -> Bool {
+        item.isAvailableForNewWork ||
+            (item.requiresPricebookReview && documentScopedReviewItemIDs.contains(item.id))
+    }
+
+    static func canDisplay(
+        _ item: Item,
+        isSelected: Bool,
+        documentScopedReviewItemIDs: Set<UUID>
+    ) -> Bool {
+        isSelected || canAdd(item, documentScopedReviewItemIDs: documentScopedReviewItemIDs)
     }
 }
 

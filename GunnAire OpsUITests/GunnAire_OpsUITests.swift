@@ -2335,6 +2335,91 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testFieldBillingKeepsProviderControlsOutOfDocumentScopedDraftFlow() throws {
+        let app = XCUIApplication()
+        let draftName = "Scoped Draft \(UUID().uuidString.prefix(8))"
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestForceQuickBooksConnected"
+        ]
+        app.launch()
+
+        let schedule = app.staticTexts["Schedule & Jobs"]
+        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        schedule.tap()
+
+        let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
+        for _ in 0..<6 where !documentation.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(documentation))
+        documentation.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Sync Catalog"].exists)
+        XCTAssertEqual(
+            app.buttons.matching(
+                NSPredicate(format: "label BEGINSWITH 'Publish ' AND label ENDSWITH ' Pending'")
+            ).count,
+            0
+        )
+
+        let createNewItem = app.buttons["Create New Item"]
+        XCTAssertTrue(createNewItem.waitForExistence(timeout: 3))
+        createNewItem.tap()
+
+        XCTAssertTrue(app.navigationBars["Create Item"].waitForExistence(timeout: 3))
+        let itemName = app.textFields["Item name"]
+        XCTAssertTrue(itemName.waitForExistence(timeout: 3))
+        replaceText(in: itemName, with: draftName)
+        let salesPrice = app.textFields["Sales price (optional)"]
+        replaceText(in: salesPrice, with: "145")
+        let hideKeyboard = app.buttons["Hide keyboard"]
+        if hideKeyboard.waitForExistence(timeout: 2) {
+            if waitForHittable(hideKeyboard, timeout: 10) {
+                hideKeyboard.tap()
+            }
+        }
+        let saveItem = app.buttons["Save"]
+        XCTAssertTrue(waitForHittable(saveItem))
+        saveItem.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        let draft = app.staticTexts[draftName]
+        XCTAssertTrue(draft.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "CatalogSyncState-", "Admin pricebook review")
+            ).firstMatch.exists
+        )
+        let removeDraft = app.buttons.matching(
+            NSPredicate(format: "label == %@", "Remove \(draftName) from invoice")
+        ).firstMatch
+        XCTAssertTrue(waitForHittable(removeDraft))
+        removeDraft.tap()
+
+        let addLineItems = app.buttons["Add Line Items"]
+        XCTAssertTrue(addLineItems.waitForExistence(timeout: 3))
+        addLineItems.tap()
+        XCTAssertTrue(app.navigationBars["Select Items"].waitForExistence(timeout: 3))
+        let scopedDraft = app.staticTexts[draftName]
+        XCTAssertTrue(scopedDraft.waitForExistence(timeout: 3))
+        scopedDraft.tap()
+        XCTAssertTrue(app.staticTexts["2 lines selected"].waitForExistence(timeout: 3))
+        app.buttons["Done"].tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.buttons.matching(
+                NSPredicate(format: "label == %@", "Remove \(draftName) from invoice")
+            ).firstMatch.waitForExistence(timeout: 3)
+        )
+    }
+
+    @MainActor
     func testAssignedTechnicianSelectsFlatRatePackageWithServicedSystemContext() throws {
         let app = XCUIApplication()
         app.launchArguments = [
