@@ -454,7 +454,8 @@ private enum GunnAireUITestFixtures {
             item.id == duplicateCatalogMappingItemID ||
             item.id == servicePackageComponentItemID ||
             item.id == servicePackageItemID ||
-            item.name == "UI Test Added Repair" {
+            item.name == "UI Test Added Repair" ||
+            item.name == "Offline Taxable Capacitor" {
             context.delete(item)
         }
         let serviceRequests = try context.fetch(FetchDescriptor<ServiceRequest>())

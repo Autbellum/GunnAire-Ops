@@ -872,10 +872,27 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
-    func createItem(_ item: QuickBooksItemCreate, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {
+    func createItem(
+        _ item: QuickBooksItemCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksItem, Error>) -> Void
+    ) {
         let body = try? JSONEncoder().encode(item)
+        let normalizedRequestID = requestID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let queryItems = normalizedRequestID?.isEmpty == false
+            ? [URLQueryItem(name: "requestid", value: normalizedRequestID)]
+            : []
         performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "item", method: "POST", body: body, contentType: "application/json") },
+            {
+                self.authorizedRequest(
+                    path: "item",
+                    queryItems: queryItems,
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
             decode: QuickBooksItemResponse.self
         ) { result in
             completion(result.flatMap {
@@ -2337,6 +2354,40 @@ struct QuickBooksItemCreate: Codable {
     private enum CodingKeys: String, CodingKey {
         case Name, Description, Sku, PurchaseDesc, UnitPrice, PurchaseCost, Taxable, IncomeAccountRef, ExpenseAccountRef, PrefVendorRef
         case ItemType = "Type"
+    }
+}
+
+/// One local catalog identity owns one QuickBooks create operation across
+/// devices and retries. Query-before-create still performs reconciliation;
+/// the stable request ID closes the uncertain-response window without placing
+/// customer, item, or accounting detail in the URL.
+enum QuickBooksCatalogCreateOperation {
+    static func requestID(for localItemID: UUID) -> String {
+        "ga-item-\(localItemID.uuidString.lowercased())"
+    }
+
+    static func payload(
+        for item: Item,
+        incomeAccountRef: QuickBooksReference,
+        expenseAccountRef: QuickBooksReference?
+    ) -> QuickBooksItemCreate {
+        QuickBooksItemCreate(
+            Name: item.name,
+            ItemType: item.itemType.rawValue,
+            Description: item.itemDescription,
+            Sku: item.sku,
+            PurchaseDesc: item.purchaseDescription ?? item.itemDescription,
+            UnitPrice: item.unitPrice,
+            PurchaseCost: item.purchaseCost,
+            Taxable: item.isTaxable,
+            IncomeAccountRef: incomeAccountRef,
+            ExpenseAccountRef: expenseAccountRef,
+            PrefVendorRef: item.preferredVendorQuickBooksID.flatMap { quickBooksID in
+                quickBooksID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil
+                    : QuickBooksReference(value: quickBooksID, name: item.preferredVendorName)
+            }
+        )
     }
 }
 

@@ -33,8 +33,12 @@ final class QuickBooksAPI: ObservableObject {
         data.fetchItem(id: id, completion: completion)
     }
 
-    func createItem(_ item: QuickBooksItemCreate, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {
-        data.createItem(item, completion: completion)
+    func createItem(
+        _ item: QuickBooksItemCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksItem, Error>) -> Void
+    ) {
+        data.createItem(item, requestID: requestID, completion: completion)
     }
 
     func updateItem(_ item: QuickBooksItemUpdate, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {

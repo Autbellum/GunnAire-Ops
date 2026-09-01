@@ -8806,24 +8806,15 @@ GunnAire
             return
         }
 
-        let payload = QuickBooksItemCreate(
-            Name: item.name,
-            ItemType: item.itemType.rawValue,
-            Description: item.itemDescription,
-            Sku: item.sku,
-            PurchaseDesc: item.purchaseDescription ?? item.itemDescription,
-            UnitPrice: item.unitPrice,
-            PurchaseCost: item.purchaseCost,
-            Taxable: item.isTaxable,
-            IncomeAccountRef: incomeAccountRef,
-            ExpenseAccountRef: expenseAccountRef,
-            PrefVendorRef: item.preferredVendorQuickBooksID.flatMap { quickBooksID in
-                quickBooksID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? nil
-                    : QuickBooksReference(value: quickBooksID, name: item.preferredVendorName)
-            }
+        let payload = QuickBooksCatalogCreateOperation.payload(
+            for: item,
+            incomeAccountRef: incomeAccountRef,
+            expenseAccountRef: expenseAccountRef
         )
-        liveAPI.createItem(payload) { result in
+        liveAPI.createItem(
+            payload,
+            requestID: QuickBooksCatalogCreateOperation.requestID(for: item.id)
+        ) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let quickBooksItem):

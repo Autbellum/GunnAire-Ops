@@ -759,6 +759,44 @@ enum QuickBooksCatalogStagingPolicy {
     }
 }
 
+enum QuickBooksCatalogLocalCreationPolicy {
+    static func makeItem(
+        id: UUID = UUID(),
+        name: String,
+        itemType: CatalogItemType,
+        sku: String?,
+        unitPrice: Double,
+        purchaseCost: Double?,
+        isTaxable: Bool,
+        itemDescription: String?,
+        purchaseDescription: String?,
+        preferredVendor: QuickBooksReference?,
+        actorEmail: String?,
+        createdAt: Date = Date()
+    ) -> Item {
+        Item(
+            id: id,
+            quickBooksSyncStatus: "pending",
+            quickBooksSyncDetail: "Saved locally; QuickBooks catalog publication is pending.",
+            pricebookReviewStatus: .approved,
+            pricebookCreatedByEmail: actorEmail,
+            pricebookReviewedByEmail: actorEmail,
+            pricebookReviewedAt: createdAt,
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            itemType: itemType,
+            unitPrice: unitPrice,
+            purchaseCost: purchaseCost,
+            isTaxable: isTaxable,
+            itemDescription: itemDescription,
+            sku: sku,
+            preferredVendorName: preferredVendor?.name,
+            preferredVendorQuickBooksID: preferredVendor?.value,
+            purchaseDescription: purchaseDescription,
+            createdAt: createdAt
+        )
+    }
+}
+
 struct QuickBooksManagementView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var quickBooksDataAPI = QuickBooksDataAPI.shared
@@ -1852,7 +1890,7 @@ struct QuickBooksManagementView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated)
+                            .disabled(activeCatalogPublicationID != nil)
                     }
 
                     Section(header: Text("Estimates").foregroundColor(Color.brandGold)) {
@@ -2373,12 +2411,6 @@ struct QuickBooksManagementView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
 
-                        if let actionMessage {
-                            Text(actionMessage)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
                         Button("Sync All QuickBooks Data") {
                             syncAllQuickBooksData()
                         }
@@ -2391,6 +2423,30 @@ struct QuickBooksManagementView: View {
                 }
                 .scrollContentBackground(.hidden)
                 .background(Color.primaryBlack)
+                .overlay(alignment: .bottom) {
+                    if let actionMessage {
+                        Text(actionMessage)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(3)
+                            .frame(maxWidth: 600, alignment: .leading)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(
+                                Color.primaryBlack.opacity(0.94),
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.brandGold.opacity(0.8), lineWidth: 1)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 8)
+                            .allowsHitTesting(false)
+                            .accessibilityIdentifier("QuickBooksActionMessage")
+                    }
+                }
                 .navigationTitle("QuickBooks Management")
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
@@ -2809,44 +2865,36 @@ struct QuickBooksManagementView: View {
     }
 
     private func createCatalogItem(_ draft: QuickBooksCatalogItemDraft) {
-        guard let incomeAccountRef = QuickBooksItemAccountResolver.incomeAccountRef(
-            from: items,
-            configuration: accountingConfiguration
-        ) else {
-            actionMessage = "Open Overview → Accounting Mappings and choose an income account before creating catalog items."
+        let localItem = QuickBooksCatalogLocalCreationPolicy.makeItem(
+            name: draft.name,
+            itemType: draft.itemType,
+            sku: draft.sku,
+            unitPrice: draft.price,
+            purchaseCost: draft.purchaseCost,
+            isTaxable: draft.isTaxable,
+            itemDescription: draft.description,
+            purchaseDescription: draft.purchaseDescription,
+            preferredVendor: draft.vendorRef,
+            actorEmail: AppIdentity.currentEmail
+        )
+        modelContext.insert(localItem)
+        activeCatalogPublicationID = localItem.id
+        showCatalogPublicationQueue = true
+        do {
+            try modelContext.save()
+        } catch {
+            activeCatalogPublicationID = nil
+            modelContext.delete(localItem)
+            actionMessage = "Could not save the catalog item locally: \(error.localizedDescription)"
             return
         }
 
-        let payload = QuickBooksItemCreate(
-            Name: draft.name,
-            ItemType: draft.itemType.rawValue,
-            Description: draft.description,
-            Sku: draft.sku,
-            PurchaseDesc: draft.purchaseDescription ?? draft.description,
-            UnitPrice: draft.price,
-            PurchaseCost: draft.purchaseCost,
-            Taxable: nil,
-            IncomeAccountRef: incomeAccountRef,
-            ExpenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(
-                configuration: accountingConfiguration
-            ),
-            PrefVendorRef: draft.vendorRef
-        )
-
-        performAction(message: "Creating catalog item in QuickBooks...") {
-            liveAPI.createItem(payload) { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success(let item):
-                        actionMessage = "Catalog item created: \(item.Name)"
-                        syncAllQuickBooksData()
-                    case .failure(let error):
-                        actionMessage = "Catalog item creation failed: \(error.localizedDescription)"
-                        isLoading = false
-                    }
-                }
-            }
+        guard isAuthenticated else {
+            activeCatalogPublicationID = nil
+            actionMessage = "Saved \(localItem.name) locally. Connect QuickBooks to publish it."
+            return
         }
+        publishApprovedCatalogItem(localItem)
     }
 
     private func approvePricebookItem(_ item: Item) {
@@ -2934,26 +2982,17 @@ struct QuickBooksManagementView: View {
             )
             return
         }
-        let payload = QuickBooksItemCreate(
-            Name: item.name,
-            ItemType: item.itemType.rawValue,
-            Description: item.itemDescription,
-            Sku: item.sku,
-            PurchaseDesc: item.purchaseDescription ?? item.itemDescription,
-            UnitPrice: item.unitPrice,
-            PurchaseCost: item.purchaseCost,
-            Taxable: item.isTaxable,
-            IncomeAccountRef: incomeAccountRef,
-            ExpenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(
+        let payload = QuickBooksCatalogCreateOperation.payload(
+            for: item,
+            incomeAccountRef: incomeAccountRef,
+            expenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(
                 configuration: accountingConfiguration
-            ),
-            PrefVendorRef: item.preferredVendorQuickBooksID.flatMap { quickBooksID in
-                quickBooksID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? nil
-                    : QuickBooksReference(value: quickBooksID, name: item.preferredVendorName)
-            }
+            )
         )
-        liveAPI.createItem(payload) { result in
+        liveAPI.createItem(
+            payload,
+            requestID: QuickBooksCatalogCreateOperation.requestID(for: item.id)
+        ) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .failure(let error):
@@ -5914,6 +5953,7 @@ private struct QuickBooksCatalogItemDraft {
     let sku: String?
     let price: Double
     let purchaseCost: Double?
+    let isTaxable: Bool
     let description: String?
     let purchaseDescription: String?
     let vendorRef: QuickBooksReference?
@@ -5930,6 +5970,7 @@ private struct QuickBooksCatalogItemComposeView: View {
     @State private var sku = ""
     @State private var price = ""
     @State private var purchaseCost = ""
+    @State private var isTaxable = false
     @State private var description = ""
     @State private var purchaseDescription = ""
     @State private var selectedVendorID = ""
@@ -5939,8 +5980,10 @@ private struct QuickBooksCatalogItemComposeView: View {
             Form {
                 Section("Sales") {
                     TextField("Name", text: $name)
+                        .accessibilityIdentifier("QuickBooksCatalogItemName")
                     TextField("SKU", text: $sku)
                         .textInputAutocapitalization(.characters)
+                        .accessibilityIdentifier("QuickBooksCatalogItemSKU")
                     Picker("Item Type", selection: $itemType) {
                         ForEach(CatalogItemType.allCases) { type in
                             Text(type.rawValue).tag(type)
@@ -5949,6 +5992,9 @@ private struct QuickBooksCatalogItemComposeView: View {
                     .pickerStyle(.segmented)
                     TextField("Price (optional)", text: $price)
                         .keyboardType(.decimalPad)
+                        .accessibilityIdentifier("QuickBooksCatalogItemPrice")
+                    Toggle("Taxable", isOn: $isTaxable)
+                        .accessibilityIdentifier("QuickBooksCatalogItemTaxable")
                     TextField("Description", text: $description)
                 }
 
@@ -5982,6 +6028,7 @@ private struct QuickBooksCatalogItemComposeView: View {
                             sku: sku.nilIfBlank,
                             price: amount,
                             purchaseCost: QuickBooksCatalogAmountParser.parseOptional(purchaseCost),
+                            isTaxable: isTaxable,
                             description: description.nilIfBlank,
                             purchaseDescription: purchaseDescription.nilIfBlank,
                             vendorRef: vendorRef
@@ -5994,6 +6041,7 @@ private struct QuickBooksCatalogItemComposeView: View {
                         QuickBooksCatalogAmountParser.parseRequiredOrZero(price) == nil ||
                         !QuickBooksCatalogAmountParser.isValidOptionalAmount(purchaseCost)
                     )
+                    .accessibilityIdentifier("CreateQuickBooksCatalogItem")
                 }
             }
         }

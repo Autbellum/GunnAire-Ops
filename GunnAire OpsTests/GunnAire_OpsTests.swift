@@ -19762,6 +19762,66 @@ struct GunnAire_OpsTests {
         }
     }
 
+    @Test func catalogCreationStartsLocallyAndReusesOneQuickBooksOperationAcrossRetries() throws {
+        let itemID = try #require(UUID(uuidString: "A13EAB2B-9FD5-4809-B017-6CC0046D4265"))
+        let createdAt = Date(timeIntervalSinceReferenceDate: 1_500_000)
+        let vendor = QuickBooksReference(value: "QBO-VENDOR-7", name: "Johnstone Supply")
+        let item = QuickBooksCatalogLocalCreationPolicy.makeItem(
+            id: itemID,
+            name: "  45/5 Dual Run Capacitor  ",
+            itemType: .nonInventory,
+            sku: "CAP-45-5",
+            unitPrice: 319,
+            purchaseCost: 82,
+            isTaxable: true,
+            itemDescription: "Premium replacement capacitor",
+            purchaseDescription: "45/5 MFD dual run capacitor",
+            preferredVendor: vendor,
+            actorEmail: "administrator",
+            createdAt: createdAt
+        )
+
+        #expect(item.id == itemID)
+        #expect(item.quickBooksID == nil)
+        #expect(item.quickBooksCatalogSyncState == "pending")
+        #expect(item.pricebookReviewStatus == .approved)
+        #expect(item.pricebookCreatedByEmail == "administrator")
+        #expect(item.pricebookReviewedByEmail == "administrator")
+        #expect(item.pricebookReviewedAt == createdAt)
+        #expect(item.name == "45/5 Dual Run Capacitor")
+        #expect(item.itemType == .nonInventory)
+        #expect(item.isTaxable)
+        #expect(item.preferredVendorQuickBooksID == "QBO-VENDOR-7")
+        #expect(QuickBooksCatalogPublicationRecovery.queuedItems(from: [item]).map(\.id) == [itemID])
+
+        let firstRequestID = QuickBooksCatalogCreateOperation.requestID(for: item.id)
+        let retryRequestID = QuickBooksCatalogCreateOperation.requestID(for: item.id)
+        #expect(firstRequestID == "ga-item-a13eab2b-9fd5-4809-b017-6cc0046d4265")
+        #expect(retryRequestID == firstRequestID)
+        #expect(firstRequestID.count == 44)
+        #expect(
+            QuickBooksCatalogCreateOperation.requestID(for: UUID()) != firstRequestID
+        )
+
+        let payload = QuickBooksCatalogCreateOperation.payload(
+            for: item,
+            incomeAccountRef: QuickBooksReference(value: "INC-1", name: "Service Income"),
+            expenseAccountRef: QuickBooksReference(value: "EXP-1", name: "Materials")
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any]
+        )
+        #expect(object["Name"] as? String == "45/5 Dual Run Capacitor")
+        #expect(object["Type"] as? String == "NonInventory")
+        #expect(object["Sku"] as? String == "CAP-45-5")
+        #expect(object["UnitPrice"] as? Double == 319)
+        #expect(object["PurchaseCost"] as? Double == 82)
+        #expect(object["Taxable"] as? Bool == true)
+        #expect((object["IncomeAccountRef"] as? [String: String])?["value"] == "INC-1")
+        #expect((object["ExpenseAccountRef"] as? [String: String])?["value"] == "EXP-1")
+        #expect((object["PrefVendorRef"] as? [String: String])?["value"] == "QBO-VENDOR-7")
+    }
+
     @Test func duplicateQuickBooksCatalogMappingsFailClosedAndResolveWithoutDeletingLocalItems() throws {
         let canonical = Item(
             quickBooksID: " QBO-ITEM-DUPLICATE ",

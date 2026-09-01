@@ -4676,6 +4676,80 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdministratorCreatesTaxableCatalogItemOfflineBeforeQuickBooksPublication() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let addCatalogItem = app.buttons["Add Catalog Item"]
+        for _ in 0..<14 where !addCatalogItem.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(addCatalogItem))
+        addCatalogItem.tap()
+
+        XCTAssertTrue(app.navigationBars["Add Catalog Item"].waitForExistence(timeout: 3))
+        let name = app.textFields["QuickBooksCatalogItemName"]
+        let sku = app.textFields["QuickBooksCatalogItemSKU"]
+        XCTAssertTrue(name.waitForExistence(timeout: 3))
+        replaceText(in: name, with: "Offline Taxable Capacitor")
+        replaceText(in: sku, with: "OFF-CAP-45")
+        let returnKey = app.keyboards.buttons["Return"]
+        if returnKey.exists {
+            returnKey.tap()
+        }
+        let taxable = app.switches["QuickBooksCatalogItemTaxable"]
+        XCTAssertTrue(taxable.exists)
+        if (taxable.value as? String) != "1" {
+            taxable.tap()
+        }
+
+        let create = app.buttons["CreateQuickBooksCatalogItem"]
+        XCTAssertTrue(create.exists)
+        XCTAssertTrue(create.isEnabled)
+        XCTAssertTrue(waitForHittable(create))
+        create.tap()
+
+        let composerDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.navigationBars["Add Catalog Item"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [composerDismissed], timeout: 3), .completed)
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].exists)
+        let result = app.staticTexts["QuickBooksActionMessage"]
+        for _ in 0..<14 where !result.isHittable {
+            app.swipeDown()
+        }
+        XCTAssertTrue(waitForHittable(result))
+        XCTAssertEqual(
+            result.label,
+            "Saved Offline Taxable Capacitor locally. Connect QuickBooks to publish it."
+        )
+
+        let queuedItem = app.staticTexts["Offline Taxable Capacitor"]
+        for _ in 0..<14 where !queuedItem.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(queuedItem))
+        XCTAssertTrue(app.staticTexts["SKU OFF-CAP-45 • Service"].exists)
+        XCTAssertTrue(app.staticTexts["Publication pending"].exists)
+        let retry = app.buttons["Retry Catalog Publication"]
+        XCTAssertTrue(retry.exists)
+        XCTAssertFalse(retry.isEnabled)
+    }
+
+    @MainActor
     func testQuickBooksManagementUsesFocusedAccountingWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
