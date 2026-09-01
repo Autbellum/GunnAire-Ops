@@ -19911,6 +19911,97 @@ struct GunnAire_OpsTests {
         }
     }
 
+    @Test func vendorCreationIsDurableIdempotentAndConflictAware() throws {
+        let vendorID = try #require(UUID(uuidString: "C35FBD4D-B1F7-4A2B-D239-8EE2268F6487"))
+        let local = Vendor(
+            id: vendorID,
+            name: "  GunnAire Test Supplier  ",
+            contactInfo: "  ORDERS@EXAMPLE.COM • +1 (810) 555-0155  "
+        )
+        let draft = QuickBooksVendorCreateOperation.draft(for: local)
+
+        #expect(draft.localVendorID == vendorID)
+        #expect(draft.displayName == "  GunnAire Test Supplier  ")
+        #expect(draft.email == "ORDERS@EXAMPLE.COM")
+        #expect(draft.phone == "+1 (810) 555-0155")
+        #expect(
+            QuickBooksVendorCreateOperation.storedContactInfo(
+                email: " orders@example.com ",
+                phone: " 810-555-0155 "
+            ) == "orders@example.com • 810-555-0155"
+        )
+
+        let firstRequestID = QuickBooksVendorCreateOperation.requestID(for: vendorID)
+        #expect(firstRequestID == "ga-vendor-c35fbd4d-b1f7-4a2b-d239-8ee2268f6487")
+        #expect(QuickBooksVendorCreateOperation.requestID(for: vendorID) == firstRequestID)
+        #expect(firstRequestID.count == 46)
+        #expect(QuickBooksVendorCreateOperation.requestID(for: UUID()) != firstRequestID)
+
+        let payloadObject = try #require(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(QuickBooksVendorCreateOperation.payload(for: draft))
+            ) as? [String: Any]
+        )
+        #expect(payloadObject["DisplayName"] as? String == "GunnAire Test Supplier")
+        #expect((payloadObject["PrimaryEmailAddr"] as? [String: String])?["Address"] == "ORDERS@EXAMPLE.COM")
+        #expect((payloadObject["PrimaryPhone"] as? [String: String])?["FreeFormNumber"] == "+1 (810) 555-0155")
+
+        let exact = try JSONDecoder().decode(
+            QuickBooksVendor.self,
+            from: Data(#"{"Id":"QBO-VENDOR-1","DisplayName":"gunnaire   test supplier","PrimaryPhone":{"FreeFormNumber":"810-555-0155"},"PrimaryEmailAddr":{"Address":"orders@example.com"}}"#.utf8)
+        )
+        let conflicting = try JSONDecoder().decode(
+            QuickBooksVendor.self,
+            from: Data(#"{"Id":"QBO-VENDOR-2","DisplayName":"GunnAire Test Supplier","PrimaryPhone":{"FreeFormNumber":"810-555-9999"},"PrimaryEmailAddr":{"Address":"different@example.com"}}"#.utf8)
+        )
+        let nameOnlyA = try JSONDecoder().decode(
+            QuickBooksVendor.self,
+            from: Data(#"{"Id":"QBO-VENDOR-3","DisplayName":"GunnAire Test Supplier"}"#.utf8)
+        )
+        let nameOnlyB = try JSONDecoder().decode(
+            QuickBooksVendor.self,
+            from: Data(#"{"Id":"QBO-VENDOR-4","DisplayName":"GunnAire Test Supplier"}"#.utf8)
+        )
+        let unrelated = try JSONDecoder().decode(
+            QuickBooksVendor.self,
+            from: Data(#"{"Id":"QBO-VENDOR-5","DisplayName":"Unrelated Supplier"}"#.utf8)
+        )
+
+        #expect(
+            try QuickBooksVendorCreateOperation.matchingRemoteVendor(
+                for: draft,
+                in: [conflicting, exact]
+            )?.Id == "QBO-VENDOR-1"
+        )
+        #expect(
+            try QuickBooksVendorCreateOperation.matchingRemoteVendor(
+                for: draft,
+                in: [unrelated]
+            ) == nil
+        )
+        #expect(throws: QuickBooksVendorCreateOperationError.self) {
+            try QuickBooksVendorCreateOperation.matchingRemoteVendor(
+                for: draft,
+                in: [conflicting]
+            )
+        }
+        #expect(throws: QuickBooksVendorCreateOperationError.self) {
+            try QuickBooksVendorCreateOperation.matchingRemoteVendor(
+                for: draft,
+                in: [nameOnlyA, nameOnlyB]
+            )
+        }
+
+        let alpha = Vendor(name: "Alpha Supply")
+        let zulu = Vendor(name: "Zulu Supply")
+        let linked = Vendor(quickBooksID: "QBO-LINKED", name: "Linked Supply")
+        #expect(
+            QuickBooksVendorPublicationRecovery.queuedVendors(
+                from: [zulu, linked, alpha]
+            ).map(\.name) == ["Alpha Supply", "Zulu Supply"]
+        )
+    }
+
     @Test func duplicateQuickBooksCatalogMappingsFailClosedAndResolveWithoutDeletingLocalItems() throws {
         let canonical = Item(
             quickBooksID: " QBO-ITEM-DUPLICATE ",

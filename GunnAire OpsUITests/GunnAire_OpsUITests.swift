@@ -4816,6 +4816,91 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdministratorCreatesVendorOfflineAndQueuesOneSafePublication() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Expenses"].tap()
+
+        let addVendor = app.buttons["Add Vendor"]
+        for _ in 0..<24 where !addVendor.isHittable {
+            app.swipeUp()
+        }
+        for _ in 0..<6 where !addVendor.isHittable {
+            app.swipeDown()
+        }
+        XCTAssertTrue(waitForHittable(addVendor))
+        XCTAssertTrue(addVendor.isEnabled)
+        addVendor.tap()
+
+        XCTAssertTrue(app.navigationBars["Add Vendor"].waitForExistence(timeout: 3))
+        let name = app.textFields["QuickBooksVendorName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 3))
+        replaceText(in: name, with: "Offline QBO Vendor")
+        let create = app.buttons["CreateQuickBooksVendor"]
+        XCTAssertTrue(create.exists)
+        XCTAssertTrue(create.isEnabled)
+        create.tap()
+
+        let composerDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.navigationBars["Add Vendor"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [composerDismissed], timeout: 3), .completed)
+
+        let result = app.staticTexts["QuickBooksActionMessage"]
+        XCTAssertTrue(waitForHittable(result))
+        XCTAssertEqual(
+            result.label,
+            "Saved Offline QBO Vendor locally. Connect QuickBooks, then publish it from the pending vendor queue."
+        )
+
+        let pendingCount = app.descendants(matching: .any)["PendingQuickBooksVendorCount"]
+        for _ in 0..<12 where !pendingCount.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(pendingCount))
+        XCTAssertEqual(pendingCount.label, "1 local vendor awaiting QuickBooks")
+
+        let publish = app.buttons["PublishPendingQuickBooksVendors"]
+        XCTAssertTrue(publish.exists)
+        XCTAssertFalse(publish.isEnabled)
+
+        for _ in 0..<6 where !addVendor.isHittable {
+            app.swipeDown()
+        }
+        XCTAssertTrue(waitForHittable(addVendor))
+        addVendor.tap()
+        XCTAssertTrue(app.navigationBars["Add Vendor"].waitForExistence(timeout: 3))
+        let duplicateName = app.textFields["QuickBooksVendorName"]
+        XCTAssertTrue(duplicateName.waitForExistence(timeout: 3))
+        replaceText(in: duplicateName, with: "Offline QBO Vendor")
+        app.buttons["CreateQuickBooksVendor"].tap()
+
+        let duplicateComposerDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.navigationBars["Add Vendor"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [duplicateComposerDismissed], timeout: 3), .completed)
+        XCTAssertTrue(waitForHittable(result))
+        XCTAssertEqual(
+            result.label,
+            "Offline QBO Vendor is already saved locally. Review it in the pending vendor queue before publishing."
+        )
+        XCTAssertEqual(pendingCount.label, "1 local vendor awaiting QuickBooks")
+    }
+
+    @MainActor
     func testQuickBooksManagementUsesFocusedAccountingWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

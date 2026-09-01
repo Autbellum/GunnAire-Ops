@@ -1275,10 +1275,27 @@ final class QuickBooksDataAPI: ObservableObject {
         )
     }
 
-    func createVendor(_ vendor: QuickBooksVendorCreate, completion: @escaping (Result<QuickBooksVendor, Error>) -> Void) {
+    func createVendor(
+        _ vendor: QuickBooksVendorCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksVendor, Error>) -> Void
+    ) {
         let body = try? JSONEncoder().encode(vendor)
+        let normalizedRequestID = requestID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let queryItems = normalizedRequestID?.isEmpty == false
+            ? [URLQueryItem(name: "requestid", value: normalizedRequestID)]
+            : []
         performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "vendor", method: "POST", body: body, contentType: "application/json") },
+            {
+                self.authorizedRequest(
+                    path: "vendor",
+                    queryItems: queryItems,
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
             decode: QuickBooksVendorResponse.self
         ) { result in
             completion(result.flatMap {
@@ -1288,6 +1305,53 @@ final class QuickBooksDataAPI: ObservableObject {
                     entity: "vendor"
                 )
             })
+        }
+    }
+
+    /// Reconciles a complete vendor snapshot before creating. A caller may
+    /// provide an already-paginated snapshot so a bulk publication performs
+    /// one complete QBO read instead of one read per local vendor.
+    func recoverOrCreateVendor(
+        _ draft: QuickBooksVendorCreateDraft,
+        remoteVendors: [QuickBooksVendor]? = nil,
+        completion: @escaping (Result<QuickBooksVendor, Error>) -> Void
+    ) {
+        let recoverOrCreate: ([QuickBooksVendor]) -> Void = { vendors in
+            do {
+                if let existing = try QuickBooksVendorCreateOperation.matchingRemoteVendor(
+                    for: draft,
+                    in: vendors
+                ) {
+                    completion(.success(existing))
+                    return
+                }
+            } catch {
+                completion(.failure(error))
+                return
+            }
+
+            self.createVendor(
+                QuickBooksVendorCreateOperation.payload(for: draft),
+                requestID: QuickBooksVendorCreateOperation.requestID(
+                    for: draft.localVendorID
+                ),
+                completion: completion
+            )
+        }
+
+        if let remoteVendors {
+            recoverOrCreate(remoteVendors)
+            return
+        }
+        fetchVendors { result in
+            switch result {
+            case .success(let vendors):
+                recoverOrCreate(vendors)
+            case .failure(let error):
+                // A failed read cannot prove that a prior create was rejected.
+                // Never begin another duplicate-prone create in that state.
+                completion(.failure(error))
+            }
         }
     }
 
@@ -3215,6 +3279,173 @@ struct QuickBooksVendorCreate: Codable {
     let DisplayName: String
     let PrimaryEmailAddr: QuickBooksEmailAddress?
     let PrimaryPhone: QuickBooksPhoneNumber?
+}
+
+struct QuickBooksVendorCreateDraft: Equatable {
+    let localVendorID: UUID
+    let displayName: String
+    let email: String?
+    let phone: String?
+}
+
+enum QuickBooksVendorCreateOperationError: LocalizedError, Equatable {
+    case invalidName
+    case conflictingRemoteIdentity(String)
+    case ambiguousRemoteIdentity(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidName:
+            "Enter a vendor name before publishing to QuickBooks."
+        case .conflictingRemoteIdentity(let name):
+            "QuickBooks already has \(name) with conflicting contact information. Review the vendor records before creating another."
+        case .ambiguousRemoteIdentity(let name):
+            "More than one QuickBooks vendor matches \(name), and the contact information does not identify one safely. Reconcile the duplicates before retrying."
+        }
+    }
+}
+
+/// One durable local vendor owns one QBO create operation across purchasing,
+/// pricebook sourcing, Bills, Vendor Credits, and accounting-console retries.
+/// Contact conflicts and ambiguity always require human review.
+enum QuickBooksVendorCreateOperation {
+    static func draft(for vendor: Vendor) -> QuickBooksVendorCreateDraft {
+        let contacts = parsedContactInfo(vendor.contactInfo)
+        return QuickBooksVendorCreateDraft(
+            localVendorID: vendor.id,
+            displayName: vendor.name,
+            email: contacts.email,
+            phone: contacts.phone
+        )
+    }
+
+    static func requestID(for localVendorID: UUID) -> String {
+        "ga-vendor-\(localVendorID.uuidString.lowercased())"
+    }
+
+    static func payload(for draft: QuickBooksVendorCreateDraft) -> QuickBooksVendorCreate {
+        QuickBooksVendorCreate(
+            DisplayName: draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines),
+            PrimaryEmailAddr: trimmed(draft.email).map { QuickBooksEmailAddress(Address: $0) },
+            PrimaryPhone: trimmed(draft.phone).map { QuickBooksPhoneNumber(FreeFormNumber: $0) }
+        )
+    }
+
+    static func storedContactInfo(email: String?, phone: String?) -> String? {
+        let combined = [trimmed(email), trimmed(phone)]
+            .compactMap { $0 }
+            .joined(separator: " • ")
+        return combined.isEmpty ? nil : combined
+    }
+
+    static func matchingRemoteVendor(
+        for draft: QuickBooksVendorCreateDraft,
+        in remoteVendors: [QuickBooksVendor]
+    ) throws -> QuickBooksVendor? {
+        let normalizedName = normalizedText(draft.displayName)
+        guard !normalizedName.isEmpty else {
+            throw QuickBooksVendorCreateOperationError.invalidName
+        }
+        let namedCandidates = remoteVendors.filter {
+            normalizedText($0.DisplayName) == normalizedName
+        }
+        guard !namedCandidates.isEmpty else { return nil }
+
+        let compatibleCandidates = namedCandidates.filter {
+            !hasContactConflict(draft: draft, remote: $0)
+        }
+        guard !compatibleCandidates.isEmpty else {
+            throw QuickBooksVendorCreateOperationError.conflictingRemoteIdentity(
+                draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        if namedCandidates.count == 1, let onlyCandidate = compatibleCandidates.first {
+            return onlyCandidate
+        }
+
+        let evidencedCandidates = compatibleCandidates.filter {
+            hasMatchingContactEvidence(draft: draft, remote: $0)
+        }
+        guard evidencedCandidates.count == 1, let exact = evidencedCandidates.first else {
+            throw QuickBooksVendorCreateOperationError.ambiguousRemoteIdentity(
+                draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        return exact
+    }
+
+    private static func parsedContactInfo(_ value: String?) -> (email: String?, phone: String?) {
+        let parts = (value ?? "")
+            .split(separator: "•", omittingEmptySubsequences: true)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let email = parts.first { $0.contains("@") }
+        let phone = parts.first { part in
+            part != email && part.contains(where: \.isNumber)
+        }
+        return (trimmed(email), trimmed(phone))
+    }
+
+    private static func hasContactConflict(
+        draft: QuickBooksVendorCreateDraft,
+        remote: QuickBooksVendor
+    ) -> Bool {
+        conflicts(normalizedEmail(draft.email), normalizedEmail(remote.PrimaryEmailAddr?.Address)) ||
+        conflicts(normalizedPhone(draft.phone), normalizedPhone(remote.PrimaryPhone?.FreeFormNumber))
+    }
+
+    private static func hasMatchingContactEvidence(
+        draft: QuickBooksVendorCreateDraft,
+        remote: QuickBooksVendor
+    ) -> Bool {
+        matches(normalizedEmail(draft.email), normalizedEmail(remote.PrimaryEmailAddr?.Address)) ||
+        matches(normalizedPhone(draft.phone), normalizedPhone(remote.PrimaryPhone?.FreeFormNumber))
+    }
+
+    private static func conflicts(_ local: String, _ remote: String) -> Bool {
+        !local.isEmpty && !remote.isEmpty && local != remote
+    }
+
+    private static func matches(_ local: String, _ remote: String) -> Bool {
+        !local.isEmpty && local == remote
+    }
+
+    private static func normalizedEmail(_ value: String?) -> String {
+        trimmed(value)?.lowercased() ?? ""
+    }
+
+    private static func normalizedPhone(_ value: String?) -> String {
+        var digits = (value ?? "").filter(\.isNumber)
+        if digits.count == 11, digits.first == "1" {
+            digits.removeFirst()
+        }
+        return digits
+    }
+
+    private static func normalizedText(_ value: String?) -> String {
+        (value ?? "")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased()
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        let result = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result?.isEmpty == false ? result : nil
+    }
+}
+
+enum QuickBooksVendorPublicationRecovery {
+    static func queuedVendors(from vendors: [Vendor]) -> [Vendor] {
+        vendors
+            .filter {
+                $0.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+                !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            .sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
 }
 
 struct QuickBooksVendorResponse: Codable {

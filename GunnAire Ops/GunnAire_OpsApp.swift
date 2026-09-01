@@ -285,6 +285,10 @@ private enum GunnAireUITestFixtures {
         for customer in customers where customer.name == "Offline QBO Customer" {
             context.delete(customer)
         }
+        let vendors = try context.fetch(FetchDescriptor<Vendor>())
+        for vendor in vendors where vendor.name == "Offline QBO Vendor" {
+            context.delete(vendor)
+        }
 
         // Every UI-test launch shares the simulator's local SwiftData store. A
         // prior workflow can create additional invoices, estimates, calls, or

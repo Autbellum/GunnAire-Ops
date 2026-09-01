@@ -803,6 +803,7 @@ struct QuickBooksManagementView: View {
     @ObservedObject private var accountingConfigurationStore = QuickBooksAccountingConfigurationStore.shared
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Customer.name, order: .forward) private var localCustomers: [Customer]
+    @Query(sort: \Vendor.name, order: .forward) private var localVendors: [Vendor]
     @Query(sort: \Item.name, order: .forward) private var localCatalogItems: [Item]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var localEstimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var localInvoices: [Invoice]
@@ -838,6 +839,7 @@ struct QuickBooksManagementView: View {
     @State private var showingRefundPaymentSheet = false
     @State private var showingStoreCardSheet = false
     @State private var showingAccountingMappingSheet = false
+    @State private var newlyCreatedLocalVendors: [Vendor] = []
 
     @State private var isLoading = false
     @State private var statusMessage = "Connect QuickBooks in Settings to start live sync."
@@ -1051,6 +1053,16 @@ struct QuickBooksManagementView: View {
 
     private var localEstimatePublicationQueue: [Estimate] {
         QuickBooksEstimatePublicationRecovery.queuedEstimates(from: localEstimates)
+    }
+
+    private var locallyKnownVendors: [Vendor] {
+        let queriedIDs = Set(localVendors.map(\.id))
+        let sameSessionVendors = newlyCreatedLocalVendors.filter { !queriedIDs.contains($0.id) }
+        return localVendors + sameSessionVendors
+    }
+
+    private var localVendorPublicationQueue: [Vendor] {
+        QuickBooksVendorPublicationRecovery.queuedVendors(from: locallyKnownVendors)
     }
 
     private var pendingPricebookReviewItems: [Item] {
@@ -2110,6 +2122,37 @@ struct QuickBooksManagementView: View {
                     }
 
                     Section(header: Text("Vendors").foregroundColor(Color.brandGold)) {
+                        Button("Add Vendor") { showingNewVendorSheet = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(isLoading)
+
+                        if !localVendorPublicationQueue.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Label(
+                                    "\(localVendorPublicationQueue.count) local vendor\(localVendorPublicationQueue.count == 1 ? "" : "s") awaiting QuickBooks",
+                                    systemImage: "arrow.triangle.2.circlepath"
+                                )
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.orange)
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("PendingQuickBooksVendorCount")
+
+                                Text(localVendorPublicationQueue.prefix(4).map(\.name).joined(separator: ", "))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+
+                                Button("Publish Pending Vendors") {
+                                    publishPendingLocalVendors()
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(!isAuthenticated || isLoading)
+                                .accessibilityIdentifier("PublishPendingQuickBooksVendors")
+                            }
+                            .padding(.vertical, 2)
+                        }
+
                         if vendors.isEmpty {
                             emptyState("No QuickBooks vendors loaded.")
                         } else {
@@ -2132,11 +2175,6 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
-                        Button("Add Vendor") { showingNewVendorSheet = true }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.brandGold)
-                            .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated)
                     }
                     }
 
@@ -3267,26 +3305,160 @@ struct QuickBooksManagementView: View {
     }
 
     private func createVendor(name: String, email: String?, phone: String?) {
-        let payload = QuickBooksVendorCreate(
-            DisplayName: name,
-            PrimaryEmailAddr: email.map { QuickBooksEmailAddress(Address: $0) },
-            PrimaryPhone: phone.map { QuickBooksPhoneNumber(FreeFormNumber: $0) }
-        )
+        let normalizedName = name
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased()
+        if let existing = locallyKnownVendors.first(where: {
+            $0.name.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased() == normalizedName
+        }) {
+            actionMessage = existing.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? "\(existing.name) is already linked to QuickBooks."
+                : "\(existing.name) is already saved locally. Review it in the pending vendor queue before publishing."
+            return
+        }
 
-        performAction(message: "Creating vendor in QuickBooks...") {
-            liveAPI.createVendor(payload) { result in
+        let localVendor = Vendor(
+            name: name,
+            contactInfo: QuickBooksVendorCreateOperation.storedContactInfo(
+                email: email,
+                phone: phone
+            )
+        )
+        modelContext.insert(localVendor)
+        do {
+            try modelContext.save()
+            newlyCreatedLocalVendors.append(localVendor)
+        } catch {
+            modelContext.delete(localVendor)
+            actionMessage = "Could not save the vendor locally: \(error.localizedDescription)"
+            return
+        }
+
+        guard isAuthenticated else {
+            actionMessage = "Saved \(localVendor.name) locally. Connect QuickBooks, then publish it from the pending vendor queue."
+            return
+        }
+
+        performAction(message: "Reconciling vendor with QuickBooks...") {
+            liveAPI.recoverOrCreateVendor(
+                QuickBooksVendorCreateOperation.draft(for: localVendor)
+            ) { result in
                 DispatchQueue.main.async {
+                    isLoading = false
                     switch result {
                     case .success(let vendor):
-                        actionMessage = "Vendor created: \(vendor.DisplayName)"
-                        syncAllQuickBooksData()
+                        applyQuickBooksVendor(vendor, to: localVendor)
+                        do {
+                            try modelContext.save()
+                            if !vendors.contains(where: { $0.Id == vendor.Id }) {
+                                vendors.append(vendor)
+                                vendors.sort { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
+                            }
+                            actionMessage = "Vendor linked: \(vendor.DisplayName)"
+                        } catch {
+                            actionMessage = "QuickBooks linked \(vendor.DisplayName), but the local confirmation could not be saved: \(error.localizedDescription)"
+                        }
                     case .failure(let error):
-                        actionMessage = "Vendor creation failed: \(error.localizedDescription)"
-                        isLoading = false
+                        actionMessage = "Saved \(localVendor.name) locally. QuickBooks reconciliation needs attention; retry will read QuickBooks before any create: \(error.localizedDescription)"
                     }
                 }
             }
         }
+    }
+
+    private func publishPendingLocalVendors() {
+        guard isAuthenticated else {
+            actionMessage = "Connect QuickBooks before publishing pending vendors."
+            return
+        }
+        let pending = localVendorPublicationQueue
+        guard !pending.isEmpty else {
+            actionMessage = "Every local vendor already has a QuickBooks link."
+            return
+        }
+
+        performAction(message: "Reconciling \(pending.count) local vendor\(pending.count == 1 ? "" : "s") with QuickBooks...") {
+            liveAPI.fetchVendors { result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .failure(let error):
+                        isLoading = false
+                        actionMessage = "Vendor publication stopped before creating anything because QuickBooks reconciliation failed: \(error.localizedDescription)"
+                    case .success(let remoteVendors):
+                        publishLocalVendorBatch(
+                            pending,
+                            remoteVendors: remoteVendors,
+                            linked: 0,
+                            failed: 0
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func publishLocalVendorBatch(
+        _ pending: [Vendor],
+        remoteVendors: [QuickBooksVendor],
+        linked: Int,
+        failed: Int
+    ) {
+        guard isAuthenticated else {
+            isLoading = false
+            actionMessage = "Vendor publication stopped because QuickBooks is no longer connected."
+            return
+        }
+        guard let localVendor = pending.first else {
+            isLoading = false
+            do {
+                try modelContext.save()
+                vendors = remoteVendors.sorted {
+                    $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending
+                }
+                actionMessage = "Vendor publication complete: \(linked) linked, \(failed) need attention."
+            } catch {
+                actionMessage = "QuickBooks vendor publication completed, but the local link confirmations could not be saved: \(error.localizedDescription)"
+            }
+            return
+        }
+
+        liveAPI.recoverOrCreateVendor(
+            QuickBooksVendorCreateOperation.draft(for: localVendor),
+            remoteVendors: remoteVendors
+        ) { result in
+            DispatchQueue.main.async {
+                var nextRemoteVendors = remoteVendors
+                var linkedCount = linked
+                var failedCount = failed
+                switch result {
+                case .success(let quickBooksVendor):
+                    applyQuickBooksVendor(quickBooksVendor, to: localVendor)
+                    if !nextRemoteVendors.contains(where: { $0.Id == quickBooksVendor.Id }) {
+                        nextRemoteVendors.append(quickBooksVendor)
+                    }
+                    linkedCount += 1
+                case .failure:
+                    failedCount += 1
+                }
+                publishLocalVendorBatch(
+                    Array(pending.dropFirst()),
+                    remoteVendors: nextRemoteVendors,
+                    linked: linkedCount,
+                    failed: failedCount
+                )
+            }
+        }
+    }
+
+    private func applyQuickBooksVendor(_ quickBooksVendor: QuickBooksVendor, to localVendor: Vendor) {
+        let draft = QuickBooksVendorCreateOperation.draft(for: localVendor)
+        localVendor.quickBooksID = quickBooksVendor.Id
+        localVendor.name = quickBooksVendor.DisplayName
+        localVendor.contactInfo = QuickBooksVendorCreateOperation.storedContactInfo(
+            email: quickBooksVendor.PrimaryEmailAddr?.Address ?? draft.email,
+            phone: quickBooksVendor.PrimaryPhone?.FreeFormNumber ?? draft.phone
+        )
     }
 
     private func createPayment(for invoice: QuickBooksInvoice, amount: Double, note: String?, paymentMethodRef: QuickBooksReference?) {
@@ -5484,10 +5656,13 @@ private struct QuickBooksVendorComposeView: View {
             Form {
                 Section("Vendor") {
                     TextField("Vendor Name", text: $name)
+                        .accessibilityIdentifier("QuickBooksVendorName")
                     TextField("Email", text: $email)
                         .keyboardType(.emailAddress)
+                        .accessibilityIdentifier("QuickBooksVendorEmail")
                     TextField("Phone", text: $phone)
                         .keyboardType(.phonePad)
+                        .accessibilityIdentifier("QuickBooksVendorPhone")
                 }
             }
             .navigationTitle("Add Vendor")
@@ -5505,6 +5680,7 @@ private struct QuickBooksVendorComposeView: View {
                         dismiss()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("CreateQuickBooksVendor")
                 }
             }
         }
