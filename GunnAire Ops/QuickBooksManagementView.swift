@@ -346,13 +346,24 @@ enum QuickBooksEstimatePublicationRecovery {
 
 enum PricebookReviewPublicationError: LocalizedError, Equatable {
     case ambiguousRemoteMatch(String)
+    case missingLinkedRemoteItem(name: String, quickBooksID: String)
+    case ambiguousLinkedRemoteItem(String)
 
     var errorDescription: String? {
         switch self {
         case .ambiguousRemoteMatch(let name):
             return "More than one QuickBooks catalog item matches \(name). Link the correct item manually before publishing."
+        case .missingLinkedRemoteItem(let name, let quickBooksID):
+            return "QuickBooks did not return linked item \(quickBooksID) for \(name). No catalog write was sent; confirm the company realm and item before retrying."
+        case .ambiguousLinkedRemoteItem(let quickBooksID):
+            return "QuickBooks returned linked item \(quickBooksID) more than once. No catalog write was sent."
         }
     }
+}
+
+enum ApprovedPricebookLinkOutcome: Equatable {
+    case synchronized
+    case reconciliationRequired(differenceCount: Int)
 }
 
 enum CatalogItemLifecycleError: LocalizedError {
@@ -433,6 +444,48 @@ enum PricebookReviewPublication {
             throw PricebookReviewPublicationError.ambiguousRemoteMatch(localItem.name)
         }
         return candidates.first
+    }
+
+    static func linkedRemoteItem(
+        for localItem: Item,
+        in remoteItems: [QuickBooksItem]
+    ) throws -> QuickBooksItem {
+        let quickBooksID = localItem.quickBooksID?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let candidates = remoteItems.filter { normalize($0.Id) == normalize(quickBooksID) }
+        guard candidates.count <= 1 else {
+            throw PricebookReviewPublicationError.ambiguousLinkedRemoteItem(quickBooksID)
+        }
+        guard let linkedItem = candidates.first, !quickBooksID.isEmpty else {
+            throw PricebookReviewPublicationError.missingLinkedRemoteItem(
+                name: localItem.name,
+                quickBooksID: quickBooksID.isEmpty ? "unassigned" : quickBooksID
+            )
+        }
+        return linkedItem
+    }
+
+    @discardableResult
+    static func linkApprovedItem(
+        _ localItem: Item,
+        to remoteItem: QuickBooksItem,
+        at date: Date = Date()
+    ) -> ApprovedPricebookLinkOutcome {
+        localItem.quickBooksID = remoteItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
+        localItem.quickBooksLastSyncedAt = date
+        localItem.timestamp = date
+        let differences = QuickBooksCatalogReconciliation.differences(
+            localItem: localItem,
+            remoteItem: remoteItem
+        )
+        guard !differences.isEmpty else {
+            localItem.quickBooksSyncStatus = "synced"
+            localItem.quickBooksSyncDetail = nil
+            return .synchronized
+        }
+        localItem.quickBooksSyncStatus = "pending_update"
+        localItem.quickBooksSyncDetail = "Pricebook approval is saved locally. Review \(differences.count) linked QuickBooks difference\(differences.count == 1 ? "" : "s") before choosing which version to publish."
+        return .reconciliationRequired(differenceCount: differences.count)
     }
 
     private static func normalize(_ value: String) -> String {
@@ -985,13 +1038,26 @@ struct QuickBooksManagementView: View {
     @State private var showWebhookEventDetails = false
 
     private var isAuthenticated: Bool {
-        quickBooksDataAPI.isAuthenticated
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksConnected") {
+            return true
+        }
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksDisconnected") {
+            return false
+        }
+        #endif
+        return quickBooksDataAPI.isAuthenticated
     }
 
     #if DEBUG
+    private var linkedPricebookReviewFixtureRequested: Bool {
+        ProcessInfo.processInfo.arguments.contains("-uiTestSeedLinkedPricebookReview")
+    }
+
     private var catalogReconciliationFixtureRequested: Bool {
         ProcessInfo.processInfo.arguments.contains("-uiTestSeedCatalogReconciliation") ||
-        ProcessInfo.processInfo.arguments.contains("-uiTestSeedCatalogMappingConflict")
+        ProcessInfo.processInfo.arguments.contains("-uiTestSeedCatalogMappingConflict") ||
+        linkedPricebookReviewFixtureRequested
     }
 
     private var catalogComparisonUnavailableFixtureRequested: Bool {
@@ -1043,6 +1109,11 @@ struct QuickBooksManagementView: View {
 
     private static var catalogReconciliationFixtureItems: [QuickBooksItem] {
         let data = Data(#"{"Id":"QBO-UI-CATALOG-RECONCILE","SyncToken":"12","Name":"HVAC Diagnostic Service","Type":"Service","Description":"Diagnostic visit and system evaluation","UnitPrice":189,"PurchaseCost":42,"Taxable":false}"#.utf8)
+        return (try? JSONDecoder().decode(QuickBooksItem.self, from: data)).map { [$0] } ?? []
+    }
+
+    private static var linkedPricebookReviewFixtureItems: [QuickBooksItem] {
+        let data = Data(#"{"Id":"QBO-UI-PRICEBOOK-REVIEW","SyncToken":"4","Name":"HVAC Diagnostic Service","Type":"Service","Description":"Diagnostic visit and system evaluation","UnitPrice":239,"PurchaseCost":42,"Taxable":false,"Active":true}"#.utf8)
         return (try? JSONDecoder().decode(QuickBooksItem.self, from: data)).map { [$0] } ?? []
     }
     #endif
@@ -2839,9 +2910,13 @@ struct QuickBooksManagementView: View {
                     }
                     #if DEBUG
                     if catalogReconciliationFixtureRequested {
-                        items = catalogComparisonUnavailableFixtureRequested
-                            ? []
-                            : Self.catalogReconciliationFixtureItems
+                        if catalogComparisonUnavailableFixtureRequested {
+                            items = []
+                        } else if linkedPricebookReviewFixtureRequested {
+                            items = Self.linkedPricebookReviewFixtureItems
+                        } else {
+                            items = Self.catalogReconciliationFixtureItems
+                        }
                         showCatalogReconciliationQueue = true
                     }
                     if accountingMappingFixtureRequested {
@@ -3172,6 +3247,9 @@ struct QuickBooksManagementView: View {
 
     private func approvePricebookItem(_ item: Item) {
         let reviewerEmail = AppIdentity.currentEmail
+        let hasLinkedQuickBooksItem = item.quickBooksID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty == false
         item.approveForPricebook(by: reviewerEmail)
         activePricebookReviewID = item.id
         do {
@@ -3182,6 +3260,17 @@ struct QuickBooksManagementView: View {
             return
         }
 
+        if hasLinkedQuickBooksItem {
+            showCatalogReconciliationQueue = true
+            guard isAuthenticated else {
+                activePricebookReviewID = nil
+                actionMessage = "\(item.name) is approved for the company pricebook. Connect QuickBooks to load its linked comparison; no QuickBooks change was sent."
+                return
+            }
+            refreshApprovedLinkedCatalogItem(item)
+            return
+        }
+
         guard isAuthenticated else {
             activePricebookReviewID = nil
             actionMessage = "\(item.name) is approved for the company pricebook. Connect QuickBooks to publish it."
@@ -3189,6 +3278,44 @@ struct QuickBooksManagementView: View {
         }
 
         publishApprovedCatalogItem(item)
+    }
+
+    private func refreshApprovedLinkedCatalogItem(_ item: Item) {
+        actionMessage = "Approved \(item.name). Loading its linked QuickBooks comparison..."
+        #if DEBUG
+        if linkedPricebookReviewFixtureRequested {
+            finishApprovedCatalogLink(
+                item,
+                remoteItemResult: Result {
+                    try PricebookReviewPublication.linkedRemoteItem(
+                        for: item,
+                        in: Self.linkedPricebookReviewFixtureItems
+                    )
+                },
+                remoteItems: Self.linkedPricebookReviewFixtureItems
+            )
+            return
+        }
+        #endif
+        liveAPI.fetchItems { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .failure(let error):
+                    markApprovedPricebookPublicationFailure(item, error: error)
+                case .success(let remoteItems):
+                    finishApprovedCatalogLink(
+                        item,
+                        remoteItemResult: Result {
+                            try PricebookReviewPublication.linkedRemoteItem(
+                                for: item,
+                                in: remoteItems
+                            )
+                        },
+                        remoteItems: remoteItems
+                    )
+                }
+            }
+        }
     }
 
     private func retryCatalogPublication(_ item: Item) {
@@ -3233,23 +3360,11 @@ struct QuickBooksManagementView: View {
                 case .success(let remoteItems):
                     do {
                         if let existing = try PricebookReviewPublication.matchingRemoteItem(for: item, in: remoteItems) {
-                            let shouldStageReactivation = item.isAvailableForNewWork && existing.Active == false
-                            try QuickBooksCatalogMappingIntegrity.validateAssignment(
-                                of: existing.Id,
-                                to: item,
-                                in: localCatalogItems
+                            finishApprovedCatalogLink(
+                                item,
+                                remoteItemResult: .success(existing),
+                                remoteItems: remoteItems
                             )
-                            applyApprovedQuickBooksItem(existing, to: item)
-                            if shouldStageReactivation {
-                                item.restoreToPricebook(by: AppIdentity.currentEmail)
-                                showCatalogReconciliationQueue = true
-                                finishApprovedPricebookPublication(
-                                    item,
-                                    message: "Linked \(item.name) to its inactive QuickBooks item. Review the staged reactivation before using it on new work."
-                                )
-                            } else {
-                                finishApprovedPricebookPublication(item, message: "Approved and linked \(item.name) to its existing QuickBooks catalog item.")
-                            }
                             return
                         }
                     } catch {
@@ -3259,6 +3374,40 @@ struct QuickBooksManagementView: View {
                     createApprovedPricebookItem(item, remoteItems: remoteItems)
                 }
             }
+        }
+    }
+
+    private func finishApprovedCatalogLink(
+        _ item: Item,
+        remoteItemResult: Result<QuickBooksItem, Error>,
+        remoteItems: [QuickBooksItem]
+    ) {
+        do {
+            let remoteItem = try remoteItemResult.get()
+            try QuickBooksCatalogMappingIntegrity.validateAssignment(
+                of: remoteItem.Id,
+                to: item,
+                in: localCatalogItems
+            )
+            items = remoteItems.sorted {
+                $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending
+            }
+            let outcome = PricebookReviewPublication.linkApprovedItem(item, to: remoteItem)
+            switch outcome {
+            case .synchronized:
+                finishApprovedPricebookPublication(
+                    item,
+                    message: "Approved and linked \(item.name). Its QuickBooks catalog values already match."
+                )
+            case .reconciliationRequired(let differenceCount):
+                showCatalogReconciliationQueue = true
+                finishApprovedPricebookPublication(
+                    item,
+                    message: "Approved and linked \(item.name). Review \(differenceCount) linked QuickBooks difference\(differenceCount == 1 ? "" : "s") before choosing which version to publish."
+                )
+            }
+        } catch {
+            markApprovedPricebookPublicationFailure(item, error: error)
         }
     }
 
@@ -3332,8 +3481,13 @@ struct QuickBooksManagementView: View {
         item.quickBooksSyncStatus = "needs_attention"
         item.quickBooksSyncDetail = error.localizedDescription
         item.quickBooksLastSyncedAt = Date()
+        if item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            showCatalogReconciliationQueue = true
+        } else {
+            showCatalogPublicationQueue = true
+        }
         try? modelContext.save()
-        actionMessage = "\(item.name) is approved locally, but QuickBooks publication needs attention: \(error.localizedDescription)"
+        actionMessage = "\(item.name) is approved locally, but QuickBooks catalog review needs attention: \(error.localizedDescription)"
     }
 
     private func createEstimate(
@@ -4180,7 +4334,7 @@ struct QuickBooksManagementView: View {
         Button(
             activePricebookReviewID == item.id
                 ? "Approving..."
-                : (isAuthenticated ? "Approve & Publish" : "Approve for Pricebook")
+                : pricebookApprovalButtonTitle(for: item)
         ) {
             approvePricebookItem(item)
         }
@@ -4189,6 +4343,13 @@ struct QuickBooksManagementView: View {
         .foregroundStyle(Color.primaryBlack)
         .disabled(activePricebookReviewID != nil || activeCatalogPublicationID != nil)
         .accessibilityIdentifier("ApprovePricebookItem-\(item.id.uuidString)")
+    }
+
+    private func pricebookApprovalButtonTitle(for item: Item) -> String {
+        guard isAuthenticated else { return "Approve for Pricebook" }
+        return item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? "Approve & Compare"
+            : "Approve & Publish"
     }
 
     @ViewBuilder

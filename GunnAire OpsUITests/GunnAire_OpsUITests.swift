@@ -4762,6 +4762,48 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testLinkedPricebookApprovalStagesComparisonWithoutChoosingQuickBooksValues() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedLinkedPricebookReview",
+            "-uiTestForceQuickBooksConnected",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let approveItem = app.buttons["ApprovePricebookItem-\(catalogItemID)"]
+        for _ in 0..<8 where !approveItem.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(approveItem.waitForExistence(timeout: 3))
+        XCTAssertEqual(approveItem.label, "Approve & Compare")
+        XCTAssertTrue(app.staticTexts["$189.00"].exists)
+        approveItem.tap()
+
+        XCTAssertTrue(app.staticTexts["No field-created catalog items need review."].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["QuickBooksCatalogReconciliationQueue"].waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.staticTexts["QBO QBO-UI-PRICEBOOK-REVIEW • 1 changed field"]
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(app.staticTexts["Sales price"].exists)
+        XCTAssertTrue(app.staticTexts["$189.00"].exists)
+        XCTAssertTrue(app.staticTexts["$239.00"].exists)
+        XCTAssertTrue(app.buttons["Use QuickBooks Version"].exists)
+        XCTAssertTrue(app.buttons["Publish GunnAire Version"].exists)
+    }
+
+    @MainActor
     func testAdministratorCreatesTaxableCatalogItemOfflineBeforeQuickBooksPublication() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

@@ -19762,6 +19762,62 @@ struct GunnAire_OpsTests {
         }
     }
 
+    @Test func linkedFieldDraftApprovalStagesComparisonWithoutChoosingTheQuickBooksVersion() throws {
+        let approvalDate = Date(timeIntervalSinceReferenceDate: 1_475_000)
+        let local = Item(
+            quickBooksID: "QBO-LINKED-FIELD-ITEM",
+            quickBooksSyncStatus: "needs_review",
+            pricebookReviewStatus: .needsReview,
+            pricebookCreatedByEmail: "field@gunnaire.com",
+            name: "HVAC Diagnostic Service",
+            itemType: .service,
+            unitPrice: 189,
+            purchaseCost: 42,
+            itemDescription: "Diagnostic visit and system evaluation"
+        )
+        local.approveForPricebook(by: "admin@gunnaire.com", at: approvalDate)
+
+        #expect(!local.requiresPricebookReview)
+        #expect(local.quickBooksSyncStatus == "pending_update")
+        #expect(local.quickBooksSyncDetail?.contains("load the linked QuickBooks version") == true)
+        #expect(local.timestamp == approvalDate)
+
+        let differingData = Data(#"{"Id":"QBO-LINKED-FIELD-ITEM","SyncToken":"4","Name":"HVAC Diagnostic Service","Type":"Service","Description":"Diagnostic visit and system evaluation","UnitPrice":239,"PurchaseCost":42,"Taxable":false,"Active":true}"#.utf8)
+        let differingRemote = try JSONDecoder().decode(QuickBooksItem.self, from: differingData)
+        let linkedRemote = try PricebookReviewPublication.linkedRemoteItem(
+            for: local,
+            in: [differingRemote]
+        )
+        let comparisonDate = approvalDate.addingTimeInterval(60)
+        let outcome = PricebookReviewPublication.linkApprovedItem(
+            local,
+            to: linkedRemote,
+            at: comparisonDate
+        )
+
+        #expect(outcome == .reconciliationRequired(differenceCount: 1))
+        #expect(local.quickBooksSyncStatus == "pending_update")
+        #expect(local.quickBooksCatalogSyncState == "pending_update")
+        #expect(local.unitPrice == 189)
+        #expect(local.purchaseCost == 42)
+        #expect(local.itemDescription == "Diagnostic visit and system evaluation")
+        #expect(local.quickBooksLastSyncedAt == comparisonDate)
+        #expect(local.quickBooksSyncDetail?.contains("Review 1 linked QuickBooks difference") == true)
+        #expect(throws: PricebookReviewPublicationError.self) {
+            try PricebookReviewPublication.linkedRemoteItem(for: local, in: [])
+        }
+
+        let matchingData = Data(#"{"Id":"QBO-LINKED-FIELD-ITEM","SyncToken":"5","Name":"HVAC Diagnostic Service","Type":"Service","Description":"Diagnostic visit and system evaluation","UnitPrice":189,"PurchaseCost":42,"Taxable":false,"Active":true}"#.utf8)
+        let matchingRemote = try JSONDecoder().decode(QuickBooksItem.self, from: matchingData)
+        #expect(
+            PricebookReviewPublication.linkApprovedItem(local, to: matchingRemote)
+                == .synchronized
+        )
+        #expect(local.quickBooksSyncStatus == "synced")
+        #expect(local.quickBooksSyncDetail == nil)
+        #expect(local.unitPrice == 189)
+    }
+
     @Test func catalogCreationStartsLocallyAndReusesOneQuickBooksOperationAcrossRetries() throws {
         let itemID = try #require(UUID(uuidString: "A13EAB2B-9FD5-4809-B017-6CC0046D4265"))
         let createdAt = Date(timeIntervalSinceReferenceDate: 1_500_000)
@@ -21476,6 +21532,16 @@ struct GunnAire_OpsTests {
         #expect(fieldItem.quickBooksCatalogSyncState == "needs_review")
         #expect(fieldItem.quickBooksSyncDetail?.contains("Administrator pricebook review") == true)
         #expect(fieldItem.quickBooksLastSyncedAt != nil)
+
+        let approvalDate = Date(timeIntervalSinceReferenceDate: 1_650_000)
+        fieldItem.approveForPricebook(by: "admin@gunnaire.com", at: approvalDate)
+        #expect(!fieldItem.requiresPricebookReview)
+        #expect(fieldItem.quickBooksSyncStatus == "pending_update")
+        #expect(fieldItem.quickBooksCatalogSyncState == "pending_update")
+        #expect(fieldItem.quickBooksSyncDetail?.contains("load the linked QuickBooks version") == true)
+        #expect(fieldItem.timestamp == approvalDate)
+        #expect(fieldItem.unitPrice == 89)
+        #expect(fieldItem.purchaseCost == 31)
     }
 
     @Test func changeOrderKeepsOriginalApprovalAndIdentifiesTheRevisedProposal() async throws {

@@ -236,7 +236,9 @@ private enum GunnAireUITestFixtures {
         let isInventoryFixture = arguments.contains("-uiTestSeedInventoryJob") || isInventoryShortageFixture || isPurchaseOrderDraftFixture || isWarrantyClaimFixture
         let isPendingEstimateFixture = arguments.contains("-uiTestSeedPendingEstimate")
         let isAcceptedStandaloneEstimateFixture = arguments.contains("-uiTestSeedAcceptedStandaloneEstimate")
-        let isPricebookReviewFixture = arguments.contains("-uiTestSeedPricebookReview")
+        let isLinkedPricebookReviewFixture = arguments.contains("-uiTestSeedLinkedPricebookReview")
+        let isPricebookReviewFixture = arguments.contains("-uiTestSeedPricebookReview") ||
+            isLinkedPricebookReviewFixture
         let isCatalogReconciliationFixture = arguments.contains("-uiTestSeedCatalogReconciliation")
         let isCatalogMappingConflictFixture = arguments.contains("-uiTestSeedCatalogMappingConflict")
         let isArchivedCatalogFixture = arguments.contains("-uiTestSeedArchivedCatalog")
@@ -620,7 +622,9 @@ private enum GunnAireUITestFixtures {
         )
         let catalogItem = Item(
             id: catalogItemID,
-            quickBooksID: (isCatalogReconciliationFixture || isCatalogMappingConflictFixture) ? "QBO-UI-CATALOG-RECONCILE" : nil,
+            quickBooksID: isLinkedPricebookReviewFixture
+                ? "QBO-UI-PRICEBOOK-REVIEW"
+                : ((isCatalogReconciliationFixture || isCatalogMappingConflictFixture) ? "QBO-UI-CATALOG-RECONCILE" : nil),
             quickBooksSyncStatus: isPricebookReviewFixture
                 ? "needs_review"
                 : (isCatalogReconciliationFixture ? "pending_update" : (isSyncRecoveryFixture ? "needs_attention" : nil)),

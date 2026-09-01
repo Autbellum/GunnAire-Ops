@@ -925,10 +925,14 @@ final class Item {
         pricebookReviewStatus = .approved
         pricebookReviewedByEmail = Self.normalizedOptionalValue(reviewerEmail)
         pricebookReviewedAt = date
-        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            quickBooksSyncStatus = "pending_update"
+            quickBooksSyncDetail = "Pricebook review approved; load the linked QuickBooks version and review any differences before publishing."
+        } else {
             quickBooksSyncStatus = "pending"
             quickBooksSyncDetail = "Pricebook review approved; QuickBooks publication is pending."
         }
+        timestamp = date
     }
 
     func archiveFromPricebook(by reviewerEmail: String?, at date: Date = Date()) {
