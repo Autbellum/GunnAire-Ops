@@ -366,6 +366,84 @@ enum ApprovedPricebookLinkOutcome: Equatable {
     case reconciliationRequired(differenceCount: Int)
 }
 
+enum CompanyPricebookSyncDisposition: Equatable {
+    case synchronized
+    case publicationPending
+    case comparisonPending
+    case needsAttention
+
+    var title: String {
+        switch self {
+        case .synchronized:
+            "Synced with QuickBooks"
+        case .publicationPending:
+            "QuickBooks publication pending"
+        case .comparisonPending:
+            "QuickBooks comparison pending"
+        case .needsAttention:
+            "QuickBooks needs attention"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .synchronized:
+            "checkmark.circle.fill"
+        case .publicationPending:
+            "arrow.up.circle"
+        case .comparisonPending:
+            "arrow.triangle.2.circlepath"
+        case .needsAttention:
+            "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+/// Keeps the operational GunnAire pricebook browseable even when the provider
+/// is disconnected. Review drafts and archived records already have dedicated
+/// compact queues; this list is the active catalog used for new field work.
+enum CompanyPricebookPresentation {
+    static func activeItems(from items: [Item], matching query: String) -> [Item] {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return items
+            .filter { item in
+                guard item.isAvailableForNewWork else { return false }
+                guard !normalizedQuery.isEmpty else { return true }
+                return [
+                    item.name,
+                    item.sku,
+                    item.itemDescription,
+                    item.preferredVendorName,
+                    item.vendorPartNumber,
+                    item.quickBooksID
+                ]
+                .compactMap { $0?.lowercased() }
+                .joined(separator: " ")
+                .contains(normalizedQuery)
+            }
+            .sorted { lhs, rhs in
+                let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+                if nameOrder != .orderedSame {
+                    return nameOrder == .orderedAscending
+                }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+    }
+
+    static func syncDisposition(for item: Item) -> CompanyPricebookSyncDisposition {
+        switch item.quickBooksCatalogSyncState {
+        case "synced":
+            .synchronized
+        case "pending":
+            .publicationPending
+        case "pending_update":
+            .comparisonPending
+        default:
+            .needsAttention
+        }
+    }
+}
+
 enum CatalogItemLifecycleError: LocalizedError {
     case pendingDocuments(PricebookReviewDocumentImpact)
     case activeAssemblyDependencies([String])
@@ -1019,6 +1097,7 @@ struct QuickBooksManagementView: View {
     @State private var paymentToRefund: Payment?
     @State private var quickBooksReconnectRequired = false
     @State private var showCustomersList = false
+    @State private var showCompanyPricebook = false
     @State private var showCatalogList = false
     @State private var showEstimatePublicationQueue = false
     @State private var showCatalogPublicationQueue = false
@@ -1027,6 +1106,7 @@ struct QuickBooksManagementView: View {
     @State private var showEstimatesList = false
     @State private var showInvoicesList = false
     @State private var customerSearchText = ""
+    @State private var companyPricebookSearchText = ""
     @State private var catalogSearchText = ""
     @State private var estimateSearchText = ""
     @State private var invoiceSearchText = ""
@@ -1265,6 +1345,17 @@ struct QuickBooksManagementView: View {
         localCatalogItems
             .filter(\.isCatalogArchived)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var activeCompanyPricebookItems: [Item] {
+        CompanyPricebookPresentation.activeItems(from: localCatalogItems, matching: "")
+    }
+
+    private var filteredCompanyPricebookItems: [Item] {
+        CompanyPricebookPresentation.activeItems(
+            from: localCatalogItems,
+            matching: companyPricebookSearchText
+        )
     }
 
     private var catalogReconciliationEntries: [QuickBooksCatalogReconciliationEntry] {
@@ -2032,10 +2123,87 @@ struct QuickBooksManagementView: View {
                             .disabled(isLoading)
                     }
 
-                    Section(header: Text("Product Catalog").foregroundColor(Color.brandGold)) {
-                        DisclosureGroup("Product Catalog (\(items.count))", isExpanded: $showCatalogList) {
+                    Section(
+                        header: Text("Company Pricebook")
+                            .foregroundColor(Color.brandGold)
+                            .accessibilityIdentifier("CompanyPricebookSection")
+                    ) {
+                        Text("This local catalog is available to authorized field workflows even when QuickBooks is disconnected. Provider publication and comparison status stays visible on each item.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        DisclosureGroup(isExpanded: $showCompanyPricebook) {
+                            if activeCompanyPricebookItems.isEmpty {
+                                emptyState("No active GunnAire pricebook items are available.")
+                            } else {
+                                TextField("Search company pricebook", text: $companyPricebookSearchText)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .accessibilityIdentifier("CompanyPricebookSearch")
+
+                                if filteredCompanyPricebookItems.isEmpty {
+                                    Text("No active pricebook items match this search.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    ForEach(filteredCompanyPricebookItems) { item in
+                                        let disposition = CompanyPricebookPresentation.syncDisposition(for: item)
+                                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text(item.name)
+                                                    .font(.headline)
+                                                Text([
+                                                    item.sku.map { "SKU \($0)" },
+                                                    item.itemType.rawValue,
+                                                    item.preferredVendorName
+                                                ].compactMap { $0 }.joined(separator: " • "))
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                                Label(disposition.title, systemImage: disposition.systemImage)
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(companyPricebookSyncTint(disposition))
+                                                    .accessibilityIdentifier("CompanyPricebookSyncStatus-\(item.id.uuidString)")
+                                            }
+                                            Spacer()
+                                            Text(item.unitPrice, format: .currency(code: "USD"))
+                                                .font(.subheadline.weight(.semibold))
+                                            Button {
+                                                catalogItemBeingEdited = item
+                                            } label: {
+                                                Image(systemName: "pencil")
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .accessibilityLabel("Edit \(item.name)")
+                                            .accessibilityHint("Edit the local pricebook item and stage any accounting changes for review.")
+                                            .accessibilityIdentifier("EditCompanyPricebookItem-\(item.id.uuidString)")
+                                        }
+                                        .padding(.vertical, 3)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label(
+                                "Browse \(activeCompanyPricebookItems.count) active \(activeCompanyPricebookItems.count == 1 ? "item" : "items")",
+                                systemImage: "books.vertical"
+                            )
+                        }
+                        .accessibilityIdentifier("CompanyPricebookDisclosure")
+
+                        Button("Add Catalog Item") { showingNewCatalogItemSheet = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(activeCatalogPublicationID != nil)
+                    }
+
+                    Section(header: Text("QuickBooks Catalog").foregroundColor(Color.brandGold)) {
+                        DisclosureGroup("QuickBooks Catalog (\(items.count))", isExpanded: $showCatalogList) {
                             if items.isEmpty {
-                                emptyState("No QuickBooks products or services loaded.")
+                                emptyState(
+                                    isAuthenticated
+                                        ? "No QuickBooks products or services loaded. Refresh QuickBooks to compare the provider catalog."
+                                        : "Connect QuickBooks to load the provider catalog. The GunnAire company pricebook remains available above."
+                                )
                             } else {
                                 TextField("Search catalog", text: $catalogSearchText)
                                     .textInputAutocapitalization(.never)
@@ -2092,12 +2260,6 @@ struct QuickBooksManagementView: View {
                                 }
                             }
                         }
-
-                        Button("Add Catalog Item") { showingNewCatalogItemSheet = true }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.brandGold)
-                            .foregroundStyle(Color.primaryBlack)
-                            .disabled(activeCatalogPublicationID != nil)
                     }
 
                     if !archivedCatalogItems.isEmpty {
@@ -2792,6 +2954,8 @@ struct QuickBooksManagementView: View {
                         }
                     }
                     .tint(Color.brandGold)
+                    .presentationDetents([.large])
+                    .presentationSizing(.page)
                 }
                 .sheet(isPresented: $showingNewEstimateSheet) {
                     QuickBooksEstimateComposeView(customers: customers) { customer, amount, note, email, sendAfterCreate in
@@ -4350,6 +4514,17 @@ struct QuickBooksManagementView: View {
         return item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? "Approve & Compare"
             : "Approve & Publish"
+    }
+
+    private func companyPricebookSyncTint(_ disposition: CompanyPricebookSyncDisposition) -> Color {
+        switch disposition {
+        case .synchronized:
+            .green
+        case .publicationPending:
+            .secondary
+        case .comparisonPending, .needsAttention:
+            .orange
+        }
     }
 
     @ViewBuilder
@@ -6181,6 +6356,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
     @State private var assemblySearchText = ""
     @State private var assemblyValidationMessage: String?
     @State private var lifecycleValidationMessage: String?
+    @FocusState private var isEditingNumericValue: Bool
 
     init(
         item: Item,
@@ -6329,6 +6505,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                         .textInputAutocapitalization(.characters)
                     TextField("Sales price", text: $unitPrice)
                         .keyboardType(.decimalPad)
+                        .focused($isEditingNumericValue)
                         .accessibilityIdentifier("CatalogEditSalesPrice")
                     Toggle("Taxable", isOn: $isTaxable)
                 }
@@ -6336,6 +6513,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                 Section("Purchasing") {
                     TextField("Purchase cost", text: $purchaseCost)
                         .keyboardType(.decimalPad)
+                        .focused($isEditingNumericValue)
                     TextField("Purchase description", text: $purchaseDescription, axis: .vertical)
                         .lineLimit(2...4)
                     Picker("Preferred vendor", selection: $preferredVendorID) {
@@ -6509,6 +6687,12 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                             ? "SavePricebookReviewChanges"
                             : "StageCatalogChanges"
                     )
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { isEditingNumericValue = false }
+                        .accessibilityLabel("Done Editing Catalog Item")
+                        .accessibilityIdentifier("DoneEditingCatalogItem")
                 }
             }
         }

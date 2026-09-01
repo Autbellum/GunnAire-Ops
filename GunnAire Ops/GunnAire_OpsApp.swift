@@ -237,6 +237,7 @@ private enum GunnAireUITestFixtures {
         let isPendingEstimateFixture = arguments.contains("-uiTestSeedPendingEstimate")
         let isAcceptedStandaloneEstimateFixture = arguments.contains("-uiTestSeedAcceptedStandaloneEstimate")
         let isLinkedPricebookReviewFixture = arguments.contains("-uiTestSeedLinkedPricebookReview")
+        let isOfflineCompanyPricebookFixture = arguments.contains("-uiTestSeedOfflineCompanyPricebook")
         let isPricebookReviewFixture = arguments.contains("-uiTestSeedPricebookReview") ||
             isLinkedPricebookReviewFixture
         let isCatalogReconciliationFixture = arguments.contains("-uiTestSeedCatalogReconciliation")
@@ -560,7 +561,8 @@ private enum GunnAireUITestFixtures {
             isFieldExpenseFixture ||
             isOperationalAlertFixture ||
             isTimeOffRequestFixture ||
-            isTechnicianRouteFixture
+            isTechnicianRouteFixture ||
+            isOfflineCompanyPricebookFixture
         guard shouldSeedOperationalFixture else {
             if let existingFixtureCustomer {
                 context.delete(existingFixtureCustomer)
@@ -624,7 +626,9 @@ private enum GunnAireUITestFixtures {
             id: catalogItemID,
             quickBooksID: isLinkedPricebookReviewFixture
                 ? "QBO-UI-PRICEBOOK-REVIEW"
-                : ((isCatalogReconciliationFixture || isCatalogMappingConflictFixture) ? "QBO-UI-CATALOG-RECONCILE" : nil),
+                : ((isCatalogReconciliationFixture || isCatalogMappingConflictFixture)
+                    ? "QBO-UI-CATALOG-RECONCILE"
+                    : (isOfflineCompanyPricebookFixture ? "QBO-UI-OFFLINE-PRICEBOOK" : nil)),
             quickBooksSyncStatus: isPricebookReviewFixture
                 ? "needs_review"
                 : (isCatalogReconciliationFixture ? "pending_update" : (isSyncRecoveryFixture ? "needs_attention" : nil)),

@@ -4804,6 +4804,68 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdministratorEditsCompanyPricebookOfflineAndStagesQuickBooksComparison() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedOfflineCompanyPricebook",
+            "-uiTestForceQuickBooksDisconnected",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let companyPricebook = app.buttons["CompanyPricebookDisclosure"]
+        for _ in 0..<14 where !(companyPricebook.exists && companyPricebook.isHittable) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(companyPricebook))
+        companyPricebook.tap()
+
+        let syncStatus = app.staticTexts["Synced with QuickBooks"]
+        for _ in 0..<4 where !(syncStatus.exists && syncStatus.isHittable) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(syncStatus))
+        XCTAssertTrue(app.staticTexts["$189.00"].exists)
+
+        let edit = app.buttons["Edit HVAC Diagnostic Service"]
+        XCTAssertTrue(waitForHittable(edit))
+        edit.tap()
+
+        XCTAssertTrue(app.navigationBars["Edit Catalog Item"].waitForExistence(timeout: 3))
+        let salesPrice = app.textFields["CatalogEditSalesPrice"]
+        XCTAssertTrue(salesPrice.waitForExistence(timeout: 3))
+        replaceText(in: salesPrice, with: "215")
+        let doneEditing = app.buttons["DoneEditingCatalogItem"]
+        XCTAssertTrue(doneEditing.waitForExistence(timeout: 3))
+        doneEditing.tap()
+        let editorNavigation = app.navigationBars["Edit Catalog Item"]
+        let stage = editorNavigation.buttons["Stage Changes"]
+        XCTAssertTrue(waitForHittable(stage))
+        XCTAssertTrue(stage.isEnabled)
+        stage.tap()
+
+        let editorDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.navigationBars["Edit Catalog Item"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [editorDismissed], timeout: 3), .completed)
+        let comparisonPending = app.staticTexts["QuickBooks comparison pending"]
+        XCTAssertTrue(comparisonPending.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["$215.00"].exists)
+        XCTAssertFalse(app.buttons["Publish GunnAire Version"].exists)
+    }
+
+    @MainActor
     func testAdministratorCreatesTaxableCatalogItemOfflineBeforeQuickBooksPublication() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -5076,12 +5138,22 @@ final class GunnAire_OpsUITests: XCTestCase {
         approvePricebookItem.tap()
         XCTAssertTrue(app.staticTexts["No field-created catalog items need review."].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Customers"].exists)
-        XCTAssertTrue(app.staticTexts["Product Catalog"].exists)
+        XCTAssertTrue(app.staticTexts["Company Pricebook"].exists)
+        let quickBooksCatalog = app.staticTexts["QuickBooks Catalog"]
+        for _ in 0..<4 where !quickBooksCatalog.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(quickBooksCatalog.waitForExistence(timeout: 3))
         XCTAssertFalse(app.buttons["Record QB Payment"].exists)
         XCTAssertFalse(app.staticTexts["Sync Health"].exists)
 
-        workspacePicker.buttons["Payments"].tap()
-        XCTAssertTrue(workspacePicker.buttons["Payments"].isSelected)
+        let paymentsWorkspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        for _ in 0..<12 where !paymentsWorkspacePicker.exists {
+            app.swipeDown()
+        }
+        XCTAssertTrue(paymentsWorkspacePicker.waitForExistence(timeout: 3))
+        paymentsWorkspacePicker.buttons["Payments"].tap()
+        XCTAssertTrue(paymentsWorkspacePicker.buttons["Payments"].isSelected)
         XCTAssertTrue(app.buttons["Record Payment"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["QuickBooksLinkedPaymentMethods"].exists)
     }
@@ -5218,9 +5290,16 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         XCTAssertTrue(archivedSection.waitForExistence(timeout: 3))
         let disclosure = app.buttons["Review 1 archived item"]
-        XCTAssertTrue(disclosure.exists)
+        for _ in 0..<4 where !(disclosure.exists && disclosure.isHittable) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(disclosure))
         disclosure.tap()
-        XCTAssertTrue(app.staticTexts["Archived Blower Motor"].waitForExistence(timeout: 3))
+        let archivedItem = app.staticTexts["Archived Blower Motor"]
+        for _ in 0..<4 where !archivedItem.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(archivedItem.waitForExistence(timeout: 3))
 
         let restore = app.buttons["RestoreArchivedCatalogItem-\(archivedCatalogItemID)"]
         for _ in 0..<4 where !restore.exists {

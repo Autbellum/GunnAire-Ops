@@ -20487,6 +20487,74 @@ struct GunnAire_OpsTests {
         #expect(CatalogItemSelectionPolicy.canAdd(draft, documentScopedReviewItemIDs: []))
     }
 
+    @Test func companyPricebookPresentationKeepsTheLocalCatalogManageableOffline() {
+        let synchronized = Item(
+            quickBooksID: "QBO-LOCAL-PRICEBOOK-1",
+            quickBooksSyncStatus: "synced",
+            name: "HVAC Diagnostic Service",
+            itemType: .service,
+            unitPrice: 189,
+            sku: "DIAG-01"
+        )
+        let publicationPending = Item(
+            quickBooksSyncStatus: "pending",
+            name: "45/5 Dual Run Capacitor",
+            itemType: .nonInventory,
+            unitPrice: 50,
+            sku: "CAP-45-5",
+            preferredVendorName: "Johnstone Supply"
+        )
+        let comparisonPending = Item(
+            quickBooksID: "QBO-LOCAL-PRICEBOOK-2",
+            quickBooksSyncStatus: "pending_update",
+            name: "Compressor Replacement",
+            itemType: .nonInventory,
+            unitPrice: 2_450
+        )
+        let needsAttention = Item(
+            quickBooksID: "QBO-LOCAL-PRICEBOOK-3",
+            quickBooksSyncStatus: "needs_attention",
+            name: "Emergency Service",
+            unitPrice: 289
+        )
+        let reviewDraft = Item(
+            quickBooksSyncStatus: "needs_review",
+            pricebookReviewStatus: .needsReview,
+            name: "Field-created Draft",
+            unitPrice: 75
+        )
+        let archived = Item(name: "Retired Motor", unitPrice: 600)
+        archived.archiveFromPricebook(by: "admin@gunnaire.com")
+        let allItems = [archived, reviewDraft, needsAttention, comparisonPending, publicationPending, synchronized]
+
+        #expect(
+            CompanyPricebookPresentation.activeItems(from: allItems, matching: "")
+                .map(\.name) == [
+                    "45/5 Dual Run Capacitor",
+                    "Compressor Replacement",
+                    "Emergency Service",
+                    "HVAC Diagnostic Service"
+                ]
+        )
+        #expect(
+            CompanyPricebookPresentation.activeItems(from: allItems, matching: "johnstone")
+                .map(\.id) == [publicationPending.id]
+        )
+        #expect(
+            CompanyPricebookPresentation.activeItems(from: allItems, matching: "diag-01")
+                .map(\.id) == [synchronized.id]
+        )
+        #expect(CompanyPricebookPresentation.syncDisposition(for: synchronized) == .synchronized)
+        #expect(CompanyPricebookPresentation.syncDisposition(for: publicationPending) == .publicationPending)
+        #expect(CompanyPricebookPresentation.syncDisposition(for: comparisonPending) == .comparisonPending)
+        #expect(CompanyPricebookPresentation.syncDisposition(for: needsAttention) == .needsAttention)
+
+        comparisonPending.unitPrice = 2_595
+        comparisonPending.stageQuickBooksCatalogUpdate()
+        #expect(comparisonPending.unitPrice == 2_595)
+        #expect(comparisonPending.quickBooksCatalogSyncState == "pending_update")
+    }
+
     @Test func quickBooksRefreshPreservesStagedCatalogEditsUntilAnAdministratorChoosesADirection() throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(
