@@ -1,5 +1,28 @@
 # App Store screenshot assets
 
+## Submission metadata contract
+
+`AppStoreSubmission.json` is the non-secret, source-controlled contract for the
+App Store record. It keeps the bundle, locale, HTTPS privacy/support/marketing
+URLs, App Review sign-in boundary, and every App Privacy answer aligned with
+`GunnAire Ops/PrivacyInfo.xcprivacy`. Review credentials and personal contact
+details belong only in App Store Connect and must never be added to this file.
+
+`Tools/release_preflight.py` fails if a collected data type is added, removed,
+duplicated, relabeled without a usage explanation, or changes its linkage,
+tracking, or purpose without the corresponding App Store answer changing too.
+This follows Apple's current requirement to answer comprehensively across all
+platforms, include integrated third-party practices, provide an iOS privacy
+policy URL, and keep the answers accurate:
+https://developer.apple.com/help/app-store-connect/manage-app-information/manage-app-privacy
+
+Safari verification on 2026-08-31 found the live App Store draft incomplete:
+the privacy-policy URL was not entered, only a subset of the source manifest's
+13 data types appeared in the draft, most visible answers still showed “Set
+Up,” and Publish was disabled. The exact current build `2026083101` was also
+not uploaded or selected. This repository contract prepares the accurate
+answers; it does not claim that the App Store form has been saved or published.
+
 These screenshots are generated from the Debug-only `-appStoreScreenshotFixtures`
 workflow in `GunnAire_OpsUITests.testCaptureAppStoreScreenshots`. The workflow
 uses fictional customer, technician, equipment, invoice, and job data. Never
