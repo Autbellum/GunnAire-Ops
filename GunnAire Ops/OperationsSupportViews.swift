@@ -639,11 +639,31 @@ struct CustomersView: View {
         }
 
         isSyncingCustomers = true
-        customerSyncMessage = "Syncing \(pendingCustomers.count) customer\(pendingCustomers.count == 1 ? "" : "s") to QuickBooks..."
-        syncCustomerBatch(pendingCustomers, created: 0, failed: 0)
+        customerSyncMessage = "Reconciling \(pendingCustomers.count) customer\(pendingCustomers.count == 1 ? "" : "s") with QuickBooks..."
+        QuickBooksDataAPI.shared.fetchCustomers { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let remoteCustomers):
+                    syncCustomerBatch(
+                        pendingCustomers,
+                        remoteCustomers: remoteCustomers,
+                        linked: 0,
+                        failed: 0
+                    )
+                case .failure(let error):
+                    isSyncingCustomers = false
+                    customerSyncMessage = "Customer sync stopped before creating anything because QuickBooks reconciliation failed: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
-    private func syncCustomerBatch(_ pendingCustomers: [Customer], created: Int, failed: Int) {
+    private func syncCustomerBatch(
+        _ pendingCustomers: [Customer],
+        remoteCustomers: [QuickBooksCustomer],
+        linked: Int,
+        failed: Int
+    ) {
         guard canSyncCustomerRecords else {
             isSyncingCustomers = false
             customerSyncMessage = "Customer sync stopped because this account no longer has integration access."
@@ -651,42 +671,41 @@ struct CustomersView: View {
         }
         guard let customer = pendingCustomers.first else {
             isSyncingCustomers = false
-            customerSyncMessage = "Customer sync complete: \(created) created, \(failed) failed."
+            do {
+                try modelContext.save()
+                customerSyncMessage = "Customer sync complete: \(linked) linked, \(failed) need attention."
+            } catch {
+                customerSyncMessage = "QuickBooks customer sync completed, but the local link confirmations could not be saved: \(error.localizedDescription)"
+            }
             return
         }
 
-        QuickBooksDataAPI.shared.createCustomer(quickBooksPayload(for: customer)) { result in
+        QuickBooksDataAPI.shared.recoverOrCreateCustomer(
+            QuickBooksCustomerCreateOperation.draft(for: customer),
+            remoteCustomers: remoteCustomers
+        ) { result in
             DispatchQueue.main.async {
-                var createdCount = created
+                var nextRemoteCustomers = remoteCustomers
+                var linkedCount = linked
                 var failedCount = failed
                 switch result {
                 case .success(let quickBooksCustomer):
                     customer.quickBooksID = quickBooksCustomer.Id
-                    createdCount += 1
+                    if !nextRemoteCustomers.contains(where: { $0.Id == quickBooksCustomer.Id }) {
+                        nextRemoteCustomers.append(quickBooksCustomer)
+                    }
+                    linkedCount += 1
                 case .failure:
                     failedCount += 1
                 }
-                syncCustomerBatch(Array(pendingCustomers.dropFirst()), created: createdCount, failed: failedCount)
+                syncCustomerBatch(
+                    Array(pendingCustomers.dropFirst()),
+                    remoteCustomers: nextRemoteCustomers,
+                    linked: linkedCount,
+                    failed: failedCount
+                )
             }
         }
-    }
-
-    private func quickBooksPayload(for customer: Customer) -> QuickBooksCustomerCreate {
-        QuickBooksCustomerCreate(
-            DisplayName: customer.name,
-            PrimaryPhone: customer.phone.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksPhoneNumber(FreeFormNumber: trimmed)
-            },
-            PrimaryEmailAddr: customer.email.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
-            },
-            BillAddr: customer.address.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
-            }
-        )
     }
 }
 
@@ -5457,37 +5476,26 @@ private struct CustomerEditorView: View {
             return
         }
         isSyncingCustomer = true
-        customerActionMessage = "Syncing \(customer.name) to QuickBooks..."
-        QuickBooksDataAPI.shared.createCustomer(quickBooksPayload(for: customer)) { result in
+        customerActionMessage = "Reconciling \(customer.name) with QuickBooks..."
+        QuickBooksDataAPI.shared.recoverOrCreateCustomer(
+            QuickBooksCustomerCreateOperation.draft(for: customer)
+        ) { result in
             DispatchQueue.main.async {
                 isSyncingCustomer = false
                 switch result {
                 case .success(let quickBooksCustomer):
                     customer.quickBooksID = quickBooksCustomer.Id
-                    customerActionMessage = "\(customer.name) is linked to QuickBooks."
+                    do {
+                        try modelContext.save()
+                        customerActionMessage = "\(customer.name) is linked to QuickBooks."
+                    } catch {
+                        customerActionMessage = "QuickBooks linked \(customer.name), but the local confirmation could not be saved: \(error.localizedDescription)"
+                    }
                 case .failure(let error):
                     customerActionMessage = "QuickBooks customer sync failed: \(error.localizedDescription)"
                 }
             }
         }
-    }
-
-    private func quickBooksPayload(for customer: Customer) -> QuickBooksCustomerCreate {
-        QuickBooksCustomerCreate(
-            DisplayName: customer.name,
-            PrimaryPhone: customer.phone.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksPhoneNumber(FreeFormNumber: trimmed)
-            },
-            PrimaryEmailAddr: customer.email.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
-            },
-            BillAddr: customer.address.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
-            }
-        )
     }
 
     private func perform(_ action: CustomerIntelligenceAction) {

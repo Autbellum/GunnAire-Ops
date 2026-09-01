@@ -2473,28 +2473,20 @@ GunnAire
     }
 
     private func syncCustomerToQuickBooks(_ customer: Customer) {
-        actionMessage = "Creating \(customer.name) in QuickBooks..."
-        let payload = QuickBooksCustomerCreate(
-            DisplayName: customer.name,
-            PrimaryPhone: customer.phone.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksPhoneNumber(FreeFormNumber: trimmed)
-            },
-            PrimaryEmailAddr: customer.email.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
-            },
-            BillAddr: customer.address.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
-            }
-        )
-        liveAPI.createCustomer(payload) { result in
+        actionMessage = "Reconciling \(customer.name) with QuickBooks..."
+        liveAPI.recoverOrCreateCustomer(
+            QuickBooksCustomerCreateOperation.draft(for: customer)
+        ) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let quickBooksCustomer):
                     customer.quickBooksID = quickBooksCustomer.Id
-                    actionMessage = "\(customer.name) created in QuickBooks."
+                    do {
+                        try modelContext.save()
+                        actionMessage = "\(customer.name) is linked to QuickBooks."
+                    } catch {
+                        actionMessage = "QuickBooks linked \(customer.name), but the local confirmation could not be saved: \(error.localizedDescription)"
+                    }
                 case .failure(let error):
                     actionMessage = "\(customer.name) saved locally. QuickBooks customer sync failed: \(error.localizedDescription)"
                 }
@@ -8660,13 +8652,9 @@ GunnAire
             return
         }
 
-        let payload = QuickBooksCustomerCreate(
-            DisplayName: customer.name,
-            PrimaryPhone: customer.phone.flatMap { $0.isEmpty ? nil : QuickBooksPhoneNumber(FreeFormNumber: $0) },
-            PrimaryEmailAddr: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
-            BillAddr: customer.address.flatMap { $0.isEmpty ? nil : QuickBooksAddress(Line1: $0) }
-        )
-        liveAPI.createCustomer(payload) { result in
+        liveAPI.recoverOrCreateCustomer(
+            QuickBooksCustomerCreateOperation.draft(for: customer)
+        ) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let quickBooksCustomer):

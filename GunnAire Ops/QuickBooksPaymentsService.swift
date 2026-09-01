@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 struct QuickBooksPaymentsCardInput {
     let cardholderName: String
@@ -365,20 +366,16 @@ final class QuickBooksPaymentsService {
             return quickBooksID
         }
 
-        let payload = QuickBooksCustomerCreate(
-            DisplayName: customer.name,
-            PrimaryPhone: customer.phone.flatMap { Self.nilIfBlank($0).map { QuickBooksPhoneNumber(FreeFormNumber: $0) } },
-            PrimaryEmailAddr: customer.email.flatMap { Self.nilIfBlank($0).map { QuickBooksEmailAddress(Address: $0) } },
-            BillAddr: customer.address.flatMap { Self.nilIfBlank($0).map { QuickBooksAddress(Line1: $0) } }
-        )
-
-        let created = try await withCheckedThrowingContinuation { continuation in
-            api.createCustomer(payload) { result in
+        let reconciled = try await withCheckedThrowingContinuation { continuation in
+            api.recoverOrCreateCustomer(
+                QuickBooksCustomerCreateOperation.draft(for: customer)
+            ) { result in
                 continuation.resume(with: result)
             }
         }
-        customer.quickBooksID = created.Id
-        return created.Id
+        customer.quickBooksID = reconciled.Id
+        try customer.modelContext?.save()
+        return reconciled.Id
     }
 
     private func ensureQuickBooksInvoice(

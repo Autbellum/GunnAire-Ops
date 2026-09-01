@@ -824,10 +824,27 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
-    func createCustomer(_ customer: QuickBooksCustomerCreate, completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void) {
+    func createCustomer(
+        _ customer: QuickBooksCustomerCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void
+    ) {
         let body = try? JSONEncoder().encode(customer)
+        let normalizedRequestID = requestID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let queryItems = normalizedRequestID?.isEmpty == false
+            ? [URLQueryItem(name: "requestid", value: normalizedRequestID)]
+            : []
         performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "customer", method: "POST", body: body, contentType: "application/json") },
+            {
+                self.authorizedRequest(
+                    path: "customer",
+                    queryItems: queryItems,
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
             decode: QuickBooksCustomerResponse.self
         ) { result in
             completion(result.flatMap {
@@ -837,6 +854,53 @@ final class QuickBooksDataAPI: ObservableObject {
                     entity: "customer"
                 )
             })
+        }
+    }
+
+    /// Reconciles a complete customer snapshot before creating. Callers may
+    /// provide one already-paginated snapshot for a bulk sync so the operation
+    /// remains safe without issuing one full QBO query per local customer.
+    func recoverOrCreateCustomer(
+        _ draft: QuickBooksCustomerCreateDraft,
+        remoteCustomers: [QuickBooksCustomer]? = nil,
+        completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void
+    ) {
+        let recoverOrCreate: ([QuickBooksCustomer]) -> Void = { customers in
+            do {
+                if let existing = try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
+                    for: draft,
+                    in: customers
+                ) {
+                    completion(.success(existing))
+                    return
+                }
+            } catch {
+                completion(.failure(error))
+                return
+            }
+
+            self.createCustomer(
+                QuickBooksCustomerCreateOperation.payload(for: draft),
+                requestID: QuickBooksCustomerCreateOperation.requestID(
+                    for: draft.localCustomerID
+                ),
+                completion: completion
+            )
+        }
+
+        if let remoteCustomers {
+            recoverOrCreate(remoteCustomers)
+            return
+        }
+        fetchCustomers { result in
+            switch result {
+            case .success(let customers):
+                recoverOrCreate(customers)
+            case .failure(let error):
+                // A failed read cannot prove that a prior create was rejected.
+                // Never start another duplicate-prone create in that state.
+                completion(.failure(error))
+            }
         }
     }
 
@@ -2278,6 +2342,147 @@ struct QuickBooksCustomerCreate: Codable {
     let PrimaryPhone: QuickBooksPhoneNumber?
     let PrimaryEmailAddr: QuickBooksEmailAddress?
     let BillAddr: QuickBooksAddress?
+}
+
+struct QuickBooksCustomerCreateDraft: Equatable {
+    let localCustomerID: UUID
+    let displayName: String
+    let phone: String?
+    let email: String?
+    let billingAddress: String?
+}
+
+enum QuickBooksCustomerCreateOperationError: LocalizedError, Equatable {
+    case invalidName
+    case conflictingRemoteIdentity(String)
+    case ambiguousRemoteIdentity(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidName:
+            "Enter a customer name before publishing to QuickBooks."
+        case .conflictingRemoteIdentity(let name):
+            "QuickBooks already has \(name) with conflicting contact information. Review the customer records before creating another."
+        case .ambiguousRemoteIdentity(let name):
+            "More than one QuickBooks customer matches \(name), and the contact information does not identify one safely. Reconcile the duplicates before retrying."
+        }
+    }
+}
+
+/// One durable local customer owns one QuickBooks create operation across
+/// invoice, payment, customer-directory, and accounting-console retries. A
+/// complete QBO query runs before create so a prior accepted-but-unacknowledged
+/// response or an existing compatible customer can be recovered without a
+/// duplicate. Contact conflicts and ambiguity always require human review.
+enum QuickBooksCustomerCreateOperation {
+    static func draft(for customer: Customer) -> QuickBooksCustomerCreateDraft {
+        QuickBooksCustomerCreateDraft(
+            localCustomerID: customer.id,
+            displayName: customer.name,
+            phone: trimmed(customer.phone),
+            email: trimmed(customer.email),
+            billingAddress: trimmed(customer.address)
+        )
+    }
+
+    static func requestID(for localCustomerID: UUID) -> String {
+        "ga-customer-\(localCustomerID.uuidString.lowercased())"
+    }
+
+    static func payload(for draft: QuickBooksCustomerCreateDraft) -> QuickBooksCustomerCreate {
+        QuickBooksCustomerCreate(
+            DisplayName: draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines),
+            PrimaryPhone: trimmed(draft.phone).map { QuickBooksPhoneNumber(FreeFormNumber: $0) },
+            PrimaryEmailAddr: trimmed(draft.email).map { QuickBooksEmailAddress(Address: $0) },
+            BillAddr: trimmed(draft.billingAddress).map { QuickBooksAddress(Line1: $0) }
+        )
+    }
+
+    static func matchingRemoteCustomer(
+        for draft: QuickBooksCustomerCreateDraft,
+        in remoteCustomers: [QuickBooksCustomer]
+    ) throws -> QuickBooksCustomer? {
+        let normalizedName = normalizedText(draft.displayName)
+        guard !normalizedName.isEmpty else {
+            throw QuickBooksCustomerCreateOperationError.invalidName
+        }
+        let namedCandidates = remoteCustomers.filter {
+            normalizedText($0.DisplayName) == normalizedName
+        }
+        guard !namedCandidates.isEmpty else { return nil }
+
+        let compatibleCandidates = namedCandidates.filter {
+            !hasContactConflict(draft: draft, remote: $0)
+        }
+        guard !compatibleCandidates.isEmpty else {
+            throw QuickBooksCustomerCreateOperationError.conflictingRemoteIdentity(
+                draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        if namedCandidates.count == 1, let onlyCandidate = compatibleCandidates.first {
+            return onlyCandidate
+        }
+
+        let evidencedCandidates = compatibleCandidates.filter {
+            hasMatchingContactEvidence(draft: draft, remote: $0)
+        }
+        guard evidencedCandidates.count == 1, let exact = evidencedCandidates.first else {
+            throw QuickBooksCustomerCreateOperationError.ambiguousRemoteIdentity(
+                draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        return exact
+    }
+
+    private static func hasContactConflict(
+        draft: QuickBooksCustomerCreateDraft,
+        remote: QuickBooksCustomer
+    ) -> Bool {
+        conflicts(normalizedEmail(draft.email), normalizedEmail(remote.PrimaryEmailAddr?.Address)) ||
+        conflicts(normalizedPhone(draft.phone), normalizedPhone(remote.PrimaryPhone?.FreeFormNumber)) ||
+        conflicts(normalizedText(draft.billingAddress), normalizedText(remote.BillAddr?.Line1))
+    }
+
+    private static func hasMatchingContactEvidence(
+        draft: QuickBooksCustomerCreateDraft,
+        remote: QuickBooksCustomer
+    ) -> Bool {
+        matches(normalizedEmail(draft.email), normalizedEmail(remote.PrimaryEmailAddr?.Address)) ||
+        matches(normalizedPhone(draft.phone), normalizedPhone(remote.PrimaryPhone?.FreeFormNumber)) ||
+        matches(normalizedText(draft.billingAddress), normalizedText(remote.BillAddr?.Line1))
+    }
+
+    private static func conflicts(_ local: String, _ remote: String) -> Bool {
+        !local.isEmpty && !remote.isEmpty && local != remote
+    }
+
+    private static func matches(_ local: String, _ remote: String) -> Bool {
+        !local.isEmpty && local == remote
+    }
+
+    private static func normalizedEmail(_ value: String?) -> String {
+        trimmed(value)?.lowercased() ?? ""
+    }
+
+    private static func normalizedPhone(_ value: String?) -> String {
+        var digits = (value ?? "").filter(\.isNumber)
+        if digits.count == 11, digits.first == "1" {
+            digits.removeFirst()
+        }
+        return digits
+    }
+
+    private static func normalizedText(_ value: String?) -> String {
+        (value ?? "")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased()
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        let result = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result?.isEmpty == false ? result : nil
+    }
 }
 
 struct QuickBooksCustomerResponse: Codable {

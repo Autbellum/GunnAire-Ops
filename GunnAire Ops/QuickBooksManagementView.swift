@@ -1827,7 +1827,7 @@ struct QuickBooksManagementView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated)
+                            .disabled(isLoading)
                     }
 
                     Section(header: Text("Product Catalog").foregroundColor(Color.brandGold)) {
@@ -2841,22 +2841,38 @@ struct QuickBooksManagementView: View {
     }
 
     private func createCustomer(name: String, email: String?, phone: String?) {
-        let payload = QuickBooksCustomerCreate(
-            DisplayName: name,
-            PrimaryPhone: phone.map { QuickBooksPhoneNumber(FreeFormNumber: $0) },
-            PrimaryEmailAddr: email.map { QuickBooksEmailAddress(Address: $0) },
-            BillAddr: nil
-        )
+        let localCustomer = Customer(name: name, phone: phone, email: email)
+        modelContext.insert(localCustomer)
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.delete(localCustomer)
+            actionMessage = "Could not save the customer locally: \(error.localizedDescription)"
+            return
+        }
 
-        performAction(message: "Creating customer in QuickBooks...") {
-            liveAPI.createCustomer(payload) { result in
+        guard isAuthenticated else {
+            actionMessage = "Saved \(localCustomer.name) locally. Connect QuickBooks or use Customers → Sync to publish it."
+            return
+        }
+
+        performAction(message: "Reconciling customer with QuickBooks...") {
+            liveAPI.recoverOrCreateCustomer(
+                QuickBooksCustomerCreateOperation.draft(for: localCustomer)
+            ) { result in
                 DispatchQueue.main.async {
                     switch result {
                     case .success(let customer):
-                        actionMessage = "Customer created: \(customer.DisplayName)"
+                        localCustomer.quickBooksID = customer.Id
+                        do {
+                            try modelContext.save()
+                            actionMessage = "Customer linked: \(customer.DisplayName)"
+                        } catch {
+                            actionMessage = "QuickBooks linked \(customer.DisplayName), but the local confirmation could not be saved: \(error.localizedDescription)"
+                        }
                         syncAllQuickBooksData()
                     case .failure(let error):
-                        actionMessage = "Customer creation failed: \(error.localizedDescription)"
+                        actionMessage = "Saved \(localCustomer.name) locally. QuickBooks reconciliation needs attention; retry will read QuickBooks before any create: \(error.localizedDescription)"
                         isLoading = false
                     }
                 }
@@ -5509,10 +5525,13 @@ private struct QuickBooksCustomerComposeView: View {
             Form {
                 Section("Customer") {
                     TextField("Customer Name", text: $name)
+                        .accessibilityIdentifier("QuickBooksCustomerName")
                     TextField("Email", text: $email)
                         .keyboardType(.emailAddress)
+                        .accessibilityIdentifier("QuickBooksCustomerEmail")
                     TextField("Phone", text: $phone)
                         .keyboardType(.phonePad)
+                        .accessibilityIdentifier("QuickBooksCustomerPhone")
                 }
             }
             .navigationTitle("Add Customer")
@@ -5530,6 +5549,7 @@ private struct QuickBooksCustomerComposeView: View {
                         dismiss()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("CreateQuickBooksCustomer")
                 }
             }
         }

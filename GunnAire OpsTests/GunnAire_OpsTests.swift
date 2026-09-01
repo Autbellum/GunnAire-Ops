@@ -19822,6 +19822,95 @@ struct GunnAire_OpsTests {
         #expect((object["PrefVendorRef"] as? [String: String])?["value"] == "QBO-VENDOR-7")
     }
 
+    @Test func customerCreationReconcilesBeforeOneStableQuickBooksOperation() throws {
+        let customerID = try #require(UUID(uuidString: "B24FBC3C-A0E6-491A-C128-7DD1157E5376"))
+        let local = Customer(
+            id: customerID,
+            name: "  GunnAire Test Customer  ",
+            phone: "+1 (810) 555-0145",
+            email: "  SERVICE@EXAMPLE.COM ",
+            address: " 15 Main Street "
+        )
+        let draft = QuickBooksCustomerCreateOperation.draft(for: local)
+
+        #expect(draft.localCustomerID == customerID)
+        #expect(draft.displayName == "  GunnAire Test Customer  ")
+        #expect(draft.phone == "+1 (810) 555-0145")
+        #expect(draft.email == "SERVICE@EXAMPLE.COM")
+        #expect(draft.billingAddress == "15 Main Street")
+
+        let firstRequestID = QuickBooksCustomerCreateOperation.requestID(for: customerID)
+        let retryRequestID = QuickBooksCustomerCreateOperation.requestID(for: customerID)
+        #expect(firstRequestID == "ga-customer-b24fbc3c-a0e6-491a-c128-7dd1157e5376")
+        #expect(retryRequestID == firstRequestID)
+        #expect(firstRequestID.count == 48)
+        #expect(QuickBooksCustomerCreateOperation.requestID(for: UUID()) != firstRequestID)
+
+        let payloadObject = try #require(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(QuickBooksCustomerCreateOperation.payload(for: draft))
+            ) as? [String: Any]
+        )
+        #expect(payloadObject["DisplayName"] as? String == "GunnAire Test Customer")
+        #expect((payloadObject["PrimaryPhone"] as? [String: String])?["FreeFormNumber"] == "+1 (810) 555-0145")
+        #expect((payloadObject["PrimaryEmailAddr"] as? [String: String])?["Address"] == "SERVICE@EXAMPLE.COM")
+        #expect((payloadObject["BillAddr"] as? [String: String])?["Line1"] == "15 Main Street")
+
+        let exact = try JSONDecoder().decode(
+            QuickBooksCustomer.self,
+            from: Data(#"{"Id":"QBO-CUSTOMER-1","DisplayName":"gunnaire   test customer","PrimaryPhone":{"FreeFormNumber":"810-555-0145"},"PrimaryEmailAddr":{"Address":"service@example.com"},"BillAddr":{"Line1":"15 Main Street"}}"#.utf8)
+        )
+        let conflicting = try JSONDecoder().decode(
+            QuickBooksCustomer.self,
+            from: Data(#"{"Id":"QBO-CUSTOMER-2","DisplayName":"GunnAire Test Customer","PrimaryPhone":{"FreeFormNumber":"810-555-9999"},"PrimaryEmailAddr":{"Address":"different@example.com"},"BillAddr":{"Line1":"90 Other Street"}}"#.utf8)
+        )
+        let nameOnly = try JSONDecoder().decode(
+            QuickBooksCustomer.self,
+            from: Data(#"{"Id":"QBO-CUSTOMER-3","DisplayName":"GunnAire Test Customer"}"#.utf8)
+        )
+        let unrelated = try JSONDecoder().decode(
+            QuickBooksCustomer.self,
+            from: Data(#"{"Id":"QBO-CUSTOMER-4","DisplayName":"Unrelated Customer"}"#.utf8)
+        )
+
+        #expect(
+            try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
+                for: draft,
+                in: [conflicting, exact]
+            )?.Id == "QBO-CUSTOMER-1"
+        )
+        #expect(
+            try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
+                for: draft,
+                in: [unrelated]
+            ) == nil
+        )
+        #expect(throws: QuickBooksCustomerCreateOperationError.self) {
+            try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
+                for: draft,
+                in: [conflicting]
+            )
+        }
+        #expect(throws: QuickBooksCustomerCreateOperationError.self) {
+            try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
+                for: draft,
+                in: [nameOnly, nameOnly]
+            )
+        }
+        #expect(throws: QuickBooksCustomerCreateOperationError.self) {
+            try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
+                for: QuickBooksCustomerCreateDraft(
+                    localCustomerID: UUID(),
+                    displayName: "   ",
+                    phone: nil,
+                    email: nil,
+                    billingAddress: nil
+                ),
+                in: []
+            )
+        }
+    }
+
     @Test func duplicateQuickBooksCatalogMappingsFailClosedAndResolveWithoutDeletingLocalItems() throws {
         let canonical = Item(
             quickBooksID: " QBO-ITEM-DUPLICATE ",

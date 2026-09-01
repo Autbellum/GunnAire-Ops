@@ -4750,6 +4750,72 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdministratorCreatesCustomerOfflineAndHandsItToCustomerSync() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let addCustomer = app.buttons["Add Customer"]
+        for _ in 0..<14 where !addCustomer.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(addCustomer))
+        XCTAssertTrue(addCustomer.isEnabled)
+        addCustomer.tap()
+
+        XCTAssertTrue(app.navigationBars["Add Customer"].waitForExistence(timeout: 3))
+        let name = app.textFields["QuickBooksCustomerName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 3))
+        replaceText(in: name, with: "Offline QBO Customer")
+        let create = app.buttons["CreateQuickBooksCustomer"]
+        XCTAssertTrue(create.exists)
+        XCTAssertTrue(create.isEnabled)
+        create.tap()
+
+        let composerDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.navigationBars["Add Customer"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [composerDismissed], timeout: 3), .completed)
+        let result = app.staticTexts["QuickBooksActionMessage"]
+        XCTAssertTrue(waitForHittable(result))
+        XCTAssertEqual(
+            result.label,
+            "Saved Offline QBO Customer locally. Connect QuickBooks or use Customers → Sync to publish it."
+        )
+
+        let sidebar = app.collectionViews["Sidebar"]
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 3))
+        let customers = sidebar.staticTexts["Customers"]
+        for _ in 0..<18 where !customers.isHittable {
+            sidebar.swipeDown()
+        }
+        XCTAssertTrue(waitForHittable(customers))
+        customers.tap()
+
+        XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
+        let createdCustomer = app.staticTexts["Offline QBO Customer"]
+        for _ in 0..<10 where !createdCustomer.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(createdCustomer.waitForExistence(timeout: 3))
+        let sync = app.buttons["Sync"]
+        XCTAssertTrue(sync.exists)
+        XCTAssertFalse(sync.isEnabled)
+    }
+
+    @MainActor
     func testQuickBooksManagementUsesFocusedAccountingWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

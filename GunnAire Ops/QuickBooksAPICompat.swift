@@ -21,8 +21,24 @@ final class QuickBooksAPI: ObservableObject {
         data.fetchCustomers(completion: completion)
     }
 
-    func createCustomer(_ customer: QuickBooksCustomerCreate, completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void) {
-        data.createCustomer(customer, completion: completion)
+    func createCustomer(
+        _ customer: QuickBooksCustomerCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void
+    ) {
+        data.createCustomer(customer, requestID: requestID, completion: completion)
+    }
+
+    func recoverOrCreateCustomer(
+        _ draft: QuickBooksCustomerCreateDraft,
+        remoteCustomers: [QuickBooksCustomer]? = nil,
+        completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void
+    ) {
+        data.recoverOrCreateCustomer(
+            draft,
+            remoteCustomers: remoteCustomers,
+            completion: completion
+        )
     }
 
     func fetchItems(completion: @escaping (Result<[QuickBooksItem], Error>) -> Void) {
