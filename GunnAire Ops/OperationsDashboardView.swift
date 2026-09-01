@@ -506,6 +506,7 @@ struct OperationsDashboardView: View {
                     } label: {
                         Label("Find", systemImage: "magnifyingglass")
                     }
+                    .accessibilityLabel("Search Command Center")
                     .accessibilityIdentifier("CommandCenterToolbarFindButton")
                     .tint(Color.brandGold)
                 }
@@ -583,6 +584,7 @@ struct OperationsDashboardView: View {
             Label("Find", systemImage: "magnifyingglass")
                 .frame(maxWidth: .infinity)
         }
+        .accessibilityLabel("Find customers and work from Command Center")
         .accessibilityIdentifier("CommandCenterQuickFindButton")
 
         if operationsAccess.canOpenSchedule {
@@ -592,6 +594,7 @@ struct OperationsDashboardView: View {
                 Label("Schedule", systemImage: "calendar.badge.clock")
                     .frame(maxWidth: .infinity)
             }
+            .accessibilityLabel("Open schedule from Command Center")
         }
 
         Button {
@@ -608,6 +611,7 @@ struct OperationsDashboardView: View {
                 Label("Collect", systemImage: "creditcard")
                     .frame(maxWidth: .infinity)
             }
+            .accessibilityLabel("Open payment collection from Command Center")
         }
 
         if operationsAccess.canOpenSync {
@@ -1486,12 +1490,14 @@ struct OperationsDashboardView: View {
                 } label: {
                     Label("Open", systemImage: "arrow.right.circle")
                 }
+                .accessibilityLabel(dispatchActionAccessibilityLabel("Open schedule", for: call))
 
                 Button {
                     GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
                 } label: {
                     Label("Docs", systemImage: "doc.text")
                 }
+                .accessibilityLabel(dispatchActionAccessibilityLabel("Open documents", for: call))
 
                 if operationsAccess.canManageDispatch,
                    call.assignedTechnician == nil,
@@ -1507,6 +1513,7 @@ struct OperationsDashboardView: View {
                     } label: {
                         Label("Collect", systemImage: "creditcard")
                     }
+                    .accessibilityLabel(dispatchActionAccessibilityLabel("Collect payment", for: call))
                     .tint(.green)
                 }
             }
@@ -1516,6 +1523,10 @@ struct OperationsDashboardView: View {
         }
         .padding(.vertical, 2)
         .accessibilityIdentifier("CommandCenterDispatchJob-\(call.id.uuidString)")
+    }
+
+    private func dispatchActionAccessibilityLabel(_ action: String, for call: ServiceCall) -> String {
+        "\(action) for \(call.customer.name), \(call.type.displayName), \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))"
     }
 
     private func priorityRow(
@@ -1556,6 +1567,7 @@ struct OperationsDashboardView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .tint(Color.brandGold)
+                    .accessibilityLabel("\(actionTitle): \(title). \(subtitle)")
             }
         }
         .padding(12)
@@ -1592,6 +1604,7 @@ struct OperationsDashboardView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .tint(tint)
+                .accessibilityLabel("\(status) \(title). \(detail)")
         }
     }
 

@@ -24,6 +24,21 @@ final class GunnAire_OpsUITests: XCTestCase {
     private let operationalAlertID = "A1000000-0000-4000-8000-000000000042"
     private let businessTaskID = "A1000000-0000-4000-8000-000000000043"
     private let timeOffRequestID = "A1000000-0000-4000-8000-000000000045"
+    private let adminWorkspaceDestinations: [(sidebar: String, route: String, title: String)] = [
+        ("Command Center", "commandCenter", "Command Center"),
+        ("Clock In/Out", "timeClock", "Time Clock"),
+        ("Schedule & Jobs", "scheduleAndJobs", "Schedule"),
+        ("Customers", "customers", "Customers"),
+        ("Onsite Documentation", "onsiteDocumentation", "Onsite Documentation"),
+        ("Mail", "mail", "Mail"),
+        ("Estimates", "estimates", "Estimates"),
+        ("Invoices", "invoices", "Invoices"),
+        ("Payments", "payments", "Payments"),
+        ("Reports", "reports", "Business Reports"),
+        ("Receipts & Bills", "receiptsBills", "Receipts & Bills"),
+        ("Sync & Integrations", "syncIntegrations", "Sync & Integrations"),
+        ("QuickBooks Management", "quickBooksManagement", "QuickBooks Management")
+    ]
 
     private func dispatchCapacityIdentifier(for date: Date) -> String {
         let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
@@ -63,23 +78,7 @@ final class GunnAire_OpsUITests: XCTestCase {
             sidebar.swipeDown()
         }
 
-        let destinations: [(sidebar: String, title: String)] = [
-            ("Command Center", "Command Center"),
-            ("Clock In/Out", "Time Clock"),
-            ("Schedule & Jobs", "Schedule"),
-            ("Customers", "Customers"),
-            ("Onsite Documentation", "Onsite Documentation"),
-            ("Mail", "Mail"),
-            ("Estimates", "Estimates"),
-            ("Invoices", "Invoices"),
-            ("Payments", "Payments"),
-            ("Reports", "Business Reports"),
-            ("Receipts & Bills", "Receipts & Bills"),
-            ("Sync & Integrations", "Sync & Integrations"),
-            ("QuickBooks Management", "QuickBooks Management")
-        ]
-
-        for destination in destinations {
+        for destination in adminWorkspaceDestinations {
             let sidebarItem = sidebar.staticTexts[destination.sidebar]
             for _ in 0..<24 where !(sidebarItem.exists && sidebarItem.isHittable) {
                 sidebar.swipeUp()
@@ -440,6 +439,105 @@ final class GunnAire_OpsUITests: XCTestCase {
         app.launch()
 
         assertAllAdminWorkspacesRemainReachable(in: app)
+    }
+
+    /// VoiceOver and Voice Control depend on a useful accessibility name for
+    /// each visible action. Audit the real seeded accessibility tree for all
+    /// primary Administrator workspaces and retain the inventory as evidence.
+    @MainActor
+    func testPrimaryWorkspacesExposeNamedVisibleActions() throws {
+        for destination in adminWorkspaceDestinations {
+            let app = XCUIApplication()
+            app.launchArguments = [
+                "-enableSplashVideo", "NO",
+                "-disableCloudKitForTesting",
+                "-appStoreScreenshotFixtures",
+                "-GunnAirePendingAppRoute", destination.route
+            ]
+            app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+            app.launch()
+
+            XCTAssertTrue(
+                app.navigationBars[destination.title].waitForExistence(timeout: 8),
+                "Failed to reach accessibility audit route: \(destination.title)"
+            )
+
+            let visibleActions = app.buttons.allElementsBoundByIndex.filter {
+                $0.exists && $0.isHittable
+            }
+            XCTAssertFalse(
+                visibleActions.isEmpty,
+                "No visible actions were exposed in \(destination.title)"
+            )
+
+            let namedVisibleActions = visibleActions.filter {
+                !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            var inventory: [String] = []
+            for action in visibleActions {
+                let name = action.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                if name.isEmpty {
+                    let isNestedImplementationControl = namedVisibleActions.contains { candidate in
+                        candidate.frame != action.frame && candidate.frame.contains(action.frame)
+                    }
+                    XCTAssertTrue(
+                        isNestedImplementationControl,
+                        "Unnamed independent action in \(destination.title): \(action.debugDescription)"
+                    )
+                    continue
+                }
+                inventory.append("\(name) | \(action.identifier)")
+            }
+
+            let ambiguousLabelsByRoute: [String: Set<String>] = [
+                "commandCenter": ["Open", "Docs", "Collect", "Find", "Schedule"],
+                "onsiteDocumentation": ["Open Documents", "Open Schedule", "Collect Payment", "Documents"]
+            ]
+            if let ambiguousLabels = ambiguousLabelsByRoute[destination.route] {
+                let remainingAmbiguousActions = namedVisibleActions.filter {
+                    ambiguousLabels.contains($0.label.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                XCTAssertTrue(
+                    remainingAmbiguousActions.isEmpty,
+                    "Ambiguous visible actions remain in \(destination.title): \(remainingAmbiguousActions.map(\.debugDescription).joined(separator: "\n"))"
+                )
+            }
+
+            let contextualActionPrefixes: [String: [String]] = [
+                "commandCenter": ["CommandCenterDispatchJob-"],
+                "onsiteDocumentation": [
+                    "DocumentationQueueJob-",
+                    "DocumentationQueueOpenDocuments-",
+                    "DocumentationQueueOpenSchedule-",
+                    "DocumentationQueueDocumentActions-",
+                    "DocumentationQueueCreateInvoice-",
+                    "DocumentationQueueCollectPayment-",
+                    "InvoiceCloseoutOpenDocuments-",
+                    "InvoiceCloseoutOpenSchedule-",
+                    "InvoiceCloseoutCollectPayment-",
+                    "InvoiceCloseoutDocumentActions-"
+                ]
+            ]
+            if let prefixes = contextualActionPrefixes[destination.route] {
+                for action in namedVisibleActions where prefixes.contains(where: { prefix in
+                    action.identifier.hasPrefix(prefix)
+                }) {
+                    XCTAssertTrue(
+                        action.label.localizedCaseInsensitiveContains(" for ") &&
+                            action.label.filter { $0 == "," }.count >= 2,
+                        "Job-specific action lacks customer context in \(destination.title): \(action.debugDescription)"
+                    )
+                }
+            }
+
+            let evidence = XCTAttachment(
+                string: inventory.sorted().joined(separator: "\n")
+            )
+            evidence.name = "Accessible actions - \(destination.title)"
+            evidence.lifetime = .keepAlways
+            add(evidence)
+            app.terminate()
+        }
     }
 
     @MainActor
@@ -2206,6 +2304,14 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["UI Test Added Repair"].waitForExistence(timeout: 3))
+        let removeAddedRepair = app.buttons.matching(
+            NSPredicate(format: "label == %@", "Remove UI Test Added Repair from invoice")
+        ).firstMatch
+        XCTAssertTrue(removeAddedRepair.waitForExistence(timeout: 3))
+        XCTAssertTrue(removeAddedRepair.identifier.hasPrefix("RemoveBillingLine-"))
+        XCTAssertTrue(removeAddedRepair.isHittable)
+        XCTAssertGreaterThanOrEqual(removeAddedRepair.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(removeAddedRepair.frame.height, 44)
         let updateInvoice = app.buttons["Update Invoice"]
         for _ in 0..<5 {
             if updateInvoice.exists && updateInvoice.isHittable { break }
@@ -2468,8 +2574,18 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         let reason = app.textFields["DocumentDiscountReason"]
         XCTAssertTrue(reason.waitForExistence(timeout: 3))
+        let expectedReason = "Plan"
         reason.tap()
-        reason.typeText("Maintenance plan member benefit")
+        reason.typeText(expectedReason)
+        let completeReason = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", expectedReason),
+            object: reason
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [completeReason], timeout: 5),
+            .completed,
+            "Discount reason did not finish entering before the keyboard was dismissed. Current value: \(String(describing: reason.value))"
+        )
         if app.keyboards.firstMatch.exists {
             app.typeKey(.escape, modifierFlags: [])
         }
@@ -2483,7 +2599,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         let summary = app.staticTexts["AuthorizedDocumentDiscount"]
         XCTAssertTrue(summary.waitForExistence(timeout: 3))
         XCTAssertTrue(summary.label.contains("10%"))
-        XCTAssertTrue(summary.label.contains("Maintenance plan member benefit"))
+        XCTAssertTrue(
+            summary.label.contains(expectedReason),
+            "Unexpected authorized discount summary: \(summary.label)"
+        )
         XCTAssertFalse(summary.label.contains("@"))
         XCTAssertTrue(app.staticTexts["−$18.90"].exists)
         let netSubtotal = app.staticTexts["DocumentNetSubtotal"]
@@ -3694,7 +3813,8 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-disableCloudKitForTesting",
             "-uiTestAuthenticatedAdmin",
             "-uiTestSeedCollectibleJob",
-            "-uiTestSeedBusinessTask"
+            "-uiTestSeedBusinessTask",
+            "-GunnAirePendingAppRoute", "commandCenter"
         ]
         app.launch()
 

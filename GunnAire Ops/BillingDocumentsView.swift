@@ -3520,16 +3520,32 @@ GunnAire
                                                 .buttonStyle(.bordered)
                                                 .accessibilityIdentifier(adjustPriceAccessibilityID(for: item))
                                             }
-                                            Stepper(
-                                                lineItemQuantityLabel(for: item),
-                                                value: lineItemQuantityBinding(for: item),
-                                                in: 0.25...100,
-                                                step: 0.25
-                                            )
-                                            .labelsHidden()
-                                            .disabled(isItemizedAssemblyLine(item))
-                                            .accessibilityLabel(lineItemQuantityAccessibilityLabel(for: item))
-                                            .accessibilityValue(lineItemQuantityAccessibilityValue(for: item))
+                                            HStack(spacing: 8) {
+                                                Button {
+                                                    removeCatalogLine(item.id)
+                                                } label: {
+                                                    Image(systemName: "minus.circle")
+                                                }
+                                                .buttonStyle(.borderless)
+                                                .frame(width: 44, height: 44)
+                                                .contentShape(Rectangle())
+                                                .fixedSize()
+                                                .layoutPriority(2)
+                                                .accessibilityLabel("Remove \(item.name) from \(selectedDocumentKind.rawValue.lowercased())")
+                                                .accessibilityIdentifier("RemoveBillingLine-\(item.id.uuidString)")
+
+                                                Stepper(
+                                                    lineItemQuantityLabel(for: item),
+                                                    value: lineItemQuantityBinding(for: item),
+                                                    in: 0.25...100,
+                                                    step: 0.25
+                                                )
+                                                .labelsHidden()
+                                                .fixedSize()
+                                                .disabled(isItemizedAssemblyLine(item))
+                                                .accessibilityLabel(lineItemQuantityAccessibilityLabel(for: item))
+                                                .accessibilityValue(lineItemQuantityAccessibilityValue(for: item))
+                                            }
                                         }
                                     }
                                     lineEquipmentPicker(for: item)
@@ -3892,21 +3908,33 @@ GunnAire
                                                 .buttonStyle(.bordered)
                                                 .accessibilityIdentifier(adjustPriceAccessibilityID(for: item))
                                             }
+
+                                            HStack(spacing: 8) {
+                                                Button {
+                                                    removeCatalogLine(item.id)
+                                                } label: {
+                                                    Image(systemName: "minus.circle")
+                                                }
+                                                .buttonStyle(.borderless)
+                                                .frame(width: 44, height: 44)
+                                                .contentShape(Rectangle())
+                                                .fixedSize()
+                                                .layoutPriority(2)
+                                                .accessibilityLabel("Remove \(item.name) from \(selectedDocumentKind.rawValue.lowercased())")
+                                                .accessibilityIdentifier("RemoveBillingLine-\(item.id.uuidString)")
+
+                                                Stepper(
+                                                    lineItemQuantityLabel(for: item),
+                                                    value: lineItemQuantityBinding(for: item),
+                                                    in: 0.25...100,
+                                                    step: 0.25
+                                                )
+                                                .labelsHidden()
+                                                .fixedSize()
+                                                .disabled(isItemizedAssemblyLine(item))
+                                                .accessibilityLabel(lineItemQuantityAccessibilityLabel(for: item))
+                                            }
                                         }
-                                        Stepper(
-                                            lineItemQuantityLabel(for: item),
-                                            value: lineItemQuantityBinding(for: item),
-                                            in: 0.25...100,
-                                            step: 0.25
-                                        )
-                                        .disabled(isItemizedAssemblyLine(item))
-                                        .accessibilityLabel(lineItemQuantityAccessibilityLabel(for: item))
-                                        Button {
-                                            removeCatalogLine(item.id)
-                                        } label: {
-                                            Image(systemName: "minus.circle")
-                                        }
-                                        .buttonStyle(.borderless)
                                     }
                                     lineEquipmentPicker(for: item)
                                 }

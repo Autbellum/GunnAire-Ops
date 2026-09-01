@@ -1978,6 +1978,17 @@ struct OnsiteDocumentationView: View {
         }
     }
 
+    private func documentationAccessibilityContext(for call: ServiceCall) -> String {
+        "\(call.customer.name), \(call.type.displayName), \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    private func invoiceAccessibilityContext(for invoice: Invoice) -> String {
+        if let linkedCall = serviceCall(for: invoice) {
+            return documentationAccessibilityContext(for: linkedCall)
+        }
+        return "\(invoice.customer.name), invoice from \(invoice.createdAt.formatted(date: .abbreviated, time: .omitted))"
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -2044,11 +2055,15 @@ struct OnsiteDocumentationView: View {
                                                     selectedServiceCallID = linkedCall.id
                                                 }
                                                 .buttonStyle(.bordered)
+                                                .accessibilityLabel("Open documents for \(documentationAccessibilityContext(for: linkedCall))")
+                                                .accessibilityIdentifier("InvoiceCloseoutOpenDocuments-\(invoice.id.uuidString)")
 
                                                 Button("Open Schedule") {
                                                     GunnAireAppIntentRouter.storeScheduleCallRoute(linkedCall.id)
                                                 }
                                                 .buttonStyle(.bordered)
+                                                .accessibilityLabel("Open schedule for \(documentationAccessibilityContext(for: linkedCall))")
+                                                .accessibilityIdentifier("InvoiceCloseoutOpenSchedule-\(invoice.id.uuidString)")
                                             }
 
                                             if invoiceBalanceDue(for: invoice) > 0.009 {
@@ -2057,6 +2072,8 @@ struct OnsiteDocumentationView: View {
                                                 }
                                                 .buttonStyle(.borderedProminent)
                                                 .tint(.green)
+                                                .accessibilityLabel("Collect payment for \(invoiceAccessibilityContext(for: invoice))")
+                                                .accessibilityIdentifier("InvoiceCloseoutCollectPayment-\(invoice.id.uuidString)")
                                             }
 
                                             Menu {
@@ -2067,6 +2084,8 @@ struct OnsiteDocumentationView: View {
                                                 Label("Documents", systemImage: "doc.on.doc")
                                             }
                                             .buttonStyle(.bordered)
+                                            .accessibilityLabel("Document actions for \(invoiceAccessibilityContext(for: invoice))")
+                                            .accessibilityIdentifier("InvoiceCloseoutDocumentActions-\(invoice.id.uuidString)")
                                         }
                                     }
                                     .padding(.vertical, 2)
@@ -2148,17 +2167,23 @@ struct OnsiteDocumentationView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Open documentation for \(documentationAccessibilityContext(for: call))")
+                        .accessibilityIdentifier("DocumentationQueueJob-\(call.id.uuidString)")
 
                         HStack {
                             Button("Open Documents") {
                                 selectedServiceCallID = call.id
                             }
                             .buttonStyle(.bordered)
+                            .accessibilityLabel("Open documents for \(documentationAccessibilityContext(for: call))")
+                            .accessibilityIdentifier("DocumentationQueueOpenDocuments-\(call.id.uuidString)")
 
                             Button("Open Schedule") {
                                 GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
                             }
                             .buttonStyle(.bordered)
+                            .accessibilityLabel("Open schedule for \(documentationAccessibilityContext(for: call))")
+                            .accessibilityIdentifier("DocumentationQueueOpenSchedule-\(call.id.uuidString)")
 
                             Menu {
                                 Button("Generate Onsite Report") {
@@ -2180,6 +2205,8 @@ struct OnsiteDocumentationView: View {
                                 Label("Documents", systemImage: "doc.on.doc")
                             }
                             .buttonStyle(.bordered)
+                            .accessibilityLabel("Document actions for \(documentationAccessibilityContext(for: call))")
+                            .accessibilityIdentifier("DocumentationQueueDocumentActions-\(call.id.uuidString)")
 
                             if call.linkedInvoiceID == nil {
                                 Button("Create Invoice") {
@@ -2188,6 +2215,8 @@ struct OnsiteDocumentationView: View {
                                 .buttonStyle(.borderedProminent)
                                 .tint(Color.brandGold)
                                 .disabled(!call.canCreateInvoiceDocument)
+                                .accessibilityLabel("Create invoice for \(documentationAccessibilityContext(for: call))")
+                                .accessibilityIdentifier("DocumentationQueueCreateInvoice-\(call.id.uuidString)")
                             } else {
                                 Button("Collect Payment") {
                                     if let linkedInvoiceID = call.linkedInvoiceID {
@@ -2196,6 +2225,8 @@ struct OnsiteDocumentationView: View {
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(.green)
+                                .accessibilityLabel("Collect payment for \(documentationAccessibilityContext(for: call))")
+                                .accessibilityIdentifier("DocumentationQueueCollectPayment-\(call.id.uuidString)")
                             }
                         }
                         if call.linkedInvoiceID == nil,
