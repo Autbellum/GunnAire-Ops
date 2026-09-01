@@ -15,6 +15,8 @@ already retained at:
   (`SHA-256 a7f39db62715ea000b02e6bd325d2ccd0e90cdc6c1805e239b001a157c7884f9`)
 - `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-01/mac-cloudkit-launch-2026090109.json`
   (`SHA-256 18128932e0481e063f8596814833fe59960e91d9887dbc8e2bc08fb789a584ae`)
+- `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-01/ipad-mac-cloudkit-convergence-2026090109.json`
+  (`SHA-256 059612fc6d088de3589aea6ae18dc43095be829b8fe87f4867f837db11996731`)
 - `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-01/GunnAire Ops 1.0 (2026090109) Mac Sign-In no-email.jpeg`
   (`SHA-256 3d03fdb60e10627d4a1325402c1a134454a94b550c0a5b9ecfbad20aade1a2f5`)
 
@@ -36,6 +38,18 @@ import, and a zero-object export, with no running operation or failure after the
 launch. This proves exact-build Mac receipt from the Development container; it
 does not prove authentication, record authorship, a two-device mutation round
 trip, offline recovery, conflict handling, or Production readiness.
+
+The installed exact iPad build independently recorded successful Development
+CloudKit setup, import, and export immediately after the Mac receive cycle, with
+no pending import/export or current warning. Its event ledger retains seven
+older `CKErrorDomain` export failures and the later successes that recovered
+them instead of erasing that history. A temporary read-only snapshot compared
+only row counts for all 32 SwiftData entity tables; the iPad and imported Mac
+count vectors matched exactly at SHA-256
+`f8050397a35a0dca5d677738e385cae1a5908687ea926bf3671f7fc4e22dfa49`.
+No business field value was inspected, and the temporary preferences and store
+copies were removed. This proves aggregate record-graph convergence, not
+field-by-field equality or a controlled bidirectional create/update/delete.
 
 ## 1. Inspect readiness
 
