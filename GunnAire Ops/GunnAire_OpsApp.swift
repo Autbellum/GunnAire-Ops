@@ -71,43 +71,101 @@ struct GunnAire_OpsApp: App {
     }
 }
 
-/// A deliberately short list of the destinations used repeatedly from an
-/// attached iPad keyboard or a Mac. Route authorization remains centralized in
-/// `ContentView`, so a shortcut never bypasses the signed-in business role.
+enum GunnAireNavigationCommandSection: Int, CaseIterable {
+    case operations
+    case backOffice
+    case integrations
+    case administrator
+}
+
+/// Mirrors the role-scoped sidebar in the native Mac Navigate menu while
+/// retaining shortcuts only for the most frequent iPad/Mac destinations.
+/// Route authorization remains centralized in `ContentView`, so neither a menu
+/// item nor a shortcut can bypass the signed-in business role.
 struct GunnAireNavigationCommandDefinition: Equatable, Identifiable {
     let route: GunnAireAppRoute
     let title: String
     let systemImage: String
-    let key: Character
+    let section: GunnAireNavigationCommandSection
+    let shortcutKey: Character?
 
     var id: String { route.rawValue }
 
-    static let primary: [Self] = [
-        .init(route: .commandCenter, title: "Command Center", systemImage: "rectangle.3.group", key: "1"),
-        .init(route: .schedule, title: "Schedule & Jobs", systemImage: "calendar", key: "2"),
-        .init(route: .customers, title: "Customers", systemImage: "person.3", key: "3"),
-        .init(route: .documentation, title: "Onsite Documentation", systemImage: "book", key: "4"),
-        .init(route: .invoices, title: "Invoices", systemImage: "doc.text", key: "5"),
-        .init(route: .payments, title: "Payments", systemImage: "creditcard", key: "6")
+    static let all: [Self] = [
+        .init(route: .commandCenter, title: "Command Center", systemImage: "rectangle.3.group", section: .operations, shortcutKey: "1"),
+        .init(route: .timeClock, title: "Clock In/Out", systemImage: "clock", section: .operations, shortcutKey: nil),
+        .init(route: .schedule, title: "Schedule & Jobs", systemImage: "calendar", section: .operations, shortcutKey: "2"),
+        .init(route: .customers, title: "Customers", systemImage: "person.3", section: .operations, shortcutKey: "3"),
+        .init(route: .documentation, title: "Onsite Documentation", systemImage: "book", section: .operations, shortcutKey: "4"),
+        .init(route: .mail, title: "Mail", systemImage: "envelope", section: .backOffice, shortcutKey: nil),
+        .init(route: .estimates, title: "Estimates", systemImage: "doc.text.magnifyingglass", section: .backOffice, shortcutKey: nil),
+        .init(route: .invoices, title: "Invoices", systemImage: "doc.text", section: .backOffice, shortcutKey: "5"),
+        .init(route: .payments, title: "Payments", systemImage: "creditcard", section: .backOffice, shortcutKey: "6"),
+        .init(route: .reports, title: "Business Reports", systemImage: "chart.bar.xaxis", section: .backOffice, shortcutKey: "7"),
+        .init(route: .receiptsBills, title: "Receipts & Bills", systemImage: "tray.and.arrow.up", section: .backOffice, shortcutKey: nil),
+        .init(route: .sync, title: "Sync & Integrations", systemImage: "arrow.triangle.2.circlepath", section: .integrations, shortcutKey: nil),
+        .init(route: .quickBooks, title: "QuickBooks Management", systemImage: "banknote", section: .administrator, shortcutKey: nil)
     ]
+
+    static var primary: [Self] {
+        all.filter { $0.shortcutKey != nil }
+    }
+
+    static func commands(in section: GunnAireNavigationCommandSection) -> [Self] {
+        all.filter { $0.section == section }
+    }
+}
+
+struct GunnAireNavigationCommandContext {
+    let visibleSidebarItems: Set<SidebarItem>
+
+    func canOpen(_ route: GunnAireAppRoute) -> Bool {
+        visibleSidebarItems.contains(route.sidebarItem)
+    }
+}
+
+private struct GunnAireNavigationCommandContextKey: FocusedValueKey {
+    typealias Value = GunnAireNavigationCommandContext
+}
+
+extension FocusedValues {
+    var gunnaireNavigationCommandContext: GunnAireNavigationCommandContext? {
+        get { self[GunnAireNavigationCommandContextKey.self] }
+        set { self[GunnAireNavigationCommandContextKey.self] = newValue }
+    }
+}
+
+private struct GunnAireOptionalKeyboardShortcut: ViewModifier {
+    let key: Character?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let key {
+            content.keyboardShortcut(KeyEquivalent(key), modifiers: .command)
+        } else {
+            content
+        }
+    }
 }
 
 struct GunnAireNavigationCommands: Commands {
+    @FocusedValue(\.gunnaireNavigationCommandContext) private var navigationContext
+
     var body: some Commands {
         CommandMenu("Navigate") {
-            ForEach(GunnAireNavigationCommandDefinition.primary) { command in
-                Button(command.title, systemImage: command.systemImage) {
-                    GunnAireAppIntentRouter.store(command.route)
+            ForEach(GunnAireNavigationCommandSection.allCases, id: \.rawValue) { section in
+                if section != .operations {
+                    Divider()
                 }
-                .keyboardShortcut(KeyEquivalent(command.key), modifiers: .command)
-            }
 
-            Divider()
-
-            Button("Business Reports", systemImage: "chart.bar.xaxis") {
-                GunnAireAppIntentRouter.store(.reports)
+                ForEach(GunnAireNavigationCommandDefinition.commands(in: section)) { command in
+                    Button(command.title, systemImage: command.systemImage) {
+                        GunnAireAppIntentRouter.store(command.route)
+                    }
+                    .modifier(GunnAireOptionalKeyboardShortcut(key: command.shortcutKey))
+                    .disabled(!(navigationContext?.canOpen(command.route) ?? false))
+                }
             }
-            .keyboardShortcut("7", modifiers: .command)
         }
     }
 }

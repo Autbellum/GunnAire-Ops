@@ -728,21 +728,39 @@ struct GunnAire_OpsTests {
     }
 
     @Test func primaryIPadMacNavigationCommandsStayFocusedUniqueAndRoleGuarded() {
+        let allCommands = GunnAireNavigationCommandDefinition.all
         let commands = GunnAireNavigationCommandDefinition.primary
 
-        #expect(commands.count == 6)
+        #expect(allCommands.count == 13)
+        #expect(Set(allCommands.map(\.route.sidebarItem)) == Set(SidebarItem.allCases))
+        #expect(Set(allCommands.map(\.route.rawValue)).count == allCommands.count)
+        #expect(GunnAireNavigationCommandDefinition.commands(in: .operations).count == 5)
+        #expect(GunnAireNavigationCommandDefinition.commands(in: .backOffice).count == 6)
+        #expect(GunnAireNavigationCommandDefinition.commands(in: .integrations).count == 1)
+        #expect(GunnAireNavigationCommandDefinition.commands(in: .administrator).count == 1)
+
+        #expect(commands.count == 7)
         #expect(Set(commands.map(\.route.rawValue)).count == commands.count)
-        #expect(Set(commands.map(\.key)).count == commands.count)
+        #expect(Set(commands.compactMap(\.shortcutKey)).count == commands.count)
         #expect(commands.map(\.route) == [
             .commandCenter,
             .schedule,
             .customers,
             .documentation,
             .invoices,
-            .payments
+            .payments,
+            .reports
         ])
-        #expect(GunnAireAppRoute.reports.sidebarItem == .reports)
-        #expect(GunnAireAppRoute.reports.shortTitle == "Reports")
+
+        let fieldContext = GunnAireNavigationCommandContext(
+            visibleSidebarItems: [.commandCenter, .timeClock, .scheduleAndJobs, .onsiteDocumentation, .invoices, .payments]
+        )
+        #expect(fieldContext.canOpen(.schedule))
+        #expect(fieldContext.canOpen(.documentation))
+        #expect(fieldContext.canOpen(.payments))
+        #expect(!fieldContext.canOpen(.customers))
+        #expect(!fieldContext.canOpen(.reports))
+        #expect(!fieldContext.canOpen(.quickBooks))
     }
 
     @Test func scheduleWorkQueueSummarizesOnlyVisibleNonemptyQueues() {

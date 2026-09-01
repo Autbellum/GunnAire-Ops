@@ -52,9 +52,10 @@ private struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
         override var canBecomeFirstResponder: Bool { true }
 
         override var keyCommands: [UIKeyCommand]? {
-            let definitions = GunnAireNavigationCommandDefinition.primary.map {
-                ($0.key.description, $0.title)
-            } + [("7", "Business Reports")]
+            let definitions = GunnAireNavigationCommandDefinition.primary.compactMap { definition -> (String, String)? in
+                guard let shortcutKey = definition.shortcutKey else { return nil }
+                return (shortcutKey.description, definition.title)
+            }
             return definitions.map { input, title in
                 let command = UIKeyCommand(
                     title: title,
@@ -89,8 +90,8 @@ private struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
         @objc private func handleKeyCommand(_ command: UIKeyCommand) {
             guard let input = command.input else { return }
             let route = GunnAireNavigationCommandDefinition.primary.first {
-                $0.key.description == input
-            }?.route ?? (input == "7" ? .reports : nil)
+                $0.shortcutKey?.description == input
+            }?.route
             guard let route else { return }
             onRoute?(route)
         }
@@ -501,6 +502,12 @@ struct ContentView: View {
             )
             applyPendingAppRouteIfNeeded()
         }
+        .focusedSceneValue(
+            \.gunnaireNavigationCommandContext,
+            GunnAireNavigationCommandContext(
+                visibleSidebarItems: Set(visibleSidebarItems)
+            )
+        )
         .tint(Color.brandGold)
     }
 
