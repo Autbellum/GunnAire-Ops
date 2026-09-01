@@ -51,8 +51,8 @@ REQUIRED_SCENARIOS = (
     ),
     AcceptanceScenario(
         "ipad-navigation-accessibility",
-        "iPad navigation, keyboard commands, Dynamic Type, and VoiceOver",
-        "Primary work remains uncluttered, reachable, and role scoped.",
+        "iPad navigation, keyboard commands, Dynamic Type, VoiceOver, and Reduce Motion",
+        "Primary work remains uncluttered, reachable, role scoped, and nonanimated when requested.",
     ),
     AcceptanceScenario(
         "mac-navigation-keyboard",

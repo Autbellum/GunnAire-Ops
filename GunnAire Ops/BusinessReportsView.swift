@@ -30,6 +30,7 @@ private struct BusinessReportCSVDocument: FileDocument {
 
 struct BusinessReportsView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -86,7 +87,13 @@ struct BusinessReportsView: View {
                         case .team: teamWorkspace
                         }
                     }
-                    .animation(.easeInOut(duration: 0.18), value: workspace)
+                    .animation(
+                        GunnAireAccessibilityMotionPolicy.easeInOut(
+                            duration: 0.18,
+                            reduceMotion: reduceMotion
+                        ),
+                        value: workspace
+                    )
                 }
                 .padding()
                 .frame(maxWidth: 1120, alignment: .leading)

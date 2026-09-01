@@ -69,7 +69,8 @@ Required coverage includes:
 
 - fresh Apple login, role resolution, revocation, and every access level;
 - uncluttered iPad/Mac navigation, attached-keyboard commands, Dynamic Type,
-  VoiceOver, dispatch conflicts, and auditable overrides;
+  VoiceOver, Reduce Motion across launch and common tasks, dispatch conflicts,
+  and auditable overrides;
 - complete offline Service, Repair, and Replacement work: findings, forms,
   photos/files, parts, labor, customer approval, closeout, reconnect, and file
   regeneration;

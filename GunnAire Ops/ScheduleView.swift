@@ -4,6 +4,7 @@ import SwiftData
 struct ScheduleView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @Query(sort: [SortDescriptor(\ServiceCall.scheduledDate)]) private var serviceCalls: [ServiceCall]
     @Query(sort: \Technician.name, order: .forward) private var technicians: [Technician]
     @Query(sort: \TechnicianAvailabilityBlock.startsAt, order: .forward) private var technicianAvailabilityBlocks: [TechnicianAvailabilityBlock]
@@ -574,7 +575,7 @@ struct ScheduleView: View {
               let call = callsForSignedInUser.first(where: { $0.id == pendingID }) else {
             return
         }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
             selectedDate = Calendar.current.startOfDay(for: call.scheduledDate)
             navigationPath = NavigationPath()
             navigationPath.append(call)
@@ -1743,7 +1744,7 @@ struct ScheduleView: View {
             syncMessage = "Dispatcher or administrator access is required to delete schedule entries."
             return
         }
-        withAnimation {
+        withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
             for index in offsets.sorted(by: >) {
                 deleteCall(selectedDayCalls[index])
             }

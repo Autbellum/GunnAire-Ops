@@ -26088,4 +26088,40 @@ struct GunnAire_OpsTests {
         #expect(try context.fetch(FetchDescriptor<BusinessTaskEvent>()).isEmpty)
     }
 
+    @Test func accessibilityMotionPolicySuppressesExplicitMotionAndTheSplashVideo() {
+        #expect(!GunnAireAccessibilityMotionPolicy.reduceMotionEnabled(
+            systemValue: false,
+            processArguments: []
+        ))
+        #expect(GunnAireAccessibilityMotionPolicy.reduceMotionEnabled(
+            systemValue: true,
+            processArguments: []
+        ))
+        #expect(GunnAireAccessibilityMotionPolicy.reduceMotionEnabled(
+            systemValue: false,
+            processArguments: [GunnAireAccessibilityMotionPolicy.uiTestReduceMotionArgument]
+        ))
+
+        #expect(GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
+            enabled: true,
+            hasVideo: true,
+            reduceMotion: false
+        ))
+        #expect(!GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
+            enabled: true,
+            hasVideo: true,
+            reduceMotion: true
+        ))
+        #expect(!GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
+            enabled: false,
+            hasVideo: true,
+            reduceMotion: false
+        ))
+        #expect(!GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
+            enabled: true,
+            hasVideo: false,
+            reduceMotion: false
+        ))
+    }
+
 }

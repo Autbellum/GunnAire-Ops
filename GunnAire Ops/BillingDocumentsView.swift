@@ -7,6 +7,7 @@ struct BillingDocumentsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @ObservedObject private var accountingConfigurationStore = QuickBooksAccountingConfigurationStore.shared
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
@@ -5113,14 +5114,22 @@ GunnAire
     private func openNextCloseoutAction(_ action: JobCloseoutNextAction) {
         switch action.destination {
         case .work:
-            withAnimation { selectedJobStage = .work }
+            withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
+                selectedJobStage = .work
+            }
         case .files:
-            withAnimation { selectedJobStage = .files }
+            withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
+                selectedJobStage = .files
+            }
         case .billing:
-            withAnimation { selectedJobStage = .billing }
+            withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
+                selectedJobStage = .billing
+            }
         case .invoiceCloseout:
             guard let invoice = currentJobInvoice else {
-                withAnimation { selectedJobStage = .billing }
+                withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
+                    selectedJobStage = .billing
+                }
                 return
             }
             openInvoiceCloseout(invoice)

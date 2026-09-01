@@ -131,6 +131,28 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testReducedMotionSkipsTheSplashAndKeepsCoreNavigationAvailable() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "YES",
+            "-maximumSplashDurationSeconds", "6",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestReduceMotion"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["Tap to skip"].exists)
+
+        app.staticTexts["Schedule & Jobs"].tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        app.staticTexts["Payments"].tap()
+        XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testGlobalFindReturnsToCommandCenterFromAnyIPadWorkspace() throws {
         let app = XCUIApplication()
         app.launchArguments = [

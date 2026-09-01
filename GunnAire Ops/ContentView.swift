@@ -101,6 +101,7 @@ private struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @EnvironmentObject private var cloudKitEventMonitor: GunnAireCloudKitEventMonitor
     @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
@@ -387,7 +388,7 @@ struct ContentView: View {
                 visibleItems: updatedItems
             )
             guard resolvedSelection != selectedSidebarItem else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
                 selectedSidebarItem = resolvedSelection
             }
         }
@@ -785,7 +786,7 @@ struct ContentView: View {
     /// every iPad and Mac workspace without duplicating business queries here.
     private func openAppWideFind() {
         guard visibleSidebarItems.contains(.commandCenter) else { return }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
             selectedSidebarItem = .commandCenter
             columnVisibility = prefersPersistentSidebar ? .doubleColumn : .detailOnly
         }
@@ -795,7 +796,7 @@ struct ContentView: View {
     private func applyPendingAppRouteIfNeeded() {
         guard let route = pendingAppRoute else { return }
         let targetItem = route.sidebarItem
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
             if visibleSidebarItems.contains(targetItem) {
                 selectedSidebarItem = targetItem
             } else {
@@ -828,6 +829,7 @@ struct ContentView: View {
 struct ServiceCallDetailView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -2549,7 +2551,9 @@ GunnAire
                                 }
                                 if workPerformedEntries.count > 3 {
                                     Button(expandedWorkLogHistory ? "Show Recent Entries" : "Show All \(workPerformedEntries.count) Entries") {
-                                        withAnimation { expandedWorkLogHistory.toggle() }
+                                        withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
+                                            expandedWorkLogHistory.toggle()
+                                        }
                                     }
                                     .font(.caption.weight(.semibold))
                                     .accessibilityIdentifier("ToggleFullWorkLog")

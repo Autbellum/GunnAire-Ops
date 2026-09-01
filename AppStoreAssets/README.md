@@ -19,9 +19,23 @@ https://developer.apple.com/help/app-store-connect/manage-app-information/manage
 Safari verification on 2026-08-31 found the live App Store draft incomplete:
 the privacy-policy URL was not entered, only a subset of the source manifest's
 13 data types appeared in the draft, most visible answers still showed “Set
-Up,” and Publish was disabled. The exact current build `2026083101` was also
-not uploaded or selected. This repository contract prepares the accurate
+Up,” and Publish was disabled. The exact current build `2026083102` is not
+uploaded or selected. This repository contract prepares the accurate
 answers; it does not claim that the App Store form has been saved or published.
+
+## Accessibility submission boundary
+
+Safari verification on 2026-08-31 found the live App Accessibility page at
+“Get Started,” with no support claim published. Apple requires a claimed
+accessibility feature to work across every common task—including first launch,
+sign-in, purchases, and settings—and evaluates claims per device type. Build
+`2026083102` implements and automates the app-side Reduce Motion boundary by
+skipping the launch video and suppressing all explicit transitions. Do not
+publish Reduce Motion or any other accessibility feature until the signed iPad,
+iPhone, and Mac acceptance record proves the complete applicable task set.
+
+Current Apple criteria:
+https://developer.apple.com/help/app-store-connect/manage-app-accessibility/overview-of-accessibility-nutrition-labels
 
 These screenshots are generated from the Debug-only `-appStoreScreenshotFixtures`
 workflow in `GunnAire_OpsUITests.testCaptureAppStoreScreenshots`. The workflow

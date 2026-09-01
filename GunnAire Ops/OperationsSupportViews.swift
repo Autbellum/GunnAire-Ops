@@ -220,6 +220,7 @@ private extension CustomerDataMaintenance.DeletionSummary {
 
 struct CustomersView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -498,7 +499,7 @@ struct CustomersView: View {
               let customer = customers.first(where: { $0.id == pendingID }) else {
             return
         }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
             selectedCustomer = customer
         }
     }

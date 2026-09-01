@@ -15,6 +15,7 @@ struct PaymentsAndReceiptsView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
@@ -1225,7 +1226,7 @@ struct PaymentsAndReceiptsView: View {
             deferredCollectionPrefersContactlessGuide = false
             deferredCollectionExpiresAt = nil
             GunnAireAppIntentRouter.clearDeferredPaymentCollectionRoute()
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
                 preparePaymentForm(for: invoice)
                 if presentsContactlessGuide {
                     contactlessGuideMessage = ""

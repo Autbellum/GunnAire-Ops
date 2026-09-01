@@ -4,14 +4,59 @@ import AVKit
 import AVFoundation
 import os
 
+enum GunnAireAccessibilityMotionPolicy {
+    static let uiTestReduceMotionArgument = "-uiTestReduceMotion"
+
+    static func reduceMotionEnabled(
+        systemValue: Bool,
+        processArguments: [String]
+    ) -> Bool {
+        #if DEBUG
+        systemValue || processArguments.contains(uiTestReduceMotionArgument)
+        #else
+        systemValue
+        #endif
+    }
+
+    static func shouldPlaySplashVideo(
+        enabled: Bool,
+        hasVideo: Bool,
+        reduceMotion: Bool
+    ) -> Bool {
+        enabled && hasVideo && !reduceMotion
+    }
+
+    static func easeInOut(duration: TimeInterval, reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeInOut(duration: duration)
+    }
+
+    static func standardAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .default
+    }
+}
+
+extension EnvironmentValues {
+    var gunnaireReduceMotion: Bool {
+        GunnAireAccessibilityMotionPolicy.reduceMotionEnabled(
+            systemValue: accessibilityReduceMotion,
+            processArguments: ProcessInfo.processInfo.arguments
+        )
+    }
+}
+
 struct AppRootView: View {
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
     @AppStorage("enableSplashVideo") private var enableSplashVideo = true
     @State private var showingSplash = true
 
     var body: some View {
         Group {
-            if showingSplash && enableSplashVideo && SplashVideoLocator.resolveURL() != nil {
+            if showingSplash && GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
+                enabled: enableSplashVideo,
+                hasVideo: SplashVideoLocator.resolveURL() != nil,
+                reduceMotion: reduceMotion
+            ) {
                 VideoSplashView {
                     showingSplash = false
                 }
@@ -25,7 +70,16 @@ struct AppRootView: View {
         }
         .onAppear {
             applyUITestAuthenticationIfRequested()
-            if !enableSplashVideo || SplashVideoLocator.resolveURL() == nil {
+            if !GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
+                enabled: enableSplashVideo,
+                hasVideo: SplashVideoLocator.resolveURL() != nil,
+                reduceMotion: reduceMotion
+            ) {
+                showingSplash = false
+            }
+        }
+        .onChange(of: reduceMotion) { _, isReduced in
+            if isReduced {
                 showingSplash = false
             }
         }
