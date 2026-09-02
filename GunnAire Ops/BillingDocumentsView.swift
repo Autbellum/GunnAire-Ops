@@ -1578,13 +1578,17 @@ GunnAire
     @ViewBuilder
     var body: some View {
         if let invoice = requestedInitialCloseoutInvoice {
-            RecordInvoicePaymentView(
-                invoice: invoice,
-                autoStartTapToPay: openTapToPayOnAppear
+            AnyView(
+                RecordInvoicePaymentView(
+                    invoice: invoice,
+                    autoStartTapToPay: openTapToPayOnAppear
+                )
+                .tint(Color.brandGold)
             )
-            .tint(Color.brandGold)
         } else {
-            NavigationStack {
+            AnyView(
+                NavigationStack {
+                    AnyView(
             List {
                 activeJobSections
 
@@ -2226,7 +2230,9 @@ GunnAire
                 )
                 reconcileLineEquipmentAssignments()
             }
-        }
+                    )
+                }
+            )
         }
     }
 

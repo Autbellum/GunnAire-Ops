@@ -19628,6 +19628,129 @@ struct GunnAire_OpsTests {
         #expect(try context.fetch(FetchDescriptor<Vendor>()).isEmpty)
     }
 
+    #if DEBUG
+    @Test @MainActor func cloudKitRoundTripProbeUsesOneExplicitFailClosedMode() {
+        let create = GunnAireCloudKitRoundTripProbe.Mode.create.launchArgument
+        let update = GunnAireCloudKitRoundTripProbe.Mode.update.launchArgument
+
+        #expect(
+            GunnAireCloudKitRoundTripProbe.mode(
+                processArguments: ["GunnAire Ops", create]
+            ) == .create
+        )
+        #expect(
+            GunnAireCloudKitRoundTripProbe.requestedModes(
+                processArguments: ["GunnAire Ops", create, update]
+            ) == [.create, .update]
+        )
+        #expect(
+            GunnAireCloudKitRoundTripProbe.mode(
+                processArguments: ["GunnAire Ops", create, update]
+            ) == nil
+        )
+        #expect(
+            GunnAireCloudKitRoundTripProbe.mode(
+                processArguments: ["GunnAire Ops"]
+            ) == nil
+        )
+    }
+
+    @Test @MainActor func cloudKitRoundTripProbeCreatesUpdatesObservesAndDeletesOnlyItsFixedCanary() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        let context = container.mainContext
+        let unrelated = BusinessTask(
+            title: "Unrelated task",
+            assignedToEmail: "staff@gunnaire.com",
+            dueAt: Date(timeIntervalSinceReferenceDate: 900_000_100),
+            createdByEmail: "staff@gunnaire.com"
+        )
+        context.insert(unrelated)
+        try context.save()
+
+        let created = try GunnAireCloudKitRoundTripProbe.apply(
+            .create,
+            in: context,
+            now: Date(timeIntervalSinceReferenceDate: 900_000_001)
+        )
+        #expect(created == .init(state: .original, matchCount: 1, actionPerformed: true))
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeCreated, in: context)
+                == .init(state: .original, matchCount: 1, actionPerformed: false)
+        )
+
+        let updated = try GunnAireCloudKitRoundTripProbe.apply(
+            .update,
+            in: context,
+            now: Date(timeIntervalSinceReferenceDate: 900_000_002)
+        )
+        #expect(updated == .init(state: .updated, matchCount: 1, actionPerformed: true))
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeUpdated, in: context)
+                == .init(state: .updated, matchCount: 1, actionPerformed: false)
+        )
+
+        let deleted = try GunnAireCloudKitRoundTripProbe.apply(.delete, in: context)
+        #expect(deleted == .init(state: .absent, matchCount: 0, actionPerformed: true))
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeDeleted, in: context)
+                == .init(state: .absent, matchCount: 0, actionPerformed: false)
+        )
+
+        let remaining = try context.fetch(FetchDescriptor<BusinessTask>())
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.id == unrelated.id)
+    }
+
+    @Test @MainActor func cloudKitRoundTripProbeRefusesUnexpectedFixedIDContent() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        let context = container.mainContext
+        context.insert(
+            BusinessTask(
+                id: GunnAireCloudKitRoundTripProbe.canaryID,
+                creationOperationID: UUID(),
+                title: "Not the canary",
+                assignedToEmail: "staff@gunnaire.com",
+                dueAt: Date(timeIntervalSinceReferenceDate: 900_000_100),
+                createdByEmail: "staff@gunnaire.com"
+            )
+        )
+        try context.save()
+
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.create, in: context)
+                == .init(state: .unexpected, matchCount: 1, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.update, in: context)
+                == .init(state: .unexpected, matchCount: 1, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.delete, in: context)
+                == .init(state: .unexpected, matchCount: 1, actionPerformed: false)
+        )
+    }
+    #endif
+
     @Test func timeOffRolePolicyFailsClosedOnAmbiguousTechnicianIdentity() {
         let fieldEmail = "field.timeoff@gunnaire.com"
         let fieldUser = AppUser(email: fieldEmail, role: .fieldTechnician)

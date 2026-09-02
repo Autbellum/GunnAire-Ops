@@ -4,6 +4,48 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
+## Build-2026090110 controlled evidence
+
+Build `1.0 (2026090110)` is retained as development-signed iOS and universal
+Mac Catalyst archives and is installed on the paired iPad Pro 13-inch (M5),
+iPadOS `26.6.1`. Its current privacy-minimal readiness files are:
+
+- `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-01/physical-device-readiness-connected-2026090110.json`
+  (`SHA-256 fa79146c25bcb063a4c0d3baf8eca89be8913ccfc7d41af07741765e849946ef`)
+- `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-01/physical-device-acceptance-2026090110.json`
+  (`SHA-256 32111eeead132420a6fca79e21f687f4be3e56901323e11b21dc4bdbe0dc489f`)
+- `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-01/ipad-mac-cloudkit-roundtrip-2026090110.json`
+  (`SHA-256 9310fb532666b60f89b6bc4999d9031331f7fa01e4fa2fbfe248540aa9e190bb`)
+
+The signed CloudKit Development sequence passed in this exact order: Mac
+created one isolated fixed-ID noncustomer canary; iPad observed the original;
+iPad updated it; Mac observed the update; Mac deleted it; and iPad observed it
+absent. A separate iPad baseline proved the marker was absent before creation.
+The Debug-only probe used its own temporary store, never opened the normal
+business store, is compiled out of Release, and left zero local support, asset,
+report, or store files on either device. The retained JSON contains no emails,
+device identifiers, customer names, addresses, invoice amounts, payment data,
+or business notes. This proves exact two-device create/update/delete propagation
+in Development; it does not prove offline reconnect, conflict recovery,
+Production promotion, authentication, or iPhone Handoff.
+
+A retained exact build-`2026090109` physical-iPad Release crash was symbolicated
+with its matching dSYM to recursive Swift generic metadata instantiation in
+`BillingDocumentsView.body` immediately below `NavigationStack`, ending in a
+stack-guard `SIGSEGV`. Build `2026090110` erases that oversized root generic
+boundary. The optimized signed Release build, focused simulator admin launch,
+and technician invoice-item/update journey pass. The complete iPad UI target
+also passes **103/103 logical tests** with **106/106 device executions**, zero
+failures or skips, and build `2026090110` is installed. The final unlocked
+physical normal-launch/no-new-crash check is still
+pending because iPadOS currently reports the device locked. Do not treat the
+simulator or successful install as physical Release launch acceptance.
+
+The readiness report remains not-ready overall because the Apple Distribution
+and separate Mac distribution private keys are not installed and no paired
+iPhone is available. No browser or account console was used for this work; the
+Safari-only instruction was honored.
+
 ## Prepared build-2026090109 package
 
 The privacy-minimal readiness report and incomplete acceptance template are

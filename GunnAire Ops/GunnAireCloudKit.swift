@@ -111,6 +111,9 @@ enum GunnAireCloudKit {
         }
 
         #if DEBUG
+        if GunnAireCloudKitRoundTripProbe.isRequested {
+            return GunnAireCloudKitRoundTripProbe.modelConfiguration(for: schema)
+        }
         if GunnAireCloudKitSchemaBootstrap.isRequested {
             return GunnAireCloudKitSchemaBootstrap.modelConfiguration(for: schema)
         }
@@ -369,6 +372,345 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
 }
 
 #if DEBUG
+/// A Development-only, privacy-safe signed-device acceptance canary.
+///
+/// The canary uses one fixed-ID BusinessTask in its own local store. It never
+/// opens the normal business store, never contains a customer relationship,
+/// and is compiled out of Release builds. Explicit launch arguments make each
+/// phase reviewable and allow a Mac -> iPad create/update/delete round trip to
+/// be proved without adding another production UI or persistence type.
+@MainActor
+enum GunnAireCloudKitRoundTripProbe {
+    enum Mode: String, CaseIterable, Codable, Sendable {
+        case create
+        case observeCreated
+        case update
+        case observeUpdated
+        case delete
+        case observeDeleted
+        case purgeLocal
+
+        var launchArgument: String {
+            switch self {
+            case .create: "-createCloudKitRoundTripCanary"
+            case .observeCreated: "-observeCreatedCloudKitRoundTripCanary"
+            case .update: "-updateCloudKitRoundTripCanary"
+            case .observeUpdated: "-observeUpdatedCloudKitRoundTripCanary"
+            case .delete: "-deleteCloudKitRoundTripCanary"
+            case .observeDeleted: "-observeDeletedCloudKitRoundTripCanary"
+            case .purgeLocal: "-purgeLocalCloudKitRoundTripProbe"
+            }
+        }
+    }
+
+    enum CanaryState: String, Codable, Sendable {
+        case absent
+        case original
+        case updated
+        case duplicate
+        case unexpected
+        case error
+    }
+
+    struct ActionResult: Equatable, Sendable {
+        let state: CanaryState
+        let matchCount: Int
+        let actionPerformed: Bool
+    }
+
+    private struct Report: Codable {
+        let schemaVersion: Int
+        let generatedAtUTC: Date
+        let applicationBuild: String
+        let mode: Mode
+        let attempt: Int
+        let state: CanaryState
+        let matchCount: Int
+        let actionPerformed: Bool
+        let expectationMet: Bool
+        let errorCode: String?
+    }
+
+    static let schemaVersion = 1
+    static let storeFileName = "GunnAireCloudKitRoundTripProbeV1.store"
+    static let reportFileName = "GunnAireCloudKitRoundTripProbeV1.json"
+    static let canaryID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000001")!
+    static let canaryCreationOperationID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000002")!
+    static let canaryTitle = "__GUNNAIRE_CLOUDKIT_ROUND_TRIP__"
+    static let originalDescription = "__GUNNAIRE_CLOUDKIT_ROUND_TRIP_CREATED__"
+    static let updatedDescription = "__GUNNAIRE_CLOUDKIT_ROUND_TRIP_UPDATED__"
+    static let canaryEmail = "cloudkit-roundtrip@gunnaire.invalid"
+
+    private static let maximumAttempt = 5
+    private static let attemptDelays: [TimeInterval] = [0, 2, 5, 10, 20]
+
+    static func requestedModes(processArguments: [String] = ProcessInfo.processInfo.arguments) -> [Mode] {
+        Mode.allCases.filter { processArguments.contains($0.launchArgument) }
+    }
+
+    static func mode(processArguments: [String] = ProcessInfo.processInfo.arguments) -> Mode? {
+        let modes = requestedModes(processArguments: processArguments)
+        return modes.count == 1 ? modes[0] : nil
+    }
+
+    static var isRequested: Bool {
+        !requestedModes().isEmpty
+    }
+
+    private static var storeURL: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(storeFileName)
+    }
+
+    private static var reportURL: URL {
+        let supportDirectory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+        return supportDirectory.appendingPathComponent(reportFileName)
+    }
+
+    static func modelConfiguration(for schema: Schema) -> ModelConfiguration {
+        if mode() == .purgeLocal || mode() == nil {
+            return ModelConfiguration(
+                "GunnAireCloudKitRoundTripProbePurge",
+                schema: schema,
+                isStoredInMemoryOnly: true,
+                cloudKitDatabase: .none
+            )
+        }
+
+        return ModelConfiguration(
+            "GunnAireCloudKitRoundTripProbeV1",
+            schema: schema,
+            url: storeURL,
+            allowsSave: true,
+            cloudKitDatabase: .private(GunnAireCloudKit.containerIdentifier)
+        )
+    }
+
+    static func prepareBeforeContainerIfRequested() throws {
+        let modes = requestedModes()
+        guard !modes.isEmpty else { return }
+        guard modes.count == 1 else {
+            throw ProbeError.multipleModes
+        }
+        guard modes[0] == .purgeLocal else { return }
+
+        let fileManager = FileManager.default
+        let storeDirectory = storeURL.deletingLastPathComponent()
+        let storeBaseName = storeURL.deletingPathExtension().lastPathComponent
+        let exactURLs = [
+            storeURL,
+            URL(fileURLWithPath: storeURL.path + "-shm"),
+            URL(fileURLWithPath: storeURL.path + "-wal"),
+            URL(fileURLWithPath: storeURL.deletingPathExtension().path + "_SUPPORT"),
+            URL(fileURLWithPath: storeURL.deletingPathExtension().path + "_ckAssets"),
+            storeDirectory.appendingPathComponent(".\(storeBaseName)_SUPPORT"),
+            storeDirectory.appendingPathComponent(".\(storeBaseName)_ckAssets"),
+            reportURL
+        ]
+        for url in exactURLs where fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
+        }
+    }
+
+    static func runIfRequested(in modelContext: ModelContext) throws {
+        let modes = requestedModes()
+        guard !modes.isEmpty else { return }
+        guard modes.count == 1 else {
+            throw ProbeError.multipleModes
+        }
+        let mode = modes[0]
+        guard mode != .purgeLocal else { return }
+
+        schedule(mode: mode, in: modelContext)
+    }
+
+    private static func schedule(mode: Mode, in modelContext: ModelContext) {
+        Task { @MainActor in
+            var previousDelay: TimeInterval = 0
+            for (index, absoluteDelay) in attemptDelays.enumerated() {
+                let incrementalDelay = absoluteDelay - previousDelay
+                previousDelay = absoluteDelay
+                if incrementalDelay > 0 {
+                    try? await Task.sleep(for: .seconds(incrementalDelay))
+                }
+
+                do {
+                    let result = try apply(mode, in: modelContext)
+                    let attempt = index + 1
+                    let expectationMet = expectationMet(
+                        mode: mode,
+                        result: result,
+                        attempt: attempt
+                    )
+                    try writeReport(
+                        mode: mode,
+                        attempt: attempt,
+                        result: result,
+                        expectationMet: expectationMet,
+                        errorCode: nil
+                    )
+                    debugLog(
+                        "mode=\(mode.rawValue) attempt=\(attempt) state=\(result.state.rawValue) " +
+                        "matches=\(result.matchCount) action=\(result.actionPerformed) passed=\(expectationMet)"
+                    )
+                    if expectationMet { return }
+                } catch {
+                    let attempt = index + 1
+                    try? writeReport(
+                        mode: mode,
+                        attempt: attempt,
+                        result: ActionResult(state: .error, matchCount: 0, actionPerformed: false),
+                        expectationMet: false,
+                        errorCode: String(describing: error)
+                    )
+                    debugLog("mode=\(mode.rawValue) attempt=\(attempt) failed: \(String(describing: error))")
+                }
+            }
+        }
+    }
+
+    static func apply(
+        _ mode: Mode,
+        in modelContext: ModelContext,
+        now: Date = Date()
+    ) throws -> ActionResult {
+        guard mode != .purgeLocal else {
+            return ActionResult(state: .absent, matchCount: 0, actionPerformed: false)
+        }
+
+        let canaryID = canaryID
+        let descriptor = FetchDescriptor<BusinessTask>(
+            predicate: #Predicate { $0.id == canaryID }
+        )
+        var matches = try modelContext.fetch(descriptor)
+        guard matches.count <= 1 else {
+            return ActionResult(state: .duplicate, matchCount: matches.count, actionPerformed: false)
+        }
+
+        var actionPerformed = false
+        switch mode {
+        case .create:
+            if matches.isEmpty {
+                let canary = BusinessTask(
+                    id: canaryID,
+                    creationOperationID: canaryCreationOperationID,
+                    title: canaryTitle,
+                    taskDescription: originalDescription,
+                    priority: .low,
+                    assignedToEmail: canaryEmail,
+                    dueAt: Date(timeIntervalSinceReferenceDate: 900_000_000),
+                    createdAt: Date(timeIntervalSinceReferenceDate: 900_000_000),
+                    createdByEmail: canaryEmail
+                )
+                modelContext.insert(canary)
+                try modelContext.save()
+                actionPerformed = true
+            }
+        case .update:
+            if let canary = matches.first,
+               canary.title == canaryTitle,
+               canary.taskDescription == originalDescription {
+                canary.taskDescription = updatedDescription
+                canary.updatedAt = now
+                try modelContext.save()
+                actionPerformed = true
+            }
+        case .delete:
+            if let canary = matches.first,
+               canary.title == canaryTitle,
+               let taskDescription = canary.taskDescription,
+               [originalDescription, updatedDescription].contains(taskDescription) {
+                modelContext.delete(canary)
+                try modelContext.save()
+                actionPerformed = true
+            }
+        case .observeCreated, .observeUpdated, .observeDeleted:
+            break
+        case .purgeLocal:
+            break
+        }
+
+        matches = try modelContext.fetch(descriptor)
+        let state = canaryState(matches: matches)
+        return ActionResult(
+            state: state,
+            matchCount: matches.count,
+            actionPerformed: actionPerformed
+        )
+    }
+
+    private static func canaryState(matches: [BusinessTask]) -> CanaryState {
+        guard matches.count <= 1 else { return .duplicate }
+        guard let canary = matches.first else { return .absent }
+        guard canary.title == canaryTitle,
+              canary.creationOperationID == canaryCreationOperationID,
+              canary.assignedToEmail == canaryEmail,
+              canary.createdByEmail == canaryEmail else {
+            return .unexpected
+        }
+        if canary.taskDescription == originalDescription { return .original }
+        if canary.taskDescription == updatedDescription { return .updated }
+        return .unexpected
+    }
+
+    private static func expectationMet(
+        mode: Mode,
+        result: ActionResult,
+        attempt: Int
+    ) -> Bool {
+        switch mode {
+        case .create, .observeCreated:
+            result.state == .original
+        case .update, .observeUpdated:
+            result.state == .updated
+        case .delete:
+            result.state == .absent && (result.actionPerformed || attempt == maximumAttempt)
+        case .observeDeleted:
+            result.state == .absent && attempt == maximumAttempt
+        case .purgeLocal:
+            true
+        }
+    }
+
+    private static func writeReport(
+        mode: Mode,
+        attempt: Int,
+        result: ActionResult,
+        expectationMet: Bool,
+        errorCode: String?
+    ) throws {
+        let report = Report(
+            schemaVersion: schemaVersion,
+            generatedAtUTC: Date(),
+            applicationBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+            mode: mode,
+            attempt: attempt,
+            state: result.state,
+            matchCount: result.matchCount,
+            actionPerformed: result.actionPerformed,
+            expectationMet: expectationMet,
+            errorCode: errorCode
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(report)
+        let directory = reportURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try data.write(to: reportURL, options: .atomic)
+    }
+
+    private static func debugLog(_ message: String) {
+        FileHandle.standardError.write(Data("[GunnAireCloudKitRoundTripProbe] \(message)\n".utf8))
+    }
+
+    private enum ProbeError: Error {
+        case multipleModes
+    }
+}
+
 /// Development-only tooling for making SwiftData publish every production
 /// entity to the CloudKit development schema. SwiftData creates CloudKit
 /// record types lazily, so launching an empty store only creates types for

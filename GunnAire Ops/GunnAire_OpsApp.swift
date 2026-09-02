@@ -30,31 +30,65 @@ struct GunnAire_OpsApp: App {
 
     var body: some Scene {
         WindowGroup {
-            switch startupState {
-            case .ready(let sharedModelContainer):
-                AppRootView()
-                    .modelContainer(sharedModelContainer)
-                    .environmentObject(cloudKitEventMonitor)
-            case .failed(let message):
-                StartupFailureView(message: message)
+            #if DEBUG
+            if GunnAireCloudKitRoundTripProbe.isRequested {
+                switch startupState {
+                case .ready(let sharedModelContainer):
+                    GunnAireCloudKitRoundTripProbeHostView()
+                        .modelContainer(sharedModelContainer)
+                case .failed(let message):
+                    StartupFailureView(message: message)
+                }
+            } else {
+                appRoot
             }
+            #else
+            appRoot
+            #endif
         }
         .commands {
             GunnAireNavigationCommands()
         }
     }
 
+    @ViewBuilder
+    private var appRoot: some View {
+        switch startupState {
+        case .ready(let sharedModelContainer):
+            AppRootView()
+                .modelContainer(sharedModelContainer)
+                .environmentObject(cloudKitEventMonitor)
+        case .failed(let message):
+            StartupFailureView(message: message)
+        }
+    }
+
     private static func buildStartupState() -> StartupState {
         let schema = GunnAireModelSchema.schema
+        #if DEBUG
+        do {
+            try GunnAireCloudKitRoundTripProbe.prepareBeforeContainerIfRequested()
+        } catch {
+            logger.error("CloudKit round-trip probe preparation failed: \(error.localizedDescription, privacy: .public)")
+            return .failed("The Development CloudKit acceptance probe could not prepare its isolated local store.")
+        }
+        #endif
         let modelConfiguration = GunnAireCloudKit.modelConfiguration(for: schema)
 
         do {
             let modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
-            FieldFormTemplate.ensureStarterTemplates(in: modelContainer.mainContext)
-            try modelContainer.mainContext.save()
             #if DEBUG
+            if !GunnAireCloudKitRoundTripProbe.isRequested &&
+                !GunnAireCloudKitSchemaBootstrap.isRequested {
+                FieldFormTemplate.ensureStarterTemplates(in: modelContainer.mainContext)
+                try modelContainer.mainContext.save()
+            }
+            try GunnAireCloudKitRoundTripProbe.runIfRequested(in: modelContainer.mainContext)
             try GunnAireCloudKitSchemaBootstrap.runIfRequested(in: modelContainer.mainContext)
             try GunnAireUITestFixtures.prepareIfRequested(in: modelContainer.mainContext)
+            #else
+            FieldFormTemplate.ensureStarterTemplates(in: modelContainer.mainContext)
+            try modelContainer.mainContext.save()
             #endif
             return .ready(modelContainer)
         } catch {
@@ -70,6 +104,35 @@ struct GunnAire_OpsApp: App {
         case failed(String)
     }
 }
+
+#if DEBUG
+private struct GunnAireCloudKitRoundTripProbeHostView: View {
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemBackground)
+                .ignoresSafeArea()
+
+            VStack(spacing: 16) {
+                ProgressView()
+                Text("CloudKit acceptance in progress")
+                    .font(.headline)
+                Text("This Development-only check contains no customer data.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding()
+        }
+        .accessibilityIdentifier("cloudkit.roundtrip.probe")
+        .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
+    }
+}
+#endif
 
 enum GunnAireNavigationCommandSection: Int, CaseIterable {
     case operations
