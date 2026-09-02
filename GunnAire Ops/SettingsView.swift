@@ -292,10 +292,13 @@ struct SettingsView: View {
                             featureStatus("Fleet & Truck Readiness", systemImage: "car.2", detail: "Included in the Command Center")
                             featureStatus("Pricebook", systemImage: "list.bullet.rectangle", detail: "Included in estimates and invoices")
                             featureStatus("Good-Better-Best Estimates", systemImage: "square.stack.3d.up", detail: "Included in estimates")
-                            Button("Manage Field Form Templates") {
+                            Button {
                                 showingFieldFormTemplates = true
+                            } label: {
+                                Label("Manage Field Form Templates", systemImage: "list.clipboard")
                             }
                             .accessibilityIdentifier("ManageFieldFormTemplates")
+                            .accessibilityHint("Opens reusable service, repair, replacement, and maintenance forms")
                             settingsToggle("Photo & Document Capture", systemImage: "camera", isOn: $enablePhotoDocumentation)
                             featureStatus("Reporting Dashboard", systemImage: "chart.bar", detail: "Included in Command Center")
                         }

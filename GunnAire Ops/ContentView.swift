@@ -2517,6 +2517,55 @@ GunnAire
 
                     GroupBox("Work Performed") {
                         VStack(alignment: .leading, spacing: 10) {
+                            if canUpdateCurrentJob {
+                                ViewThatFits(in: .horizontal) {
+                                    HStack(spacing: 8) {
+                                        Button {
+                                            showingWorkPerformedLog = true
+                                        } label: {
+                                            Label("Add Work Log", systemImage: "plus.circle")
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .accessibilityIdentifier("AddWorkPerformedLog")
+
+                                        Button {
+                                            showingCustomerWorkSummary = true
+                                        } label: {
+                                            Label(
+                                                currentCustomerWorkSummary == nil ? "Create Work Summary" : "Review Work Summary",
+                                                systemImage: "doc.text"
+                                            )
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(workPerformedEntries.isEmpty && currentCustomerWorkSummary == nil)
+                                        .accessibilityIdentifier("ReviewCustomerWorkSummary")
+                                    }
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Button {
+                                            showingWorkPerformedLog = true
+                                        } label: {
+                                            Label("Add Work Log", systemImage: "plus.circle")
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .accessibilityIdentifier("AddWorkPerformedLog")
+
+                                        Button {
+                                            showingCustomerWorkSummary = true
+                                        } label: {
+                                            Label(
+                                                currentCustomerWorkSummary == nil ? "Create Work Summary" : "Review Work Summary",
+                                                systemImage: "doc.text"
+                                            )
+                                            .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(workPerformedEntries.isEmpty && currentCustomerWorkSummary == nil)
+                                        .accessibilityIdentifier("ReviewCustomerWorkSummary")
+                                    }
+                                }
+                            }
+
                             if workPerformedEntries.isEmpty {
                                 Label(
                                     requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
@@ -2588,55 +2637,6 @@ GunnAire
                                 Text("The customer-facing service report summary has not been prepared yet.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                            }
-
-                            if canUpdateCurrentJob {
-                                ViewThatFits(in: .horizontal) {
-                                    HStack(spacing: 8) {
-                                        Button {
-                                            showingWorkPerformedLog = true
-                                        } label: {
-                                            Label("Add Work Log", systemImage: "plus.circle")
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .accessibilityIdentifier("AddWorkPerformedLog")
-
-                                        Button {
-                                            showingCustomerWorkSummary = true
-                                        } label: {
-                                            Label(
-                                                currentCustomerWorkSummary == nil ? "Create Work Summary" : "Review Work Summary",
-                                                systemImage: "doc.text"
-                                            )
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .disabled(workPerformedEntries.isEmpty && currentCustomerWorkSummary == nil)
-                                        .accessibilityIdentifier("ReviewCustomerWorkSummary")
-                                    }
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        Button {
-                                            showingWorkPerformedLog = true
-                                        } label: {
-                                            Label("Add Work Log", systemImage: "plus.circle")
-                                                .frame(maxWidth: .infinity)
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .accessibilityIdentifier("AddWorkPerformedLog")
-
-                                        Button {
-                                            showingCustomerWorkSummary = true
-                                        } label: {
-                                            Label(
-                                                currentCustomerWorkSummary == nil ? "Create Work Summary" : "Review Work Summary",
-                                                systemImage: "doc.text"
-                                            )
-                                            .frame(maxWidth: .infinity)
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .disabled(workPerformedEntries.isEmpty && currentCustomerWorkSummary == nil)
-                                        .accessibilityIdentifier("ReviewCustomerWorkSummary")
-                                    }
-                                }
                             }
 
                             Text("Entries are append-only and remain available offline. The reviewed summary feeds the existing service report and customer-document workflow.")

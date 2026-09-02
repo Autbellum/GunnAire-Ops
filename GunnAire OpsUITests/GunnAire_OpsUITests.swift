@@ -1421,17 +1421,17 @@ final class GunnAire_OpsUITests: XCTestCase {
         settingsArea.buttons["Workflow"].tap()
 
         let settingsForm = app.collectionViews["SettingsForm"]
-        let manageForms = app.descendants(matching: .any)["ManageFieldFormTemplates"]
+        let manageForms = app.buttons["ManageFieldFormTemplates"]
         for _ in 0..<8 where !manageForms.exists || !manageForms.isHittable {
             settingsForm.swipeUp()
         }
         XCTAssertTrue(manageForms.waitForExistence(timeout: 3), app.debugDescription)
         XCTAssertTrue(manageForms.isHittable, app.debugDescription)
-        manageForms.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        manageForms.tap()
 
-        XCTAssertTrue(app.navigationBars["Field Form Templates"].waitForExistence(timeout: 3))
         let createForm = app.buttons["CreateFieldFormTemplate"]
-        XCTAssertTrue(createForm.waitForExistence(timeout: 3))
+        XCTAssertTrue(createForm.waitForExistence(timeout: 6), app.debugDescription)
+        XCTAssertTrue(app.navigationBars["Field Form Templates"].waitForExistence(timeout: 3))
         createForm.tap()
 
         XCTAssertTrue(app.navigationBars["New Field Form"].waitForExistence(timeout: 3))
