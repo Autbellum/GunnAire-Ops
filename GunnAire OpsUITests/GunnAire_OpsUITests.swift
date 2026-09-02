@@ -3670,6 +3670,116 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testPostJobReviewDraftRequiresExplicitCustomerMarketingConsent() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-appStoreScreenshotFixtures",
+            "-enableMarketingCampaigns", "YES",
+            "-customerReviewURL", "https://review.example.invalid/gunnaire"
+        ]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let job = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        for _ in 0..<8 where !job.exists || !job.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(job.waitForExistence(timeout: 3))
+        XCTAssertTrue(job.isHittable)
+        job.tap()
+
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+        let workspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Overview"].tap()
+
+        // Customer Contact is rendered after the optional review action, so
+        // reaching it proves this absence is the consent gate rather than an
+        // unexamined portion of the job overview.
+        let customerContact = app.staticTexts["Customer Contact"]
+        for _ in 0..<12 where !customerContact.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(customerContact.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Draft Review Request"].exists)
+        XCTAssertFalse(app.staticTexts["Optional marketing follow-up. It opens as a draft and is recorded only after staff sends it."].exists)
+
+        let customers = revealSidebarDestination("Customers", in: app)
+        customers.tap()
+        XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
+
+        let customerRecord = app.buttons["OpenCustomerRecord-\(screenshotCustomerID)"]
+        for _ in 0..<6 where !customerRecord.exists || !customerRecord.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(customerRecord.waitForExistence(timeout: 3))
+        XCTAssertTrue(customerRecord.isHittable)
+        customerRecord.tap()
+        XCTAssertTrue(app.navigationBars["Edit Customer"].waitForExistence(timeout: 3))
+
+        let marketingConsent = app.switches["Allow marketing email"]
+        let customerForm = app.collectionViews.firstMatch
+        for _ in 0..<8 where !marketingConsent.exists || !marketingConsent.isHittable {
+            customerForm.swipeUp()
+        }
+        XCTAssertTrue(marketingConsent.waitForExistence(timeout: 3))
+        XCTAssertTrue(marketingConsent.isHittable)
+        XCTAssertEqual(marketingConsent.value as? String, "0")
+        marketingConsent.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(marketingConsent.value as? String, "1")
+
+        let save = app.navigationBars["Edit Customer"].buttons["Save"]
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
+
+        let scheduleAgain = revealSidebarDestination("Schedule & Jobs", in: app)
+        scheduleAgain.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let restoredJob = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        for _ in 0..<8 where !restoredJob.exists || !restoredJob.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(restoredJob.waitForExistence(timeout: 3))
+        XCTAssertTrue(restoredJob.isHittable)
+        restoredJob.tap()
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+
+        let restoredWorkspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(restoredWorkspacePicker.waitForExistence(timeout: 3))
+        restoredWorkspacePicker.buttons["Overview"].tap()
+
+        let reviewDraft = app.buttons["Draft Review Request"]
+        for _ in 0..<12 where !reviewDraft.exists || !reviewDraft.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(reviewDraft.waitForExistence(timeout: 3))
+        XCTAssertTrue(reviewDraft.isHittable)
+        XCTAssertTrue(app.staticTexts["Optional marketing follow-up. It opens as a draft and is recorded only after staff sends it."].exists)
+
+        // The evidence intentionally stops before launching Mail or Gmail.
+        // Screenshot fixtures also suppress the signed-in account identity.
+        XCTAssertFalse(app.descendants(matching: .any)["SidebarAccountIdentity"].exists)
+        XCTAssertFalse(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
+        ).firstMatch.exists)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Consent-gated post-job review draft without account email"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
     func testAdministratorRecordsAppendOnlyWorkAndReviewsTheCustomerSummary() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
