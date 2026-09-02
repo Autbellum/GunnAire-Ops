@@ -4,36 +4,39 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
-## Build-2026090111 offline-conflict acceptance procedure
+## Build-2026090201 offline-conflict acceptance procedure
 
-Build `1.0 (2026090111)` contains a version-2 Debug-only acceptance probe for
-the outstanding two-device offline same-record conflict and recovery gate. The
-implementation and its local state-machine coverage pass, but the signed
-physical sequence below has **not** run. The paired iPad was unavailable at the
-latest local check after iPadOS previously denied launch while it was locked;
-the exact generic iOS and Mac Catalyst Debug products have already built and
-passed strict signature and entitlement inspection, but build `2026090111` has
-not been installed on the iPad. Do not convert this section to
-passed evidence until every step completes on the exact signed Mac and iPad
-builds and the redacted reports agree.
+Build `1.0 (2026090111)` introduced the version-2 Debug-only acceptance probe
+for the outstanding two-device offline same-record conflict and recovery gate;
+the exact current build `1.0 (2026090201)` retains it. The implementation and
+its local state-machine coverage pass, but the signed physical sequence below
+has **not** run. The paired iPad was unavailable at the latest local check after
+iPadOS previously denied launch while it was locked. Exact build-`2026090201`
+generic iOS and arm64 Mac Catalyst Debug products now build, pass strict
+signature inspection, contain the probe, and are retained beside the Release
+archives, but the iOS product has not been installed on the iPad. Do not
+convert this section to passed evidence until every step completes on the exact
+signed Mac and iPad builds and the redacted reports agree.
 
-The exact development-signed Release archives and privacy-minimal current-build
-readiness/template are retained under
-`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-02`. Both archives
-pass strict artifact validation and exact local/online preflight, but they are
-not Distribution-signed and do not replace the Debug products required for the
-conflict probe. The incomplete acceptance template correctly remains failed
+The exact development-signed build-`2026090201` Release archives and
+verification manifest are retained under `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-02`.
+Both archives pass strict artifact validation and exact local preflight, but
+they are not Distribution-signed and do not replace
+the Debug products required for the conflict probe. The retained build-`2026090111`
+readiness/template remain historical and must not be relabeled as current-build
+physical evidence. The incomplete acceptance template correctly remains failed
 closed until its 19 physical/provider scenarios have real evidence.
 
-The current source also passes **692/692** logic tests on both iPad Simulator
-and Mac Catalyst and **103/103** complete iPad UI tests with **106/106** device
-executions. These are local implementation/regression evidence only; they do
-not substitute for the physical offline/reconnect sequence.
+The current source passes **693/693** logic tests on both iPad Simulator and Mac
+Catalyst. The latest complete iPad UI baseline remains build `2026090111` at
+**103/103** logical tests with **106/106** device executions. These are local
+implementation/regression evidence only; they do not substitute for the
+physical offline/reconnect sequence.
 
 Execute the sequence in this order in CloudKit Development:
 
 1. Unlock the iPad and keep it awake. Install the exact iOS Debug build
-   `2026090111` on the iPad and use the exact Mac Catalyst Debug product on the
+   `2026090201` on the iPad and use the exact Mac Catalyst Debug product on the
    Mac. Both must be signed by the same development team and use
    `iCloud.com.gunnaire.businesssuite`.
 2. Launch `-purgeLocalCloudKitRoundTripProbe` once on each device. This removes
