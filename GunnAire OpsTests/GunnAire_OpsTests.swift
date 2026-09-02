@@ -19632,6 +19632,7 @@ struct GunnAire_OpsTests {
     @Test @MainActor func cloudKitRoundTripProbeUsesOneExplicitFailClosedMode() {
         let create = GunnAireCloudKitRoundTripProbe.Mode.create.launchArgument
         let update = GunnAireCloudKitRoundTripProbe.Mode.update.launchArgument
+        let conflict = GunnAireCloudKitRoundTripProbe.Mode.writeConflictA.launchArgument
 
         #expect(
             GunnAireCloudKitRoundTripProbe.mode(
@@ -19645,9 +19646,11 @@ struct GunnAire_OpsTests {
         )
         #expect(
             GunnAireCloudKitRoundTripProbe.mode(
-                processArguments: ["GunnAire Ops", create, update]
+                processArguments: ["GunnAire Ops", create, update, conflict]
             ) == nil
         )
+        #expect(GunnAireCloudKitRoundTripProbe.schemaVersion == 2)
+        #expect(GunnAireCloudKitRoundTripProbe.storeFileName.contains("V2"))
         #expect(
             GunnAireCloudKitRoundTripProbe.mode(
                 processArguments: ["GunnAire Ops"]
@@ -19747,6 +19750,250 @@ struct GunnAire_OpsTests {
         #expect(
             try GunnAireCloudKitRoundTripProbe.apply(.delete, in: context)
                 == .init(state: .unexpected, matchCount: 1, actionPerformed: false)
+        )
+    }
+
+    @Test @MainActor func cloudKitConflictProbeRetainsBothOfflineWritesThenResolvesAndCleansUp() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        let context = container.mainContext
+        let unrelatedTask = BusinessTask(
+            title: "Unrelated task",
+            assignedToEmail: "staff@gunnaire.com",
+            dueAt: Date(timeIntervalSinceReferenceDate: 900_000_100),
+            createdByEmail: "staff@gunnaire.com"
+        )
+        let unrelatedEvent = BusinessTaskEvent(
+            taskID: unrelatedTask.id,
+            kind: .updated,
+            actorEmail: "staff@gunnaire.com",
+            detail: "Unrelated event",
+            titleSnapshot: unrelatedTask.title,
+            assignedToEmailSnapshot: unrelatedTask.assignedToEmail,
+            dueAtSnapshot: unrelatedTask.dueAt,
+            priority: unrelatedTask.priority
+        )
+        context.insert(unrelatedTask)
+        context.insert(unrelatedEvent)
+        try context.save()
+
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.seedConflict, in: context)
+                == .init(state: .original, matchCount: 1, actionPerformed: true)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictSeed, in: context)
+                == .init(state: .original, matchCount: 1, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(
+                .writeConflictA,
+                in: context,
+                now: Date(timeIntervalSinceReferenceDate: 900_000_010)
+            ) == .init(state: .conflictA, matchCount: 2, actionPerformed: true)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.writeConflictA, in: context)
+                == .init(state: .conflictA, matchCount: 2, actionPerformed: false)
+        )
+
+        // Simulate CloudKit choosing device B's task value while preserving
+        // both devices' immutable update events.
+        let canaryID = GunnAireCloudKitRoundTripProbe.canaryID
+        let canary = try #require(
+            context.fetch(
+                FetchDescriptor<BusinessTask>(
+                    predicate: #Predicate { $0.id == canaryID }
+                )
+            ).first
+        )
+        canary.taskDescription = GunnAireCloudKitRoundTripProbe.conflictBDescription
+        context.insert(
+            try #require(
+                GunnAireCloudKitRoundTripProbe.makeConflictEvent(
+                    for: .writeConflictB,
+                    at: Date(timeIntervalSinceReferenceDate: 900_000_011)
+                )
+            )
+        )
+        try context.save()
+
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictConverged, in: context)
+                == .init(state: .conflictConverged, matchCount: 3, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(
+                .resolveConflict,
+                in: context,
+                now: Date(timeIntervalSinceReferenceDate: 900_000_012)
+            ) == .init(state: .conflictResolved, matchCount: 4, actionPerformed: true)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictResolved, in: context)
+                == .init(state: .conflictResolved, matchCount: 4, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.cleanupConflict, in: context)
+                == .init(state: .absent, matchCount: 0, actionPerformed: true)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictDeleted, in: context)
+                == .init(state: .absent, matchCount: 0, actionPerformed: false)
+        )
+
+        #expect(try context.fetch(FetchDescriptor<BusinessTask>()).map(\.id) == [unrelatedTask.id])
+        #expect(try context.fetch(FetchDescriptor<BusinessTaskEvent>()).map(\.id) == [unrelatedEvent.id])
+
+        let deviceBContainer = try ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        let deviceBContext = deviceBContainer.mainContext
+        _ = try GunnAireCloudKitRoundTripProbe.apply(.seedConflict, in: deviceBContext)
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.writeConflictB, in: deviceBContext)
+                == .init(state: .conflictB, matchCount: 2, actionPerformed: true)
+        )
+    }
+
+    @Test @MainActor func cloudKitConflictProbeFailsClosedForAnUnrecognizedCanaryEvent() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        let context = container.mainContext
+        _ = try GunnAireCloudKitRoundTripProbe.apply(.seedConflict, in: context)
+        context.insert(
+            BusinessTaskEvent(
+                taskID: GunnAireCloudKitRoundTripProbe.canaryID,
+                kind: .updated,
+                actorEmail: GunnAireCloudKitRoundTripProbe.canaryEmail,
+                detail: "Unexpected conflict event",
+                titleSnapshot: GunnAireCloudKitRoundTripProbe.canaryTitle,
+                assignedToEmailSnapshot: GunnAireCloudKitRoundTripProbe.canaryEmail,
+                dueAtSnapshot: GunnAireCloudKitRoundTripProbe.canaryDate,
+                priority: .low
+            )
+        )
+        try context.save()
+
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.resolveConflict, in: context)
+                == .init(state: .unexpected, matchCount: 2, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.cleanupConflict, in: context)
+                == .init(state: .unexpected, matchCount: 2, actionPerformed: false)
+        )
+        #expect(try context.fetch(FetchDescriptor<BusinessTask>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<BusinessTaskEvent>()).count == 1)
+    }
+
+    @Test @MainActor func cloudKitConflictProbeWaitsForPartialImportsAndRecoversResolutionAndCleanup() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        let context = container.mainContext
+        _ = try GunnAireCloudKitRoundTripProbe.apply(.seedConflict, in: context)
+
+        context.insert(
+            try #require(
+                GunnAireCloudKitRoundTripProbe.makeConflictEvent(
+                    for: .writeConflictA,
+                    at: Date(timeIntervalSinceReferenceDate: 900_000_020)
+                )
+            )
+        )
+        try context.save()
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictConverged, in: context)
+                == .init(state: .conflictWritePending, matchCount: 2, actionPerformed: false)
+        )
+
+        let canaryID = GunnAireCloudKitRoundTripProbe.canaryID
+        let canary = try #require(
+            context.fetch(
+                FetchDescriptor<BusinessTask>(
+                    predicate: #Predicate { $0.id == canaryID }
+                )
+            ).first
+        )
+        canary.taskDescription = GunnAireCloudKitRoundTripProbe.conflictADescription
+        context.insert(
+            try #require(
+                GunnAireCloudKitRoundTripProbe.makeConflictEvent(
+                    for: .writeConflictB,
+                    at: Date(timeIntervalSinceReferenceDate: 900_000_021)
+                )
+            )
+        )
+        try context.save()
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictConverged, in: context)
+                == .init(state: .conflictConverged, matchCount: 3, actionPerformed: false)
+        )
+
+        context.insert(
+            try #require(
+                GunnAireCloudKitRoundTripProbe.makeConflictEvent(
+                    for: .resolveConflict,
+                    at: Date(timeIntervalSinceReferenceDate: 900_000_022)
+                )
+            )
+        )
+        try context.save()
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictResolved, in: context)
+                == .init(state: .conflictResolutionPending, matchCount: 4, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(
+                .resolveConflict,
+                in: context,
+                now: Date(timeIntervalSinceReferenceDate: 900_000_023)
+            ) == .init(state: .conflictResolved, matchCount: 4, actionPerformed: true)
+        )
+
+        context.delete(canary)
+        try context.save()
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictDeleted, in: context)
+                == .init(state: .cleanupPending, matchCount: 3, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.cleanupConflict, in: context)
+                == .init(state: .absent, matchCount: 0, actionPerformed: true)
         )
     }
     #endif

@@ -4,6 +4,66 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
+## Build-2026090111 offline-conflict acceptance procedure
+
+Build `1.0 (2026090111)` contains a version-2 Debug-only acceptance probe for
+the outstanding two-device offline same-record conflict and recovery gate. The
+implementation and its local state-machine coverage pass, but the signed
+physical sequence below has **not** run. The paired iPad is reachable and
+paired, but iPadOS denied the latest launch check because the device was locked;
+the exact generic iOS and Mac Catalyst Debug products have already built and
+passed strict signature and entitlement inspection, but build `2026090111` has
+not been installed on the iPad. Do not convert this section to
+passed evidence until every step completes on the exact signed Mac and iPad
+builds and the redacted reports agree.
+
+The current source also passes **692/692** logic tests on both iPad Simulator
+and Mac Catalyst and **103/103** complete iPad UI tests with **106/106** device
+executions. These are local implementation/regression evidence only; they do
+not substitute for the physical offline/reconnect sequence.
+
+Execute the sequence in this order in CloudKit Development:
+
+1. Unlock the iPad and keep it awake. Install the exact iOS Debug build
+   `2026090111` on the iPad and use the exact Mac Catalyst Debug product on the
+   Mac. Both must be signed by the same development team and use
+   `iCloud.com.gunnaire.businesssuite`.
+2. Launch `-purgeLocalCloudKitRoundTripProbe` once on each device. This removes
+   only the version-2 probe store/support/assets/report on that device; it does
+   not delete the remote canary or open the normal business store.
+3. With both devices online, launch `-seedCloudKitConflictCanary` on the Mac,
+   then `-observeCloudKitConflictSeed` on the iPad. Require state `original`
+   and match count `1` on both reports.
+4. Take both devices offline using their normal network controls. Do not infer
+   offline state from a launch result. Launch `-writeCloudKitConflictA` on the
+   Mac and `-writeCloudKitConflictB` on the iPad. Require `conflictA` and
+   `conflictB`, respectively, each with match count `2`.
+5. Reconnect both devices. Launch `-observeCloudKitConflictConverged` on each
+   until both independently report `conflictConverged`, match count `3`. This
+   is the required proof that both immutable A/B witnesses arrived even though
+   CloudKit may select either A or B for the shared task value.
+6. On one device that already reported convergence, launch
+   `-resolveCloudKitConflictCanary`. Require `conflictResolved`, match count
+   `4`. On the other device launch `-observeCloudKitConflictResolved` and
+   require the same state and count.
+7. On the resolving device only after count `4`, launch
+   `-cleanupCloudKitConflictCanary`. Require `absent`, count `0`. On the other
+   device launch `-observeCloudKitConflictDeleted` and require `absent`, count
+   `0` after the bounded observation window.
+8. Launch `-purgeLocalCloudKitRoundTripProbe` on both devices. Confirm that no
+   version-2 store, support, asset, or report file remains locally. Retain only
+   a new privacy-redacted summary of mode, state, count, build, attempts, and
+   timestamps; do not retain account, device, customer, invoice, payment, or
+   business-note values.
+
+Any `unexpected`, `duplicate`, or `error` state; missing witness; count drift;
+timeout; wrong build; or residual remote/local marker is a failed or blocked
+acceptance, never a pass. The procedure follows Apple's
+[local-store synchronization](https://developer.apple.com/documentation/coredata/synchronizing-a-local-store-to-the-cloud)
+and [conflict-resolution](https://developer.apple.com/documentation/coredata/conflict-resolution)
+guidance reviewed read-only in Safari.
+It authorizes no Production CloudKit promotion or account-console change.
+
 ## Build-2026090110 controlled evidence
 
 Build `1.0 (2026090110)` is retained as development-signed iOS and universal

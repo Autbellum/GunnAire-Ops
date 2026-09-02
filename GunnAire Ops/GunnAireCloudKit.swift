@@ -377,8 +377,11 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
 /// The canary uses one fixed-ID BusinessTask in its own local store. It never
 /// opens the normal business store, never contains a customer relationship,
 /// and is compiled out of Release builds. Explicit launch arguments make each
-/// phase reviewable and allow a Mac -> iPad create/update/delete round trip to
-/// be proved without adding another production UI or persistence type.
+/// phase reviewable and allow both a Mac -> iPad create/update/delete round
+/// trip and an offline same-record conflict/recovery sequence to be proved
+/// without adding another production UI or persistence type. Conflict writes
+/// retain fixed, append-only BusinessTaskEvent witnesses so a last-writer-wins
+/// task value can never be mistaken for proof that both device edits arrived.
 @MainActor
 enum GunnAireCloudKitRoundTripProbe {
     enum Mode: String, CaseIterable, Codable, Sendable {
@@ -388,6 +391,15 @@ enum GunnAireCloudKitRoundTripProbe {
         case observeUpdated
         case delete
         case observeDeleted
+        case seedConflict
+        case observeConflictSeed
+        case writeConflictA
+        case writeConflictB
+        case observeConflictConverged
+        case resolveConflict
+        case observeConflictResolved
+        case cleanupConflict
+        case observeConflictDeleted
         case purgeLocal
 
         var launchArgument: String {
@@ -398,6 +410,15 @@ enum GunnAireCloudKitRoundTripProbe {
             case .observeUpdated: "-observeUpdatedCloudKitRoundTripCanary"
             case .delete: "-deleteCloudKitRoundTripCanary"
             case .observeDeleted: "-observeDeletedCloudKitRoundTripCanary"
+            case .seedConflict: "-seedCloudKitConflictCanary"
+            case .observeConflictSeed: "-observeCloudKitConflictSeed"
+            case .writeConflictA: "-writeCloudKitConflictA"
+            case .writeConflictB: "-writeCloudKitConflictB"
+            case .observeConflictConverged: "-observeCloudKitConflictConverged"
+            case .resolveConflict: "-resolveCloudKitConflictCanary"
+            case .observeConflictResolved: "-observeCloudKitConflictResolved"
+            case .cleanupConflict: "-cleanupCloudKitConflictCanary"
+            case .observeConflictDeleted: "-observeCloudKitConflictDeleted"
             case .purgeLocal: "-purgeLocalCloudKitRoundTripProbe"
             }
         }
@@ -407,6 +428,13 @@ enum GunnAireCloudKitRoundTripProbe {
         case absent
         case original
         case updated
+        case conflictA
+        case conflictB
+        case conflictWritePending
+        case conflictConverged
+        case conflictResolutionPending
+        case conflictResolved
+        case cleanupPending
         case duplicate
         case unexpected
         case error
@@ -431,15 +459,25 @@ enum GunnAireCloudKitRoundTripProbe {
         let errorCode: String?
     }
 
-    static let schemaVersion = 1
-    static let storeFileName = "GunnAireCloudKitRoundTripProbeV1.store"
-    static let reportFileName = "GunnAireCloudKitRoundTripProbeV1.json"
+    static let schemaVersion = 2
+    static let storeFileName = "GunnAireCloudKitRoundTripProbeV2.store"
+    static let reportFileName = "GunnAireCloudKitRoundTripProbeV2.json"
     static let canaryID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000001")!
     static let canaryCreationOperationID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000002")!
+    static let conflictEventAID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000003")!
+    static let conflictEventAOperationID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000004")!
+    static let conflictEventBID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000005")!
+    static let conflictEventBOperationID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000006")!
+    static let conflictResolutionEventID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000007")!
+    static let conflictResolutionOperationID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000008")!
     static let canaryTitle = "__GUNNAIRE_CLOUDKIT_ROUND_TRIP__"
     static let originalDescription = "__GUNNAIRE_CLOUDKIT_ROUND_TRIP_CREATED__"
     static let updatedDescription = "__GUNNAIRE_CLOUDKIT_ROUND_TRIP_UPDATED__"
+    static let conflictADescription = "__GUNNAIRE_CLOUDKIT_CONFLICT_A__"
+    static let conflictBDescription = "__GUNNAIRE_CLOUDKIT_CONFLICT_B__"
+    static let conflictResolvedDescription = "__GUNNAIRE_CLOUDKIT_CONFLICT_RESOLVED_A_B__"
     static let canaryEmail = "cloudkit-roundtrip@gunnaire.invalid"
+    static let canaryDate = Date(timeIntervalSinceReferenceDate: 900_000_000)
 
     private static let maximumAttempt = 5
     private static let attemptDelays: [TimeInterval] = [0, 2, 5, 10, 20]
@@ -480,7 +518,7 @@ enum GunnAireCloudKitRoundTripProbe {
         }
 
         return ModelConfiguration(
-            "GunnAireCloudKitRoundTripProbeV1",
+            "GunnAireCloudKitRoundTripProbeV2",
             schema: schema,
             url: storeURL,
             allowsSave: true,
@@ -580,79 +618,238 @@ enum GunnAireCloudKitRoundTripProbe {
             return ActionResult(state: .absent, matchCount: 0, actionPerformed: false)
         }
 
-        let canaryID = canaryID
-        let descriptor = FetchDescriptor<BusinessTask>(
-            predicate: #Predicate { $0.id == canaryID }
-        )
-        var matches = try modelContext.fetch(descriptor)
-        guard matches.count <= 1 else {
-            return ActionResult(state: .duplicate, matchCount: matches.count, actionPerformed: false)
+        var snapshot = try conflictSnapshot(in: modelContext)
+        var state = canaryState(snapshot: snapshot)
+        guard state != .duplicate else {
+            return ActionResult(state: state, matchCount: snapshot.matchCount, actionPerformed: false)
         }
 
         var actionPerformed = false
         switch mode {
-        case .create:
-            if matches.isEmpty {
-                let canary = BusinessTask(
-                    id: canaryID,
-                    creationOperationID: canaryCreationOperationID,
-                    title: canaryTitle,
-                    taskDescription: originalDescription,
-                    priority: .low,
-                    assignedToEmail: canaryEmail,
-                    dueAt: Date(timeIntervalSinceReferenceDate: 900_000_000),
-                    createdAt: Date(timeIntervalSinceReferenceDate: 900_000_000),
-                    createdByEmail: canaryEmail
-                )
-                modelContext.insert(canary)
+        case .create, .seedConflict:
+            if state == .absent {
+                modelContext.insert(makeCanary())
                 try modelContext.save()
                 actionPerformed = true
             }
         case .update:
-            if let canary = matches.first,
-               canary.title == canaryTitle,
-               canary.taskDescription == originalDescription {
+            if state == .original, let canary = snapshot.canary {
                 canary.taskDescription = updatedDescription
                 canary.updatedAt = now
                 try modelContext.save()
                 actionPerformed = true
             }
         case .delete:
-            if let canary = matches.first,
-               canary.title == canaryTitle,
-               let taskDescription = canary.taskDescription,
-               [originalDescription, updatedDescription].contains(taskDescription) {
+            if [.original, .updated].contains(state), let canary = snapshot.canary {
                 modelContext.delete(canary)
                 try modelContext.save()
                 actionPerformed = true
             }
-        case .observeCreated, .observeUpdated, .observeDeleted:
+        case .writeConflictA, .writeConflictB:
+            let expectedState: CanaryState = mode == .writeConflictA ? .conflictA : .conflictB
+            if state == .original, let canary = snapshot.canary,
+               let event = makeConflictEvent(for: mode, at: now) {
+                canary.taskDescription = mode == .writeConflictA ? conflictADescription : conflictBDescription
+                canary.updatedAt = now
+                modelContext.insert(event)
+                try modelContext.save()
+                actionPerformed = true
+            } else if state == expectedState {
+                // The first save may have completed even if its caller did not
+                // observe the response. Keep retries idempotent.
+            }
+        case .resolveConflict:
+            let eventIDs = Set(snapshot.events.map(\.id))
+            let convergedIDs = Set([conflictEventAID, conflictEventBID])
+            if eventIDs.isSuperset(of: convergedIDs), let canary = snapshot.canary,
+               [conflictADescription, conflictBDescription, conflictResolvedDescription]
+                .contains(canary.taskDescription ?? "") {
+                if canary.taskDescription != conflictResolvedDescription {
+                    canary.taskDescription = conflictResolvedDescription
+                    canary.updatedAt = now
+                    actionPerformed = true
+                }
+                if !eventIDs.contains(conflictResolutionEventID),
+                   let event = makeConflictEvent(for: mode, at: now) {
+                    modelContext.insert(event)
+                    actionPerformed = true
+                }
+                try modelContext.save()
+            }
+        case .cleanupConflict:
+            if [.conflictResolved, .cleanupPending].contains(state) {
+                if let canary = snapshot.canary {
+                    modelContext.delete(canary)
+                }
+                for event in snapshot.events {
+                    modelContext.delete(event)
+                }
+                try modelContext.save()
+                actionPerformed = snapshot.matchCount > 0
+            }
+        case .observeCreated, .observeUpdated, .observeDeleted,
+                .observeConflictSeed, .observeConflictConverged,
+                .observeConflictResolved, .observeConflictDeleted:
             break
         case .purgeLocal:
             break
         }
 
-        matches = try modelContext.fetch(descriptor)
-        let state = canaryState(matches: matches)
+        snapshot = try conflictSnapshot(in: modelContext)
+        state = canaryState(snapshot: snapshot)
         return ActionResult(
             state: state,
-            matchCount: matches.count,
+            matchCount: snapshot.matchCount,
             actionPerformed: actionPerformed
         )
     }
 
-    private static func canaryState(matches: [BusinessTask]) -> CanaryState {
-        guard matches.count <= 1 else { return .duplicate }
-        guard let canary = matches.first else { return .absent }
-        guard canary.title == canaryTitle,
-              canary.creationOperationID == canaryCreationOperationID,
-              canary.assignedToEmail == canaryEmail,
-              canary.createdByEmail == canaryEmail else {
+    private struct ConflictSnapshot {
+        let canaryMatches: [BusinessTask]
+        let events: [BusinessTaskEvent]
+
+        var canary: BusinessTask? { canaryMatches.first }
+        var matchCount: Int { canaryMatches.count + events.count }
+    }
+
+    private static func conflictSnapshot(in modelContext: ModelContext) throws -> ConflictSnapshot {
+        let canaryID = canaryID
+        let taskDescriptor = FetchDescriptor<BusinessTask>(
+            predicate: #Predicate { $0.id == canaryID }
+        )
+        let eventDescriptor = FetchDescriptor<BusinessTaskEvent>(
+            predicate: #Predicate { $0.taskID == canaryID }
+        )
+        return ConflictSnapshot(
+            canaryMatches: try modelContext.fetch(taskDescriptor),
+            events: try modelContext.fetch(eventDescriptor)
+        )
+    }
+
+    private static func makeCanary() -> BusinessTask {
+        BusinessTask(
+            id: canaryID,
+            creationOperationID: canaryCreationOperationID,
+            title: canaryTitle,
+            taskDescription: originalDescription,
+            priority: .low,
+            assignedToEmail: canaryEmail,
+            dueAt: canaryDate,
+            createdAt: canaryDate,
+            createdByEmail: canaryEmail
+        )
+    }
+
+    static func makeConflictEvent(for mode: Mode, at date: Date = Date()) -> BusinessTaskEvent? {
+        let identity: (id: UUID, operationID: UUID, detail: String)
+        switch mode {
+        case .writeConflictA:
+            identity = (conflictEventAID, conflictEventAOperationID, conflictADescription)
+        case .writeConflictB:
+            identity = (conflictEventBID, conflictEventBOperationID, conflictBDescription)
+        case .resolveConflict:
+            identity = (conflictResolutionEventID, conflictResolutionOperationID, conflictResolvedDescription)
+        default:
+            return nil
+        }
+        return BusinessTaskEvent(
+            id: identity.id,
+            operationID: identity.operationID,
+            taskID: canaryID,
+            kind: .updated,
+            occurredAt: date,
+            actorEmail: canaryEmail,
+            detail: identity.detail,
+            titleSnapshot: canaryTitle,
+            assignedToEmailSnapshot: canaryEmail,
+            dueAtSnapshot: canaryDate,
+            priority: .low
+        )
+    }
+
+    private static func canaryState(snapshot: ConflictSnapshot) -> CanaryState {
+        guard snapshot.canaryMatches.count <= 1 else { return .duplicate }
+        let groupedEvents = Dictionary(grouping: snapshot.events, by: \BusinessTaskEvent.id)
+        guard groupedEvents.values.allSatisfy({ $0.count == 1 }) else { return .duplicate }
+        let eventsByID = Dictionary(uniqueKeysWithValues: snapshot.events.map { ($0.id, $0) })
+        let expectedIDs = Set([conflictEventAID, conflictEventBID, conflictResolutionEventID])
+        guard Set(eventsByID.keys).isSubset(of: expectedIDs),
+              eventsByID.values.allSatisfy(conflictEventIsValid) else {
             return .unexpected
         }
-        if canary.taskDescription == originalDescription { return .original }
-        if canary.taskDescription == updatedDescription { return .updated }
+        guard let canary = snapshot.canary else {
+            return snapshot.events.isEmpty ? .absent : .cleanupPending
+        }
+        guard exactCanaryIdentity(canary) else { return .unexpected }
+
+        let eventIDs = Set(eventsByID.keys)
+        if eventIDs.isEmpty {
+            if canary.taskDescription == originalDescription { return .original }
+            if canary.taskDescription == updatedDescription { return .updated }
+            if [conflictADescription, conflictBDescription].contains(canary.taskDescription ?? "") {
+                return .conflictWritePending
+            }
+            if canary.taskDescription == conflictResolvedDescription { return .cleanupPending }
+            return .unexpected
+        }
+        if eventIDs == [conflictEventAID], canary.taskDescription == conflictADescription {
+            return .conflictA
+        }
+        if eventIDs == [conflictEventBID], canary.taskDescription == conflictBDescription {
+            return .conflictB
+        }
+        let convergedIDs = Set([conflictEventAID, conflictEventBID])
+        if eventIDs == convergedIDs,
+           [conflictADescription, conflictBDescription].contains(canary.taskDescription ?? "") {
+            return .conflictConverged
+        }
+        if eventIDs.isSubset(of: convergedIDs),
+           [originalDescription, conflictADescription, conflictBDescription]
+            .contains(canary.taskDescription ?? "") {
+            return .conflictWritePending
+        }
+        if eventIDs.isSuperset(of: convergedIDs),
+           [conflictADescription, conflictBDescription].contains(canary.taskDescription ?? "") {
+            return .conflictResolutionPending
+        }
+        if eventIDs == expectedIDs, canary.taskDescription == conflictResolvedDescription {
+            return .conflictResolved
+        }
+        if eventIDs.isSubset(of: expectedIDs), canary.taskDescription == conflictResolvedDescription {
+            return .cleanupPending
+        }
         return .unexpected
+    }
+
+    private static func exactCanaryIdentity(_ canary: BusinessTask) -> Bool {
+        canary.title == canaryTitle &&
+            canary.creationOperationID == canaryCreationOperationID &&
+            canary.assignedToEmail == canaryEmail &&
+            canary.createdByEmail == canaryEmail
+    }
+
+    private static func conflictEventIsValid(_ event: BusinessTaskEvent) -> Bool {
+        let expected: (operationID: UUID, detail: String)?
+        switch event.id {
+        case conflictEventAID:
+            expected = (conflictEventAOperationID, conflictADescription)
+        case conflictEventBID:
+            expected = (conflictEventBOperationID, conflictBDescription)
+        case conflictResolutionEventID:
+            expected = (conflictResolutionOperationID, conflictResolvedDescription)
+        default:
+            expected = nil
+        }
+        guard let expected else { return false }
+        return event.operationID == expected.operationID &&
+            event.taskID == canaryID &&
+            event.kind == .updated &&
+            event.actorEmail == canaryEmail &&
+            event.detail == expected.detail &&
+            event.titleSnapshot == canaryTitle &&
+            event.assignedToEmailSnapshot == canaryEmail &&
+            event.dueAtSnapshot == canaryDate &&
+            event.prioritySnapshot == .low
     }
 
     private static func expectationMet(
@@ -668,6 +865,20 @@ enum GunnAireCloudKitRoundTripProbe {
         case .delete:
             result.state == .absent && (result.actionPerformed || attempt == maximumAttempt)
         case .observeDeleted:
+            result.state == .absent && attempt == maximumAttempt
+        case .seedConflict, .observeConflictSeed:
+            result.state == .original
+        case .writeConflictA:
+            result.state == .conflictA
+        case .writeConflictB:
+            result.state == .conflictB
+        case .observeConflictConverged:
+            result.state == .conflictConverged
+        case .resolveConflict, .observeConflictResolved:
+            result.state == .conflictResolved
+        case .cleanupConflict:
+            result.state == .absent && (result.actionPerformed || attempt == maximumAttempt)
+        case .observeConflictDeleted:
             result.state == .absent && attempt == maximumAttempt
         case .purgeLocal:
             true
