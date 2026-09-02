@@ -3614,6 +3614,11 @@ struct GunnAire_OpsTests {
               "detail": "Partner approval required.",
               "capabilities": ["catalog", "purchaseOrders"],
               "canSubmitOrders": false,
+              "accessModel": "exclusiveThirdParty",
+              "integrationProtocol": "serviceTitanMarketplace",
+              "publicAPIDocumented": false,
+              "onboardingRequirements": ["Written provider approval", "Provider test account"],
+              "publicDocumentationReviewedAt": "2026-09-02",
               "onboardingURL": "https://www.lennoxpros.com/"
             },
             {
@@ -3660,6 +3665,11 @@ struct GunnAire_OpsTests {
             ) == nil
         )
         #expect(connectors.first?.statusLabel == "Partner approval required")
+        #expect(connectors.first?.accessModelLabel == "Exclusive third-party path")
+        #expect(connectors.first?.integrationProtocolLabel == "ServiceTitan marketplace integration")
+        #expect(connectors.first?.publicAPIDocumented == false)
+        #expect(connectors.first?.requirements.count == 2)
+        #expect(connectors.first?.capabilityLabels == ["Catalog", "Purchase orders"])
         let outdated = SupplierConnectorReadiness(
             contractVersion: 1,
             kind: .genericCatalog,
@@ -3669,10 +3679,50 @@ struct GunnAire_OpsTests {
             detail: "Legacy contract active.",
             capabilities: ["purchaseOrders"],
             canSubmitOrders: true,
+            accessModel: nil,
+            integrationProtocol: nil,
+            publicAPIDocumented: nil,
+            onboardingRequirements: nil,
+            publicDocumentationReviewedAt: nil,
             onboardingURL: nil
         )
         #expect(!outdated.isReady)
         #expect(outdated.statusLabel == "Connector upgrade required")
+    }
+
+    @Test func supplierConnectorReadinessExplainsThirdPartyOnlyProviderPath() throws {
+        let data = Data(#"""
+        {
+          "connectors": [
+            {
+              "contractVersion": 2,
+              "kind": "lennoxPartner",
+              "displayName": "Lennox Procurement",
+              "provider": "Lennox",
+              "status": "thirdPartyOnly",
+              "detail": "The published integration is limited to another platform.",
+              "capabilities": ["catalog", "priceAvailability", "purchaseOrders"],
+              "canSubmitOrders": false,
+              "accessModel": "exclusiveThirdParty",
+              "integrationProtocol": "serviceTitanMarketplace",
+              "publicAPIDocumented": false,
+              "onboardingRequirements": ["Separate written provider authorization"],
+              "publicDocumentationReviewedAt": "2026-09-02",
+              "onboardingURL": "https://www.lennoxpros.com/news/field-service-manangement-hvac"
+            }
+          ]
+        }
+        """#.utf8)
+
+        let connector = try #require(
+            GunnAireBackendService.decodeSupplierConnectors(from: data).first
+        )
+
+        #expect(!connector.isReady)
+        #expect(connector.statusLabel == "Published for a third party only")
+        #expect(connector.accessModelLabel == "Exclusive third-party path")
+        #expect(connector.integrationProtocolLabel == "ServiceTitan marketplace integration")
+        #expect(connector.publicDocumentationReviewedAt == "2026-09-02")
     }
 
     @Test func serverConnectorAcceptanceCreatesImmutableApprovedOrderEvidence() throws {

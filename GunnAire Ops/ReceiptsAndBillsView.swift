@@ -3494,10 +3494,48 @@ private struct SupplierOrderConfirmationSheet: View {
                                         Text(connector.detail)
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
+
+                                        if let accessModel = connector.accessModelLabel,
+                                           let integrationProtocol = connector.integrationProtocolLabel {
+                                            Text("\(accessModel) · \(integrationProtocol)")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        if !connector.capabilityLabels.isEmpty {
+                                            Text("Adapter scope: \(connector.capabilityLabels.joined(separator: ", "))")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        if connector.publicAPIDocumented == false {
+                                            Label("No public self-service API specification is documented.", systemImage: "lock.doc")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        if !connector.requirements.isEmpty, !connector.isReady {
+                                            DisclosureGroup("Setup requirements") {
+                                                ForEach(Array(connector.requirements.enumerated()), id: \.offset) { _, requirement in
+                                                    Text("• \(requirement)")
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                            }
+                                            .font(.caption2.weight(.semibold))
+                                        }
+
+                                        if let reviewedAt = connector.publicDocumentationReviewedAt,
+                                           !reviewedAt.isEmpty {
+                                            Text("Official information reviewed \(reviewedAt)")
+                                                .font(.caption2)
+                                                .foregroundStyle(.tertiary)
+                                        }
+
                                         if let urlText = connector.onboardingURL,
                                            let url = URL(string: urlText),
                                            !connector.isReady {
-                                            Link("Supplier onboarding information", destination: url)
+                                            Link("Official supplier integration information", destination: url)
                                                 .font(.caption2)
                                         }
                                     }
