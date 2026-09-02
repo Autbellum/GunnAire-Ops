@@ -17,6 +17,14 @@ not been installed on the iPad. Do not convert this section to
 passed evidence until every step completes on the exact signed Mac and iPad
 builds and the redacted reports agree.
 
+The exact development-signed Release archives and privacy-minimal current-build
+readiness/template are retained under
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-02`. Both archives
+pass strict artifact validation and exact local/online preflight, but they are
+not Distribution-signed and do not replace the Debug products required for the
+conflict probe. The incomplete acceptance template correctly remains failed
+closed until its 19 physical/provider scenarios have real evidence.
+
 The current source also passes **692/692** logic tests on both iPad Simulator
 and Mac Catalyst and **103/103** complete iPad UI tests with **106/106** device
 executions. These are local implementation/regression evidence only; they do
