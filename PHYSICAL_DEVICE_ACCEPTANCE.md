@@ -9,8 +9,8 @@ QuickBooks mutation, card charge, customer communication, or supplier order.
 Build `1.0 (2026090111)` contains a version-2 Debug-only acceptance probe for
 the outstanding two-device offline same-record conflict and recovery gate. The
 implementation and its local state-machine coverage pass, but the signed
-physical sequence below has **not** run. The paired iPad is reachable and
-paired, but iPadOS denied the latest launch check because the device was locked;
+physical sequence below has **not** run. The paired iPad was unavailable at the
+latest local check after iPadOS previously denied launch while it was locked;
 the exact generic iOS and Mac Catalyst Debug products have already built and
 passed strict signature and entitlement inspection, but build `2026090111` has
 not been installed on the iPad. Do not convert this section to
@@ -55,6 +55,32 @@ Execute the sequence in this order in CloudKit Development:
    a new privacy-redacted summary of mode, state, count, build, attempts, and
    timestamps; do not retain account, device, customer, invoice, payment, or
    business-note values.
+
+After every phase from seed through deleted observation, capture the report
+before launching the next phase because the app replaces the prior report. Use
+the fixed phase identifiers printed by `--help`; this command validates the
+exact build/mode/state/count and writes a privacy-minimal file without the raw
+error text, source path, device identifier, or account identity:
+
+```sh
+python3 Tools/cloudkit_conflict_acceptance.py \
+  --capture mac-seed \
+  --report "/path/to/GunnAireCloudKitRoundTripProbeV2.json" \
+  --evidence-directory "/path/to/new-conflict-evidence-directory"
+```
+
+Use the same new evidence directory for all ten phases, then require the full
+ordered set to pass:
+
+```sh
+python3 Tools/cloudkit_conflict_acceptance.py \
+  --validate-directory "/path/to/new-conflict-evidence-directory"
+```
+
+The collector refuses to overwrite a retained phase. Its sequence validation
+does not prove that network controls were off during the two write phases;
+record that operator-observed condition separately in the signed-device
+acceptance record.
 
 Any `unexpected`, `duplicate`, or `error` state; missing witness; count drift;
 timeout; wrong build; or residual remote/local marker is a failed or blocked
