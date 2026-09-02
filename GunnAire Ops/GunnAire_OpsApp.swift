@@ -806,6 +806,8 @@ private enum GunnAireUITestFixtures {
             ) ?? fixtureNow
         let call = ServiceCall(
             id: serviceCallID,
+            googleCalendarID: isSyncRecoveryFixture ? GunnAireUITestIdentity.technicianEmail : nil,
+            googleEventID: isSyncRecoveryFixture ? "google-ui-sync-recovery" : nil,
             googleEventManagedByApp: true,
             eventTitle: isScreenshotFixture ? "Cooling system diagnostic" : "Collectible HVAC service",
             siteAddress: customer.address,
@@ -905,6 +907,8 @@ private enum GunnAireUITestFixtures {
         )
         let maintenanceCall = ServiceCall(
             id: maintenanceServiceCallID,
+            googleCalendarID: isSyncRecoveryFixture ? GunnAireUITestIdentity.technicianEmail : nil,
+            googleEventID: isSyncRecoveryFixture ? "google-ui-sync-recovery-maintenance" : nil,
             googleEventManagedByApp: true,
             eventTitle: "Comfort Care maintenance",
             siteAddress: customer.address,

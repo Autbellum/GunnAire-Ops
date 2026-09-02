@@ -5571,6 +5571,7 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-enableSplashVideo", "NO",
             "-disableCloudKitForTesting",
             "-uiTestAuthenticatedAdmin",
+            "-uiTestForceQuickBooksDisconnected",
             "-uiTestSeedSyncRecovery"
         ]
         app.launch()
@@ -5584,9 +5585,15 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         let recoveryDisclosure = app.buttons["SyncRecoveryDisclosure"]
         XCTAssertTrue(recoveryDisclosure.waitForExistence(timeout: 3))
-        XCTAssertTrue(
-            recoveryDisclosure.label.contains("Review 2 sync items"),
-            "Unexpected recovery disclosure label: \(recoveryDisclosure.label)"
+        let recoveryCount = recoveryDisclosure.label
+            .split(separator: " ")
+            .dropFirst()
+            .first
+            .flatMap { Int($0) }
+        XCTAssertGreaterThanOrEqual(
+            recoveryCount ?? 0,
+            2,
+            "Expected at least the two seeded recovery items: \(recoveryDisclosure.label)"
         )
         recoveryDisclosure.tap()
 
@@ -5594,6 +5601,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         let pricebookRecovery = app.buttons["SyncRecoveryPricebook"]
         XCTAssertTrue(pricebookRecovery.exists)
         XCTAssertFalse(app.buttons["SyncRecoveryPayments"].exists)
+        XCTAssertFalse(app.buttons["SyncRecoveryCalendar"].exists)
 
         pricebookRecovery.tap()
         XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 3))

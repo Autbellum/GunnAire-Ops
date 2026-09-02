@@ -842,7 +842,15 @@ struct SyncIntegrationsView: View {
     private let calendar = Calendar.current
 
     private var quickBooksConnected: Bool {
-        QuickBooksDataAPI.shared.isAuthenticated
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksConnected") {
+            return true
+        }
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksDisconnected") {
+            return false
+        }
+        #endif
+        return QuickBooksDataAPI.shared.isAuthenticated
     }
 
     private var canViewFinancials: Bool {
@@ -1849,7 +1857,15 @@ struct OnsiteDocumentationView: View {
     @State private var documentExportMessage = ""
 
     private var quickBooksConnected: Bool {
-        QuickBooksDataAPI.shared.isAuthenticated
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksConnected") {
+            return true
+        }
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksDisconnected") {
+            return false
+        }
+        #endif
+        return QuickBooksDataAPI.shared.isAuthenticated
     }
 
     private var currentUserEmail: String? {
