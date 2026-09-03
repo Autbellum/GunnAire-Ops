@@ -152,6 +152,9 @@ class DeviceSummary:
     tunnel_state: str
     developer_mode: str
     ddi_services_available: bool
+    installed_marketing_version: str | None = None
+    installed_build_version: str | None = None
+    app_inspection_succeeded: bool = False
 
     @property
     def is_available(self) -> bool:
@@ -160,6 +163,14 @@ class DeviceSummary:
             and self.tunnel_state.lower() in {"available", "connected"}
             and self.developer_mode.lower() == "enabled"
             and self.ddi_services_available
+        )
+
+    def has_current_build(self, marketing_version: str, build_version: str) -> bool:
+        return (
+            self.is_available
+            and self.app_inspection_succeeded
+            and self.installed_marketing_version == marketing_version
+            and self.installed_build_version == build_version
         )
 
 
@@ -215,7 +226,13 @@ def inspect_signing_identities() -> tuple[dict[str, int], str | None]:
     return signing_identity_kinds(output), None
 
 
-def summarize_device(raw: dict[str, Any]) -> DeviceSummary:
+def summarize_device(
+    raw: dict[str, Any],
+    *,
+    installed_marketing_version: str | None = None,
+    installed_build_version: str | None = None,
+    app_inspection_succeeded: bool = False,
+) -> DeviceSummary:
     identifier = str(raw.get("identifier", "unknown"))
     device = raw.get("deviceProperties", {}) if isinstance(raw.get("deviceProperties"), dict) else {}
     hardware = raw.get("hardwareProperties", {}) if isinstance(raw.get("hardwareProperties"), dict) else {}
@@ -229,15 +246,94 @@ def summarize_device(raw: dict[str, Any]) -> DeviceSummary:
         tunnel_state=str(connection.get("tunnelState", "unknown")),
         developer_mode=str(device.get("developerModeStatus", "unknown")),
         ddi_services_available=bool(device.get("ddiServicesAvailable", False)),
+        installed_marketing_version=installed_marketing_version,
+        installed_build_version=installed_build_version,
+        app_inspection_succeeded=app_inspection_succeeded,
     )
 
 
-def parse_devicectl_payload(payload: dict[str, Any]) -> list[DeviceSummary]:
+def parse_devicectl_payload(
+    payload: dict[str, Any],
+    installed_apps: dict[str, tuple[str | None, str | None, bool]] | None = None,
+) -> list[DeviceSummary]:
     result = payload.get("result", {})
     raw_devices = result.get("devices", []) if isinstance(result, dict) else []
     if not isinstance(raw_devices, list):
         raise ValueError("devicectl JSON result.devices is not a list")
-    return [summarize_device(raw) for raw in raw_devices if isinstance(raw, dict)]
+    app_versions = installed_apps or {}
+    summaries: list[DeviceSummary] = []
+    for raw in raw_devices:
+        if not isinstance(raw, dict):
+            continue
+        identifier = str(raw.get("identifier", "unknown"))
+        marketing_version, build_version, inspection_succeeded = app_versions.get(
+            identifier,
+            (None, None, False),
+        )
+        summaries.append(
+            summarize_device(
+                raw,
+                installed_marketing_version=marketing_version,
+                installed_build_version=build_version,
+                app_inspection_succeeded=inspection_succeeded,
+            )
+        )
+    return summaries
+
+
+def parse_installed_app_payload(
+    payload: dict[str, Any],
+    *,
+    bundle_id: str = EXPECTED_BUNDLE_ID,
+) -> tuple[str | None, str | None]:
+    result = payload.get("result", {})
+    apps = result.get("apps", []) if isinstance(result, dict) else []
+    if not isinstance(apps, list):
+        raise ValueError("devicectl JSON result.apps is not a list")
+    matches = [
+        app for app in apps
+        if isinstance(app, dict) and app.get("bundleIdentifier") == bundle_id
+    ]
+    if not matches:
+        return None, None
+    if len(matches) != 1:
+        raise ValueError("devicectl returned multiple installed apps for the expected bundle")
+    app = matches[0]
+    marketing_version = app.get("version")
+    build_version = app.get("bundleVersion")
+    return (
+        str(marketing_version) if marketing_version is not None else None,
+        str(build_version) if build_version is not None else None,
+    )
+
+
+def inspect_installed_app(identifier: str) -> tuple[str | None, str | None, bool]:
+    with tempfile.TemporaryDirectory(prefix="gunnaire-installed-app-") as temp_dir:
+        output_path = Path(temp_dir) / "apps.json"
+        process = run(
+            [
+                "xcrun",
+                "devicectl",
+                "device",
+                "info",
+                "apps",
+                "--device",
+                identifier,
+                "--timeout",
+                "15",
+                "--json-output",
+                str(output_path),
+                "--quiet",
+            ]
+        )
+        if process.returncode != 0 or not output_path.is_file():
+            return None, None, False
+        try:
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            marketing_version, build_version = parse_installed_app_payload(payload)
+            return marketing_version, build_version, True
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None, None, False
 
 
 def inspect_devices() -> tuple[list[DeviceSummary], str | None]:
@@ -259,7 +355,21 @@ def inspect_devices() -> tuple[list[DeviceSummary], str | None]:
             return [], detail or "devicectl did not produce JSON output"
         try:
             payload = json.loads(output_path.read_text(encoding="utf-8"))
-            return parse_devicectl_payload(payload), None
+            result = payload.get("result", {})
+            raw_devices = result.get("devices", []) if isinstance(result, dict) else []
+            if not isinstance(raw_devices, list):
+                raise ValueError("devicectl JSON result.devices is not a list")
+            installed_apps: dict[str, tuple[str | None, str | None, bool]] = {}
+            for raw in raw_devices:
+                if not isinstance(raw, dict):
+                    continue
+                identifier = str(raw.get("identifier", ""))
+                if not identifier:
+                    continue
+                summary = summarize_device(raw)
+                if summary.is_available:
+                    installed_apps[identifier] = inspect_installed_app(identifier)
+            return parse_devicectl_payload(payload, installed_apps), None
         except (OSError, ValueError, json.JSONDecodeError) as error:
             return [], str(error)
 
@@ -282,6 +392,14 @@ def build_readiness_report(
     device_list = list(devices)
     available_ipads = [device for device in device_list if device.device_type == "iPad" and device.is_available]
     available_iphones = [device for device in device_list if device.device_type == "iPhone" and device.is_available]
+    current_ipads = [
+        device for device in available_ipads
+        if device.has_current_build(marketing_version, build_version)
+    ]
+    current_iphones = [
+        device for device in available_iphones
+        if device.has_current_build(marketing_version, build_version)
+    ]
     checks = [
         check_item(
             "current-ios-archive",
@@ -314,17 +432,25 @@ def build_readiness_report(
         ),
         check_item(
             "physical-ipad",
-            "pass" if available_ipads else "blocked",
-            f"{len(available_ipads)} signed-device-ready iPad detected."
-            if available_ipads
-            else device_error or "No paired, connected, Developer Mode iPad with DDI services is available.",
+            "pass" if current_ipads else "blocked",
+            f"{len(current_ipads)} paired development iPad has exact build {build_version} installed. Unlock and normal launch remain separate acceptance steps."
+            if current_ipads
+            else (
+                f"{len(available_ipads)} paired development iPad detected, but exact build {build_version} is not confirmed installed."
+                if available_ipads
+                else device_error or "No paired, connected, Developer Mode iPad with DDI services is available."
+            ),
         ),
         check_item(
             "physical-iphone",
-            "pass" if available_iphones else "blocked",
-            f"{len(available_iphones)} signed-device-ready iPhone detected."
-            if available_iphones
-            else device_error or "No paired, connected, Developer Mode iPhone with DDI services is available.",
+            "pass" if current_iphones else "blocked",
+            f"{len(current_iphones)} paired development iPhone has exact build {build_version} installed. Unlock and normal launch remain separate acceptance steps."
+            if current_iphones
+            else (
+                f"{len(available_iphones)} paired development iPhone detected, but exact build {build_version} is not confirmed installed."
+                if available_iphones
+                else device_error or "No paired, connected, Developer Mode iPhone with DDI services is available."
+            ),
         ),
     ]
     statuses = {item["id"]: item["status"] for item in checks}
@@ -356,7 +482,14 @@ def build_readiness_report(
             "buildVersion": build_version,
         },
         "signingIdentityCounts": identities,
-        "devices": [{**asdict(device), "is_available": device.is_available} for device in device_list],
+        "devices": [
+            {
+                **asdict(device),
+                "is_available": device.is_available,
+                "is_current_build": device.has_current_build(marketing_version, build_version),
+            }
+            for device in device_list
+        ],
         "checks": checks,
         "readiness": {
             "signedDeviceAcceptance": device_acceptance_ready,
@@ -537,7 +670,12 @@ def print_report(report: dict[str, Any]) -> None:
     for item in report["checks"]:
         print(f"{item['status'].upper():7} {item['id']}: {item['detail']}")
     for device in report["devices"]:
-        state = "available" if device["is_available"] else "unavailable"
+        if device["is_current_build"]:
+            state = f"exact build {application['buildVersion']} installed; launch not yet accepted"
+        elif device["is_available"]:
+            state = "development connection ready; exact build missing or unverified"
+        else:
+            state = "development connection unavailable"
         print(
             f"DEVICE  {device['device_ref']} — {device['marketing_name']} "
             f"{device['os_version']} — {state}"

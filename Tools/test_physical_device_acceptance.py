@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import copy
 import unittest
 from datetime import datetime, timezone
@@ -10,7 +12,15 @@ except ModuleNotFoundError:  # Direct execution from the Tools directory.
 
 
 class PhysicalDeviceAcceptanceTests(unittest.TestCase):
-    def device(self, device_type: str, *, available: bool = True) -> acceptance.DeviceSummary:
+    def device(
+        self,
+        device_type: str,
+        *,
+        available: bool = True,
+        marketing_version: str | None = "1.0",
+        build_version: str | None = "2026083101",
+        app_inspection_succeeded: bool = True,
+    ) -> acceptance.DeviceSummary:
         return acceptance.DeviceSummary(
             device_ref=f"{device_type.lower()}-ref",
             device_type=device_type,
@@ -20,6 +30,9 @@ class PhysicalDeviceAcceptanceTests(unittest.TestCase):
             tunnel_state="connected" if available else "unavailable",
             developer_mode="enabled",
             ddi_services_available=available,
+            installed_marketing_version=marketing_version,
+            installed_build_version=build_version,
+            app_inspection_succeeded=app_inspection_succeeded,
         )
 
     def complete_record(self) -> dict:
@@ -66,6 +79,54 @@ class PhysicalDeviceAcceptanceTests(unittest.TestCase):
         self.assertNotIn("UDID", repr(summary))
         self.assertNotIn("PERSONAL-NAME", repr(summary))
         self.assertNotEqual(summary.device_ref, raw["identifier"])
+
+    def test_installed_app_parser_returns_only_the_expected_bundle_versions(self) -> None:
+        payload = {
+            "result": {
+                "deviceIdentifier": "PRIVATE-DEVICE-ID",
+                "apps": [
+                    {
+                        "name": "Unrelated App",
+                        "bundleIdentifier": "com.example.unrelated",
+                        "version": "99",
+                        "bundleVersion": "999",
+                    },
+                    {
+                        "name": "GunnAire Ops",
+                        "bundleIdentifier": acceptance.EXPECTED_BUNDLE_ID,
+                        "version": "1.0",
+                        "bundleVersion": "2026090204",
+                    },
+                ],
+            }
+        }
+
+        self.assertEqual(
+            acceptance.parse_installed_app_payload(payload),
+            ("1.0", "2026090204"),
+        )
+        self.assertNotIn("PRIVATE-DEVICE-ID", repr(acceptance.parse_installed_app_payload(payload)))
+
+    def test_readiness_requires_the_exact_build_on_each_connected_device_family(self) -> None:
+        report = acceptance.build_readiness_report(
+            marketing_version="1.0",
+            build_version="2026083101",
+            archive=Path("/tmp/missing-archive"),
+            mac_app=Path("/tmp/missing-app"),
+            identities={"development": 1, "ios_distribution": 0, "mac_distribution": 0},
+            devices=[
+                self.device("iPad"),
+                self.device("iPhone", build_version="2026083001"),
+            ],
+        )
+
+        checks = {item["id"]: item for item in report["checks"]}
+        self.assertEqual(checks["physical-ipad"]["status"], "pass")
+        self.assertEqual(checks["physical-iphone"]["status"], "blocked")
+        self.assertIn("exact build 2026083101", checks["physical-ipad"]["detail"])
+        self.assertIn("not confirmed installed", checks["physical-iphone"]["detail"])
+        self.assertTrue(report["devices"][0]["is_current_build"])
+        self.assertFalse(report["devices"][1]["is_current_build"])
 
     def test_readiness_requires_device_families_and_distribution(self) -> None:
         report = acceptance.build_readiness_report(
