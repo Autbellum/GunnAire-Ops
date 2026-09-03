@@ -33,7 +33,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.08.30.16"
+SERVICE_VERSION = "2026.09.02.17"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -133,25 +133,73 @@ SUPPLIER_CONNECTOR_DEFINITIONS: dict[str, dict[str, object]] = {
         "displayName": "Johnstone Supply DirectConnect",
         "provider": "Johnstone Supply",
         "statusWhenUnavailable": "onboardingRequired",
-        "detailWhenUnavailable": "Ask the Johnstone account representative to approve DirectConnect, branch mapping, pricing, and test-order specifications.",
-        "capabilities": ["catalog", "priceAvailability", "purchaseOrders"],
+        "detailWhenUnavailable": "Johnstone publishes DirectConnect as an account-representative provisioned ordering path using consistently formatted data or file attachments; no public self-service API specification is published.",
+        "capabilities": ["purchaseOrders"],
+        "accessModel": "accountRepresentativeProvisioned",
+        "integrationProtocol": "formattedDataOrFile",
+        "publicAPIDocumented": False,
+        "onboardingRequirements": [
+            "Active Johnstone business account and local-store relationship",
+            "Johnstone account-representative approval and branch/account mapping",
+            "Agreed consistently formatted transmission or file format",
+            "Provider test-order, acknowledgement, and reconciliation acceptance",
+        ],
+        "publicDocumentationReviewedAt": "2026-09-02",
         "onboardingURL": "https://www.johnstonesupply.com/store101/ecommerce-tools",
     },
     "johnstonePunchOut": {
         "displayName": "Johnstone Supply Punch-out",
         "provider": "Johnstone Supply",
         "statusWhenUnavailable": "onboardingRequired",
-        "detailWhenUnavailable": "Ask the Johnstone account representative for the customer-specific cXML Punch-out agreement and test credentials.",
+        "detailWhenUnavailable": "Johnstone publishes customer-specific Punch-out catalogs using standards such as cXML, with real-time account pricing and availability; setup is provisioned through the account representative.",
         "capabilities": ["catalog", "priceAvailability", "purchaseOrders"],
+        "accessModel": "customerSpecificProvisioning",
+        "integrationProtocol": "cXMLPunchOut",
+        "publicAPIDocumented": False,
+        "onboardingRequirements": [
+            "Active Johnstone business account and local-store relationship",
+            "Johnstone account-representative approval",
+            "Customer-specific cXML Punch-out agreement and test configuration",
+            "Catalog, pricing, availability, cart, order, and reconciliation acceptance",
+        ],
+        "publicDocumentationReviewedAt": "2026-09-02",
         "onboardingURL": "https://www.johnstonesupply.com/store101/ecommerce-tools",
     },
     "lennoxPartner": {
-        "displayName": "Lennox Partner",
+        "displayName": "Lennox Procurement",
         "provider": "Lennox",
-        "statusWhenUnavailable": "partnerGated",
-        "detailWhenUnavailable": "A public direct GunnAire API is not established. Obtain written Lennox partner approval and exact catalog/procurement specifications before enabling this adapter.",
+        "statusWhenUnavailable": "thirdPartyOnly",
+        "detailWhenUnavailable": "Lennox currently publishes this catalog/procurement integration for ServiceTitan, its preferred and exclusive field-service-management partner; full procurement is waitlisted. No direct GunnAire API specification is published.",
         "capabilities": ["catalog", "priceAvailability", "purchaseOrders"],
+        "accessModel": "exclusiveThirdParty",
+        "integrationProtocol": "serviceTitanMarketplace",
+        "publicAPIDocumented": False,
+        "onboardingRequirements": [
+            "Separate written Lennox authorization for a GunnAire integration",
+            "Provider-issued technical specification and non-production test account",
+            "Catalog, account pricing, availability, branch, and order entitlements",
+            "Provider acceptance for submission, recovery, rejection, and reconciliation",
+        ],
+        "publicDocumentationReviewedAt": "2026-09-02",
         "onboardingURL": "https://www.lennoxpros.com/news/field-service-manangement-hvac",
+    },
+    "carrierEnterprise": {
+        "displayName": "Carrier Enterprise Procurement",
+        "provider": "Carrier Enterprise",
+        "statusWhenUnavailable": "onboardingRequired",
+        "detailWhenUnavailable": "Carrier publishes a developer portal with application and API-key registration, but a public Carrier Enterprise distributor catalog, account-pricing, availability, and purchase-order contract has not been verified. Obtain written Carrier Enterprise approval and the applicable API specification before enabling this adapter.",
+        "capabilities": ["catalog", "priceAvailability", "purchaseOrders"],
+        "accessModel": "providerApprovedApplication",
+        "integrationProtocol": "providerDocumented",
+        "publicAPIDocumented": False,
+        "onboardingRequirements": [
+            "Active Carrier Enterprise business account and branch relationship",
+            "Carrier Enterprise approval for a GunnAire developer application",
+            "Provider-issued API key, non-production environment, and account/branch entitlements",
+            "Catalog, pricing, availability, submission, recovery, and reconciliation acceptance",
+        ],
+        "publicDocumentationReviewedAt": "2026-09-03",
+        "onboardingURL": "https://developer.carrier.com/",
     },
     "genericCatalog": {
         "displayName": "Generic Supplier Catalog",
@@ -159,6 +207,16 @@ SUPPLIER_CONNECTOR_DEFINITIONS: dict[str, dict[str, object]] = {
         "statusWhenUnavailable": "adapterRequired",
         "detailWhenUnavailable": "Install an approved server adapter for the supplier's documented catalog and ordering contract.",
         "capabilities": ["catalog", "priceAvailability", "purchaseOrders"],
+        "accessModel": "supplierSpecific",
+        "integrationProtocol": "providerDocumented",
+        "publicAPIDocumented": None,
+        "onboardingRequirements": [
+            "Supplier-approved API, EDI, Punch-out, or file-exchange specification",
+            "Non-production credentials and account/branch entitlements",
+            "Documented idempotency, acknowledgement, and recovery behavior",
+            "Provider sandbox and GunnAire reconciliation acceptance",
+        ],
+        "publicDocumentationReviewedAt": None,
         "onboardingURL": None,
     },
 }
@@ -1065,6 +1123,11 @@ def supplier_connector_records() -> list[dict[str, object]]:
                 ),
                 "capabilities": list(definition["capabilities"]),
                 "canSubmitOrders": active,
+                "accessModel": definition["accessModel"],
+                "integrationProtocol": definition["integrationProtocol"],
+                "publicAPIDocumented": definition["publicAPIDocumented"],
+                "onboardingRequirements": list(definition["onboardingRequirements"]),
+                "publicDocumentationReviewedAt": definition["publicDocumentationReviewedAt"],
                 "onboardingURL": definition["onboardingURL"],
             }
         )

@@ -174,7 +174,7 @@ class SupplierConnectorTests(unittest.TestCase):
                     ) as response:
                         payload = json.loads(response.read().decode("utf-8"))
                     self.assertEqual(response.status, 200)
-                    self.assertEqual(len(payload["connectors"]), 4)
+                    self.assertEqual(len(payload["connectors"]), 5)
                     self.assertTrue(all(
                         record["contractVersion"] == backend.SUPPLIER_CONNECTOR_CONTRACT_VERSION
                         for record in payload["connectors"]
@@ -182,7 +182,29 @@ class SupplierConnectorTests(unittest.TestCase):
                     self.assertFalse(any(record["canSubmitOrders"] for record in payload["connectors"]))
                     kinds = {record["kind"]: record for record in payload["connectors"]}
                     self.assertEqual(kinds["johnstonePunchOut"]["status"], "onboardingRequired")
-                    self.assertEqual(kinds["lennoxPartner"]["status"], "partnerGated")
+                    self.assertEqual(kinds["johnstoneDirectConnect"]["accessModel"], "accountRepresentativeProvisioned")
+                    self.assertEqual(kinds["johnstoneDirectConnect"]["integrationProtocol"], "formattedDataOrFile")
+                    self.assertEqual(kinds["johnstoneDirectConnect"]["capabilities"], ["purchaseOrders"])
+                    self.assertEqual(kinds["johnstonePunchOut"]["integrationProtocol"], "cXMLPunchOut")
+                    self.assertEqual(kinds["lennoxPartner"]["status"], "thirdPartyOnly")
+                    self.assertEqual(kinds["lennoxPartner"]["accessModel"], "exclusiveThirdParty")
+                    self.assertEqual(kinds["lennoxPartner"]["integrationProtocol"], "serviceTitanMarketplace")
+                    self.assertFalse(kinds["lennoxPartner"]["publicAPIDocumented"])
+                    self.assertIn("ServiceTitan", kinds["lennoxPartner"]["detail"])
+                    self.assertEqual(kinds["lennoxPartner"]["publicDocumentationReviewedAt"], "2026-09-02")
+                    self.assertGreaterEqual(len(kinds["lennoxPartner"]["onboardingRequirements"]), 4)
+                    self.assertEqual(kinds["carrierEnterprise"]["status"], "onboardingRequired")
+                    self.assertEqual(kinds["carrierEnterprise"]["accessModel"], "providerApprovedApplication")
+                    self.assertEqual(kinds["carrierEnterprise"]["integrationProtocol"], "providerDocumented")
+                    self.assertFalse(kinds["carrierEnterprise"]["publicAPIDocumented"])
+                    self.assertIn("API-key registration", kinds["carrierEnterprise"]["detail"])
+                    self.assertGreaterEqual(len(kinds["carrierEnterprise"]["onboardingRequirements"]), 4)
+                    self.assertTrue(all(
+                        record["status"] == record["status"].strip()
+                        and record["detail"] == record["detail"].strip()
+                        for record in payload["connectors"]
+                    ))
+                    self.assertIsNone(kinds["genericCatalog"]["publicAPIDocumented"])
                     serialized = json.dumps(payload).lower()
                     self.assertNotIn("token", serialized)
                     self.assertNotIn("password", serialized)
