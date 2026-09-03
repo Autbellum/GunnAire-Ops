@@ -985,6 +985,10 @@ enum PurchaseOrderOrderingPolicy {
             guard normalizedVendor.contains("lennox") else {
                 throw PurchaseOrderConfirmationError.connectorVendorMismatch
             }
+        case .carrierEnterprise:
+            guard normalizedVendor.contains("carrier") else {
+                throw PurchaseOrderConfirmationError.connectorVendorMismatch
+            }
         case .genericCatalog:
             break
         }
