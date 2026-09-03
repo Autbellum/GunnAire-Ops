@@ -25,6 +25,7 @@ enum SupplierConnectorKind: String, Codable, CaseIterable, Identifiable {
     case johnstoneDirectConnect
     case johnstonePunchOut
     case lennoxPartner
+    case carrierEnterprise
     case genericCatalog
 
     var id: String { rawValue }
@@ -34,6 +35,7 @@ enum SupplierConnectorKind: String, Codable, CaseIterable, Identifiable {
         case .johnstoneDirectConnect: "Johnstone Supply DirectConnect"
         case .johnstonePunchOut: "Johnstone Supply Punch-out"
         case .lennoxPartner: "Lennox Partner"
+        case .carrierEnterprise: "Carrier Enterprise Procurement"
         case .genericCatalog: "Generic Supplier Catalog"
         }
     }
@@ -75,6 +77,7 @@ struct SupplierConnectorReadiness: Codable, Identifiable, Equatable {
         case "ready": "Ready"
         case "onboardingRequired": "Onboarding required"
         case "partnerGated": "Partner approval required"
+        case "thirdPartyOnly": "Third-party only"
         case "adapterRequired": "Server adapter required"
         default: "Unavailable"
         }
@@ -115,6 +118,9 @@ enum SupplierConnectorSelectionPolicy {
         }
         if normalizedVendor.contains("lennox") {
             return ready.filter { $0.kind == .lennoxPartner }
+        }
+        if normalizedVendor.contains("carrier") {
+            return ready.filter { $0.kind == .carrierEnterprise }
         }
         let providerMatches = ready.filter {
             normalizedVendor.contains($0.provider.lowercased()) ||

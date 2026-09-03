@@ -3575,11 +3575,22 @@ struct GunnAire_OpsTests {
               "kind": "lennoxPartner",
               "displayName": "Lennox Partner",
               "provider": "Lennox",
-              "status": "partnerGated",
+              "status": "thirdPartyOnly",
               "detail": "Partner approval required.",
               "capabilities": ["catalog", "purchaseOrders"],
               "canSubmitOrders": false,
               "onboardingURL": "https://www.lennoxpros.com/"
+            },
+            {
+              "contractVersion": 2,
+              "kind": "carrierEnterprise",
+              "displayName": "Carrier Enterprise Procurement",
+              "provider": "Carrier Enterprise",
+              "status": "onboardingRequired",
+              "detail": "Provider approval required.",
+              "capabilities": ["catalog", "priceAvailability", "purchaseOrders"],
+              "canSubmitOrders": false,
+              "onboardingURL": "https://developer.carrier.com/"
             },
             {
               "contractVersion": 2,
@@ -3610,7 +3621,7 @@ struct GunnAire_OpsTests {
         let connectors = try GunnAireBackendService.decodeSupplierConnectors(from: data)
         let orderable = SupplierConnectorSelectionPolicy.orderableConnectors(from: connectors)
 
-        #expect(connectors.count == 3)
+        #expect(connectors.count == 4)
         #expect(orderable.map(\.kind) == [.genericCatalog, .johnstoneDirectConnect])
         #expect(
             SupplierConnectorSelectionPolicy.preferredConnectorKind(
@@ -3624,7 +3635,13 @@ struct GunnAire_OpsTests {
                 from: connectors
             ) == nil
         )
-        #expect(connectors.first?.statusLabel == "Partner approval required")
+        #expect(connectors.first?.statusLabel == "Third-party only")
+        #expect(
+            SupplierConnectorSelectionPolicy.preferredConnectorKind(
+                for: "Carrier Enterprise - Winston-Salem",
+                from: connectors
+            ) == nil
+        )
         let outdated = SupplierConnectorReadiness(
             contractVersion: 1,
             kind: .genericCatalog,
