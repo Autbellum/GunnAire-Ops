@@ -65,11 +65,19 @@ The order is intentional:
 
 ## Current-source verification
 
-Both focused capture workflows passed on 2026-08-31: 1/1 on an iPad Pro
-13-inch (M5) simulator and 1/1 on an iPhone 17 Pro Max simulator, each running
-iOS 26.5. The twelve exported attachments were mapped by their manifests,
-visually inspected, and mechanically verified for the expected dimensions and
-an opaque RGB pixel format before replacing this retained set.
+The current iPad captures were exported from the complete sequential UI result
+that passed 104/104 logical tests with 107/107 device executions on 2026-09-02
+using an iPad Pro 13-inch (M5) simulator with iOS 26.5. The current iPhone
+capture workflow passed 1/1 the same day on an iPhone 17 Pro Max simulator with
+iOS 26.5. Evidence is retained at
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-02/GunnAire Ops 1.0 (2026090204 iPad UI Broad 104 Pass).xcresult`
+and
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-02/GunnAire Ops 1.0 (2026090204 iPhone App Store Screenshots).xcresult`.
+The twelve exported attachments were mapped by their manifests, visually
+inspected, and mechanically verified for the expected dimensions and an opaque
+RGB pixel format before replacing this retained set. None exposes the signed-in
+account email or sidebar identity, and none contains a keyboard, alert, spinner,
+or notification banner.
 
 The capture contract verifies that the deterministic fixtures never expose the
 signed-in sidebar identity. Customer Systems must show the compact Edit, QR,
