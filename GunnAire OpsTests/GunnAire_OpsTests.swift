@@ -17729,6 +17729,73 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(appManagedEvent))
     }
 
+    @Test func gmailInboxQueryAlwaysKeepsResultsInTheInbox() {
+        #expect(GmailMessagePresentation.inboxQuery(searchText: "") == "in:inbox")
+        #expect(GmailMessagePresentation.inboxQuery(searchText: "  furnace estimate  ") == "in:inbox furnace estimate")
+    }
+
+    @Test func gmailMessagePresentationPrefersPlainTextOverHtml() {
+        func encoded(_ value: String) -> String {
+            Data(value.utf8)
+                .base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+        }
+
+        let payload = GmailMessagePayload(
+            headers: nil,
+            mimeType: "multipart/alternative",
+            body: nil,
+            parts: [
+                GmailMessagePayload(
+                    headers: nil,
+                    mimeType: "text/html",
+                    body: GmailMessageBody(data: encoded("<p>Do not show markup</p>"), size: nil),
+                    parts: nil,
+                    filename: nil
+                ),
+                GmailMessagePayload(
+                    headers: nil,
+                    mimeType: "text/plain",
+                    body: GmailMessageBody(data: encoded("Your appointment is confirmed."), size: nil),
+                    parts: nil,
+                    filename: nil
+                )
+            ],
+            filename: nil
+        )
+
+        #expect(GmailMessagePresentation.bodyText(from: payload) == "Your appointment is confirmed.")
+    }
+
+    @Test func gmailMessagePresentationRemovesHtmlMarkupAndUnreadState() {
+        let html = "<style>.hidden { display: none; }</style><script>alert('debug')</script><div>Hello <strong>Eric</strong></div><p>Your appointment is set.</p>"
+        let encodedHTML = Data(html.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let payload = GmailMessagePayload(
+            headers: nil,
+            mimeType: "text/html",
+            body: GmailMessageBody(data: encodedHTML, size: nil),
+            parts: nil,
+            filename: nil
+        )
+        let unread = GmailMessageDetail(
+            id: "mail-1",
+            threadId: "thread-1",
+            labelIds: ["INBOX", "UNREAD"],
+            snippet: nil,
+            internalDate: nil,
+            payload: payload
+        )
+
+        #expect(GmailMessagePresentation.bodyText(from: payload) == "Hello Eric\nYour appointment is set.")
+        #expect(GmailMessagePresentation.removingUnreadLabel(from: unread).labelIds == ["INBOX"])
+    }
+
     @Test func gmailRawMessageIncludesPdfAttachment() async throws {
         let attachment = GmailAttachment(
             fileName: "GunnAire-Estimate.pdf",

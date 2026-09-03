@@ -31,7 +31,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ("Schedule & Jobs", "scheduleAndJobs", "Schedule"),
         ("Customers", "customers", "Customers"),
         ("Onsite Documentation", "onsiteDocumentation", "Onsite Documentation"),
-        ("Mail", "mail", "Mail"),
+        ("Mail", "mail", "Inbox"),
         ("Estimates", "estimates", "Estimates"),
         ("Invoices", "invoices", "Invoices"),
         ("Payments", "payments", "Payments"),
@@ -239,6 +239,46 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         app.staticTexts["Payments"].tap()
         XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testMailWorkspaceUsesASimpleInboxInterface() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures",
+            "-uiTestSeedMailInbox",
+            "-GunnAirePendingAppRoute", "mail"
+        ]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 6))
+        XCTAssertTrue(app.descendants(matching: .any)["MailInboxList"].exists)
+        XCTAssertTrue(app.buttons["MailRefreshButton"].exists)
+        XCTAssertTrue(app.buttons["MailComposeButton"].exists)
+        XCTAssertFalse(app.staticTexts["Headers"].exists)
+        XCTAssertFalse(app.staticTexts["Snippet"].exists)
+        XCTAssertFalse(app.staticTexts["Message Body"].exists)
+        XCTAssertFalse(app.staticTexts["Status"].exists)
+
+        let message = app.descendants(matching: .any)["MailMessage-ui-mail-1"]
+        XCTAssertTrue(message.waitForExistence(timeout: 3))
+        message.tap()
+
+        XCTAssertTrue(app.navigationBars["Mail"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Service appointment confirmed"].exists)
+        XCTAssertTrue(app.staticTexts["Jordan Customer <jordan@example.com>"].exists)
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] 'We will see you Tuesday morning'")
+        ).firstMatch.exists)
+        XCTAssertTrue(app.buttons["MailReplyButton"].exists)
+        XCTAssertTrue(app.buttons["MailMoreActionsButton"].exists)
+        XCTAssertFalse(app.staticTexts["MIME-Version"].exists)
+        XCTAssertFalse(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] '<div>'")
+        ).firstMatch.exists)
     }
 
     @MainActor
