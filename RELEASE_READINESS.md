@@ -1,5 +1,7 @@
 # GunnAire Ops release readiness
 
+Follow-up physical-device inspection on 2026-09-03 found two separately signed apps with the identical **GunnAire Ops** display name. The obsolete build `1` could be mistaken for the corrected app. Its May-era local store, preferences, and customer document were backed up, its SQLite store passed integrity validation, and only the obsolete `www.gunnaire.com.GunnAire-Ops` bundle was removed. Current `com.gunnaire.businesssuite` build `2026090304` is now the sole user app on the M5 iPad; it stays running when opened directly into Invoices with retained device data and produces no new crash report. Evidence is `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-03/physical-invoice-duplicate-resolution-2026090304.json`, SHA-256 `5568ee7794580986e1842f4f73a10e7d587e043206ff2a300f61f1a835d4f1ec`.
+
 Last reviewed: 2026-09-03
 
 ## Current result
