@@ -7,6 +7,7 @@ struct BillingDocumentsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @ObservedObject private var accountingConfigurationStore = QuickBooksAccountingConfigurationStore.shared
     @Query(sort: \Customer.name, order: .forward) private var customers: [Customer]
     @Query(sort: \Item.name, order: .forward) private var items: [Item]
@@ -67,6 +68,7 @@ struct BillingDocumentsView: View {
     @State private var itemSearchText = ""
     @State private var catalogFilter: DocumentationCatalogFilter = .recommended
     @State private var newlyCreatedLineItems: [UUID: Item] = [:]
+    @State private var documentScopedReviewItemIDs: Set<UUID> = []
     @State private var selectedItemQuantities: [UUID: Double] = [:]
     @State private var selectedItemPriceAdjustments: [UUID: AuthorizedLinePriceAdjustment] = [:]
     @State private var selectedDocumentDiscount: AuthorizedDocumentDiscount?
@@ -91,7 +93,6 @@ struct BillingDocumentsView: View {
     @State private var actionMessage = ""
     @State private var isCreatingDocument = false
     @State private var isImportingQuickBooksItems = false
-    @State private var isPublishingQuickBooksItems = false
     @State private var syncingEstimateIDs: Set<UUID> = []
     @State private var didLoadInitialContext = false
     @State private var didAttemptInitialCatalogImport = false
@@ -555,7 +556,12 @@ struct BillingDocumentsView: View {
             .compactMap { $0?.lowercased() }
             .joined(separator: " ")
             let matchesQuery = query.isEmpty || haystack.contains(query)
-            return matchesQuery && matchesCatalogFilter(item)
+            let canDisplay = CatalogItemSelectionPolicy.canDisplay(
+                item,
+                isSelected: isCatalogItemSelected(item),
+                documentScopedReviewItemIDs: documentScopedReviewItemIDs
+            )
+            return canDisplay && matchesQuery && matchesCatalogFilter(item)
         }
     }
 
@@ -567,10 +573,6 @@ struct BillingDocumentsView: View {
         !newItemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         CatalogItemAmountParser.parseRequiredOrZero(newItemPrice) != nil &&
         CatalogItemAmountParser.isValidOptionalAmount(newItemCost)
-    }
-
-    private var unsyncedCatalogItems: [Item] {
-        items.filter { itemNeedsQuickBooksSync($0) && !$0.requiresPricebookReview }
     }
 
     private var catalogItemsAwaitingReview: [Item] {
@@ -796,7 +798,8 @@ struct BillingDocumentsView: View {
                     serviceCalls: serviceCalls
                 ),
                 let item = items.first(where: { $0.id == candidate.billingCatalogItemID }),
-                !item.requiresPricebookReview else { return nil }
+                !item.requiresPricebookReview,
+                item.isAvailableForNewWork else { return nil }
                 return candidate
             }
             .sorted {
@@ -814,7 +817,8 @@ struct BillingDocumentsView: View {
                       agreement.agreementPrice.map({ $0 > 0.009 }) == true else { return false }
                 guard let billingCatalogItemID = agreement.billingCatalogItemID else { return true }
                 guard let item = items.first(where: { $0.id == billingCatalogItemID }),
-                      !item.requiresPricebookReview else { return true }
+                      !item.requiresPricebookReview,
+                      item.isAvailableForNewWork else { return true }
                 return agreement.billingInterval != .perVisit && agreement.billingAnchorDate == nil
             }
             .sorted {
@@ -951,6 +955,9 @@ struct BillingDocumentsView: View {
 
     private var isQuickBooksConnected: Bool {
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksConnected") {
+            return true
+        }
         if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksDisconnected") {
             return false
         }
@@ -1571,77 +1578,87 @@ GunnAire
     @ViewBuilder
     var body: some View {
         if let invoice = requestedInitialCloseoutInvoice {
-            RecordInvoicePaymentView(
-                invoice: invoice,
-                autoStartTapToPay: openTapToPayOnAppear
+            AnyView(
+                RecordInvoicePaymentView(
+                    invoice: invoice,
+                    autoStartTapToPay: openTapToPayOnAppear
+                )
+                .tint(Color.brandGold)
             )
-            .tint(Color.brandGold)
         } else {
-            NavigationStack {
+            AnyView(
+                NavigationStack {
+                    AnyView(
             List {
                 activeJobSections
 
-                if !isJobDocumentationMode && canViewFinancials {
-                    Section("Workspace Snapshot") {
-                        switch workspaceMode {
-                        case .all:
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Billing Overview")
-                                    .font(.headline)
-                                HStack {
-                                    workspaceMetricView(title: "Pending Estimates", value: "\(estimateMetrics.pending)")
-                                    Spacer()
-                                    workspaceMetricView(title: "Open Invoices", value: "\(invoiceMetrics.open)")
+                AnyView(Group {
+                    if !isJobDocumentationMode && canViewFinancials {
+                        Section("Workspace Snapshot") {
+                            switch workspaceMode {
+                            case .all:
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Billing Overview")
+                                        .font(.headline)
+                                    HStack {
+                                        workspaceMetricView(title: "Pending Estimates", value: "\(estimateMetrics.pending)")
+                                        Spacer()
+                                        workspaceMetricView(title: "Open Invoices", value: "\(invoiceMetrics.open)")
+                                    }
+                                    HStack {
+                                        workspaceMetricView(title: "Estimate Follow-Up", value: "\(estimateMetrics.followUp)")
+                                        Spacer()
+                                        workspaceMetricView(title: "Outstanding", value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
+                                    }
                                 }
+                            case .estimates:
                                 HStack {
-                                    workspaceMetricView(title: "Estimate Follow-Up", value: "\(estimateMetrics.followUp)")
+                                    workspaceMetricView(title: "Pending", value: "\(estimateMetrics.pending)")
+                                    Spacer()
+                                    workspaceMetricView(title: "Accepted", value: "\(estimateMetrics.accepted)")
+                                    Spacer()
+                                    workspaceMetricView(title: "Follow-Up", value: "\(estimateMetrics.followUp)")
+                                }
+                            case .invoices:
+                                HStack {
+                                    workspaceMetricView(title: "Open", value: "\(invoiceMetrics.open)")
+                                    Spacer()
+                                    workspaceMetricView(title: "Overdue", value: "\(invoiceMetrics.overdue)")
                                     Spacer()
                                     workspaceMetricView(title: "Outstanding", value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
                                 }
                             }
-                        case .estimates:
-                            HStack {
-                                workspaceMetricView(title: "Pending", value: "\(estimateMetrics.pending)")
-                                Spacer()
-                                workspaceMetricView(title: "Accepted", value: "\(estimateMetrics.accepted)")
-                                Spacer()
-                                workspaceMetricView(title: "Follow-Up", value: "\(estimateMetrics.followUp)")
-                            }
-                        case .invoices:
-                            HStack {
-                                workspaceMetricView(title: "Open", value: "\(invoiceMetrics.open)")
-                                Spacer()
-                                workspaceMetricView(title: "Overdue", value: "\(invoiceMetrics.overdue)")
-                                Spacer()
-                                workspaceMetricView(title: "Outstanding", value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
-                            }
                         }
                     }
-                }
+                })
 
-                if !isJobDocumentationMode, let generatedCustomerDocumentURL {
-                    Section("Customer Documents") {
-                        ShareLink(item: generatedCustomerDocumentURL) {
-                            Label("Share Last Generated Document", systemImage: "square.and.arrow.up")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.brandGold)
-                        .foregroundStyle(Color.primaryBlack)
+                AnyView(Group {
+                    if !isJobDocumentationMode, let generatedCustomerDocumentURL {
+                        Section("Customer Documents") {
+                            ShareLink(item: generatedCustomerDocumentURL) {
+                                Label("Share Last Generated Document", systemImage: "square.and.arrow.up")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
 
-                        Button {
-                            emailGeneratedCustomerDocument(generatedCustomerDocumentURL)
-                        } label: {
-                            Label(isEmailingGeneratedDocument ? "Emailing..." : "Email Last Generated Document", systemImage: "paperplane")
+                            Button {
+                                emailGeneratedCustomerDocument(generatedCustomerDocumentURL)
+                            } label: {
+                                Label(isEmailingGeneratedDocument ? "Emailing..." : "Email Last Generated Document", systemImage: "paperplane")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!canEmailGeneratedCustomerDocument)
                         }
-                        .buttonStyle(.bordered)
-                        .disabled(!canEmailGeneratedCustomerDocument)
                     }
-                }
+                })
 
-                if (canViewFinancials || canCollectFieldPayments) &&
-                    (currentJobEstimate != nil || currentJobInvoice != nil) &&
-                    (!isJobDocumentationMode || selectedJobStage == .billing) {
-                    Section("Current Job Documents") {
+                AnyView(Group {
+                    if (canViewFinancials || canCollectFieldPayments) &&
+                        (currentJobEstimate != nil || currentJobInvoice != nil) &&
+                        (!isJobDocumentationMode || selectedJobStage == .billing) {
+                        Section("Current Job Documents") {
+                            AnyView(Group {
                         if let estimate = currentJobEstimate {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Estimate")
@@ -1832,7 +1849,9 @@ GunnAire
                             }
                             .padding(.vertical, 2)
                         }
+                            })
 
+                            AnyView(Group {
                         if let invoice = currentJobInvoice {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(invoice.projectBillingDisplayTitle ?? "Invoice")
@@ -1917,76 +1936,80 @@ GunnAire
                             }
                             .padding(.vertical, 2)
                         }
+                            })
+                        }
                     }
-                }
+                })
 
-                if let customer = contextCustomer,
-                   !isJobDocumentationMode || selectedJobStage == .work {
-                    Section("Customer Context") {
-                        if let agreement = activeServiceAgreement {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Active Service Agreement")
-                                    .font(.headline)
-                                Text(agreement.schedulePattern)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text("Next visit: \(agreement.nextDate.formatted(date: .abbreviated, time: .omitted))")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                Text("Reminder: \(agreement.reminderDate.formatted(date: .abbreviated, time: .omitted))")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 2)
-                        }
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Customer History")
-                                .font(.headline)
-                            Text(customerActivitySummary(customer))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            if canViewFinancials && customerLifetimeInvoiceTotal > 0 {
-                                Text("Lifetime invoiced: \(customerLifetimeInvoiceTotal, format: .currency(code: "USD"))")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-
-                        if !recentCustomerCalls.isEmpty {
-                            ForEach(recentCustomerCalls) { recentCall in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(serviceCallSummaryLine(recentCall))
+                AnyView(Group {
+                    if let customer = contextCustomer,
+                       !isJobDocumentationMode || selectedJobStage == .work {
+                        Section("Customer Context") {
+                            if let agreement = activeServiceAgreement {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Active Service Agreement")
+                                        .font(.headline)
+                                    Text(agreement.schedulePattern)
                                         .font(.caption)
-                                    Text(recentCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                        .foregroundColor(.secondary)
+                                    Text("Next visit: \(agreement.nextDate.formatted(date: .abbreviated, time: .omitted))")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
-                                    if let notes = recentCall.notes, !notes.isEmpty {
-                                        Text(notes)
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(2)
-                                    }
+                                    Text("Reminder: \(agreement.reminderDate.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
                                 }
                                 .padding(.vertical, 2)
                             }
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Customer History")
+                                    .font(.headline)
+                                Text(customerActivitySummary(customer))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                if canViewFinancials && customerLifetimeInvoiceTotal > 0 {
+                                    Text("Lifetime invoiced: \(customerLifetimeInvoiceTotal, format: .currency(code: "USD"))")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+
+                            if !recentCustomerCalls.isEmpty {
+                                ForEach(recentCustomerCalls) { recentCall in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(serviceCallSummaryLine(recentCall))
+                                            .font(.caption)
+                                        Text(recentCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        if let notes = recentCall.notes, !notes.isEmpty {
+                                            Text(notes)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                                .lineLimit(2)
+                                        }
+                                    }
+                                    .padding(.vertical, 2)
+                                }
+                            }
                         }
                     }
-                }
+                })
 
-                estimateActionQueues
+                AnyView(estimateActionQueues)
 
-                invoiceActionQueues
+                AnyView(invoiceActionQueues)
 
-                equipmentHistorySection
+                AnyView(equipmentHistorySection)
 
-                builderDetailsWorkspaceSection
+                AnyView(builderDetailsWorkspaceSection)
 
-                estimatesWorkspaceSection
+                AnyView(estimatesWorkspaceSection)
 
-                invoicesWorkspaceSection
+                AnyView(invoicesWorkspaceSection)
 
-                paymentsWorkspaceSection
+                AnyView(paymentsWorkspaceSection)
             }
             .navigationTitle(navigationTitle)
             .toolbar {
@@ -2003,6 +2026,7 @@ GunnAire
                     items: items,
                     selectedItems: selectedItems,
                     selectedItemizedAssemblyIDs: Set(selectedItemizedAssemblyMemberships.keys),
+                    documentScopedReviewItemIDs: documentScopedReviewItemIDs,
                     onToggle: toggleItem
                 )
             }
@@ -2065,7 +2089,9 @@ GunnAire
             .sheet(item: $agreementBillingSetupPending) { agreement in
                 MaintenanceAgreementBillingSetupSheet(
                     agreement: agreement,
-                    billingItems: items.filter { !$0.requiresPricebookReview }
+                    billingItems: items.filter {
+                        !$0.requiresPricebookReview && $0.isAvailableForNewWork
+                    }
                 ) { itemID, anchorDate in
                     try configureMaintenanceAgreementBilling(
                         agreement,
@@ -2216,7 +2242,9 @@ GunnAire
                 )
                 reconcileLineEquipmentAssignments()
             }
-        }
+                    )
+                }
+            )
         }
     }
 
@@ -2412,6 +2440,33 @@ GunnAire
         }
     }
 
+    @ViewBuilder
+    private func catalogSyncStateLabel(for item: Item) -> some View {
+        let state = item.quickBooksCatalogSyncState
+        if state == "archived" {
+            Label("Archived from new work", systemImage: "archivebox")
+                .font(.caption2)
+                .foregroundStyle(Color.secondary)
+                .accessibilityIdentifier("CatalogSyncState-\(item.id.uuidString)")
+        } else if state == "needs_review" {
+            Label("Admin pricebook review", systemImage: "person.badge.clock")
+                .font(.caption2)
+                .foregroundStyle(Color.orange)
+                .accessibilityIdentifier("CatalogSyncState-\(item.id.uuidString)")
+        } else if isQuickBooksConnected, state != "synced" {
+            let needsAttention = state == "needs_attention"
+            Label(
+                needsAttention
+                    ? "QBO needs attention"
+                    : (state == "pending_update" ? "QBO update pending" : "QBO publication pending"),
+                systemImage: needsAttention ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath"
+            )
+            .font(.caption2)
+            .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
+            .accessibilityIdentifier("CatalogSyncState-\(item.id.uuidString)")
+        }
+    }
+
     private func populateCustomerFields(from customer: Customer) {
         customerSearchText = customer.name
         customerName = customer.name
@@ -2450,28 +2505,20 @@ GunnAire
     }
 
     private func syncCustomerToQuickBooks(_ customer: Customer) {
-        actionMessage = "Creating \(customer.name) in QuickBooks..."
-        let payload = QuickBooksCustomerCreate(
-            DisplayName: customer.name,
-            PrimaryPhone: customer.phone.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksPhoneNumber(FreeFormNumber: trimmed)
-            },
-            PrimaryEmailAddr: customer.email.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksEmailAddress(Address: trimmed)
-            },
-            BillAddr: customer.address.flatMap { value in
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed.isEmpty ? nil : QuickBooksAddress(Line1: trimmed)
-            }
-        )
-        liveAPI.createCustomer(payload) { result in
+        actionMessage = "Reconciling \(customer.name) with QuickBooks..."
+        liveAPI.recoverOrCreateCustomer(
+            QuickBooksCustomerCreateOperation.draft(for: customer)
+        ) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let quickBooksCustomer):
                     customer.quickBooksID = quickBooksCustomer.Id
-                    actionMessage = "\(customer.name) created in QuickBooks."
+                    do {
+                        try modelContext.save()
+                        actionMessage = "\(customer.name) is linked to QuickBooks."
+                    } catch {
+                        actionMessage = "QuickBooks linked \(customer.name), but the local confirmation could not be saved: \(error.localizedDescription)"
+                    }
                 case .failure(let error):
                     actionMessage = "\(customer.name) saved locally. QuickBooks customer sync failed: \(error.localizedDescription)"
                 }
@@ -3267,9 +3314,19 @@ GunnAire
                 }
     }
 
-    @ViewBuilder
-    private var activeJobSections: some View {
-                if let call = activeServiceCall {
+    /// Keep the job-only branch behind a concrete type-erasure boundary.
+    ///
+    /// This workspace contains a deliberately rich set of job sections. When
+    /// the branch was exposed as one deeply nested opaque View type, SwiftUI
+    /// attempted to materialize all of that generic metadata even when the
+    /// invoice workspace did not have an active job. On physical devices that
+    /// exhausted the main-thread stack while opening the Invoices tab.
+    private var activeJobSections: AnyView {
+        guard let call = activeServiceCall else {
+            return AnyView(EmptyView())
+        }
+
+        return AnyView(Group {
                     Section("Job") {
                         Text(call.customer.name)
                             .font(.headline)
@@ -3497,6 +3554,7 @@ GunnAire
                                                     .font(.caption2)
                                                     .foregroundColor(.secondary)
                                             }
+                                            catalogSyncStateLabel(for: item)
                                         }
                                         Spacer()
                                         VStack(alignment: .trailing, spacing: 4) {
@@ -3519,16 +3577,32 @@ GunnAire
                                                 .buttonStyle(.bordered)
                                                 .accessibilityIdentifier(adjustPriceAccessibilityID(for: item))
                                             }
-                                            Stepper(
-                                                lineItemQuantityLabel(for: item),
-                                                value: lineItemQuantityBinding(for: item),
-                                                in: 0.25...100,
-                                                step: 0.25
-                                            )
-                                            .labelsHidden()
-                                            .disabled(isItemizedAssemblyLine(item))
-                                            .accessibilityLabel(lineItemQuantityAccessibilityLabel(for: item))
-                                            .accessibilityValue(lineItemQuantityAccessibilityValue(for: item))
+                                            HStack(spacing: 8) {
+                                                Button {
+                                                    removeCatalogLine(item.id)
+                                                } label: {
+                                                    Image(systemName: "minus.circle")
+                                                }
+                                                .buttonStyle(.borderless)
+                                                .frame(width: 44, height: 44)
+                                                .contentShape(Rectangle())
+                                                .fixedSize()
+                                                .layoutPriority(2)
+                                                .accessibilityLabel("Remove \(item.name) from \(selectedDocumentKind.rawValue.lowercased())")
+                                                .accessibilityIdentifier("RemoveBillingLine-\(item.id.uuidString)")
+
+                                                Stepper(
+                                                    lineItemQuantityLabel(for: item),
+                                                    value: lineItemQuantityBinding(for: item),
+                                                    in: 0.25...100,
+                                                    step: 0.25
+                                                )
+                                                .labelsHidden()
+                                                .fixedSize()
+                                                .disabled(isItemizedAssemblyLine(item))
+                                                .accessibilityLabel(lineItemQuantityAccessibilityLabel(for: item))
+                                                .accessibilityValue(lineItemQuantityAccessibilityValue(for: item))
+                                            }
                                         }
                                     }
                                     lineEquipmentPicker(for: item)
@@ -3686,7 +3760,7 @@ GunnAire
                         workflowSection(for: call)
                     }
                 }
-
+        )
     }
 
     @ViewBuilder
@@ -3768,27 +3842,8 @@ GunnAire
     @ViewBuilder
     private var lineItemBuilderView: some View {
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("Line Items")
-                                .font(.headline)
-                            Spacer()
-                            if isQuickBooksConnected {
-                                Button(isImportingQuickBooksItems ? "Importing..." : "Sync Catalog") {
-                                    importQuickBooksItems()
-                                }
-                                .font(.caption)
-                                .disabled(isImportingQuickBooksItems)
-
-                                if !unsyncedCatalogItems.isEmpty {
-                                    Button(isPublishingQuickBooksItems ? "Publishing..." : "Publish \(unsyncedCatalogItems.count) Pending") {
-                                        publishUnsyncedCatalogItems()
-                                    }
-                                    .font(.caption)
-                                    .disabled(isPublishingQuickBooksItems)
-                                    .accessibilityHint("Publishes locally created catalog items to QuickBooks before they are used on invoices.")
-                                }
-                            }
-                        }
+                        Text("Line Items")
+                            .font(.headline)
 
                         TextField("Search items to add", text: $itemSearchText)
                             .textInputAutocapitalization(.never)
@@ -3837,18 +3892,7 @@ GunnAire
                                                     .lineLimit(1)
                                             }
                                             itemMetaText(for: item)
-                                            if item.requiresPricebookReview {
-                                                Label("Admin pricebook review", systemImage: "person.badge.clock")
-                                                    .font(.caption2)
-                                                    .foregroundStyle(Color.orange)
-                                            } else if isQuickBooksConnected, item.quickBooksCatalogSyncState != "synced" {
-                                                Label(
-                                                    item.needsQuickBooksAttention ? "QBO needs attention" : "QBO pending",
-                                                    systemImage: item.needsQuickBooksAttention ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath"
-                                                )
-                                                .font(.caption2)
-                                                .foregroundStyle(item.needsQuickBooksAttention ? Color.orange : Color.secondary)
-                                            }
+                                            catalogSyncStateLabel(for: item)
                                         }
                                         Spacer()
                                         Text(item.unitPrice, format: .currency(code: "USD"))
@@ -3891,21 +3935,33 @@ GunnAire
                                                 .buttonStyle(.bordered)
                                                 .accessibilityIdentifier(adjustPriceAccessibilityID(for: item))
                                             }
+
+                                            HStack(spacing: 8) {
+                                                Button {
+                                                    removeCatalogLine(item.id)
+                                                } label: {
+                                                    Image(systemName: "minus.circle")
+                                                }
+                                                .buttonStyle(.borderless)
+                                                .frame(width: 44, height: 44)
+                                                .contentShape(Rectangle())
+                                                .fixedSize()
+                                                .layoutPriority(2)
+                                                .accessibilityLabel("Remove \(item.name) from \(selectedDocumentKind.rawValue.lowercased())")
+                                                .accessibilityIdentifier("RemoveBillingLine-\(item.id.uuidString)")
+
+                                                Stepper(
+                                                    lineItemQuantityLabel(for: item),
+                                                    value: lineItemQuantityBinding(for: item),
+                                                    in: 0.25...100,
+                                                    step: 0.25
+                                                )
+                                                .labelsHidden()
+                                                .fixedSize()
+                                                .disabled(isItemizedAssemblyLine(item))
+                                                .accessibilityLabel(lineItemQuantityAccessibilityLabel(for: item))
+                                            }
                                         }
-                                        Stepper(
-                                            lineItemQuantityLabel(for: item),
-                                            value: lineItemQuantityBinding(for: item),
-                                            in: 0.25...100,
-                                            step: 0.25
-                                        )
-                                        .disabled(isItemizedAssemblyLine(item))
-                                        .accessibilityLabel(lineItemQuantityAccessibilityLabel(for: item))
-                                        Button {
-                                            removeCatalogLine(item.id)
-                                        } label: {
-                                            Image(systemName: "minus.circle")
-                                        }
-                                        .buttonStyle(.borderless)
                                     }
                                     lineEquipmentPicker(for: item)
                                 }
@@ -4305,7 +4361,9 @@ GunnAire
         for candidate: MaintenanceAgreementBillingCandidate
     ) -> Item? {
         items.first { item in
-            item.id == candidate.billingCatalogItemID && !item.requiresPricebookReview
+            item.id == candidate.billingCatalogItemID &&
+            !item.requiresPricebookReview &&
+            item.isAvailableForNewWork
         }
     }
 
@@ -4321,6 +4379,9 @@ GunnAire
         if item.requiresPricebookReview {
             return "\(item.name) is awaiting administrator pricebook review and cannot publish to QuickBooks yet."
         }
+        if item.isCatalogArchived {
+            return "\(item.name) is archived from new work. Choose an active billing item before releasing another agreement invoice."
+        }
         return "Set the first billing date before releasing \(agreement.billingInterval.displayName.lowercased()) invoices."
     }
 
@@ -4334,7 +4395,8 @@ GunnAire
         }
         guard MaintenanceAgreementBillingPolicy.isEligibleForBilling(agreement),
               let item = items.first(where: { $0.id == catalogItemID }),
-              !item.requiresPricebookReview else {
+              !item.requiresPricebookReview,
+              item.isAvailableForNewWork else {
             throw MaintenanceAgreementBillingWorkflowError.billingItemUnavailable
         }
 
@@ -5113,14 +5175,22 @@ GunnAire
     private func openNextCloseoutAction(_ action: JobCloseoutNextAction) {
         switch action.destination {
         case .work:
-            withAnimation { selectedJobStage = .work }
+            withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
+                selectedJobStage = .work
+            }
         case .files:
-            withAnimation { selectedJobStage = .files }
+            withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
+                selectedJobStage = .files
+            }
         case .billing:
-            withAnimation { selectedJobStage = .billing }
+            withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
+                selectedJobStage = .billing
+            }
         case .invoiceCloseout:
             guard let invoice = currentJobInvoice else {
-                withAnimation { selectedJobStage = .billing }
+                withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
+                    selectedJobStage = .billing
+                }
                 return
             }
             openInvoiceCloseout(invoice)
@@ -6838,6 +6908,9 @@ GunnAire
 
     private func selectCreatedItem(_ item: Item) {
         newlyCreatedLineItems[item.id] = item
+        if item.requiresPricebookReview {
+            documentScopedReviewItemIDs.insert(item.id)
+        }
         selectedItems.insert(item.id)
         selectedItemQuantities[item.id] = selectedItemQuantities[item.id] ?? 1
         catalogFilter = .selected
@@ -6865,7 +6938,7 @@ GunnAire
     }
 
     private func importQuickBooksItems() {
-        guard isQuickBooksConnected else { return }
+        guard canApprovePricebookItems, isQuickBooksConnected else { return }
         isImportingQuickBooksItems = true
         actionMessage = "Loading QuickBooks catalog..."
         liveAPI.fetchItems { result in
@@ -6924,12 +6997,12 @@ GunnAire
     private func importQuickBooksItemsIfNeeded() {
         guard !didAttemptInitialCatalogImport else { return }
         didAttemptInitialCatalogImport = true
-        guard isQuickBooksConnected, items.isEmpty else { return }
+        guard canApprovePricebookItems, isQuickBooksConnected, items.isEmpty else { return }
         importQuickBooksItems()
     }
 
     private func publishCatalogItemIfPossible(_ item: Item) {
-        guard !item.requiresPricebookReview else { return }
+        guard !item.requiresPricebookReview, !item.isCatalogArchived else { return }
         guard isQuickBooksConnected, itemNeedsQuickBooksSync(item) else { return }
         prepareQuickBooksItemsForDocument([item]) { result in
             switch result {
@@ -6941,30 +7014,13 @@ GunnAire
         }
     }
 
-    private func publishUnsyncedCatalogItems() {
-        let pendingItems = unsyncedCatalogItems
-        guard isQuickBooksConnected, !pendingItems.isEmpty else { return }
-        isPublishingQuickBooksItems = true
-        actionMessage = "Publishing \(pendingItems.count) catalog item\(pendingItems.count == 1 ? "" : "s") to QuickBooks..."
-        prepareQuickBooksItemsForDocument(pendingItems) { result in
-            isPublishingQuickBooksItems = false
-            switch result {
-            case .success(let syncedItems):
-                actionMessage = "Published \(syncedItems.count) catalog item\(syncedItems.count == 1 ? "" : "s") to QuickBooks."
-            case .failure(let error):
-                actionMessage = "QuickBooks catalog publish failed: \(error.localizedDescription)"
-            }
-        }
-    }
-
     private func applyQuickBooksItem(_ quickBooksItem: QuickBooksItem, to item: Item) {
-        if item.requiresPricebookReview {
-            item.approveForPricebook(by: "quickbooks-reconciliation")
-        }
+        guard !item.requiresPricebookReview else { return }
         item.quickBooksID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
         item.quickBooksSyncStatus = "synced"
         item.quickBooksSyncDetail = nil
         item.quickBooksLastSyncedAt = Date()
+        item.applyQuickBooksCatalogAvailability(quickBooksItem.Active)
         item.name = quickBooksItem.Name
         if let itemType = quickBooksItem.ItemType {
             item.itemTypeRawValue = itemType
@@ -7186,10 +7242,14 @@ GunnAire
 
         let restoredItems = restoredCatalogItems(snapshotJSON: catalogSnapshotJSON, lineItemSummary: lineItemSummary)
         let snapshots = CatalogLineItemSnapshot.decoded(from: catalogSnapshotJSON)
+        newlyCreatedLineItems.removeAll()
         if restoredItems.isEmpty {
             clearSelectedCatalogLines()
         } else {
             selectedItems = Set(restoredItems.map(\.id))
+            documentScopedReviewItemIDs = Set(
+                restoredItems.filter(\.requiresPricebookReview).map(\.id)
+            )
             selectedDocumentDiscount = CatalogLineItemSnapshot.documentDiscount(from: catalogSnapshotJSON)
             selectedItemQuantities = Dictionary(
                 uniqueKeysWithValues: snapshots.map { ($0.catalogItemID, $0.quantity) }
@@ -7885,6 +7945,16 @@ GunnAire
             return
         }
 
+        guard CatalogItemSelectionPolicy.canAdd(
+            item,
+            documentScopedReviewItemIDs: documentScopedReviewItemIDs
+        ) else {
+            actionMessage = item.requiresPricebookReview
+                ? "\(item.name) is awaiting administrator review and remains limited to the document where it was created."
+                : "\(item.name) is archived from new work. Ask an administrator to restore and reconcile it before adding it."
+            return
+        }
+
         do {
             let selection = try CatalogAssemblyPolicy.selection(root: item, catalogItems: items)
             let incomingIDs = Set(selection.lineItems.map(\.id))
@@ -7960,6 +8030,8 @@ GunnAire
 
     private func clearSelectedCatalogLines() {
         selectedItems.removeAll()
+        newlyCreatedLineItems.removeAll()
+        documentScopedReviewItemIDs.removeAll()
         selectedItemQuantities.removeAll()
         selectedItemPriceAdjustments.removeAll()
         selectedDocumentDiscount = nil
@@ -8611,13 +8683,9 @@ GunnAire
             return
         }
 
-        let payload = QuickBooksCustomerCreate(
-            DisplayName: customer.name,
-            PrimaryPhone: customer.phone.flatMap { $0.isEmpty ? nil : QuickBooksPhoneNumber(FreeFormNumber: $0) },
-            PrimaryEmailAddr: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
-            BillAddr: customer.address.flatMap { $0.isEmpty ? nil : QuickBooksAddress(Line1: $0) }
-        )
-        liveAPI.createCustomer(payload) { result in
+        liveAPI.recoverOrCreateCustomer(
+            QuickBooksCustomerCreateOperation.draft(for: customer)
+        ) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let quickBooksCustomer):
@@ -8647,6 +8715,10 @@ GunnAire
             completion(.failure(PricebookPublicationError.reviewRequired(item.name)))
             return
         }
+        if let item = items.first(where: \.isCatalogArchived) {
+            completion(.failure(PricebookPublicationError.archived(item.name)))
+            return
+        }
         guard items.contains(where: itemNeedsQuickBooksSync) else {
             completion(.success(items))
             return
@@ -8665,19 +8737,25 @@ GunnAire
                     markQuickBooksCatalogSyncFailure(for: items.filter(itemNeedsQuickBooksSync), error: error)
                     completion(.failure(error))
                 case .success(let quickBooksItems):
-                    let activeQuickBooksItems = quickBooksItems.filter { $0.Active != false }
                     for item in items where itemNeedsQuickBooksSync(item) {
                         do {
                             if let quickBooksItem = try PricebookReviewPublication.matchingRemoteItem(
                                 for: item,
-                                in: activeQuickBooksItems
+                                in: quickBooksItems
                             ) {
                                 try QuickBooksCatalogMappingIntegrity.validateAssignment(
                                     of: quickBooksItem.Id,
                                     to: item,
                                     in: self.items
                                 )
+                                let shouldStageReactivation = item.isAvailableForNewWork && quickBooksItem.Active == false
                                 applyQuickBooksItem(quickBooksItem, to: item)
+                                if shouldStageReactivation {
+                                    item.restoreToPricebook(by: currentUserEmail)
+                                    saveQuickBooksSyncState()
+                                    completion(.failure(PricebookPublicationError.inactiveQuickBooksMatch(item.name)))
+                                    return
+                                }
                             }
                         } catch {
                             markQuickBooksCatalogSyncFailure(for: [item], error: error)
@@ -8757,24 +8835,15 @@ GunnAire
             return
         }
 
-        let payload = QuickBooksItemCreate(
-            Name: item.name,
-            ItemType: item.itemType.rawValue,
-            Description: item.itemDescription,
-            Sku: item.sku,
-            PurchaseDesc: item.purchaseDescription ?? item.itemDescription,
-            UnitPrice: item.unitPrice,
-            PurchaseCost: item.purchaseCost,
-            Taxable: item.isTaxable,
-            IncomeAccountRef: incomeAccountRef,
-            ExpenseAccountRef: expenseAccountRef,
-            PrefVendorRef: item.preferredVendorQuickBooksID.flatMap { quickBooksID in
-                quickBooksID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? nil
-                    : QuickBooksReference(value: quickBooksID, name: item.preferredVendorName)
-            }
+        let payload = QuickBooksCatalogCreateOperation.payload(
+            for: item,
+            incomeAccountRef: incomeAccountRef,
+            expenseAccountRef: expenseAccountRef
         )
-        liveAPI.createItem(payload) { result in
+        liveAPI.createItem(
+            payload,
+            requestID: QuickBooksCatalogCreateOperation.requestID(for: item.id)
+        ) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let quickBooksItem):
@@ -9654,7 +9723,9 @@ private struct RecordInvoicePaymentView: View {
                 defer { isProcessingQuickBooksPayment = false }
 
                 do {
+                    let localPaymentID = UUID()
                     let result = try await QuickBooksPaymentsService.shared.processCardPayment(
+                        localPaymentID: localPaymentID,
                         invoice: invoice,
                         amount: paidAmount,
                         cardInput: QuickBooksPaymentsCardInput(
@@ -9683,6 +9754,7 @@ private struct RecordInvoicePaymentView: View {
                     }
 
                     let payment = Payment(
+                        id: localPaymentID,
                         invoice: invoice,
                         quickBooksID: result.accountingPayment?.Id,
                         quickBooksChargeID: result.charge.id,
@@ -9711,7 +9783,9 @@ private struct RecordInvoicePaymentView: View {
                 defer { isProcessingQuickBooksPayment = false }
 
                 do {
+                    let localPaymentID = UUID()
                     let result = try await QuickBooksPaymentsService.shared.processBankPayment(
+                        localPaymentID: localPaymentID,
                         invoice: invoice,
                         amount: paidAmount,
                         bankInput: QuickBooksPaymentsBankAccountInput(
@@ -9727,6 +9801,7 @@ private struct RecordInvoicePaymentView: View {
                     )
 
                     let payment = Payment(
+                        id: localPaymentID,
                         invoice: invoice,
                         quickBooksID: result.accountingPayment?.Id,
                         quickBooksChargeID: result.charge.id,
@@ -9847,6 +9922,7 @@ private struct DocumentationItemSelectorView: View {
     let items: [Item]
     let selectedItems: Set<UUID>
     let selectedItemizedAssemblyIDs: Set<UUID>
+    let documentScopedReviewItemIDs: Set<UUID>
     let onToggle: (Item) -> Void
 
     @State private var searchText = ""
@@ -9854,7 +9930,15 @@ private struct DocumentationItemSelectorView: View {
 
     private var filteredItems: [Item] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let sortedItems = items.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let sortedItems = items
+            .filter {
+                CatalogItemSelectionPolicy.canDisplay(
+                    $0,
+                    isSelected: isSelected($0),
+                    documentScopedReviewItemIDs: documentScopedReviewItemIDs
+                )
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         guard !query.isEmpty else { return sortedItems }
         return sortedItems.filter { item in
             [
@@ -9982,6 +10066,11 @@ private struct DocumentationItemSelectorView: View {
                     Text(item.isTaxable ? "Taxable" : "Non-taxable")
                         .font(.caption2)
                         .foregroundColor(.secondary)
+                    if item.isCatalogArchived {
+                        Label("Archived • remove only", systemImage: "archivebox")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 Text(item.unitPrice, format: .currency(code: "USD"))
@@ -10237,11 +10326,17 @@ private enum CatalogItemAmountParser {
 
 enum PricebookPublicationError: LocalizedError, Equatable {
     case reviewRequired(String)
+    case archived(String)
+    case inactiveQuickBooksMatch(String)
 
     var errorDescription: String? {
         switch self {
         case .reviewRequired(let itemName):
             return "\(itemName) needs administrator pricebook review before it can publish to QuickBooks. The document remains saved locally."
+        case .archived(let itemName):
+            return "\(itemName) is archived from new work. Restore and reconcile it or replace the document line before publishing to QuickBooks."
+        case .inactiveQuickBooksMatch(let itemName):
+            return "\(itemName) matches an inactive QuickBooks item. The existing identity was linked safely; an administrator must review its staged reactivation before this document can publish."
         }
     }
 }
@@ -10382,6 +10477,7 @@ private struct DocumentationItemCreatorView: View {
     @State private var purchaseDescription = ""
     @State private var isTaxable = false
     @State private var creationMessage = ""
+    @FocusState private var isEditing: Bool
 
     private var vendorDropdownOptions: [SearchableDropdownOption] {
         CatalogVendorSelection.options(for: vendors)
@@ -10426,8 +10522,10 @@ private struct DocumentationItemCreatorView: View {
             Form {
                 Section("Sales") {
                     TextField("Item name", text: $name)
+                        .focused($isEditing)
                     TextField("SKU", text: $sku)
                         .textInputAutocapitalization(.characters)
+                        .focused($isEditing)
                     Picker("Item Type", selection: $itemType) {
                         ForEach(CatalogItemType.allCases) { type in
                             Text(type.rawValue).tag(type)
@@ -10436,9 +10534,11 @@ private struct DocumentationItemCreatorView: View {
                     .pickerStyle(.segmented)
                     TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(2...3)
+                        .focused($isEditing)
                     Toggle("Taxable", isOn: $isTaxable)
                     TextField("Sales price (optional)", text: $price)
                         .keyboardType(.decimalPad)
+                        .focused($isEditing)
                     if requiresPricebookReview {
                         Label(
                             "This job can use the item now. An administrator must review it before it becomes a reusable QuickBooks catalog item.",
@@ -10452,7 +10552,9 @@ private struct DocumentationItemCreatorView: View {
                 Section("Purchasing") {
                     TextField("Purchase price", text: $cost)
                         .keyboardType(.decimalPad)
+                        .focused($isEditing)
                     TextField("Typical purchase source", text: $preferredVendor)
+                        .focused($isEditing)
                     if !vendors.isEmpty {
                         SearchableDropdownPicker(
                             title: "Saved Vendor",
@@ -10463,11 +10565,14 @@ private struct DocumentationItemCreatorView: View {
                         )
                     }
                     TextField("Vendor part #", text: $vendorPartNumber)
+                        .focused($isEditing)
                     TextField("Purchase URL", text: $purchaseURL)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
+                        .focused($isEditing)
                     TextField("Purchase notes", text: $purchaseDescription, axis: .vertical)
                         .lineLimit(2...3)
+                        .focused($isEditing)
                 }
 
                 if !creationMessage.isEmpty {
@@ -10490,6 +10595,11 @@ private struct DocumentationItemCreatorView: View {
                         CatalogItemAmountParser.parseRequiredOrZero(price) == nil ||
                         !CatalogItemAmountParser.isValidOptionalAmount(cost)
                     )
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { isEditing = false }
+                        .accessibilityLabel("Done Editing Item")
                 }
             }
         }

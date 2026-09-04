@@ -284,7 +284,10 @@ struct ReceiptsAndBillsView: View {
 
     private var lowStockItems: [Item] {
         catalogItems.filter { item in
-            guard item.tracksInventory, let reorderPoint = item.reorderPoint, reorderPoint > 0 else { return false }
+            guard item.isAvailableForNewWork,
+                  item.tracksInventory,
+                  let reorderPoint = item.reorderPoint,
+                  reorderPoint > 0 else { return false }
             return InventoryLedger.availableQuantity(for: item.id, movements: inventoryMovements) <= reorderPoint
         }
     }
@@ -1106,7 +1109,7 @@ struct ReceiptsAndBillsView: View {
 
             Picker("Pricebook item", selection: $newPurchaseOrderItemID) {
                 Text("Manual part").tag(UUID?.none)
-                ForEach(catalogItems) { item in
+                ForEach(catalogItems.filter(\.isAvailableForNewWork)) { item in
                     Text(item.name).tag(UUID?.some(item.id))
                 }
             }
@@ -3377,6 +3380,55 @@ private struct SupplierOrderConfirmationSheet: View {
                     )
                 }
 
+                // The evidence the office must record stays first. Optional
+                // connector readiness follows it, so a manual confirmation is
+                // never buried below provider diagnostics or onboarding links.
+                Section("Supplier Acceptance") {
+                    Picker("Channel", selection: $channel) {
+                        ForEach(SupplierOrderChannel.manualCases) { channel in
+                            Text(channel.displayName).tag(channel)
+                        }
+                    }
+                    .accessibilityIdentifier("SupplierOrderChannel")
+
+                    TextField("Supplier confirmation / order reference", text: $reference)
+                        .textInputAutocapitalization(.characters)
+                        .focused($focusedField, equals: .reference)
+                        .submitLabel(.next)
+                        .onSubmit { focusedField = .supplierLocation }
+                        .accessibilityIdentifier("SupplierOrderReference")
+
+                    TextField("Branch or supplier location (optional)", text: $supplierLocation)
+                        .focused($focusedField, equals: .supplierLocation)
+                        .submitLabel(.next)
+                        .onSubmit { focusedField = .unitCost }
+                        .accessibilityIdentifier("SupplierOrderLocation")
+
+                    ForEach($lineCostDrafts) { $draft in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(draft.itemName)
+                                .font(.caption.weight(.semibold))
+                            TextField("Confirmed unit cost", text: $draft.unitCostText)
+                                .keyboardType(.decimalPad)
+                                .focused($focusedField, equals: .unitCost)
+                                .accessibilityIdentifier(
+                                    draft.id == lineCostDrafts.first?.id
+                                        ? "SupplierOrderUnitCost"
+                                        : "SupplierOrderUnitCost-\(draft.id.uuidString)"
+                                )
+                        }
+                    }
+
+                    TextField("Confirmed freight", text: $shippingCostText)
+                        .keyboardType(.decimalPad)
+                        .focused($focusedField, equals: .shippingCost)
+                        .accessibilityIdentifier("SupplierOrderShippingCost")
+
+                    Text("Record evidence only after the supplier accepts the order. This does not transmit anything or store supplier credentials.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 if GunnAireBackendService.isConfigured {
                     Section("Approved Connector") {
                         if isLoadingConnectors {
@@ -3442,10 +3494,48 @@ private struct SupplierOrderConfirmationSheet: View {
                                         Text(connector.detail)
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
+
+                                        if let accessModel = connector.accessModelLabel,
+                                           let integrationProtocol = connector.integrationProtocolLabel {
+                                            Text("\(accessModel) · \(integrationProtocol)")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        if !connector.capabilityLabels.isEmpty {
+                                            Text("Adapter scope: \(connector.capabilityLabels.joined(separator: ", "))")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        if connector.publicAPIDocumented == false {
+                                            Label("No public self-service API specification is documented.", systemImage: "lock.doc")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        if !connector.requirements.isEmpty, !connector.isReady {
+                                            DisclosureGroup("Setup requirements") {
+                                                ForEach(Array(connector.requirements.enumerated()), id: \.offset) { _, requirement in
+                                                    Text("• \(requirement)")
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                            }
+                                            .font(.caption2.weight(.semibold))
+                                        }
+
+                                        if let reviewedAt = connector.publicDocumentationReviewedAt,
+                                           !reviewedAt.isEmpty {
+                                            Text("Official information reviewed \(reviewedAt)")
+                                                .font(.caption2)
+                                                .foregroundStyle(.tertiary)
+                                        }
+
                                         if let urlText = connector.onboardingURL,
                                            let url = URL(string: urlText),
                                            !connector.isReady {
-                                            Link("Supplier onboarding information", destination: url)
+                                            Link("Official supplier integration information", destination: url)
                                                 .font(.caption2)
                                         }
                                     }
@@ -3460,52 +3550,6 @@ private struct SupplierOrderConfirmationSheet: View {
                                 .foregroundStyle(.orange)
                         }
                     }
-                }
-
-                Section("Supplier Acceptance") {
-                    Picker("Channel", selection: $channel) {
-                        ForEach(SupplierOrderChannel.manualCases) { channel in
-                            Text(channel.displayName).tag(channel)
-                        }
-                    }
-                    .accessibilityIdentifier("SupplierOrderChannel")
-
-                    TextField("Supplier confirmation / order reference", text: $reference)
-                        .textInputAutocapitalization(.characters)
-                        .focused($focusedField, equals: .reference)
-                        .submitLabel(.next)
-                        .onSubmit { focusedField = .supplierLocation }
-                        .accessibilityIdentifier("SupplierOrderReference")
-
-                    TextField("Branch or supplier location (optional)", text: $supplierLocation)
-                        .focused($focusedField, equals: .supplierLocation)
-                        .submitLabel(.next)
-                        .onSubmit { focusedField = .unitCost }
-                        .accessibilityIdentifier("SupplierOrderLocation")
-
-                    ForEach($lineCostDrafts) { $draft in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(draft.itemName)
-                                .font(.caption.weight(.semibold))
-                            TextField("Confirmed unit cost", text: $draft.unitCostText)
-                                .keyboardType(.decimalPad)
-                                .focused($focusedField, equals: .unitCost)
-                                .accessibilityIdentifier(
-                                    draft.id == lineCostDrafts.first?.id
-                                        ? "SupplierOrderUnitCost"
-                                        : "SupplierOrderUnitCost-\(draft.id.uuidString)"
-                                )
-                        }
-                    }
-
-                    TextField("Confirmed freight", text: $shippingCostText)
-                        .keyboardType(.decimalPad)
-                        .focused($focusedField, equals: .shippingCost)
-                        .accessibilityIdentifier("SupplierOrderShippingCost")
-
-                    Text("Record evidence only after the supplier accepts the order. This does not transmit anything or store supplier credentials.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
                 if let validationMessage {
@@ -3645,6 +3689,13 @@ private struct InventoryCycleCountSheet: View {
     @State private var countedQuantityText = ""
     @State private var reason = ""
     @State private var validationMessage: String?
+    @FocusState private var focusedField: Field?
+
+    private enum Field: Hashable {
+        case location
+        case quantity
+        case reason
+    }
 
     init(
         item: Item,
@@ -3702,6 +3753,7 @@ private struct InventoryCycleCountSheet: View {
 
                 Section("Physical Count") {
                     TextField("Truck, warehouse, or stock location", text: $location)
+                        .focused($focusedField, equals: .location)
                         .accessibilityIdentifier("InventoryCountLocation")
                     LabeledContent(
                         "Ledger quantity",
@@ -3709,6 +3761,7 @@ private struct InventoryCycleCountSheet: View {
                     )
                     TextField("Counted quantity", text: $countedQuantityText)
                         .keyboardType(.decimalPad)
+                        .focused($focusedField, equals: .quantity)
                         .accessibilityIdentifier("InventoryCountQuantity")
                     if let varianceQuantity {
                         LabeledContent(
@@ -3722,6 +3775,7 @@ private struct InventoryCycleCountSheet: View {
                 Section("Count Evidence") {
                     TextField("Variance reason or count note", text: $reason, axis: .vertical)
                         .lineLimit(2...4)
+                        .focused($focusedField, equals: .reason)
                         .accessibilityIdentifier("InventoryCountReason")
                     Text("A reason is required when the physical count differs from the ledger. The entry records the expected count, actual count, variance, date, and signed-in administrator.")
                         .font(.caption)
@@ -3761,6 +3815,11 @@ private struct InventoryCycleCountSheet: View {
                     }
                     .disabled(!canSave)
                     .accessibilityIdentifier("SaveInventoryCount")
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedField = nil }
+                        .accessibilityLabel("Done Editing Inventory Count")
                 }
             }
         }

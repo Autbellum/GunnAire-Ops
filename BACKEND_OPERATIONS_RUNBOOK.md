@@ -1,6 +1,6 @@
 # GunnAire backend operations runbook
 
-Last verified: 2026-08-30
+Last verified: 2026-08-31
 
 This runbook covers the shared GunnAire service at
 `https://gunnaire-api.onrender.com`. It does not authorize accounting changes,
@@ -23,9 +23,9 @@ credential rotation, production restores, or customer communications.
 
    ```sh
    python3 Tools/release_preflight.py \
-     --archive "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083012 Current Source).xcarchive" \
-     --mac-app "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083012 Current Source Mac Catalyst).app" \
-     --mac-result "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/GunnAire Ops 1.0 (2026083012 Current Source Mac Catalyst).xcresult" \
+     --archive "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083101 Current Source).xcarchive" \
+     --mac-app "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083101 Current Source Mac Catalyst).app" \
+     --mac-result "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083101 Current Source Mac Catalyst).xcresult" \
      --cloudkit-development-export /Users/gunnaire/Downloads/cloudkit-development-11.ckdb \
      --cloudkit-production-export /Users/gunnaire/Downloads/cloudkit-production-7.ckdb
    ```
@@ -36,7 +36,7 @@ credential rotation, production restores, or customer communications.
    login scope, the exact universal Mac Catalyst Release app/result, privacy
    manifests, hardened runtime, release configuration, QBO/Google OAuth
    identifiers, app/dSYM UUIDs, binary hygiene, and the exact additive CloudKit
-   delta including record system fields and security grants. Build 3012's exact
+   delta including record system fields and security grants. Build 3101's exact
    local run passes 61 checks with four expected warnings and zero failures.
    Development-signing warnings are expected until the Apple
    Distribution private key is installed. Use
@@ -48,12 +48,22 @@ credential rotation, production restores, or customer communications.
    python3 -m unittest discover -s Backend -p 'test_*.py' -v
    ```
 
-   Source `2026.08.30.15` has 69 expected tests. A different count requires
-   review before deployment even when the discovered subset is green.
-   The same suite must pass in the **Backend regression** GitHub workflow on
-   Python 3.13 and the production-aligned Python 3.14 job. A green workflow is
-   evidence for the reviewed commit; it does not itself authorize Render to
-   deploy that commit.
+   Then run the CloudKit, release, and signed-device tooling regression:
+
+   ```sh
+   python3 -m unittest discover -s Tools -p 'test_*.py' -v
+   ```
+
+   Source `2026.08.30.16` has 70 expected tests. A different count requires
+   review before deployment even when the discovered subset is green. Tools has
+   11 expected CloudKit/release/acceptance tests. Both suites must pass in the
+   **Backend regression** GitHub workflow on Python 3.13 and the
+   production-aligned Python 3.14 job. The established status-check names remain
+   unchanged even though each job now runs both suites. The workflow has
+   read-only repository contents permission and performs no online probe,
+   CloudKit promotion, accounting/payment mutation, device installation, or
+   provider call. A green workflow is evidence for the reviewed commit; it does
+   not itself authorize Render to deploy that commit.
 4. Record the current GitHub commit, `/health` response, and deployment ID.
    Confirm a recent verified off-host backup exists before a release that adds
    database tables. The `.12` Apple identity tables, `.13` supplier-attempt
@@ -64,8 +74,9 @@ credential rotation, production restores, or customer communications.
    3.14** checks have unfiltered pull-request and push-to-`main` triggers.
    Ref-scoped concurrency intentionally cancels an older in-progress run when
    a newer commit supersedes it, so completed checks prove the exact current
-   ref head rather than every superseded commit. Merge commit `3df24b5` proves
-   both jobs succeed on that exact `main` head. The main branch should also have
+   ref head rather than every superseded commit. Reviewed PR 15 merged as
+   `9f5636116c304f307e81980f095d70045d213c7e` after both jobs passed on source
+   head `71ac9490cd89808c5a70a29d7e0c9dae520238a3`. The main branch should also have
    an active GitHub ruleset requiring a pull
    request, resolved review conversations, an up-to-date branch, and both
    successful GitHub Actions checks, with deletion and force pushes blocked and
@@ -78,7 +89,7 @@ credential rotation, production restores, or customer communications.
    part of a routine code deploy.
 6. After the authorized deployment, rerun the same preflight with `--online`.
    Confirm `/health` returns HTTP 200 and exact `serviceVersion`
-   `2026.08.30.15`.
+   `2026.08.30.16`.
 7. Confirm the new public Apple route is present without fabricating an Apple
    event or storing data:
 

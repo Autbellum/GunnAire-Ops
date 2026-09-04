@@ -11,6 +11,7 @@ import CoreImage
 import Foundation
 import PDFKit
 import SwiftData
+import SwiftUI
 import Vision
 
 @MainActor
@@ -727,22 +728,56 @@ struct GunnAire_OpsTests {
         )
     }
 
+    @Test func maximumDynamicTypeFixtureIsDebugOnlyAndDeterministic() {
+        #expect(
+            GunnAireAccessibilityTextSizePolicy.forcedDynamicTypeSize(
+                processArguments: [
+                    "GunnAire Ops",
+                    GunnAireAccessibilityTextSizePolicy.uiTestMaximumDynamicTypeArgument
+                ]
+            ) == .accessibility5
+        )
+        #expect(
+            GunnAireAccessibilityTextSizePolicy.forcedDynamicTypeSize(
+                processArguments: ["GunnAire Ops"]
+            ) == nil
+        )
+    }
+
     @Test func primaryIPadMacNavigationCommandsStayFocusedUniqueAndRoleGuarded() {
+        let allCommands = GunnAireNavigationCommandDefinition.all
         let commands = GunnAireNavigationCommandDefinition.primary
 
-        #expect(commands.count == 6)
+        #expect(allCommands.count == 13)
+        #expect(Set(allCommands.map(\.route.sidebarItem)) == Set(SidebarItem.allCases))
+        #expect(Set(allCommands.map(\.route.rawValue)).count == allCommands.count)
+        #expect(GunnAireNavigationCommandDefinition.commands(in: .operations).count == 5)
+        #expect(GunnAireNavigationCommandDefinition.commands(in: .backOffice).count == 6)
+        #expect(GunnAireNavigationCommandDefinition.commands(in: .integrations).count == 1)
+        #expect(GunnAireNavigationCommandDefinition.commands(in: .administrator).count == 1)
+
+        #expect(commands.count == 7)
         #expect(Set(commands.map(\.route.rawValue)).count == commands.count)
-        #expect(Set(commands.map(\.key)).count == commands.count)
+        #expect(Set(commands.compactMap(\.shortcutKey)).count == commands.count)
         #expect(commands.map(\.route) == [
             .commandCenter,
             .schedule,
             .customers,
             .documentation,
             .invoices,
-            .payments
+            .payments,
+            .reports
         ])
-        #expect(GunnAireAppRoute.reports.sidebarItem == .reports)
-        #expect(GunnAireAppRoute.reports.shortTitle == "Reports")
+
+        let fieldContext = GunnAireNavigationCommandContext(
+            visibleSidebarItems: [.commandCenter, .timeClock, .scheduleAndJobs, .onsiteDocumentation, .invoices, .payments]
+        )
+        #expect(fieldContext.canOpen(.schedule))
+        #expect(fieldContext.canOpen(.documentation))
+        #expect(fieldContext.canOpen(.payments))
+        #expect(!fieldContext.canOpen(.customers))
+        #expect(!fieldContext.canOpen(.reports))
+        #expect(!fieldContext.canOpen(.quickBooks))
     }
 
     @Test func scheduleWorkQueueSummarizesOnlyVisibleNonemptyQueues() {
@@ -3579,6 +3614,11 @@ struct GunnAire_OpsTests {
               "detail": "Partner approval required.",
               "capabilities": ["catalog", "purchaseOrders"],
               "canSubmitOrders": false,
+              "accessModel": "exclusiveThirdParty",
+              "integrationProtocol": "serviceTitanMarketplace",
+              "publicAPIDocumented": false,
+              "onboardingRequirements": ["Written provider approval", "Provider test account"],
+              "publicDocumentationReviewedAt": "2026-09-02",
               "onboardingURL": "https://www.lennoxpros.com/"
             },
             {
@@ -3635,7 +3675,12 @@ struct GunnAire_OpsTests {
                 from: connectors
             ) == nil
         )
-        #expect(connectors.first?.statusLabel == "Third-party only")
+        #expect(connectors.first?.statusLabel == "Published for a third party only")
+        #expect(connectors.first?.accessModelLabel == "Exclusive third-party path")
+        #expect(connectors.first?.integrationProtocolLabel == "ServiceTitan marketplace integration")
+        #expect(connectors.first?.publicAPIDocumented == false)
+        #expect(connectors.first?.requirements.count == 2)
+        #expect(connectors.first?.capabilityLabels == ["Catalog", "Purchase orders"])
         #expect(
             SupplierConnectorSelectionPolicy.preferredConnectorKind(
                 for: "Carrier Enterprise - Winston-Salem",
@@ -3651,10 +3696,50 @@ struct GunnAire_OpsTests {
             detail: "Legacy contract active.",
             capabilities: ["purchaseOrders"],
             canSubmitOrders: true,
+            accessModel: nil,
+            integrationProtocol: nil,
+            publicAPIDocumented: nil,
+            onboardingRequirements: nil,
+            publicDocumentationReviewedAt: nil,
             onboardingURL: nil
         )
         #expect(!outdated.isReady)
         #expect(outdated.statusLabel == "Connector upgrade required")
+    }
+
+    @Test func supplierConnectorReadinessExplainsThirdPartyOnlyProviderPath() throws {
+        let data = Data(#"""
+        {
+          "connectors": [
+            {
+              "contractVersion": 2,
+              "kind": "lennoxPartner",
+              "displayName": "Lennox Procurement",
+              "provider": "Lennox",
+              "status": "thirdPartyOnly",
+              "detail": "The published integration is limited to another platform.",
+              "capabilities": ["catalog", "priceAvailability", "purchaseOrders"],
+              "canSubmitOrders": false,
+              "accessModel": "exclusiveThirdParty",
+              "integrationProtocol": "serviceTitanMarketplace",
+              "publicAPIDocumented": false,
+              "onboardingRequirements": ["Separate written provider authorization"],
+              "publicDocumentationReviewedAt": "2026-09-02",
+              "onboardingURL": "https://www.lennoxpros.com/news/field-service-manangement-hvac"
+            }
+          ]
+        }
+        """#.utf8)
+
+        let connector = try #require(
+            GunnAireBackendService.decodeSupplierConnectors(from: data).first
+        )
+
+        #expect(!connector.isReady)
+        #expect(connector.statusLabel == "Published for a third party only")
+        #expect(connector.accessModelLabel == "Exclusive third-party path")
+        #expect(connector.integrationProtocolLabel == "ServiceTitan marketplace integration")
+        #expect(connector.publicDocumentationReviewedAt == "2026-09-02")
     }
 
     @Test func serverConnectorAcceptanceCreatesImmutableApprovedOrderEvidence() throws {
@@ -17644,6 +17729,73 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(appManagedEvent))
     }
 
+    @Test func gmailInboxQueryAlwaysKeepsResultsInTheInbox() {
+        #expect(GmailMessagePresentation.inboxQuery(searchText: "") == "in:inbox")
+        #expect(GmailMessagePresentation.inboxQuery(searchText: "  furnace estimate  ") == "in:inbox furnace estimate")
+    }
+
+    @Test func gmailMessagePresentationPrefersPlainTextOverHtml() {
+        func encoded(_ value: String) -> String {
+            Data(value.utf8)
+                .base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+        }
+
+        let payload = GmailMessagePayload(
+            headers: nil,
+            mimeType: "multipart/alternative",
+            body: nil,
+            parts: [
+                GmailMessagePayload(
+                    headers: nil,
+                    mimeType: "text/html",
+                    body: GmailMessageBody(data: encoded("<p>Do not show markup</p>"), size: nil),
+                    parts: nil,
+                    filename: nil
+                ),
+                GmailMessagePayload(
+                    headers: nil,
+                    mimeType: "text/plain",
+                    body: GmailMessageBody(data: encoded("Your appointment is confirmed."), size: nil),
+                    parts: nil,
+                    filename: nil
+                )
+            ],
+            filename: nil
+        )
+
+        #expect(GmailMessagePresentation.bodyText(from: payload) == "Your appointment is confirmed.")
+    }
+
+    @Test func gmailMessagePresentationRemovesHtmlMarkupAndUnreadState() {
+        let html = "<style>.hidden { display: none; }</style><script>alert('debug')</script><div>Hello <strong>Eric</strong></div><p>Your appointment is set.</p>"
+        let encodedHTML = Data(html.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let payload = GmailMessagePayload(
+            headers: nil,
+            mimeType: "text/html",
+            body: GmailMessageBody(data: encodedHTML, size: nil),
+            parts: nil,
+            filename: nil
+        )
+        let unread = GmailMessageDetail(
+            id: "mail-1",
+            threadId: "thread-1",
+            labelIds: ["INBOX", "UNREAD"],
+            snippet: nil,
+            internalDate: nil,
+            payload: payload
+        )
+
+        #expect(GmailMessagePresentation.bodyText(from: payload) == "Hello Eric\nYour appointment is set.")
+        #expect(GmailMessagePresentation.removingUnreadLabel(from: unread).labelIds == ["INBOX"])
+    }
+
     @Test func gmailRawMessageIncludesPdfAttachment() async throws {
         let attachment = GmailAttachment(
             fileName: "GunnAire-Estimate.pdf",
@@ -18907,6 +19059,47 @@ struct GunnAire_OpsTests {
         #expect(integrations.detail.contains("1 communication"))
     }
 
+    @Test func businessSuiteKeepsLinkedCatalogUpdatesVisibleBeforeLiveQuickBooksComparison() {
+        let stagedItem = Item(
+            quickBooksID: "QBO-STAGED-COMMAND-1",
+            quickBooksSyncStatus: "pending_update",
+            quickBooksSyncDetail: "Administrator-approved price change is waiting for comparison.",
+            name: "Staged Compressor Repair",
+            unitPrice: 2_400
+        )
+
+        let pending = BusinessSuiteIntelligence.syncAttentionSummary(
+            serviceCalls: [],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            attachments: [],
+            timeEntries: [],
+            items: [stagedItem],
+            googleConnected: true,
+            quickBooksConnected: true,
+            sharedServerConfigured: false
+        )
+        #expect(pending.pricebookCount == 1)
+        #expect(pending.total == 1)
+
+        stagedItem.quickBooksSyncStatus = "synced"
+        let reconciled = BusinessSuiteIntelligence.syncAttentionSummary(
+            serviceCalls: [],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            attachments: [],
+            timeEntries: [],
+            items: [stagedItem],
+            googleConnected: true,
+            quickBooksConnected: true,
+            sharedServerConfigured: false
+        )
+        #expect(reconciled.pricebookCount == 0)
+        #expect(reconciled.total == 0)
+    }
+
     @Test func businessSuiteSurfacesTechnicalReportActionsAndOpenConcerns() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let customer = Customer(name: "Documentation Command Customer", address: "700 Report Ave")
@@ -19569,6 +19762,376 @@ struct GunnAire_OpsTests {
         #expect(try context.fetch(FetchDescriptor<Vendor>()).isEmpty)
     }
 
+    #if DEBUG
+    @Test @MainActor func cloudKitRoundTripProbeUsesOneExplicitFailClosedMode() {
+        let create = GunnAireCloudKitRoundTripProbe.Mode.create.launchArgument
+        let update = GunnAireCloudKitRoundTripProbe.Mode.update.launchArgument
+        let conflict = GunnAireCloudKitRoundTripProbe.Mode.writeConflictA.launchArgument
+
+        #expect(
+            GunnAireCloudKitRoundTripProbe.mode(
+                processArguments: ["GunnAire Ops", create]
+            ) == .create
+        )
+        #expect(
+            GunnAireCloudKitRoundTripProbe.requestedModes(
+                processArguments: ["GunnAire Ops", create, update]
+            ) == [.create, .update]
+        )
+        #expect(
+            GunnAireCloudKitRoundTripProbe.mode(
+                processArguments: ["GunnAire Ops", create, update, conflict]
+            ) == nil
+        )
+        #expect(GunnAireCloudKitRoundTripProbe.schemaVersion == 2)
+        #expect(GunnAireCloudKitRoundTripProbe.storeFileName.contains("V2"))
+        #expect(
+            GunnAireCloudKitRoundTripProbe.mode(
+                processArguments: ["GunnAire Ops"]
+            ) == nil
+        )
+    }
+
+    @Test @MainActor func cloudKitRoundTripProbeCreatesUpdatesObservesAndDeletesOnlyItsFixedCanary() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        let context = container.mainContext
+        let unrelated = BusinessTask(
+            title: "Unrelated task",
+            assignedToEmail: "staff@gunnaire.com",
+            dueAt: Date(timeIntervalSinceReferenceDate: 900_000_100),
+            createdByEmail: "staff@gunnaire.com"
+        )
+        context.insert(unrelated)
+        try context.save()
+
+        let created = try GunnAireCloudKitRoundTripProbe.apply(
+            .create,
+            in: context,
+            now: Date(timeIntervalSinceReferenceDate: 900_000_001)
+        )
+        #expect(created == .init(state: .original, matchCount: 1, actionPerformed: true))
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeCreated, in: context)
+                == .init(state: .original, matchCount: 1, actionPerformed: false)
+        )
+
+        let updated = try GunnAireCloudKitRoundTripProbe.apply(
+            .update,
+            in: context,
+            now: Date(timeIntervalSinceReferenceDate: 900_000_002)
+        )
+        #expect(updated == .init(state: .updated, matchCount: 1, actionPerformed: true))
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeUpdated, in: context)
+                == .init(state: .updated, matchCount: 1, actionPerformed: false)
+        )
+
+        let deleted = try GunnAireCloudKitRoundTripProbe.apply(.delete, in: context)
+        #expect(deleted == .init(state: .absent, matchCount: 0, actionPerformed: true))
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeDeleted, in: context)
+                == .init(state: .absent, matchCount: 0, actionPerformed: false)
+        )
+
+        let remaining = try context.fetch(FetchDescriptor<BusinessTask>())
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.id == unrelated.id)
+    }
+
+    @Test @MainActor func cloudKitRoundTripProbeRefusesUnexpectedFixedIDContent() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        let context = container.mainContext
+        context.insert(
+            BusinessTask(
+                id: GunnAireCloudKitRoundTripProbe.canaryID,
+                creationOperationID: UUID(),
+                title: "Not the canary",
+                assignedToEmail: "staff@gunnaire.com",
+                dueAt: Date(timeIntervalSinceReferenceDate: 900_000_100),
+                createdByEmail: "staff@gunnaire.com"
+            )
+        )
+        try context.save()
+
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.create, in: context)
+                == .init(state: .unexpected, matchCount: 1, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.update, in: context)
+                == .init(state: .unexpected, matchCount: 1, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.delete, in: context)
+                == .init(state: .unexpected, matchCount: 1, actionPerformed: false)
+        )
+    }
+
+    @Test @MainActor func cloudKitConflictProbeRetainsBothOfflineWritesThenResolvesAndCleansUp() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        let context = container.mainContext
+        let unrelatedTask = BusinessTask(
+            title: "Unrelated task",
+            assignedToEmail: "staff@gunnaire.com",
+            dueAt: Date(timeIntervalSinceReferenceDate: 900_000_100),
+            createdByEmail: "staff@gunnaire.com"
+        )
+        let unrelatedEvent = BusinessTaskEvent(
+            taskID: unrelatedTask.id,
+            kind: .updated,
+            actorEmail: "staff@gunnaire.com",
+            detail: "Unrelated event",
+            titleSnapshot: unrelatedTask.title,
+            assignedToEmailSnapshot: unrelatedTask.assignedToEmail,
+            dueAtSnapshot: unrelatedTask.dueAt,
+            priority: unrelatedTask.priority
+        )
+        context.insert(unrelatedTask)
+        context.insert(unrelatedEvent)
+        try context.save()
+
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.seedConflict, in: context)
+                == .init(state: .original, matchCount: 1, actionPerformed: true)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictSeed, in: context)
+                == .init(state: .original, matchCount: 1, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(
+                .writeConflictA,
+                in: context,
+                now: Date(timeIntervalSinceReferenceDate: 900_000_010)
+            ) == .init(state: .conflictA, matchCount: 2, actionPerformed: true)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.writeConflictA, in: context)
+                == .init(state: .conflictA, matchCount: 2, actionPerformed: false)
+        )
+
+        // Simulate CloudKit choosing device B's task value while preserving
+        // both devices' immutable update events.
+        let canaryID = GunnAireCloudKitRoundTripProbe.canaryID
+        let canary = try #require(
+            context.fetch(
+                FetchDescriptor<BusinessTask>(
+                    predicate: #Predicate { $0.id == canaryID }
+                )
+            ).first
+        )
+        canary.taskDescription = GunnAireCloudKitRoundTripProbe.conflictBDescription
+        context.insert(
+            try #require(
+                GunnAireCloudKitRoundTripProbe.makeConflictEvent(
+                    for: .writeConflictB,
+                    at: Date(timeIntervalSinceReferenceDate: 900_000_011)
+                )
+            )
+        )
+        try context.save()
+
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictConverged, in: context)
+                == .init(state: .conflictConverged, matchCount: 3, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(
+                .resolveConflict,
+                in: context,
+                now: Date(timeIntervalSinceReferenceDate: 900_000_012)
+            ) == .init(state: .conflictResolved, matchCount: 4, actionPerformed: true)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictResolved, in: context)
+                == .init(state: .conflictResolved, matchCount: 4, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.cleanupConflict, in: context)
+                == .init(state: .absent, matchCount: 0, actionPerformed: true)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictDeleted, in: context)
+                == .init(state: .absent, matchCount: 0, actionPerformed: false)
+        )
+
+        #expect(try context.fetch(FetchDescriptor<BusinessTask>()).map(\.id) == [unrelatedTask.id])
+        #expect(try context.fetch(FetchDescriptor<BusinessTaskEvent>()).map(\.id) == [unrelatedEvent.id])
+
+        let deviceBContainer = try ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        let deviceBContext = deviceBContainer.mainContext
+        _ = try GunnAireCloudKitRoundTripProbe.apply(.seedConflict, in: deviceBContext)
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.writeConflictB, in: deviceBContext)
+                == .init(state: .conflictB, matchCount: 2, actionPerformed: true)
+        )
+    }
+
+    @Test @MainActor func cloudKitConflictProbeFailsClosedForAnUnrecognizedCanaryEvent() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        let context = container.mainContext
+        _ = try GunnAireCloudKitRoundTripProbe.apply(.seedConflict, in: context)
+        context.insert(
+            BusinessTaskEvent(
+                taskID: GunnAireCloudKitRoundTripProbe.canaryID,
+                kind: .updated,
+                actorEmail: GunnAireCloudKitRoundTripProbe.canaryEmail,
+                detail: "Unexpected conflict event",
+                titleSnapshot: GunnAireCloudKitRoundTripProbe.canaryTitle,
+                assignedToEmailSnapshot: GunnAireCloudKitRoundTripProbe.canaryEmail,
+                dueAtSnapshot: GunnAireCloudKitRoundTripProbe.canaryDate,
+                priority: .low
+            )
+        )
+        try context.save()
+
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.resolveConflict, in: context)
+                == .init(state: .unexpected, matchCount: 2, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.cleanupConflict, in: context)
+                == .init(state: .unexpected, matchCount: 2, actionPerformed: false)
+        )
+        #expect(try context.fetch(FetchDescriptor<BusinessTask>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<BusinessTaskEvent>()).count == 1)
+    }
+
+    @Test @MainActor func cloudKitConflictProbeWaitsForPartialImportsAndRecoversResolutionAndCleanup() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [
+                ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true,
+                    cloudKitDatabase: .none
+                )
+            ]
+        )
+        let context = container.mainContext
+        _ = try GunnAireCloudKitRoundTripProbe.apply(.seedConflict, in: context)
+
+        context.insert(
+            try #require(
+                GunnAireCloudKitRoundTripProbe.makeConflictEvent(
+                    for: .writeConflictA,
+                    at: Date(timeIntervalSinceReferenceDate: 900_000_020)
+                )
+            )
+        )
+        try context.save()
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictConverged, in: context)
+                == .init(state: .conflictWritePending, matchCount: 2, actionPerformed: false)
+        )
+
+        let canaryID = GunnAireCloudKitRoundTripProbe.canaryID
+        let canary = try #require(
+            context.fetch(
+                FetchDescriptor<BusinessTask>(
+                    predicate: #Predicate { $0.id == canaryID }
+                )
+            ).first
+        )
+        canary.taskDescription = GunnAireCloudKitRoundTripProbe.conflictADescription
+        context.insert(
+            try #require(
+                GunnAireCloudKitRoundTripProbe.makeConflictEvent(
+                    for: .writeConflictB,
+                    at: Date(timeIntervalSinceReferenceDate: 900_000_021)
+                )
+            )
+        )
+        try context.save()
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictConverged, in: context)
+                == .init(state: .conflictConverged, matchCount: 3, actionPerformed: false)
+        )
+
+        context.insert(
+            try #require(
+                GunnAireCloudKitRoundTripProbe.makeConflictEvent(
+                    for: .resolveConflict,
+                    at: Date(timeIntervalSinceReferenceDate: 900_000_022)
+                )
+            )
+        )
+        try context.save()
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictResolved, in: context)
+                == .init(state: .conflictResolutionPending, matchCount: 4, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(
+                .resolveConflict,
+                in: context,
+                now: Date(timeIntervalSinceReferenceDate: 900_000_023)
+            ) == .init(state: .conflictResolved, matchCount: 4, actionPerformed: true)
+        )
+
+        context.delete(canary)
+        try context.save()
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.observeConflictDeleted, in: context)
+                == .init(state: .cleanupPending, matchCount: 3, actionPerformed: false)
+        )
+        #expect(
+            try GunnAireCloudKitRoundTripProbe.apply(.cleanupConflict, in: context)
+                == .init(state: .absent, matchCount: 0, actionPerformed: true)
+        )
+    }
+    #endif
+
     @Test func timeOffRolePolicyFailsClosedOnAmbiguousTechnicianIdentity() {
         let fieldEmail = "field.timeoff@gunnaire.com"
         let fieldUser = AppUser(email: fieldEmail, role: .fieldTechnician)
@@ -19701,6 +20264,302 @@ struct GunnAire_OpsTests {
         #expect(throws: PricebookReviewPublicationError.self) {
             try PricebookReviewPublication.matchingRemoteItem(for: local, in: [matching, duplicate])
         }
+    }
+
+    @Test func linkedFieldDraftApprovalStagesComparisonWithoutChoosingTheQuickBooksVersion() throws {
+        let approvalDate = Date(timeIntervalSinceReferenceDate: 1_475_000)
+        let local = Item(
+            quickBooksID: "QBO-LINKED-FIELD-ITEM",
+            quickBooksSyncStatus: "needs_review",
+            pricebookReviewStatus: .needsReview,
+            pricebookCreatedByEmail: "field@gunnaire.com",
+            name: "HVAC Diagnostic Service",
+            itemType: .service,
+            unitPrice: 189,
+            purchaseCost: 42,
+            itemDescription: "Diagnostic visit and system evaluation"
+        )
+        local.approveForPricebook(by: "admin@gunnaire.com", at: approvalDate)
+
+        #expect(!local.requiresPricebookReview)
+        #expect(local.quickBooksSyncStatus == "pending_update")
+        #expect(local.quickBooksSyncDetail?.contains("load the linked QuickBooks version") == true)
+        #expect(local.timestamp == approvalDate)
+
+        let differingData = Data(#"{"Id":"QBO-LINKED-FIELD-ITEM","SyncToken":"4","Name":"HVAC Diagnostic Service","Type":"Service","Description":"Diagnostic visit and system evaluation","UnitPrice":239,"PurchaseCost":42,"Taxable":false,"Active":true}"#.utf8)
+        let differingRemote = try JSONDecoder().decode(QuickBooksItem.self, from: differingData)
+        let linkedRemote = try PricebookReviewPublication.linkedRemoteItem(
+            for: local,
+            in: [differingRemote]
+        )
+        let comparisonDate = approvalDate.addingTimeInterval(60)
+        let outcome = PricebookReviewPublication.linkApprovedItem(
+            local,
+            to: linkedRemote,
+            at: comparisonDate
+        )
+
+        #expect(outcome == .reconciliationRequired(differenceCount: 1))
+        #expect(local.quickBooksSyncStatus == "pending_update")
+        #expect(local.quickBooksCatalogSyncState == "pending_update")
+        #expect(local.unitPrice == 189)
+        #expect(local.purchaseCost == 42)
+        #expect(local.itemDescription == "Diagnostic visit and system evaluation")
+        #expect(local.quickBooksLastSyncedAt == comparisonDate)
+        #expect(local.quickBooksSyncDetail?.contains("Review 1 linked QuickBooks difference") == true)
+        #expect(throws: PricebookReviewPublicationError.self) {
+            try PricebookReviewPublication.linkedRemoteItem(for: local, in: [])
+        }
+
+        let matchingData = Data(#"{"Id":"QBO-LINKED-FIELD-ITEM","SyncToken":"5","Name":"HVAC Diagnostic Service","Type":"Service","Description":"Diagnostic visit and system evaluation","UnitPrice":189,"PurchaseCost":42,"Taxable":false,"Active":true}"#.utf8)
+        let matchingRemote = try JSONDecoder().decode(QuickBooksItem.self, from: matchingData)
+        #expect(
+            PricebookReviewPublication.linkApprovedItem(local, to: matchingRemote)
+                == .synchronized
+        )
+        #expect(local.quickBooksSyncStatus == "synced")
+        #expect(local.quickBooksSyncDetail == nil)
+        #expect(local.unitPrice == 189)
+    }
+
+    @Test func catalogCreationStartsLocallyAndReusesOneQuickBooksOperationAcrossRetries() throws {
+        let itemID = try #require(UUID(uuidString: "A13EAB2B-9FD5-4809-B017-6CC0046D4265"))
+        let createdAt = Date(timeIntervalSinceReferenceDate: 1_500_000)
+        let vendor = QuickBooksReference(value: "QBO-VENDOR-7", name: "Johnstone Supply")
+        let item = QuickBooksCatalogLocalCreationPolicy.makeItem(
+            id: itemID,
+            name: "  45/5 Dual Run Capacitor  ",
+            itemType: .nonInventory,
+            sku: "CAP-45-5",
+            unitPrice: 319,
+            purchaseCost: 82,
+            isTaxable: true,
+            itemDescription: "Premium replacement capacitor",
+            purchaseDescription: "45/5 MFD dual run capacitor",
+            preferredVendor: vendor,
+            actorEmail: "administrator",
+            createdAt: createdAt
+        )
+
+        #expect(item.id == itemID)
+        #expect(item.quickBooksID == nil)
+        #expect(item.quickBooksCatalogSyncState == "pending")
+        #expect(item.pricebookReviewStatus == .approved)
+        #expect(item.pricebookCreatedByEmail == "administrator")
+        #expect(item.pricebookReviewedByEmail == "administrator")
+        #expect(item.pricebookReviewedAt == createdAt)
+        #expect(item.name == "45/5 Dual Run Capacitor")
+        #expect(item.itemType == .nonInventory)
+        #expect(item.isTaxable)
+        #expect(item.preferredVendorQuickBooksID == "QBO-VENDOR-7")
+        #expect(QuickBooksCatalogPublicationRecovery.queuedItems(from: [item]).map(\.id) == [itemID])
+
+        let firstRequestID = QuickBooksCatalogCreateOperation.requestID(for: item.id)
+        let retryRequestID = QuickBooksCatalogCreateOperation.requestID(for: item.id)
+        #expect(firstRequestID == "ga-item-a13eab2b-9fd5-4809-b017-6cc0046d4265")
+        #expect(retryRequestID == firstRequestID)
+        #expect(firstRequestID.count == 44)
+        #expect(
+            QuickBooksCatalogCreateOperation.requestID(for: UUID()) != firstRequestID
+        )
+
+        let payload = QuickBooksCatalogCreateOperation.payload(
+            for: item,
+            incomeAccountRef: QuickBooksReference(value: "INC-1", name: "Service Income"),
+            expenseAccountRef: QuickBooksReference(value: "EXP-1", name: "Materials")
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(payload)) as? [String: Any]
+        )
+        #expect(object["Name"] as? String == "45/5 Dual Run Capacitor")
+        #expect(object["Type"] as? String == "NonInventory")
+        #expect(object["Sku"] as? String == "CAP-45-5")
+        #expect(object["UnitPrice"] as? Double == 319)
+        #expect(object["PurchaseCost"] as? Double == 82)
+        #expect(object["Taxable"] as? Bool == true)
+        #expect((object["IncomeAccountRef"] as? [String: String])?["value"] == "INC-1")
+        #expect((object["ExpenseAccountRef"] as? [String: String])?["value"] == "EXP-1")
+        #expect((object["PrefVendorRef"] as? [String: String])?["value"] == "QBO-VENDOR-7")
+    }
+
+    @Test func customerCreationReconcilesBeforeOneStableQuickBooksOperation() throws {
+        let customerID = try #require(UUID(uuidString: "B24FBC3C-A0E6-491A-C128-7DD1157E5376"))
+        let local = Customer(
+            id: customerID,
+            name: "  GunnAire Test Customer  ",
+            phone: "+1 (810) 555-0145",
+            email: "  SERVICE@EXAMPLE.COM ",
+            address: " 15 Main Street "
+        )
+        let draft = QuickBooksCustomerCreateOperation.draft(for: local)
+
+        #expect(draft.localCustomerID == customerID)
+        #expect(draft.displayName == "  GunnAire Test Customer  ")
+        #expect(draft.phone == "+1 (810) 555-0145")
+        #expect(draft.email == "SERVICE@EXAMPLE.COM")
+        #expect(draft.billingAddress == "15 Main Street")
+
+        let firstRequestID = QuickBooksCustomerCreateOperation.requestID(for: customerID)
+        let retryRequestID = QuickBooksCustomerCreateOperation.requestID(for: customerID)
+        #expect(firstRequestID == "ga-customer-b24fbc3c-a0e6-491a-c128-7dd1157e5376")
+        #expect(retryRequestID == firstRequestID)
+        #expect(firstRequestID.count == 48)
+        #expect(QuickBooksCustomerCreateOperation.requestID(for: UUID()) != firstRequestID)
+
+        let payloadObject = try #require(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(QuickBooksCustomerCreateOperation.payload(for: draft))
+            ) as? [String: Any]
+        )
+        #expect(payloadObject["DisplayName"] as? String == "GunnAire Test Customer")
+        #expect((payloadObject["PrimaryPhone"] as? [String: String])?["FreeFormNumber"] == "+1 (810) 555-0145")
+        #expect((payloadObject["PrimaryEmailAddr"] as? [String: String])?["Address"] == "SERVICE@EXAMPLE.COM")
+        #expect((payloadObject["BillAddr"] as? [String: String])?["Line1"] == "15 Main Street")
+
+        let exact = try JSONDecoder().decode(
+            QuickBooksCustomer.self,
+            from: Data(#"{"Id":"QBO-CUSTOMER-1","DisplayName":"gunnaire   test customer","PrimaryPhone":{"FreeFormNumber":"810-555-0145"},"PrimaryEmailAddr":{"Address":"service@example.com"},"BillAddr":{"Line1":"15 Main Street"}}"#.utf8)
+        )
+        let conflicting = try JSONDecoder().decode(
+            QuickBooksCustomer.self,
+            from: Data(#"{"Id":"QBO-CUSTOMER-2","DisplayName":"GunnAire Test Customer","PrimaryPhone":{"FreeFormNumber":"810-555-9999"},"PrimaryEmailAddr":{"Address":"different@example.com"},"BillAddr":{"Line1":"90 Other Street"}}"#.utf8)
+        )
+        let nameOnly = try JSONDecoder().decode(
+            QuickBooksCustomer.self,
+            from: Data(#"{"Id":"QBO-CUSTOMER-3","DisplayName":"GunnAire Test Customer"}"#.utf8)
+        )
+        let unrelated = try JSONDecoder().decode(
+            QuickBooksCustomer.self,
+            from: Data(#"{"Id":"QBO-CUSTOMER-4","DisplayName":"Unrelated Customer"}"#.utf8)
+        )
+
+        #expect(
+            try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
+                for: draft,
+                in: [conflicting, exact]
+            )?.Id == "QBO-CUSTOMER-1"
+        )
+        #expect(
+            try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
+                for: draft,
+                in: [unrelated]
+            ) == nil
+        )
+        #expect(throws: QuickBooksCustomerCreateOperationError.self) {
+            try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
+                for: draft,
+                in: [conflicting]
+            )
+        }
+        #expect(throws: QuickBooksCustomerCreateOperationError.self) {
+            try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
+                for: draft,
+                in: [nameOnly, nameOnly]
+            )
+        }
+        #expect(throws: QuickBooksCustomerCreateOperationError.self) {
+            try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
+                for: QuickBooksCustomerCreateDraft(
+                    localCustomerID: UUID(),
+                    displayName: "   ",
+                    phone: nil,
+                    email: nil,
+                    billingAddress: nil
+                ),
+                in: []
+            )
+        }
+    }
+
+    @Test func vendorCreationIsDurableIdempotentAndConflictAware() throws {
+        let vendorID = try #require(UUID(uuidString: "C35FBD4D-B1F7-4A2B-D239-8EE2268F6487"))
+        let local = Vendor(
+            id: vendorID,
+            name: "  GunnAire Test Supplier  ",
+            contactInfo: "  ORDERS@EXAMPLE.COM • +1 (810) 555-0155  "
+        )
+        let draft = QuickBooksVendorCreateOperation.draft(for: local)
+
+        #expect(draft.localVendorID == vendorID)
+        #expect(draft.displayName == "  GunnAire Test Supplier  ")
+        #expect(draft.email == "ORDERS@EXAMPLE.COM")
+        #expect(draft.phone == "+1 (810) 555-0155")
+        #expect(
+            QuickBooksVendorCreateOperation.storedContactInfo(
+                email: " orders@example.com ",
+                phone: " 810-555-0155 "
+            ) == "orders@example.com • 810-555-0155"
+        )
+
+        let firstRequestID = QuickBooksVendorCreateOperation.requestID(for: vendorID)
+        #expect(firstRequestID == "ga-vendor-c35fbd4d-b1f7-4a2b-d239-8ee2268f6487")
+        #expect(QuickBooksVendorCreateOperation.requestID(for: vendorID) == firstRequestID)
+        #expect(firstRequestID.count == 46)
+        #expect(QuickBooksVendorCreateOperation.requestID(for: UUID()) != firstRequestID)
+
+        let payloadObject = try #require(
+            JSONSerialization.jsonObject(
+                with: JSONEncoder().encode(QuickBooksVendorCreateOperation.payload(for: draft))
+            ) as? [String: Any]
+        )
+        #expect(payloadObject["DisplayName"] as? String == "GunnAire Test Supplier")
+        #expect((payloadObject["PrimaryEmailAddr"] as? [String: String])?["Address"] == "ORDERS@EXAMPLE.COM")
+        #expect((payloadObject["PrimaryPhone"] as? [String: String])?["FreeFormNumber"] == "+1 (810) 555-0155")
+
+        let exact = try JSONDecoder().decode(
+            QuickBooksVendor.self,
+            from: Data(#"{"Id":"QBO-VENDOR-1","DisplayName":"gunnaire   test supplier","PrimaryPhone":{"FreeFormNumber":"810-555-0155"},"PrimaryEmailAddr":{"Address":"orders@example.com"}}"#.utf8)
+        )
+        let conflicting = try JSONDecoder().decode(
+            QuickBooksVendor.self,
+            from: Data(#"{"Id":"QBO-VENDOR-2","DisplayName":"GunnAire Test Supplier","PrimaryPhone":{"FreeFormNumber":"810-555-9999"},"PrimaryEmailAddr":{"Address":"different@example.com"}}"#.utf8)
+        )
+        let nameOnlyA = try JSONDecoder().decode(
+            QuickBooksVendor.self,
+            from: Data(#"{"Id":"QBO-VENDOR-3","DisplayName":"GunnAire Test Supplier"}"#.utf8)
+        )
+        let nameOnlyB = try JSONDecoder().decode(
+            QuickBooksVendor.self,
+            from: Data(#"{"Id":"QBO-VENDOR-4","DisplayName":"GunnAire Test Supplier"}"#.utf8)
+        )
+        let unrelated = try JSONDecoder().decode(
+            QuickBooksVendor.self,
+            from: Data(#"{"Id":"QBO-VENDOR-5","DisplayName":"Unrelated Supplier"}"#.utf8)
+        )
+
+        #expect(
+            try QuickBooksVendorCreateOperation.matchingRemoteVendor(
+                for: draft,
+                in: [conflicting, exact]
+            )?.Id == "QBO-VENDOR-1"
+        )
+        #expect(
+            try QuickBooksVendorCreateOperation.matchingRemoteVendor(
+                for: draft,
+                in: [unrelated]
+            ) == nil
+        )
+        #expect(throws: QuickBooksVendorCreateOperationError.self) {
+            try QuickBooksVendorCreateOperation.matchingRemoteVendor(
+                for: draft,
+                in: [conflicting]
+            )
+        }
+        #expect(throws: QuickBooksVendorCreateOperationError.self) {
+            try QuickBooksVendorCreateOperation.matchingRemoteVendor(
+                for: draft,
+                in: [nameOnlyA, nameOnlyB]
+            )
+        }
+
+        let alpha = Vendor(name: "Alpha Supply")
+        let zulu = Vendor(name: "Zulu Supply")
+        let linked = Vendor(quickBooksID: "QBO-LINKED", name: "Linked Supply")
+        #expect(
+            QuickBooksVendorPublicationRecovery.queuedVendors(
+                from: [zulu, linked, alpha]
+            ).map(\.name) == ["Alpha Supply", "Zulu Supply"]
+        )
     }
 
     @Test func duplicateQuickBooksCatalogMappingsFailClosedAndResolveWithoutDeletingLocalItems() throws {
@@ -19946,6 +20805,258 @@ struct GunnAire_OpsTests {
         #expect(throws: QuickBooksCatalogReconciliationError.self) {
             try QuickBooksCatalogReconciliation.updatePayload(localItem: local, currentRemoteItem: vendorRemoval)
         }
+    }
+
+    @Test func catalogArchiveLifecycleBlocksActiveDependenciesAndStagesQuickBooksAvailability() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 920_000)
+        let item = Item(
+            quickBooksID: "QBO-ARCHIVE-1",
+            quickBooksSyncStatus: "synced",
+            name: "Legacy Contactor",
+            itemType: .nonInventory,
+            unitPrice: 425,
+            purchaseCost: 110,
+            sku: "CONT-LEGACY"
+        )
+        let snapshot = CatalogLineItemSnapshot.encoded(from: [item])
+        let pendingInvoice = Invoice(
+            customer: Customer(name: "Archive Policy Customer"),
+            catalogSnapshotJSON: snapshot,
+            amount: 425
+        )
+
+        #expect(throws: CatalogItemLifecycleError.self) {
+            try CatalogItemLifecyclePolicy.validateArchive(
+                item,
+                catalogItems: [item],
+                estimates: [],
+                invoices: [pendingInvoice],
+                agreements: []
+            )
+        }
+
+        let package = Item(name: "Legacy Contactor Repair", unitPrice: 795)
+        package.assemblyDefinition = CatalogAssemblyDefinition(
+            presentation: .flatRate,
+            components: [CatalogAssemblyComponentDefinition(itemID: item.id, quantity: 1)]
+        )
+        #expect(throws: CatalogItemLifecycleError.self) {
+            try CatalogItemLifecyclePolicy.validateArchive(
+                item,
+                catalogItems: [item, package],
+                estimates: [],
+                invoices: [],
+                agreements: []
+            )
+        }
+
+        package.archiveFromPricebook(by: "admin@gunnaire.com", at: now)
+        let agreement = RecurringMaintenanceContract(
+            customer: Customer(name: "Agreement Archive Customer"),
+            planName: "Comfort Plan",
+            schedulePattern: "Every 6 months",
+            nextDate: now.addingTimeInterval(86_400),
+            active: true,
+            lifecycle: MaintenanceAgreementLifecycle(
+                status: .active,
+                agreementPrice: 240,
+                billingInterval: .monthly,
+                billingCatalogItemID: item.id,
+                autoRenews: true,
+                createdAt: now
+            )
+        )
+        #expect(throws: CatalogItemLifecycleError.self) {
+            try CatalogItemLifecyclePolicy.validateArchive(
+                item,
+                catalogItems: [item, package],
+                estimates: [],
+                invoices: [],
+                agreements: [agreement]
+            )
+        }
+
+        agreement.active = false
+        try CatalogItemLifecyclePolicy.validateArchive(
+            item,
+            catalogItems: [item, package],
+            estimates: [],
+            invoices: [],
+            agreements: [agreement]
+        )
+        item.archiveFromPricebook(by: "ADMIN@GUNNAIRE.COM", at: now)
+        #expect(item.isCatalogArchived)
+        #expect(!item.isAvailableForNewWork)
+        #expect(item.quickBooksID == "QBO-ARCHIVE-1")
+        #expect(item.quickBooksCatalogSyncState == "pending_update")
+        #expect(item.pricebookReviewedByEmail == "admin@gunnaire.com")
+        #expect(item.pricebookReviewedAt == now)
+
+        let remote = try JSONDecoder().decode(
+            QuickBooksItem.self,
+            from: Data(#"{"Id":"QBO-ARCHIVE-1","SyncToken":"14","Name":"Legacy Contactor","Type":"NonInventory","Sku":"CONT-LEGACY","UnitPrice":425,"PurchaseCost":110,"Taxable":false,"Active":true}"#.utf8)
+        )
+        let differences = QuickBooksCatalogReconciliation.differences(
+            localItem: item,
+            remoteItem: remote
+        )
+        #expect(differences.contains { $0.field == "Availability" && $0.gunnAireValue == "Archived" })
+        let update = try QuickBooksCatalogReconciliation.updatePayload(
+            localItem: item,
+            currentRemoteItem: remote
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(update)) as? [String: Any]
+        )
+        #expect(object["Active"] as? Bool == false)
+        #expect(throws: QuickBooksDocumentLinePublicationError.self) {
+            try QuickBooksDocumentLinePublication.lines(
+                snapshotJSON: snapshot,
+                expectedSubtotal: 425,
+                catalogItems: [item]
+            )
+        }
+
+        item.restoreToPricebook(by: "admin@gunnaire.com", at: now.addingTimeInterval(60))
+        #expect(item.isAvailableForNewWork)
+        #expect(item.quickBooksCatalogSyncState == "pending_update")
+    }
+
+    @Test func archivedUnlinkedCatalogItemsStayOutOfNewWorkAndPublicationRecovery() {
+        let archived = Item(
+            quickBooksSyncStatus: "pending",
+            name: "Retired Compressor Add-on",
+            unitPrice: 1_200,
+            sku: "COMP-OLD"
+        )
+        archived.archiveFromPricebook(by: "admin@gunnaire.com")
+
+        #expect(archived.quickBooksCatalogSyncState == "archived")
+        #expect(QuickBooksCatalogPublicationRecovery.queuedItems(from: [archived]).isEmpty)
+        #expect(
+            Item.matchingLocalCatalogItem(
+                in: [archived],
+                quickBooksID: "QBO-NEW-ACTIVE",
+                name: "Retired Compressor Add-on",
+                sku: "COMP-OLD"
+            ) == nil
+        )
+
+        archived.restoreToPricebook(by: "admin@gunnaire.com")
+        #expect(archived.quickBooksCatalogSyncState == "pending")
+        #expect(QuickBooksCatalogPublicationRecovery.queuedItems(from: [archived]).map(\.id) == [archived.id])
+
+        archived.applyQuickBooksCatalogAvailability(false)
+        archived.quickBooksSyncStatus = "synced"
+        #expect(archived.quickBooksCatalogSyncState == "archived")
+    }
+
+    @Test func fieldCreatedCatalogItemStaysDocumentScopedUntilAdministratorApproval() {
+        let draft = Item(
+            quickBooksSyncStatus: "needs_review",
+            pricebookReviewStatus: .needsReview,
+            pricebookCreatedByEmail: "field@gunnaire.com",
+            name: "Field Diagnostic Add-on",
+            unitPrice: 85
+        )
+        let approved = Item(name: "Approved Diagnostic", unitPrice: 125)
+        let archived = Item(name: "Archived Diagnostic", unitPrice: 100)
+        archived.archiveFromPricebook(by: "admin@gunnaire.com")
+
+        #expect(!draft.isAvailableForNewWork)
+        #expect(
+            !CatalogItemSelectionPolicy.canAdd(
+                draft,
+                documentScopedReviewItemIDs: []
+            )
+        )
+        #expect(
+            CatalogItemSelectionPolicy.canAdd(
+                draft,
+                documentScopedReviewItemIDs: [draft.id]
+            )
+        )
+        #expect(
+            CatalogItemSelectionPolicy.canDisplay(
+                draft,
+                isSelected: true,
+                documentScopedReviewItemIDs: []
+            )
+        )
+        #expect(CatalogItemSelectionPolicy.canAdd(approved, documentScopedReviewItemIDs: []))
+        #expect(!CatalogItemSelectionPolicy.canAdd(archived, documentScopedReviewItemIDs: []))
+
+        draft.approveForPricebook(by: "admin@gunnaire.com")
+        #expect(draft.isAvailableForNewWork)
+        #expect(CatalogItemSelectionPolicy.canAdd(draft, documentScopedReviewItemIDs: []))
+    }
+
+    @Test func companyPricebookPresentationKeepsTheLocalCatalogManageableOffline() {
+        let synchronized = Item(
+            quickBooksID: "QBO-LOCAL-PRICEBOOK-1",
+            quickBooksSyncStatus: "synced",
+            name: "HVAC Diagnostic Service",
+            itemType: .service,
+            unitPrice: 189,
+            sku: "DIAG-01"
+        )
+        let publicationPending = Item(
+            quickBooksSyncStatus: "pending",
+            name: "45/5 Dual Run Capacitor",
+            itemType: .nonInventory,
+            unitPrice: 50,
+            sku: "CAP-45-5",
+            preferredVendorName: "Johnstone Supply"
+        )
+        let comparisonPending = Item(
+            quickBooksID: "QBO-LOCAL-PRICEBOOK-2",
+            quickBooksSyncStatus: "pending_update",
+            name: "Compressor Replacement",
+            itemType: .nonInventory,
+            unitPrice: 2_450
+        )
+        let needsAttention = Item(
+            quickBooksID: "QBO-LOCAL-PRICEBOOK-3",
+            quickBooksSyncStatus: "needs_attention",
+            name: "Emergency Service",
+            unitPrice: 289
+        )
+        let reviewDraft = Item(
+            quickBooksSyncStatus: "needs_review",
+            pricebookReviewStatus: .needsReview,
+            name: "Field-created Draft",
+            unitPrice: 75
+        )
+        let archived = Item(name: "Retired Motor", unitPrice: 600)
+        archived.archiveFromPricebook(by: "admin@gunnaire.com")
+        let allItems = [archived, reviewDraft, needsAttention, comparisonPending, publicationPending, synchronized]
+
+        #expect(
+            CompanyPricebookPresentation.activeItems(from: allItems, matching: "")
+                .map(\.name) == [
+                    "45/5 Dual Run Capacitor",
+                    "Compressor Replacement",
+                    "Emergency Service",
+                    "HVAC Diagnostic Service"
+                ]
+        )
+        #expect(
+            CompanyPricebookPresentation.activeItems(from: allItems, matching: "johnstone")
+                .map(\.id) == [publicationPending.id]
+        )
+        #expect(
+            CompanyPricebookPresentation.activeItems(from: allItems, matching: "diag-01")
+                .map(\.id) == [synchronized.id]
+        )
+        #expect(CompanyPricebookPresentation.syncDisposition(for: synchronized) == .synchronized)
+        #expect(CompanyPricebookPresentation.syncDisposition(for: publicationPending) == .publicationPending)
+        #expect(CompanyPricebookPresentation.syncDisposition(for: comparisonPending) == .comparisonPending)
+        #expect(CompanyPricebookPresentation.syncDisposition(for: needsAttention) == .needsAttention)
+
+        comparisonPending.unitPrice = 2_595
+        comparisonPending.stageQuickBooksCatalogUpdate()
+        #expect(comparisonPending.unitPrice == 2_595)
+        #expect(comparisonPending.quickBooksCatalogSyncState == "pending_update")
     }
 
     @Test func quickBooksRefreshPreservesStagedCatalogEditsUntilAnAdministratorChoosesADirection() throws {
@@ -20792,6 +21903,24 @@ struct GunnAire_OpsTests {
         let syncedItem = Item(quickBooksID: "QBO-ITEM-77", name: "Diagnostic Visit", unitPrice: 189)
         #expect(syncedItem.quickBooksCatalogSyncState == "synced")
         #expect(syncedItem.needsQuickBooksAttention == false)
+
+        let stagedUpdate = Item(
+            quickBooksID: "QBO-ITEM-78",
+            quickBooksSyncStatus: "pending_update",
+            name: "Updated Diagnostic Visit",
+            unitPrice: 209
+        )
+        #expect(stagedUpdate.quickBooksCatalogSyncState == "pending_update")
+        #expect(stagedUpdate.hasPendingQuickBooksCatalogUpdate)
+        #expect(stagedUpdate.needsQuickBooksAttention == false)
+
+        stagedUpdate.quickBooksSyncStatus = "needs_attention"
+        #expect(stagedUpdate.quickBooksCatalogSyncState == "needs_attention")
+        #expect(stagedUpdate.needsQuickBooksAttention)
+
+        stagedUpdate.quickBooksSyncStatus = "unexpected_legacy_value"
+        #expect(stagedUpdate.quickBooksCatalogSyncState == "needs_attention")
+        #expect(stagedUpdate.needsQuickBooksAttention)
     }
 
     @Test func servicePackageOnlyEditDoesNotStageAFalseQuickBooksCatalogUpdate() {
@@ -20928,6 +22057,63 @@ struct GunnAire_OpsTests {
         #expect(imported.unitPrice == 129)
         #expect(imported.quickBooksCatalogSyncState == "synced")
         #expect(imported.quickBooksLastSyncedAt != nil)
+    }
+
+    @MainActor
+    @Test func matchingQuickBooksImportLinksButNeverApprovesAFieldCreatedItem() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let fieldItem = Item(
+            quickBooksSyncStatus: "needs_review",
+            pricebookReviewStatus: .needsReview,
+            pricebookCreatedByEmail: "tech@gunnaire.com",
+            name: "Air Filter",
+            itemType: .nonInventory,
+            unitPrice: 89,
+            purchaseCost: 31,
+            sku: "FIELD-MERV-11"
+        )
+        context.insert(fieldItem)
+        try context.save()
+
+        let remoteData = Data(#"{"Id":"QBO-FILTER-MATCH","SyncToken":"9","Name":"Air Filter","Type":"NonInventory","Sku":"FIELD-MERV-11","UnitPrice":129,"PurchaseCost":44,"Active":true}"#.utf8)
+        let remoteItem = try JSONDecoder().decode(QuickBooksItem.self, from: remoteData)
+
+        try QuickBooksLocalSync.importSnapshot(
+            customers: [],
+            items: [remoteItem],
+            estimates: [],
+            invoices: [],
+            payments: [],
+            vendors: [],
+            into: context
+        )
+
+        let storedItems = try context.fetch(FetchDescriptor<Item>())
+        #expect(storedItems.count == 1)
+        #expect(fieldItem.quickBooksID == "QBO-FILTER-MATCH")
+        #expect(fieldItem.requiresPricebookReview)
+        #expect(!fieldItem.isAvailableForNewWork)
+        #expect(fieldItem.pricebookReviewedByEmail == nil)
+        #expect(fieldItem.unitPrice == 89)
+        #expect(fieldItem.purchaseCost == 31)
+        #expect(fieldItem.quickBooksCatalogSyncState == "needs_review")
+        #expect(fieldItem.quickBooksSyncDetail?.contains("Administrator pricebook review") == true)
+        #expect(fieldItem.quickBooksLastSyncedAt != nil)
+
+        let approvalDate = Date(timeIntervalSinceReferenceDate: 1_650_000)
+        fieldItem.approveForPricebook(by: "admin@gunnaire.com", at: approvalDate)
+        #expect(!fieldItem.requiresPricebookReview)
+        #expect(fieldItem.quickBooksSyncStatus == "pending_update")
+        #expect(fieldItem.quickBooksCatalogSyncState == "pending_update")
+        #expect(fieldItem.quickBooksSyncDetail?.contains("load the linked QuickBooks version") == true)
+        #expect(fieldItem.timestamp == approvalDate)
+        #expect(fieldItem.unitPrice == 89)
+        #expect(fieldItem.purchaseCost == 31)
     }
 
     @Test func changeOrderKeepsOriginalApprovalAndIdentifiesTheRevisedProposal() async throws {
@@ -23524,6 +24710,17 @@ struct GunnAire_OpsTests {
           "appointmentSummary": null,
           "invoiceReference": null,
           "balanceDue": null,
+          "estimateID": "8F000000-0000-4000-8000-000000000001",
+          "estimateLabel": "Better",
+          "estimateAmount": 4200,
+          "estimateRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "estimateResponseID": "8F000000-0000-4000-8000-000000000002",
+          "estimateResponseName": "Portal Customer",
+          "estimateRespondedAt": "2026-08-27T17:30:00+00:00",
+          "estimateResolutionStatus": "pending",
+          "estimateResolutionDetail": null,
+          "estimateResolvedAt": null,
+          "estimateResolvedBy": null,
           "expiresAt": "2026-09-10T12:00:00+00:00",
           "revokedAt": null,
           "openedCount": 2,
@@ -23556,8 +24753,186 @@ struct GunnAire_OpsTests {
 
         #expect(currentRecord.openedCount == 2)
         #expect(currentRecord.lastOpenedAt == "2026-08-27T18:00:00+00:00")
+        #expect(currentRecord.estimateLabel == "Better")
+        #expect(currentRecord.estimateAmount == 4_200)
+        #expect(currentRecord.estimateResolutionStatus == "pending")
         #expect(legacyRecord.openedCount == nil)
         #expect(legacyRecord.lastOpenedAt == nil)
+        #expect(legacyRecord.estimateID == nil)
+        #expect(legacyRecord.estimateResponseID == nil)
+    }
+
+    @MainActor
+    @Test func customerPortalApprovalAppliesOnlyTheExactEstimateRevision() throws {
+        let customer = Customer(
+            id: UUID(uuidString: "8F100000-0000-4000-8000-000000000001")!,
+            name: "Portal Customer",
+            email: "portal.customer@example.com"
+        )
+        let callID = UUID(uuidString: "8F100000-0000-4000-8000-000000000002")!
+        let estimateID = UUID(uuidString: "8F100000-0000-4000-8000-000000000003")!
+        let responseID = UUID(uuidString: "8F100000-0000-4000-8000-000000000004")!
+        let createdAt = Date(timeIntervalSince1970: 1_788_200_000)
+        let respondedAt = createdAt.addingTimeInterval(600)
+        let call = ServiceCall(
+            id: callID,
+            type: .repair,
+            scheduledDate: createdAt,
+            customer: customer,
+            followUpRequired: true,
+            followUpAction: "Review proposal",
+            followUpDueDate: respondedAt.addingTimeInterval(86_400)
+        )
+        let estimate = Estimate(
+            id: estimateID,
+            serviceCallID: callID,
+            proposalOption: EstimateProposalOption.better.rawValue,
+            customer: customer,
+            lineItemSummary: "Repair compressor circuit",
+            catalogSnapshotJSON: "[]",
+            amount: 4_200,
+            createdAt: createdAt
+        )
+        let timestamp = ISO8601DateFormatter().string(from: respondedAt)
+        let linkPayload: [String: Any] = [
+            "id": "portal-approval",
+            "customerName": customer.name,
+            "customerEmail": customer.email!,
+            "serviceCallID": callID.uuidString,
+            "title": "Estimate approval",
+            "estimateID": estimateID.uuidString,
+            "estimateLabel": estimate.proposalLabel,
+            "estimateAmount": estimate.amount,
+            "estimateRevision": estimate.customerPortalRevision,
+            "estimateResponseID": responseID.uuidString,
+            "estimateResponseName": "Alex Customer",
+            "estimateRespondedAt": timestamp,
+            "estimateResolutionStatus": "pending",
+            "expiresAt": ISO8601DateFormatter().string(from: respondedAt.addingTimeInterval(86_400)),
+            "createdAt": ISO8601DateFormatter().string(from: createdAt),
+            "createdBy": "admin@gunnaire.com",
+        ]
+        let linkData = try JSONSerialization.data(withJSONObject: linkPayload)
+        let link = try JSONDecoder().decode(BackendCustomerPortalLinkRecord.self, from: linkData)
+
+        let result = try CustomerPortalEstimateApprovalPolicy.apply(
+            link,
+            estimates: [estimate],
+            serviceCalls: [call],
+            recordedByEmail: "admin@gunnaire.com",
+            now: respondedAt.addingTimeInterval(30)
+        )
+        #expect(!result.wasAlreadyApplied)
+        #expect(result.estimate === estimate)
+        #expect(result.serviceCall === call)
+        #expect(estimate.hasRecordedCustomerApproval)
+        #expect(estimate.customerApprovedByName == "Alex Customer")
+        #expect(estimate.customerApprovedAt == respondedAt)
+        #expect(estimate.customerApprovalMethod == .email)
+        #expect(estimate.customerApprovalReference == "Customer portal response \(responseID.uuidString.lowercased())")
+        #expect(estimate.customerApprovalRecordedByEmail == "admin@gunnaire.com")
+        #expect(call.linkedEstimateID == estimate.id)
+        #expect(!call.followUpRequired)
+        #expect(call.followUpAction == nil)
+        #expect(call.followUpDueDate == nil)
+
+        let replay = try CustomerPortalEstimateApprovalPolicy.apply(
+            link,
+            estimates: [estimate],
+            serviceCalls: [call],
+            recordedByEmail: "admin@gunnaire.com",
+            now: respondedAt.addingTimeInterval(60)
+        )
+        #expect(replay.wasAlreadyApplied)
+
+        estimate.customerApprovedAt = respondedAt.addingTimeInterval(30)
+        #expect(throws: CustomerPortalEstimateApprovalImportIssue.approvalConflict) {
+            try CustomerPortalEstimateApprovalPolicy.apply(
+                link,
+                estimates: [estimate],
+                serviceCalls: [call],
+                recordedByEmail: "admin@gunnaire.com",
+                now: respondedAt.addingTimeInterval(60)
+            )
+        }
+        estimate.customerApprovedAt = respondedAt
+
+        var futureCreatedPayload = linkPayload
+        futureCreatedPayload["createdAt"] = ISO8601DateFormatter().string(from: respondedAt.addingTimeInterval(60))
+        let futureCreatedData = try JSONSerialization.data(withJSONObject: futureCreatedPayload)
+        let futureCreatedLink = try JSONDecoder().decode(BackendCustomerPortalLinkRecord.self, from: futureCreatedData)
+        #expect(throws: CustomerPortalEstimateApprovalImportIssue.responseTimeInvalid) {
+            try CustomerPortalEstimateApprovalPolicy.apply(
+                futureCreatedLink,
+                estimates: [estimate],
+                serviceCalls: [call],
+                recordedByEmail: "admin@gunnaire.com",
+                now: respondedAt.addingTimeInterval(60)
+            )
+        }
+    }
+
+    @MainActor
+    @Test func customerPortalApprovalRejectsChangedOrUnavailableLocalEvidence() throws {
+        let customer = Customer(
+            id: UUID(uuidString: "8F200000-0000-4000-8000-000000000001")!,
+            name: "Revision Customer",
+            email: "revision.customer@example.com"
+        )
+        let callID = UUID(uuidString: "8F200000-0000-4000-8000-000000000002")!
+        let estimate = Estimate(
+            id: UUID(uuidString: "8F200000-0000-4000-8000-000000000003")!,
+            serviceCallID: callID,
+            customer: customer,
+            lineItemSummary: "Original scope",
+            catalogSnapshotJSON: "[]",
+            amount: 1_250,
+            createdAt: Date(timeIntervalSince1970: 1_788_300_000)
+        )
+        let originalRevision = estimate.customerPortalRevision
+        let respondedAt = estimate.createdAt.addingTimeInterval(300)
+        let data = try JSONSerialization.data(withJSONObject: [
+            "id": "portal-stale",
+            "customerName": customer.name,
+            "customerEmail": customer.email!,
+            "serviceCallID": callID.uuidString,
+            "title": "Estimate approval",
+            "estimateID": estimate.id.uuidString,
+            "estimateLabel": estimate.proposalLabel,
+            "estimateAmount": estimate.amount,
+            "estimateRevision": originalRevision,
+            "estimateResponseID": UUID().uuidString,
+            "estimateResponseName": "Revision Customer",
+            "estimateRespondedAt": ISO8601DateFormatter().string(from: respondedAt),
+            "estimateResolutionStatus": "pending",
+            "expiresAt": ISO8601DateFormatter().string(from: respondedAt.addingTimeInterval(86_400)),
+            "createdAt": ISO8601DateFormatter().string(from: estimate.createdAt),
+            "createdBy": "admin@gunnaire.com",
+        ])
+        let link = try JSONDecoder().decode(BackendCustomerPortalLinkRecord.self, from: data)
+
+        #expect(throws: CustomerPortalEstimateApprovalImportIssue.jobUnavailable) {
+            try CustomerPortalEstimateApprovalPolicy.apply(
+                link,
+                estimates: [estimate],
+                serviceCalls: [],
+                recordedByEmail: "admin@gunnaire.com",
+                now: respondedAt
+            )
+        }
+
+        let call = ServiceCall(id: callID, type: .service, scheduledDate: estimate.createdAt, customer: customer)
+        estimate.amount = 1_350
+        #expect(throws: CustomerPortalEstimateApprovalImportIssue.snapshotChanged) {
+            try CustomerPortalEstimateApprovalPolicy.apply(
+                link,
+                estimates: [estimate],
+                serviceCalls: [call],
+                recordedByEmail: "admin@gunnaire.com",
+                now: respondedAt
+            )
+        }
+        #expect(!estimate.hasRecordedCustomerApproval)
     }
 
     @Test func quickBooksPaymentsTraceHeaderIsNeverAcceptedAsAChargeIdentifier() throws {
@@ -23604,6 +24979,172 @@ struct GunnAire_OpsTests {
                 from: Data(#"{"TotalAmt":125.00}"#.utf8)
             )
         }
+    }
+
+    @Test func quickBooksAccountingPaymentCreationIsIdempotentAndConflictAware() throws {
+        let localPaymentID = UUID(uuidString: "A9000000-0000-4000-8000-000000000001")!
+        let basePayment = QuickBooksPaymentCreate(
+            CustomerRef: QuickBooksReference(value: "customer-22", name: "Payment Customer"),
+            TotalAmt: 125,
+            PrivateNote: "Collected in the field",
+            PaymentRefNum: "AUTH-125",
+            Line: [
+                QuickBooksPaymentLine(
+                    Amount: 125,
+                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: "invoice-81", TxnType: "Invoice")]
+                )
+            ],
+            PaymentMethodRef: QuickBooksReference(value: "method-4", name: "QuickBooks Card"),
+            CreditCardPayment: nil
+        )
+        let draft = QuickBooksAccountingPaymentDraft(
+            localPaymentID: localPaymentID,
+            payment: basePayment
+        )
+
+        let requestID = QuickBooksAccountingPaymentCreateOperation.requestID(for: localPaymentID)
+        #expect(requestID == "ga-payment-a9000000-0000-4000-8000-000000000001")
+        #expect(requestID.count == 47)
+
+        let payload = try QuickBooksAccountingPaymentCreateOperation.payload(for: draft)
+        let marker = QuickBooksAccountingPaymentCreateOperation.marker(for: localPaymentID)
+        #expect(payload.PrivateNote == "Collected in the field\n\(marker)")
+        #expect(payload.CustomerRef?.value == "customer-22")
+        #expect(payload.Line?.first?.LinkedTxn?.first?.TxnId == "invoice-81")
+
+        let matchingRemote = try JSONDecoder().decode(
+            QuickBooksPayment.self,
+            from: Data("""
+            {
+              "Id": "payment-900",
+              "CustomerRef": {"value": "CUSTOMER-22", "name": "Payment Customer"},
+              "TotalAmt": "125.00",
+              "PrivateNote": "Collected in the field\\n\(marker)",
+              "PaymentRefNum": "AUTH-125",
+              "Line": [{"Amount": 125, "LinkedTxn": [{"TxnId": "INVOICE-81", "TxnType": "Invoice"}]}]
+            }
+            """.utf8)
+        )
+        #expect(
+            try QuickBooksAccountingPaymentCreateOperation.matchingRemotePayment(
+                for: draft,
+                in: [matchingRemote]
+            )?.Id == "payment-900"
+        )
+
+        let unrelatedRemote = try JSONDecoder().decode(
+            QuickBooksPayment.self,
+            from: Data("""
+            {
+              "Id": "payment-901",
+              "CustomerRef": {"value": "customer-22"},
+              "TotalAmt": 125,
+              "PrivateNote": "Another payment",
+              "Line": [{"Amount": 125, "LinkedTxn": [{"TxnId": "invoice-81", "TxnType": "Invoice"}]}]
+            }
+            """.utf8)
+        )
+        #expect(
+            try QuickBooksAccountingPaymentCreateOperation.matchingRemotePayment(
+                for: draft,
+                in: [unrelatedRemote]
+            ) == nil
+        )
+
+        let conflictingRemote = try JSONDecoder().decode(
+            QuickBooksPayment.self,
+            from: Data("""
+            {
+              "Id": "payment-902",
+              "CustomerRef": {"value": "customer-22"},
+              "TotalAmt": 124,
+              "PrivateNote": "\(marker)",
+              "Line": [{"Amount": 124, "LinkedTxn": [{"TxnId": "invoice-81", "TxnType": "Invoice"}]}]
+            }
+            """.utf8)
+        )
+        #expect(throws: QuickBooksAccountingPaymentCreateOperationError.conflictingRemotePayment) {
+            try QuickBooksAccountingPaymentCreateOperation.matchingRemotePayment(
+                for: draft,
+                in: [conflictingRemote]
+            )
+        }
+        #expect(throws: QuickBooksAccountingPaymentCreateOperationError.ambiguousRemotePayment) {
+            try QuickBooksAccountingPaymentCreateOperation.matchingRemotePayment(
+                for: draft,
+                in: [matchingRemote, matchingRemote]
+            )
+        }
+
+        let invalidDraft = QuickBooksAccountingPaymentDraft(
+            localPaymentID: localPaymentID,
+            payment: QuickBooksPaymentCreate(
+                CustomerRef: basePayment.CustomerRef,
+                TotalAmt: 125,
+                PrivateNote: nil,
+                PaymentRefNum: nil,
+                Line: nil,
+                PaymentMethodRef: nil,
+                CreditCardPayment: nil
+            )
+        )
+        #expect(throws: QuickBooksAccountingPaymentCreateOperationError.invalidInvoice) {
+            try QuickBooksAccountingPaymentCreateOperation.payload(for: invalidDraft)
+        }
+    }
+
+    @MainActor
+    @Test func quickBooksTrackedPaymentRequiresOneUnambiguousLocalInvoice() throws {
+        let remoteInvoice = try JSONDecoder().decode(
+            QuickBooksInvoice.self,
+            from: Data(#"{"Id":"qbo-invoice-81","DocNumber":"INV-81","CustomerRef":{"value":"customer-22","name":"Payment Customer"},"TotalAmt":125,"Balance":125}"#.utf8)
+        )
+        let customer = Customer(name: "Payment Customer")
+        let linkedInvoice = Invoice(
+            customer: customer,
+            quickBooksID: " QBO-INVOICE-81 ",
+            lineItemSummary: "Service",
+            amount: 125
+        )
+
+        #expect(
+            QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
+                for: remoteInvoice,
+                in: [linkedInvoice]
+            ) === linkedInvoice
+        )
+
+        let duplicateLink = Invoice(
+            customer: customer,
+            quickBooksID: "qbo-invoice-81",
+            lineItemSummary: "Duplicate legacy link",
+            amount: 125
+        )
+        #expect(
+            QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
+                for: remoteInvoice,
+                in: [linkedInvoice, duplicateLink]
+            ) == nil
+        )
+
+        let documentNumberLink = Invoice(
+            customer: customer,
+            quickBooksID: "inv-81",
+            lineItemSummary: "Legacy document-number link",
+            amount: 125
+        )
+        #expect(
+            QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
+                for: remoteInvoice,
+                in: [documentNumberLink]
+            ) === documentNumberLink
+        )
+        #expect(
+            QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
+                for: remoteInvoice,
+                in: [Invoice(customer: customer, lineItemSummary: "Unlinked", amount: 125)]
+            ) == nil
+        )
     }
 
     @MainActor
@@ -26103,6 +27644,42 @@ struct GunnAire_OpsTests {
         #expect(summary.businessTaskEvents == 1)
         #expect(try context.fetch(FetchDescriptor<BusinessTask>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<BusinessTaskEvent>()).isEmpty)
+    }
+
+    @Test func accessibilityMotionPolicySuppressesExplicitMotionAndTheSplashVideo() {
+        #expect(!GunnAireAccessibilityMotionPolicy.reduceMotionEnabled(
+            systemValue: false,
+            processArguments: []
+        ))
+        #expect(GunnAireAccessibilityMotionPolicy.reduceMotionEnabled(
+            systemValue: true,
+            processArguments: []
+        ))
+        #expect(GunnAireAccessibilityMotionPolicy.reduceMotionEnabled(
+            systemValue: false,
+            processArguments: [GunnAireAccessibilityMotionPolicy.uiTestReduceMotionArgument]
+        ))
+
+        #expect(GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
+            enabled: true,
+            hasVideo: true,
+            reduceMotion: false
+        ))
+        #expect(!GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
+            enabled: true,
+            hasVideo: true,
+            reduceMotion: true
+        ))
+        #expect(!GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
+            enabled: false,
+            hasVideo: true,
+            reduceMotion: false
+        ))
+        #expect(!GunnAireAccessibilityMotionPolicy.shouldPlaySplashVideo(
+            enabled: true,
+            hasVideo: false,
+            reduceMotion: false
+        ))
     }
 
 }

@@ -15,6 +15,7 @@ struct PaymentsAndReceiptsView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @AppStorage("enableOnsitePayments") private var enableOnsitePayments = false
     @AppStorage("onsitePaymentProcessor") private var onsitePaymentProcessor = OnsitePaymentProcessor.none.rawValue
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
@@ -1225,7 +1226,7 @@ struct PaymentsAndReceiptsView: View {
             deferredCollectionPrefersContactlessGuide = false
             deferredCollectionExpiresAt = nil
             GunnAireAppIntentRouter.clearDeferredPaymentCollectionRoute()
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
                 preparePaymentForm(for: invoice)
                 if presentsContactlessGuide {
                     contactlessGuideMessage = ""
@@ -1297,6 +1298,7 @@ struct PaymentsAndReceiptsView: View {
 
     @discardableResult
     private func saveLocalPayment(
+        id: UUID = UUID(),
         invoice: Invoice,
         amount: Double,
         quickBooksPaymentID: String? = nil,
@@ -1313,6 +1315,7 @@ struct PaymentsAndReceiptsView: View {
         processorOverride: String? = nil
     ) -> Payment {
         let payment = Payment(
+                id: id,
                 invoice: invoice,
                 quickBooksID: quickBooksPaymentID,
                 quickBooksChargeID: quickBooksChargeID,
@@ -1515,7 +1518,9 @@ struct PaymentsAndReceiptsView: View {
             defer { isProcessingQuickBooksPayment = false }
 
             do {
+                let localPaymentID = UUID()
                 let result = try await QuickBooksPaymentsService.shared.processCardPayment(
+                    localPaymentID: localPaymentID,
                     invoice: invoice,
                     amount: amount,
                     cardInput: quickBooksCardInput(for: invoice),
@@ -1527,6 +1532,7 @@ struct PaymentsAndReceiptsView: View {
                 }
                 authorizationReference = result.charge.authCode ?? authorizationReference
                 let payment = saveLocalPayment(
+                    id: localPaymentID,
                     invoice: invoice,
                     amount: amount,
                     quickBooksPaymentID: result.accountingPayment?.Id,
@@ -1558,7 +1564,9 @@ struct PaymentsAndReceiptsView: View {
             defer { isProcessingQuickBooksPayment = false }
 
             do {
+                let localPaymentID = UUID()
                 let result = try await QuickBooksPaymentsService.shared.processBankPayment(
+                    localPaymentID: localPaymentID,
                     invoice: invoice,
                     amount: amount,
                     bankInput: QuickBooksPaymentsBankAccountInput(
@@ -1574,6 +1582,7 @@ struct PaymentsAndReceiptsView: View {
                 )
                 authorizationReference = result.charge.authCode ?? authorizationReference
                 let payment = saveLocalPayment(
+                    id: localPaymentID,
                     invoice: invoice,
                     amount: amount,
                     quickBooksPaymentID: result.accountingPayment?.Id,

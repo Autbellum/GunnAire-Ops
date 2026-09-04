@@ -111,6 +111,9 @@ enum GunnAireCloudKit {
         }
 
         #if DEBUG
+        if GunnAireCloudKitRoundTripProbe.isRequested {
+            return GunnAireCloudKitRoundTripProbe.modelConfiguration(for: schema)
+        }
         if GunnAireCloudKitSchemaBootstrap.isRequested {
             return GunnAireCloudKitSchemaBootstrap.modelConfiguration(for: schema)
         }
@@ -369,6 +372,556 @@ final class GunnAireCloudKitEventMonitor: ObservableObject {
 }
 
 #if DEBUG
+/// A Development-only, privacy-safe signed-device acceptance canary.
+///
+/// The canary uses one fixed-ID BusinessTask in its own local store. It never
+/// opens the normal business store, never contains a customer relationship,
+/// and is compiled out of Release builds. Explicit launch arguments make each
+/// phase reviewable and allow both a Mac -> iPad create/update/delete round
+/// trip and an offline same-record conflict/recovery sequence to be proved
+/// without adding another production UI or persistence type. Conflict writes
+/// retain fixed, append-only BusinessTaskEvent witnesses so a last-writer-wins
+/// task value can never be mistaken for proof that both device edits arrived.
+@MainActor
+enum GunnAireCloudKitRoundTripProbe {
+    enum Mode: String, CaseIterable, Codable, Sendable {
+        case create
+        case observeCreated
+        case update
+        case observeUpdated
+        case delete
+        case observeDeleted
+        case seedConflict
+        case observeConflictSeed
+        case writeConflictA
+        case writeConflictB
+        case observeConflictConverged
+        case resolveConflict
+        case observeConflictResolved
+        case cleanupConflict
+        case observeConflictDeleted
+        case purgeLocal
+
+        var launchArgument: String {
+            switch self {
+            case .create: "-createCloudKitRoundTripCanary"
+            case .observeCreated: "-observeCreatedCloudKitRoundTripCanary"
+            case .update: "-updateCloudKitRoundTripCanary"
+            case .observeUpdated: "-observeUpdatedCloudKitRoundTripCanary"
+            case .delete: "-deleteCloudKitRoundTripCanary"
+            case .observeDeleted: "-observeDeletedCloudKitRoundTripCanary"
+            case .seedConflict: "-seedCloudKitConflictCanary"
+            case .observeConflictSeed: "-observeCloudKitConflictSeed"
+            case .writeConflictA: "-writeCloudKitConflictA"
+            case .writeConflictB: "-writeCloudKitConflictB"
+            case .observeConflictConverged: "-observeCloudKitConflictConverged"
+            case .resolveConflict: "-resolveCloudKitConflictCanary"
+            case .observeConflictResolved: "-observeCloudKitConflictResolved"
+            case .cleanupConflict: "-cleanupCloudKitConflictCanary"
+            case .observeConflictDeleted: "-observeCloudKitConflictDeleted"
+            case .purgeLocal: "-purgeLocalCloudKitRoundTripProbe"
+            }
+        }
+    }
+
+    enum CanaryState: String, Codable, Sendable {
+        case absent
+        case original
+        case updated
+        case conflictA
+        case conflictB
+        case conflictWritePending
+        case conflictConverged
+        case conflictResolutionPending
+        case conflictResolved
+        case cleanupPending
+        case duplicate
+        case unexpected
+        case error
+    }
+
+    struct ActionResult: Equatable, Sendable {
+        let state: CanaryState
+        let matchCount: Int
+        let actionPerformed: Bool
+    }
+
+    private struct Report: Codable {
+        let schemaVersion: Int
+        let generatedAtUTC: Date
+        let applicationBuild: String
+        let mode: Mode
+        let attempt: Int
+        let state: CanaryState
+        let matchCount: Int
+        let actionPerformed: Bool
+        let expectationMet: Bool
+        let errorCode: String?
+    }
+
+    static let schemaVersion = 2
+    static let storeFileName = "GunnAireCloudKitRoundTripProbeV2.store"
+    static let reportFileName = "GunnAireCloudKitRoundTripProbeV2.json"
+    static let canaryID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000001")!
+    static let canaryCreationOperationID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000002")!
+    static let conflictEventAID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000003")!
+    static let conflictEventAOperationID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000004")!
+    static let conflictEventBID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000005")!
+    static let conflictEventBOperationID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000006")!
+    static let conflictResolutionEventID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000007")!
+    static let conflictResolutionOperationID = UUID(uuidString: "C10DA1A0-0000-4000-8000-000000000008")!
+    static let canaryTitle = "__GUNNAIRE_CLOUDKIT_ROUND_TRIP__"
+    static let originalDescription = "__GUNNAIRE_CLOUDKIT_ROUND_TRIP_CREATED__"
+    static let updatedDescription = "__GUNNAIRE_CLOUDKIT_ROUND_TRIP_UPDATED__"
+    static let conflictADescription = "__GUNNAIRE_CLOUDKIT_CONFLICT_A__"
+    static let conflictBDescription = "__GUNNAIRE_CLOUDKIT_CONFLICT_B__"
+    static let conflictResolvedDescription = "__GUNNAIRE_CLOUDKIT_CONFLICT_RESOLVED_A_B__"
+    static let canaryEmail = "cloudkit-roundtrip@gunnaire.invalid"
+    static let canaryDate = Date(timeIntervalSinceReferenceDate: 900_000_000)
+
+    private static let maximumAttempt = 5
+    private static let attemptDelays: [TimeInterval] = [0, 2, 5, 10, 20]
+
+    static func requestedModes(processArguments: [String] = ProcessInfo.processInfo.arguments) -> [Mode] {
+        Mode.allCases.filter { processArguments.contains($0.launchArgument) }
+    }
+
+    static func mode(processArguments: [String] = ProcessInfo.processInfo.arguments) -> Mode? {
+        let modes = requestedModes(processArguments: processArguments)
+        return modes.count == 1 ? modes[0] : nil
+    }
+
+    static var isRequested: Bool {
+        !requestedModes().isEmpty
+    }
+
+    private static var storeURL: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(storeFileName)
+    }
+
+    private static var reportURL: URL {
+        let supportDirectory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+        return supportDirectory.appendingPathComponent(reportFileName)
+    }
+
+    static func modelConfiguration(for schema: Schema) -> ModelConfiguration {
+        if mode() == .purgeLocal || mode() == nil {
+            return ModelConfiguration(
+                "GunnAireCloudKitRoundTripProbePurge",
+                schema: schema,
+                isStoredInMemoryOnly: true,
+                cloudKitDatabase: .none
+            )
+        }
+
+        return ModelConfiguration(
+            "GunnAireCloudKitRoundTripProbeV2",
+            schema: schema,
+            url: storeURL,
+            allowsSave: true,
+            cloudKitDatabase: .private(GunnAireCloudKit.containerIdentifier)
+        )
+    }
+
+    static func prepareBeforeContainerIfRequested() throws {
+        let modes = requestedModes()
+        guard !modes.isEmpty else { return }
+        guard modes.count == 1 else {
+            throw ProbeError.multipleModes
+        }
+        guard modes[0] == .purgeLocal else { return }
+
+        let fileManager = FileManager.default
+        let storeDirectory = storeURL.deletingLastPathComponent()
+        let storeBaseName = storeURL.deletingPathExtension().lastPathComponent
+        let exactURLs = [
+            storeURL,
+            URL(fileURLWithPath: storeURL.path + "-shm"),
+            URL(fileURLWithPath: storeURL.path + "-wal"),
+            URL(fileURLWithPath: storeURL.deletingPathExtension().path + "_SUPPORT"),
+            URL(fileURLWithPath: storeURL.deletingPathExtension().path + "_ckAssets"),
+            storeDirectory.appendingPathComponent(".\(storeBaseName)_SUPPORT"),
+            storeDirectory.appendingPathComponent(".\(storeBaseName)_ckAssets"),
+            reportURL
+        ]
+        for url in exactURLs where fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
+        }
+    }
+
+    static func runIfRequested(in modelContext: ModelContext) throws {
+        let modes = requestedModes()
+        guard !modes.isEmpty else { return }
+        guard modes.count == 1 else {
+            throw ProbeError.multipleModes
+        }
+        let mode = modes[0]
+        guard mode != .purgeLocal else { return }
+
+        schedule(mode: mode, in: modelContext)
+    }
+
+    private static func schedule(mode: Mode, in modelContext: ModelContext) {
+        Task { @MainActor in
+            var previousDelay: TimeInterval = 0
+            for (index, absoluteDelay) in attemptDelays.enumerated() {
+                let incrementalDelay = absoluteDelay - previousDelay
+                previousDelay = absoluteDelay
+                if incrementalDelay > 0 {
+                    try? await Task.sleep(for: .seconds(incrementalDelay))
+                }
+
+                do {
+                    let result = try apply(mode, in: modelContext)
+                    let attempt = index + 1
+                    let expectationMet = expectationMet(
+                        mode: mode,
+                        result: result,
+                        attempt: attempt
+                    )
+                    try writeReport(
+                        mode: mode,
+                        attempt: attempt,
+                        result: result,
+                        expectationMet: expectationMet,
+                        errorCode: nil
+                    )
+                    debugLog(
+                        "mode=\(mode.rawValue) attempt=\(attempt) state=\(result.state.rawValue) " +
+                        "matches=\(result.matchCount) action=\(result.actionPerformed) passed=\(expectationMet)"
+                    )
+                    if expectationMet { return }
+                } catch {
+                    let attempt = index + 1
+                    try? writeReport(
+                        mode: mode,
+                        attempt: attempt,
+                        result: ActionResult(state: .error, matchCount: 0, actionPerformed: false),
+                        expectationMet: false,
+                        errorCode: String(describing: error)
+                    )
+                    debugLog("mode=\(mode.rawValue) attempt=\(attempt) failed: \(String(describing: error))")
+                }
+            }
+        }
+    }
+
+    static func apply(
+        _ mode: Mode,
+        in modelContext: ModelContext,
+        now: Date = Date()
+    ) throws -> ActionResult {
+        guard mode != .purgeLocal else {
+            return ActionResult(state: .absent, matchCount: 0, actionPerformed: false)
+        }
+
+        var snapshot = try conflictSnapshot(in: modelContext)
+        var state = canaryState(snapshot: snapshot)
+        guard state != .duplicate else {
+            return ActionResult(state: state, matchCount: snapshot.matchCount, actionPerformed: false)
+        }
+
+        var actionPerformed = false
+        switch mode {
+        case .create, .seedConflict:
+            if state == .absent {
+                modelContext.insert(makeCanary())
+                try modelContext.save()
+                actionPerformed = true
+            }
+        case .update:
+            if state == .original, let canary = snapshot.canary {
+                canary.taskDescription = updatedDescription
+                canary.updatedAt = now
+                try modelContext.save()
+                actionPerformed = true
+            }
+        case .delete:
+            if [.original, .updated].contains(state), let canary = snapshot.canary {
+                modelContext.delete(canary)
+                try modelContext.save()
+                actionPerformed = true
+            }
+        case .writeConflictA, .writeConflictB:
+            let expectedState: CanaryState = mode == .writeConflictA ? .conflictA : .conflictB
+            if state == .original, let canary = snapshot.canary,
+               let event = makeConflictEvent(for: mode, at: now) {
+                canary.taskDescription = mode == .writeConflictA ? conflictADescription : conflictBDescription
+                canary.updatedAt = now
+                modelContext.insert(event)
+                try modelContext.save()
+                actionPerformed = true
+            } else if state == expectedState {
+                // The first save may have completed even if its caller did not
+                // observe the response. Keep retries idempotent.
+            }
+        case .resolveConflict:
+            let eventIDs = Set(snapshot.events.map(\.id))
+            let convergedIDs = Set([conflictEventAID, conflictEventBID])
+            if eventIDs.isSuperset(of: convergedIDs), let canary = snapshot.canary,
+               [conflictADescription, conflictBDescription, conflictResolvedDescription]
+                .contains(canary.taskDescription ?? "") {
+                if canary.taskDescription != conflictResolvedDescription {
+                    canary.taskDescription = conflictResolvedDescription
+                    canary.updatedAt = now
+                    actionPerformed = true
+                }
+                if !eventIDs.contains(conflictResolutionEventID),
+                   let event = makeConflictEvent(for: mode, at: now) {
+                    modelContext.insert(event)
+                    actionPerformed = true
+                }
+                try modelContext.save()
+            }
+        case .cleanupConflict:
+            if [.conflictResolved, .cleanupPending].contains(state) {
+                if let canary = snapshot.canary {
+                    modelContext.delete(canary)
+                }
+                for event in snapshot.events {
+                    modelContext.delete(event)
+                }
+                try modelContext.save()
+                actionPerformed = snapshot.matchCount > 0
+            }
+        case .observeCreated, .observeUpdated, .observeDeleted,
+                .observeConflictSeed, .observeConflictConverged,
+                .observeConflictResolved, .observeConflictDeleted:
+            break
+        case .purgeLocal:
+            break
+        }
+
+        snapshot = try conflictSnapshot(in: modelContext)
+        state = canaryState(snapshot: snapshot)
+        return ActionResult(
+            state: state,
+            matchCount: snapshot.matchCount,
+            actionPerformed: actionPerformed
+        )
+    }
+
+    private struct ConflictSnapshot {
+        let canaryMatches: [BusinessTask]
+        let events: [BusinessTaskEvent]
+
+        var canary: BusinessTask? { canaryMatches.first }
+        var matchCount: Int { canaryMatches.count + events.count }
+    }
+
+    private static func conflictSnapshot(in modelContext: ModelContext) throws -> ConflictSnapshot {
+        let canaryID = canaryID
+        let taskDescriptor = FetchDescriptor<BusinessTask>(
+            predicate: #Predicate { $0.id == canaryID }
+        )
+        let eventDescriptor = FetchDescriptor<BusinessTaskEvent>(
+            predicate: #Predicate { $0.taskID == canaryID }
+        )
+        return ConflictSnapshot(
+            canaryMatches: try modelContext.fetch(taskDescriptor),
+            events: try modelContext.fetch(eventDescriptor)
+        )
+    }
+
+    private static func makeCanary() -> BusinessTask {
+        BusinessTask(
+            id: canaryID,
+            creationOperationID: canaryCreationOperationID,
+            title: canaryTitle,
+            taskDescription: originalDescription,
+            priority: .low,
+            assignedToEmail: canaryEmail,
+            dueAt: canaryDate,
+            createdAt: canaryDate,
+            createdByEmail: canaryEmail
+        )
+    }
+
+    static func makeConflictEvent(for mode: Mode, at date: Date = Date()) -> BusinessTaskEvent? {
+        let identity: (id: UUID, operationID: UUID, detail: String)
+        switch mode {
+        case .writeConflictA:
+            identity = (conflictEventAID, conflictEventAOperationID, conflictADescription)
+        case .writeConflictB:
+            identity = (conflictEventBID, conflictEventBOperationID, conflictBDescription)
+        case .resolveConflict:
+            identity = (conflictResolutionEventID, conflictResolutionOperationID, conflictResolvedDescription)
+        default:
+            return nil
+        }
+        return BusinessTaskEvent(
+            id: identity.id,
+            operationID: identity.operationID,
+            taskID: canaryID,
+            kind: .updated,
+            occurredAt: date,
+            actorEmail: canaryEmail,
+            detail: identity.detail,
+            titleSnapshot: canaryTitle,
+            assignedToEmailSnapshot: canaryEmail,
+            dueAtSnapshot: canaryDate,
+            priority: .low
+        )
+    }
+
+    private static func canaryState(snapshot: ConflictSnapshot) -> CanaryState {
+        guard snapshot.canaryMatches.count <= 1 else { return .duplicate }
+        let groupedEvents = Dictionary(grouping: snapshot.events, by: \BusinessTaskEvent.id)
+        guard groupedEvents.values.allSatisfy({ $0.count == 1 }) else { return .duplicate }
+        let eventsByID = Dictionary(uniqueKeysWithValues: snapshot.events.map { ($0.id, $0) })
+        let expectedIDs = Set([conflictEventAID, conflictEventBID, conflictResolutionEventID])
+        guard Set(eventsByID.keys).isSubset(of: expectedIDs),
+              eventsByID.values.allSatisfy(conflictEventIsValid) else {
+            return .unexpected
+        }
+        guard let canary = snapshot.canary else {
+            return snapshot.events.isEmpty ? .absent : .cleanupPending
+        }
+        guard exactCanaryIdentity(canary) else { return .unexpected }
+
+        let eventIDs = Set(eventsByID.keys)
+        if eventIDs.isEmpty {
+            if canary.taskDescription == originalDescription { return .original }
+            if canary.taskDescription == updatedDescription { return .updated }
+            if [conflictADescription, conflictBDescription].contains(canary.taskDescription ?? "") {
+                return .conflictWritePending
+            }
+            if canary.taskDescription == conflictResolvedDescription { return .cleanupPending }
+            return .unexpected
+        }
+        if eventIDs == [conflictEventAID], canary.taskDescription == conflictADescription {
+            return .conflictA
+        }
+        if eventIDs == [conflictEventBID], canary.taskDescription == conflictBDescription {
+            return .conflictB
+        }
+        let convergedIDs = Set([conflictEventAID, conflictEventBID])
+        if eventIDs == convergedIDs,
+           [conflictADescription, conflictBDescription].contains(canary.taskDescription ?? "") {
+            return .conflictConverged
+        }
+        if eventIDs.isSubset(of: convergedIDs),
+           [originalDescription, conflictADescription, conflictBDescription]
+            .contains(canary.taskDescription ?? "") {
+            return .conflictWritePending
+        }
+        if eventIDs.isSuperset(of: convergedIDs),
+           [conflictADescription, conflictBDescription].contains(canary.taskDescription ?? "") {
+            return .conflictResolutionPending
+        }
+        if eventIDs == expectedIDs, canary.taskDescription == conflictResolvedDescription {
+            return .conflictResolved
+        }
+        if eventIDs.isSubset(of: expectedIDs), canary.taskDescription == conflictResolvedDescription {
+            return .cleanupPending
+        }
+        return .unexpected
+    }
+
+    private static func exactCanaryIdentity(_ canary: BusinessTask) -> Bool {
+        canary.title == canaryTitle &&
+            canary.creationOperationID == canaryCreationOperationID &&
+            canary.assignedToEmail == canaryEmail &&
+            canary.createdByEmail == canaryEmail
+    }
+
+    private static func conflictEventIsValid(_ event: BusinessTaskEvent) -> Bool {
+        let expected: (operationID: UUID, detail: String)?
+        switch event.id {
+        case conflictEventAID:
+            expected = (conflictEventAOperationID, conflictADescription)
+        case conflictEventBID:
+            expected = (conflictEventBOperationID, conflictBDescription)
+        case conflictResolutionEventID:
+            expected = (conflictResolutionOperationID, conflictResolvedDescription)
+        default:
+            expected = nil
+        }
+        guard let expected else { return false }
+        return event.operationID == expected.operationID &&
+            event.taskID == canaryID &&
+            event.kind == .updated &&
+            event.actorEmail == canaryEmail &&
+            event.detail == expected.detail &&
+            event.titleSnapshot == canaryTitle &&
+            event.assignedToEmailSnapshot == canaryEmail &&
+            event.dueAtSnapshot == canaryDate &&
+            event.prioritySnapshot == .low
+    }
+
+    private static func expectationMet(
+        mode: Mode,
+        result: ActionResult,
+        attempt: Int
+    ) -> Bool {
+        switch mode {
+        case .create, .observeCreated:
+            result.state == .original
+        case .update, .observeUpdated:
+            result.state == .updated
+        case .delete:
+            result.state == .absent && (result.actionPerformed || attempt == maximumAttempt)
+        case .observeDeleted:
+            result.state == .absent && attempt == maximumAttempt
+        case .seedConflict, .observeConflictSeed:
+            result.state == .original
+        case .writeConflictA:
+            result.state == .conflictA
+        case .writeConflictB:
+            result.state == .conflictB
+        case .observeConflictConverged:
+            result.state == .conflictConverged
+        case .resolveConflict, .observeConflictResolved:
+            result.state == .conflictResolved
+        case .cleanupConflict:
+            result.state == .absent && (result.actionPerformed || attempt == maximumAttempt)
+        case .observeConflictDeleted:
+            result.state == .absent && attempt == maximumAttempt
+        case .purgeLocal:
+            true
+        }
+    }
+
+    private static func writeReport(
+        mode: Mode,
+        attempt: Int,
+        result: ActionResult,
+        expectationMet: Bool,
+        errorCode: String?
+    ) throws {
+        let report = Report(
+            schemaVersion: schemaVersion,
+            generatedAtUTC: Date(),
+            applicationBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+            mode: mode,
+            attempt: attempt,
+            state: result.state,
+            matchCount: result.matchCount,
+            actionPerformed: result.actionPerformed,
+            expectationMet: expectationMet,
+            errorCode: errorCode
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(report)
+        let directory = reportURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try data.write(to: reportURL, options: .atomic)
+    }
+
+    private static func debugLog(_ message: String) {
+        FileHandle.standardError.write(Data("[GunnAireCloudKitRoundTripProbe] \(message)\n".utf8))
+    }
+
+    private enum ProbeError: Error {
+        case multipleModes
+    }
+}
+
 /// Development-only tooling for making SwiftData publish every production
 /// entity to the CloudKit development schema. SwiftData creates CloudKit
 /// record types lazily, so launching an empty store only creates types for

@@ -58,6 +58,11 @@ struct SupplierConnectorReadiness: Codable, Identifiable, Equatable {
     let detail: String
     let capabilities: [String]
     let canSubmitOrders: Bool
+    let accessModel: String?
+    let integrationProtocol: String?
+    let publicAPIDocumented: Bool?
+    let onboardingRequirements: [String]?
+    let publicDocumentationReviewedAt: String?
     let onboardingURL: String?
 
     var id: SupplierConnectorKind { kind }
@@ -77,10 +82,45 @@ struct SupplierConnectorReadiness: Codable, Identifiable, Equatable {
         case "ready": "Ready"
         case "onboardingRequired": "Onboarding required"
         case "partnerGated": "Partner approval required"
-        case "thirdPartyOnly": "Third-party only"
+        case "thirdPartyOnly": "Published for a third party only"
         case "adapterRequired": "Server adapter required"
         default: "Unavailable"
         }
+    }
+
+    var accessModelLabel: String? {
+        switch accessModel {
+        case "accountRepresentativeProvisioned": "Account-representative setup"
+        case "customerSpecificProvisioning": "Customer-specific setup"
+        case "exclusiveThirdParty": "Exclusive third-party path"
+        case "supplierSpecific": "Supplier-specific agreement"
+        default: nil
+        }
+    }
+
+    var integrationProtocolLabel: String? {
+        switch integrationProtocol {
+        case "formattedDataOrFile": "Formatted data or file exchange"
+        case "cXMLPunchOut": "cXML Punch-out"
+        case "serviceTitanMarketplace": "ServiceTitan marketplace integration"
+        case "providerDocumented": "Supplier-documented adapter"
+        default: nil
+        }
+    }
+
+    var capabilityLabels: [String] {
+        capabilities.compactMap { capability in
+            switch capability {
+            case "catalog": "Catalog"
+            case "priceAvailability": "Price and availability"
+            case "purchaseOrders": "Purchase orders"
+            default: nil
+            }
+        }
+    }
+
+    var requirements: [String] {
+        onboardingRequirements ?? []
     }
 }
 

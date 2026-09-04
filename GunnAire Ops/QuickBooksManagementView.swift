@@ -52,6 +52,7 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
     case missingCatalogSnapshot
     case missingCatalogItem(String)
     case pricebookReviewRequired(String)
+    case catalogItemArchived(String)
     case missingQuickBooksItemMapping(String)
     case invalidLineAmount(String)
     case invalidDocumentDiscount
@@ -65,6 +66,8 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
             return "The local catalog item for \(name) is missing. Open Job Billing and replace that line before retrying."
         case .pricebookReviewRequired(let name):
             return "\(name) needs administrator pricebook review before this document can publish to QuickBooks."
+        case .catalogItemArchived(let name):
+            return "\(name) is archived from new work. Restore and reconcile that pricebook item or replace the line before publishing to QuickBooks."
         case .missingQuickBooksItemMapping(let name):
             return "\(name) is not linked to a QuickBooks product or service. Review and publish the catalog item first."
         case .invalidLineAmount(let name):
@@ -100,6 +103,9 @@ enum QuickBooksDocumentLinePublication {
             }
             guard !item.requiresPricebookReview else {
                 throw QuickBooksDocumentLinePublicationError.pricebookReviewRequired(snapshot.name)
+            }
+            guard !item.isCatalogArchived else {
+                throw QuickBooksDocumentLinePublicationError.catalogItemArchived(snapshot.name)
             }
             return item
         }
@@ -340,11 +346,162 @@ enum QuickBooksEstimatePublicationRecovery {
 
 enum PricebookReviewPublicationError: LocalizedError, Equatable {
     case ambiguousRemoteMatch(String)
+    case missingLinkedRemoteItem(name: String, quickBooksID: String)
+    case ambiguousLinkedRemoteItem(String)
 
     var errorDescription: String? {
         switch self {
         case .ambiguousRemoteMatch(let name):
             return "More than one QuickBooks catalog item matches \(name). Link the correct item manually before publishing."
+        case .missingLinkedRemoteItem(let name, let quickBooksID):
+            return "QuickBooks did not return linked item \(quickBooksID) for \(name). No catalog write was sent; confirm the company realm and item before retrying."
+        case .ambiguousLinkedRemoteItem(let quickBooksID):
+            return "QuickBooks returned linked item \(quickBooksID) more than once. No catalog write was sent."
+        }
+    }
+}
+
+enum ApprovedPricebookLinkOutcome: Equatable {
+    case synchronized
+    case reconciliationRequired(differenceCount: Int)
+}
+
+enum CompanyPricebookSyncDisposition: Equatable {
+    case synchronized
+    case publicationPending
+    case comparisonPending
+    case needsAttention
+
+    var title: String {
+        switch self {
+        case .synchronized:
+            "Synced with QuickBooks"
+        case .publicationPending:
+            "QuickBooks publication pending"
+        case .comparisonPending:
+            "QuickBooks comparison pending"
+        case .needsAttention:
+            "QuickBooks needs attention"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .synchronized:
+            "checkmark.circle.fill"
+        case .publicationPending:
+            "arrow.up.circle"
+        case .comparisonPending:
+            "arrow.triangle.2.circlepath"
+        case .needsAttention:
+            "exclamationmark.triangle.fill"
+        }
+    }
+}
+
+/// Keeps the operational GunnAire pricebook browseable even when the provider
+/// is disconnected. Review drafts and archived records already have dedicated
+/// compact queues; this list is the active catalog used for new field work.
+enum CompanyPricebookPresentation {
+    static func activeItems(from items: [Item], matching query: String) -> [Item] {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return items
+            .filter { item in
+                guard item.isAvailableForNewWork else { return false }
+                guard !normalizedQuery.isEmpty else { return true }
+                return [
+                    item.name,
+                    item.sku,
+                    item.itemDescription,
+                    item.preferredVendorName,
+                    item.vendorPartNumber,
+                    item.quickBooksID
+                ]
+                .compactMap { $0?.lowercased() }
+                .joined(separator: " ")
+                .contains(normalizedQuery)
+            }
+            .sorted { lhs, rhs in
+                let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+                if nameOrder != .orderedSame {
+                    return nameOrder == .orderedAscending
+                }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+    }
+
+    static func syncDisposition(for item: Item) -> CompanyPricebookSyncDisposition {
+        switch item.quickBooksCatalogSyncState {
+        case "synced":
+            .synchronized
+        case "pending":
+            .publicationPending
+        case "pending_update":
+            .comparisonPending
+        default:
+            .needsAttention
+        }
+    }
+}
+
+enum CatalogItemLifecycleError: LocalizedError {
+    case pendingDocuments(PricebookReviewDocumentImpact)
+    case activeAssemblyDependencies([String])
+    case activeAgreementDependencies([String])
+    case archivedCannotPublish(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .pendingDocuments(let impact):
+            return "Archive this item after its pending document work is resolved. \(impact.summary)"
+        case .activeAssemblyDependencies(let names):
+            return "Archive or revise the active service package\(names.count == 1 ? "" : "s") that still use this item: \(names.joined(separator: ", "))."
+        case .activeAgreementDependencies(let names):
+            return "Choose a replacement billing item for the active service agreement\(names.count == 1 ? "" : "s") before archiving: \(names.joined(separator: ", "))."
+        case .archivedCannotPublish(let name):
+            return "\(name) is archived and cannot be published as a new QuickBooks catalog item. Restore it first."
+        }
+    }
+}
+
+enum CatalogItemLifecyclePolicy {
+    static func validateArchive(
+        _ item: Item,
+        catalogItems: [Item],
+        estimates: [Estimate],
+        invoices: [Invoice],
+        agreements: [RecurringMaintenanceContract]
+    ) throws {
+        let impact = PricebookReviewQueue.documentImpact(
+            for: item,
+            estimates: estimates,
+            invoices: invoices
+        )
+        guard impact.totalCount == 0 else {
+            throw CatalogItemLifecycleError.pendingDocuments(impact)
+        }
+
+        let dependentPackages = catalogItems.filter { candidate in
+            candidate.id != item.id &&
+            candidate.isAvailableForNewWork &&
+            candidate.assemblyDefinition?.components.contains(where: { $0.itemID == item.id }) == true
+        }
+        guard dependentPackages.isEmpty else {
+            throw CatalogItemLifecycleError.activeAssemblyDependencies(
+                dependentPackages.map(\.name).sorted()
+            )
+        }
+
+        let dependentAgreements = agreements.filter { agreement in
+            agreement.billingCatalogItemID == item.id &&
+            agreement.active &&
+            agreement.lifecycleStatus != .cancelled &&
+            agreement.lifecycleStatus != .declined
+        }
+        guard dependentAgreements.isEmpty else {
+            throw CatalogItemLifecycleError.activeAgreementDependencies(
+                dependentAgreements.map { "\($0.customer?.name ?? "Customer unavailable") • \($0.displayName)" }.sorted()
+            )
         }
     }
 }
@@ -365,6 +522,48 @@ enum PricebookReviewPublication {
             throw PricebookReviewPublicationError.ambiguousRemoteMatch(localItem.name)
         }
         return candidates.first
+    }
+
+    static func linkedRemoteItem(
+        for localItem: Item,
+        in remoteItems: [QuickBooksItem]
+    ) throws -> QuickBooksItem {
+        let quickBooksID = localItem.quickBooksID?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let candidates = remoteItems.filter { normalize($0.Id) == normalize(quickBooksID) }
+        guard candidates.count <= 1 else {
+            throw PricebookReviewPublicationError.ambiguousLinkedRemoteItem(quickBooksID)
+        }
+        guard let linkedItem = candidates.first, !quickBooksID.isEmpty else {
+            throw PricebookReviewPublicationError.missingLinkedRemoteItem(
+                name: localItem.name,
+                quickBooksID: quickBooksID.isEmpty ? "unassigned" : quickBooksID
+            )
+        }
+        return linkedItem
+    }
+
+    @discardableResult
+    static func linkApprovedItem(
+        _ localItem: Item,
+        to remoteItem: QuickBooksItem,
+        at date: Date = Date()
+    ) -> ApprovedPricebookLinkOutcome {
+        localItem.quickBooksID = remoteItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
+        localItem.quickBooksLastSyncedAt = date
+        localItem.timestamp = date
+        let differences = QuickBooksCatalogReconciliation.differences(
+            localItem: localItem,
+            remoteItem: remoteItem
+        )
+        guard !differences.isEmpty else {
+            localItem.quickBooksSyncStatus = "synced"
+            localItem.quickBooksSyncDetail = nil
+            return .synchronized
+        }
+        localItem.quickBooksSyncStatus = "pending_update"
+        localItem.quickBooksSyncDetail = "Pricebook approval is saved locally. Review \(differences.count) linked QuickBooks difference\(differences.count == 1 ? "" : "s") before choosing which version to publish."
+        return .reconciliationRequired(differenceCount: differences.count)
     }
 
     private static func normalize(_ value: String) -> String {
@@ -450,6 +649,8 @@ enum QuickBooksCatalogPublicationRecovery {
         items
             .filter { item in
                 !item.requiresPricebookReview &&
+                !item.isCatalogArchived &&
+                item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
                 item.quickBooksCatalogSyncState != "synced" &&
                 !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             }
@@ -562,6 +763,15 @@ enum QuickBooksCatalogReconciliation {
                 )
             )
         }
+        if localItem.isAvailableForNewWork != (remoteItem.Active ?? true) {
+            result.append(
+                QuickBooksCatalogFieldDifference(
+                    field: "Availability",
+                    gunnAireValue: localItem.isAvailableForNewWork ? "Active" : "Archived",
+                    quickBooksValue: (remoteItem.Active ?? true) ? "Active" : "Inactive"
+                )
+            )
+        }
         appendTextDifference("Purchase description", localItem.purchaseDescription, remoteItem.PurchaseDesc, to: &result)
 
         let localVendorID = normalized(localItem.preferredVendorQuickBooksID ?? "")
@@ -622,7 +832,8 @@ enum QuickBooksCatalogReconciliation {
             Taxable: localItem.isTaxable,
             PrefVendorRef: localVendorID.flatMap { id in
                 id.isEmpty ? nil : QuickBooksReference(value: id, name: localItem.preferredVendorName)
-            }
+            },
+            Active: localItem.isAvailableForNewWork
         )
     }
 
@@ -692,6 +903,7 @@ struct QuickBooksCatalogAccountingSnapshot: Equatable {
     let isTaxable: Bool
     let purchaseDescription: String
     let preferredVendorQuickBooksID: String
+    let isActive: Bool
 
     init(item: Item) {
         self.init(
@@ -703,7 +915,8 @@ struct QuickBooksCatalogAccountingSnapshot: Equatable {
             purchaseCost: item.purchaseCost,
             isTaxable: item.isTaxable,
             purchaseDescription: item.purchaseDescription,
-            preferredVendorQuickBooksID: item.preferredVendorQuickBooksID
+            preferredVendorQuickBooksID: item.preferredVendorQuickBooksID,
+            isActive: item.isAvailableForNewWork
         )
     }
 
@@ -716,7 +929,8 @@ struct QuickBooksCatalogAccountingSnapshot: Equatable {
         purchaseCost: Double?,
         isTaxable: Bool,
         purchaseDescription: String?,
-        preferredVendorQuickBooksID: String?
+        preferredVendorQuickBooksID: String?,
+        isActive: Bool = true
     ) {
         self.name = Self.trimmed(name)
         self.itemType = itemType
@@ -727,6 +941,7 @@ struct QuickBooksCatalogAccountingSnapshot: Equatable {
         self.isTaxable = isTaxable
         self.purchaseDescription = Self.trimmed(purchaseDescription)
         self.preferredVendorQuickBooksID = Self.trimmed(preferredVendorQuickBooksID).lowercased()
+        self.isActive = isActive
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -738,7 +953,8 @@ struct QuickBooksCatalogAccountingSnapshot: Equatable {
         abs(lhs.purchaseCost - rhs.purchaseCost) < 0.005 &&
         lhs.isTaxable == rhs.isTaxable &&
         lhs.purchaseDescription == rhs.purchaseDescription &&
-        lhs.preferredVendorQuickBooksID == rhs.preferredVendorQuickBooksID
+        lhs.preferredVendorQuickBooksID == rhs.preferredVendorQuickBooksID &&
+        lhs.isActive == rhs.isActive
     }
 
     private static func trimmed(_ value: String?) -> String {
@@ -758,16 +974,78 @@ enum QuickBooksCatalogStagingPolicy {
     }
 }
 
+enum QuickBooksCatalogLocalCreationPolicy {
+    static func makeItem(
+        id: UUID = UUID(),
+        name: String,
+        itemType: CatalogItemType,
+        sku: String?,
+        unitPrice: Double,
+        purchaseCost: Double?,
+        isTaxable: Bool,
+        itemDescription: String?,
+        purchaseDescription: String?,
+        preferredVendor: QuickBooksReference?,
+        actorEmail: String?,
+        createdAt: Date = Date()
+    ) -> Item {
+        Item(
+            id: id,
+            quickBooksSyncStatus: "pending",
+            quickBooksSyncDetail: "Saved locally; QuickBooks catalog publication is pending.",
+            pricebookReviewStatus: .approved,
+            pricebookCreatedByEmail: actorEmail,
+            pricebookReviewedByEmail: actorEmail,
+            pricebookReviewedAt: createdAt,
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            itemType: itemType,
+            unitPrice: unitPrice,
+            purchaseCost: purchaseCost,
+            isTaxable: isTaxable,
+            itemDescription: itemDescription,
+            sku: sku,
+            preferredVendorName: preferredVendor?.name,
+            preferredVendorQuickBooksID: preferredVendor?.value,
+            purchaseDescription: purchaseDescription,
+            createdAt: createdAt
+        )
+    }
+}
+
+enum QuickBooksTrackedPaymentPolicy {
+    static func linkedLocalInvoice(
+        for quickBooksInvoice: QuickBooksInvoice,
+        in localInvoices: [Invoice]
+    ) -> Invoice? {
+        let quickBooksID = normalized(quickBooksInvoice.Id)
+        let documentNumber = normalized(quickBooksInvoice.DocNumber)
+        let matches = localInvoices.filter { localInvoice in
+            let localQuickBooksID = normalized(localInvoice.quickBooksID)
+            return !localQuickBooksID.isEmpty &&
+                (localQuickBooksID == quickBooksID ||
+                 (!documentNumber.isEmpty && localQuickBooksID == documentNumber))
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+
+    private static func normalized(_ value: String?) -> String {
+        (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
 struct QuickBooksManagementView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var quickBooksDataAPI = QuickBooksDataAPI.shared
     @ObservedObject private var accountingConfigurationStore = QuickBooksAccountingConfigurationStore.shared
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Customer.name, order: .forward) private var localCustomers: [Customer]
+    @Query(sort: \Vendor.name, order: .forward) private var localVendors: [Vendor]
     @Query(sort: \Item.name, order: .forward) private var localCatalogItems: [Item]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var localEstimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var localInvoices: [Invoice]
     @Query(sort: \Payment.date, order: .reverse) private var localPayments: [Payment]
+    @Query(sort: \RecurringMaintenanceContract.nextDate, order: .forward) private var localMaintenanceAgreements: [RecurringMaintenanceContract]
     private let liveAPI = QuickBooksAPI.shared
 
     @State private var customers: [QuickBooksCustomer] = []
@@ -799,6 +1077,7 @@ struct QuickBooksManagementView: View {
     @State private var showingRefundPaymentSheet = false
     @State private var showingStoreCardSheet = false
     @State private var showingAccountingMappingSheet = false
+    @State private var newlyCreatedLocalVendors: [Vendor] = []
 
     @State private var isLoading = false
     @State private var statusMessage = "Connect QuickBooks in Settings to start live sync."
@@ -806,7 +1085,6 @@ struct QuickBooksManagementView: View {
     @State private var syncResourceStatuses: [QuickBooksSyncResourceStatus] = Self.defaultSyncResourceStatuses
     @State private var lastSuccessfulSyncAt: Date? = UserDefaults.standard.object(forKey: "QuickBooksLastSuccessfulSyncAt") as? Date
     @State private var lastSyncStartedAt: Date?
-    @State private var activePaymentInvoiceID: String?
     @State private var activeEmailEstimateID: String?
     @State private var activeEmailInvoiceID: String?
     @State private var activeLocalEstimatePublicationID: UUID?
@@ -819,13 +1097,16 @@ struct QuickBooksManagementView: View {
     @State private var paymentToRefund: Payment?
     @State private var quickBooksReconnectRequired = false
     @State private var showCustomersList = false
+    @State private var showCompanyPricebook = false
     @State private var showCatalogList = false
     @State private var showEstimatePublicationQueue = false
     @State private var showCatalogPublicationQueue = false
     @State private var showCatalogReconciliationQueue = false
+    @State private var showArchivedCatalogItems = false
     @State private var showEstimatesList = false
     @State private var showInvoicesList = false
     @State private var customerSearchText = ""
+    @State private var companyPricebookSearchText = ""
     @State private var catalogSearchText = ""
     @State private var estimateSearchText = ""
     @State private var invoiceSearchText = ""
@@ -837,13 +1118,30 @@ struct QuickBooksManagementView: View {
     @State private var showWebhookEventDetails = false
 
     private var isAuthenticated: Bool {
-        quickBooksDataAPI.isAuthenticated
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksConnected") {
+            return true
+        }
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksDisconnected") {
+            return false
+        }
+        #endif
+        return quickBooksDataAPI.isAuthenticated
     }
 
     #if DEBUG
+    private var linkedPricebookReviewFixtureRequested: Bool {
+        ProcessInfo.processInfo.arguments.contains("-uiTestSeedLinkedPricebookReview")
+    }
+
     private var catalogReconciliationFixtureRequested: Bool {
         ProcessInfo.processInfo.arguments.contains("-uiTestSeedCatalogReconciliation") ||
-        ProcessInfo.processInfo.arguments.contains("-uiTestSeedCatalogMappingConflict")
+        ProcessInfo.processInfo.arguments.contains("-uiTestSeedCatalogMappingConflict") ||
+        linkedPricebookReviewFixtureRequested
+    }
+
+    private var catalogComparisonUnavailableFixtureRequested: Bool {
+        ProcessInfo.processInfo.arguments.contains("-uiTestCatalogComparisonUnavailable")
     }
 
     private var accountingMappingFixtureRequested: Bool {
@@ -891,6 +1189,11 @@ struct QuickBooksManagementView: View {
 
     private static var catalogReconciliationFixtureItems: [QuickBooksItem] {
         let data = Data(#"{"Id":"QBO-UI-CATALOG-RECONCILE","SyncToken":"12","Name":"HVAC Diagnostic Service","Type":"Service","Description":"Diagnostic visit and system evaluation","UnitPrice":189,"PurchaseCost":42,"Taxable":false}"#.utf8)
+        return (try? JSONDecoder().decode(QuickBooksItem.self, from: data)).map { [$0] } ?? []
+    }
+
+    private static var linkedPricebookReviewFixtureItems: [QuickBooksItem] {
+        let data = Data(#"{"Id":"QBO-UI-PRICEBOOK-REVIEW","SyncToken":"4","Name":"HVAC Diagnostic Service","Type":"Service","Description":"Diagnostic visit and system evaluation","UnitPrice":239,"PurchaseCost":42,"Taxable":false,"Active":true}"#.utf8)
         return (try? JSONDecoder().decode(QuickBooksItem.self, from: data)).map { [$0] } ?? []
     }
     #endif
@@ -995,7 +1298,13 @@ struct QuickBooksManagementView: View {
     }
 
     private var collectibleQuickBooksInvoices: [QuickBooksInvoice] {
-        invoices.filter { outstandingQuickBooksBalance(for: $0) > 0 }
+        invoices.filter { quickBooksInvoice in
+            guard outstandingQuickBooksBalance(for: quickBooksInvoice) > 0,
+                  let localInvoice = localInvoice(for: quickBooksInvoice) else {
+                return false
+            }
+            return localOutstandingBalance(for: localInvoice) > 0
+        }
     }
 
     private var collectibleLocalInvoices: [Invoice] {
@@ -1010,6 +1319,16 @@ struct QuickBooksManagementView: View {
         QuickBooksEstimatePublicationRecovery.queuedEstimates(from: localEstimates)
     }
 
+    private var locallyKnownVendors: [Vendor] {
+        let queriedIDs = Set(localVendors.map(\.id))
+        let sameSessionVendors = newlyCreatedLocalVendors.filter { !queriedIDs.contains($0.id) }
+        return localVendors + sameSessionVendors
+    }
+
+    private var localVendorPublicationQueue: [Vendor] {
+        QuickBooksVendorPublicationRecovery.queuedVendors(from: locallyKnownVendors)
+    }
+
     private var pendingPricebookReviewItems: [Item] {
         PricebookReviewQueue.queuedItems(
             from: localCatalogItems,
@@ -1022,11 +1341,44 @@ struct QuickBooksManagementView: View {
         QuickBooksCatalogPublicationRecovery.queuedItems(from: localCatalogItems)
     }
 
+    private var archivedCatalogItems: [Item] {
+        localCatalogItems
+            .filter(\.isCatalogArchived)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var activeCompanyPricebookItems: [Item] {
+        CompanyPricebookPresentation.activeItems(from: localCatalogItems, matching: "")
+    }
+
+    private var filteredCompanyPricebookItems: [Item] {
+        CompanyPricebookPresentation.activeItems(
+            from: localCatalogItems,
+            matching: companyPricebookSearchText
+        )
+    }
+
     private var catalogReconciliationEntries: [QuickBooksCatalogReconciliationEntry] {
         QuickBooksCatalogReconciliation.entries(
             localItems: localCatalogItems,
             remoteItems: items
         )
+    }
+
+    private var stagedCatalogReconciliationItems: [Item] {
+        localCatalogItems
+            .filter(\.hasPendingQuickBooksCatalogUpdate)
+            .sorted { lhs, rhs in
+                if lhs.needsQuickBooksAttention != rhs.needsQuickBooksAttention {
+                    return lhs.needsQuickBooksAttention
+                }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+
+    private var catalogItemsAwaitingLiveComparison: [Item] {
+        let comparedItemIDs = Set(catalogReconciliationEntries.map { $0.localItem.id })
+        return stagedCatalogReconciliationItems.filter { !comparedItemIDs.contains($0.id) }
     }
 
     private var catalogMappingConflicts: [QuickBooksCatalogMappingConflict] {
@@ -1479,7 +1831,7 @@ struct QuickBooksManagementView: View {
                             .accessibilityIdentifier("QuickBooksCatalogPublicationQueue")
                     ) {
                         if localCatalogPublicationQueue.isEmpty {
-                            Label("All approved local catalog items are linked to QuickBooks.", systemImage: "checkmark.circle.fill")
+                            Label("All active approved local catalog items are linked to QuickBooks.", systemImage: "checkmark.circle.fill")
                                 .foregroundStyle(.green)
                         } else {
                             Text("Retries first reconcile one unique QuickBooks name and SKU match. A new item is created only when no match exists.")
@@ -1585,7 +1937,7 @@ struct QuickBooksManagementView: View {
                         }
                     }
 
-                    if !catalogReconciliationEntries.isEmpty {
+                    if !stagedCatalogReconciliationItems.isEmpty {
                         Section(
                             header: Text("Catalog Reconciliation")
                                 .foregroundColor(Color.brandGold)
@@ -1596,6 +1948,49 @@ struct QuickBooksManagementView: View {
                                 .foregroundStyle(.secondary)
 
                             DisclosureGroup(isExpanded: $showCatalogReconciliationQueue) {
+                                if !catalogItemsAwaitingLiveComparison.isEmpty {
+                                    Label(
+                                        "Waiting for a live QuickBooks comparison",
+                                        systemImage: "icloud.and.arrow.down"
+                                    )
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.orange)
+                                    .accessibilityIdentifier("QuickBooksCatalogComparisonWaiting")
+
+                                    Text("The local changes remain saved and no QuickBooks update has been sent. Reconnect or refresh before choosing which version wins.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+
+                                    ForEach(catalogItemsAwaitingLiveComparison) { item in
+                                        HStack(alignment: .firstTextBaseline) {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(item.name)
+                                                    .font(.subheadline.weight(.semibold))
+                                                if let quickBooksID = item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                                   !quickBooksID.isEmpty {
+                                                    Text("QBO \(quickBooksID) • Staged locally")
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                            }
+                                            Spacer()
+                                            if item.needsQuickBooksAttention {
+                                                Image(systemName: "exclamationmark.triangle.fill")
+                                                    .foregroundStyle(.orange)
+                                                    .accessibilityLabel("Needs attention")
+                                            }
+                                        }
+                                        .accessibilityIdentifier("QuickBooksCatalogComparisonWaitingItem-\(item.id.uuidString)")
+                                    }
+
+                                    Button(isLoading ? "Refreshing..." : "Refresh QuickBooks") {
+                                        syncAllQuickBooksData()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .disabled(!isAuthenticated || isLoading)
+                                    .accessibilityIdentifier("RefreshQuickBooksCatalogComparison")
+                                }
+
                                 ForEach(catalogReconciliationEntries) { entry in
                                     VStack(alignment: .leading, spacing: 10) {
                                         HStack(alignment: .firstTextBaseline) {
@@ -1653,7 +2048,7 @@ struct QuickBooksManagementView: View {
                                 }
                             } label: {
                                 Label(
-                                    "Review \(catalogReconciliationEntries.count) staged \(catalogReconciliationEntries.count == 1 ? "item" : "items")",
+                                    "Review \(stagedCatalogReconciliationItems.count) staged \(stagedCatalogReconciliationItems.count == 1 ? "item" : "items")",
                                     systemImage: "arrow.left.arrow.right.square"
                                 )
                             }
@@ -1725,13 +2120,90 @@ struct QuickBooksManagementView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated)
+                            .disabled(isLoading)
                     }
 
-                    Section(header: Text("Product Catalog").foregroundColor(Color.brandGold)) {
-                        DisclosureGroup("Product Catalog (\(items.count))", isExpanded: $showCatalogList) {
+                    Section(
+                        header: Text("Company Pricebook")
+                            .foregroundColor(Color.brandGold)
+                            .accessibilityIdentifier("CompanyPricebookSection")
+                    ) {
+                        Text("This local catalog is available to authorized field workflows even when QuickBooks is disconnected. Provider publication and comparison status stays visible on each item.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        DisclosureGroup(isExpanded: $showCompanyPricebook) {
+                            if activeCompanyPricebookItems.isEmpty {
+                                emptyState("No active GunnAire pricebook items are available.")
+                            } else {
+                                TextField("Search company pricebook", text: $companyPricebookSearchText)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled()
+                                    .accessibilityIdentifier("CompanyPricebookSearch")
+
+                                if filteredCompanyPricebookItems.isEmpty {
+                                    Text("No active pricebook items match this search.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    ForEach(filteredCompanyPricebookItems) { item in
+                                        let disposition = CompanyPricebookPresentation.syncDisposition(for: item)
+                                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text(item.name)
+                                                    .font(.headline)
+                                                Text([
+                                                    item.sku.map { "SKU \($0)" },
+                                                    item.itemType.rawValue,
+                                                    item.preferredVendorName
+                                                ].compactMap { $0 }.joined(separator: " • "))
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                                Label(disposition.title, systemImage: disposition.systemImage)
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(companyPricebookSyncTint(disposition))
+                                                    .accessibilityIdentifier("CompanyPricebookSyncStatus-\(item.id.uuidString)")
+                                            }
+                                            Spacer()
+                                            Text(item.unitPrice, format: .currency(code: "USD"))
+                                                .font(.subheadline.weight(.semibold))
+                                            Button {
+                                                catalogItemBeingEdited = item
+                                            } label: {
+                                                Image(systemName: "pencil")
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .accessibilityLabel("Edit \(item.name)")
+                                            .accessibilityHint("Edit the local pricebook item and stage any accounting changes for review.")
+                                            .accessibilityIdentifier("EditCompanyPricebookItem-\(item.id.uuidString)")
+                                        }
+                                        .padding(.vertical, 3)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label(
+                                "Browse \(activeCompanyPricebookItems.count) active \(activeCompanyPricebookItems.count == 1 ? "item" : "items")",
+                                systemImage: "books.vertical"
+                            )
+                        }
+                        .accessibilityIdentifier("CompanyPricebookDisclosure")
+
+                        Button("Add Catalog Item") { showingNewCatalogItemSheet = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(activeCatalogPublicationID != nil)
+                    }
+
+                    Section(header: Text("QuickBooks Catalog").foregroundColor(Color.brandGold)) {
+                        DisclosureGroup("QuickBooks Catalog (\(items.count))", isExpanded: $showCatalogList) {
                             if items.isEmpty {
-                                emptyState("No QuickBooks products or services loaded.")
+                                emptyState(
+                                    isAuthenticated
+                                        ? "No QuickBooks products or services loaded. Refresh QuickBooks to compare the provider catalog."
+                                        : "Connect QuickBooks to load the provider catalog. The GunnAire company pricebook remains available above."
+                                )
                             } else {
                                 TextField("Search catalog", text: $catalogSearchText)
                                     .textInputAutocapitalization(.never)
@@ -1763,6 +2235,11 @@ struct QuickBooksManagementView: View {
                                             Text(item.ItemType ?? "Unknown")
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
+                                            if item.Active == false {
+                                                Label("Inactive in QuickBooks", systemImage: "archivebox")
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundStyle(.secondary)
+                                            }
                                         }
                                         Spacer()
                                         if let price = item.UnitPrice {
@@ -1783,12 +2260,48 @@ struct QuickBooksManagementView: View {
                                 }
                             }
                         }
+                    }
 
-                        Button("Add Catalog Item") { showingNewCatalogItemSheet = true }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.brandGold)
-                            .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated)
+                    if !archivedCatalogItems.isEmpty {
+                        Section(
+                            header: Text("Archived Pricebook")
+                                .foregroundColor(Color.brandGold)
+                                .accessibilityIdentifier("ArchivedPricebookSection")
+                        ) {
+                            Text("Archived items stay in historical jobs, invoices, inventory, and purchasing records, but are unavailable for new work. Restore locally before reviewing any QuickBooks reactivation.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            DisclosureGroup(isExpanded: $showArchivedCatalogItems) {
+                                ForEach(archivedCatalogItems) { item in
+                                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(item.name)
+                                                .font(.subheadline.weight(.semibold))
+                                            Text([
+                                                item.sku.map { "SKU \($0)" },
+                                                item.quickBooksID.map { "QBO \($0)" },
+                                                item.quickBooksCatalogSyncState == "pending_update" ? "QBO archive pending" : nil
+                                            ].compactMap { $0 }.joined(separator: " • "))
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Button("Restore") {
+                                            restoreCatalogItem(item)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .accessibilityIdentifier("RestoreArchivedCatalogItem-\(item.id.uuidString)")
+                                    }
+                                    .padding(.vertical, 3)
+                                }
+                            } label: {
+                                Label(
+                                    "Review \(archivedCatalogItems.count) archived \(archivedCatalogItems.count == 1 ? "item" : "items")",
+                                    systemImage: "archivebox"
+                                )
+                            }
+                        }
                     }
 
                     Section(header: Text("Estimates").foregroundColor(Color.brandGold)) {
@@ -1865,14 +2378,6 @@ struct QuickBooksManagementView: View {
                                         }
 
                                         HStack {
-                                            Button(activePaymentInvoiceID == invoice.Id ? "Processing..." : "Record QB Payment") {
-                                                takeLiveCustomerPayment(for: invoice)
-                                            }
-                                            .buttonStyle(.borderedProminent)
-                                            .tint(Color.brandGold)
-                                            .foregroundStyle(Color.primaryBlack)
-                                            .disabled(activePaymentInvoiceID != nil || outstandingQuickBooksBalance(for: invoice) <= 0)
-
                                             if let invoiceURL = liveInvoiceURL(for: invoice) {
                                                 Link("Open in QuickBooks", destination: invoiceURL)
                                                     .font(.caption)
@@ -2008,6 +2513,37 @@ struct QuickBooksManagementView: View {
                     }
 
                     Section(header: Text("Vendors").foregroundColor(Color.brandGold)) {
+                        Button("Add Vendor") { showingNewVendorSheet = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
+                            .disabled(isLoading)
+
+                        if !localVendorPublicationQueue.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Label(
+                                    "\(localVendorPublicationQueue.count) local vendor\(localVendorPublicationQueue.count == 1 ? "" : "s") awaiting QuickBooks",
+                                    systemImage: "arrow.triangle.2.circlepath"
+                                )
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.orange)
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("PendingQuickBooksVendorCount")
+
+                                Text(localVendorPublicationQueue.prefix(4).map(\.name).joined(separator: ", "))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+
+                                Button("Publish Pending Vendors") {
+                                    publishPendingLocalVendors()
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(!isAuthenticated || isLoading)
+                                .accessibilityIdentifier("PublishPendingQuickBooksVendors")
+                            }
+                            .padding(.vertical, 2)
+                        }
+
                         if vendors.isEmpty {
                             emptyState("No QuickBooks vendors loaded.")
                         } else {
@@ -2030,11 +2566,6 @@ struct QuickBooksManagementView: View {
                             }
                         }
 
-                        Button("Add Vendor") { showingNewVendorSheet = true }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Color.brandGold)
-                            .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated)
                     }
                     }
 
@@ -2309,12 +2840,6 @@ struct QuickBooksManagementView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
 
-                        if let actionMessage {
-                            Text(actionMessage)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
                         Button("Sync All QuickBooks Data") {
                             syncAllQuickBooksData()
                         }
@@ -2327,6 +2852,30 @@ struct QuickBooksManagementView: View {
                 }
                 .scrollContentBackground(.hidden)
                 .background(Color.primaryBlack)
+                .overlay(alignment: .bottom) {
+                    if let actionMessage {
+                        Text(actionMessage)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.white)
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(3)
+                            .frame(maxWidth: 600, alignment: .leading)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(
+                                Color.primaryBlack.opacity(0.94),
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.brandGold.opacity(0.8), lineWidth: 1)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 8)
+                            .allowsHitTesting(false)
+                            .accessibilityIdentifier("QuickBooksActionMessage")
+                    }
+                }
                 .navigationTitle("QuickBooks Management")
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
@@ -2384,7 +2933,10 @@ struct QuickBooksManagementView: View {
                     QuickBooksLocalCatalogItemEditView(
                         item: item,
                         catalogItems: localCatalogItems,
-                        vendors: vendors
+                        vendors: vendors,
+                        onSetArchived: { shouldArchive in
+                            try setCatalogItem(item, archived: shouldArchive)
+                        }
                     ) {
                         do {
                             try modelContext.save()
@@ -2402,6 +2954,8 @@ struct QuickBooksManagementView: View {
                         }
                     }
                     .tint(Color.brandGold)
+                    .presentationDetents([.large])
+                    .presentationSizing(.page)
                 }
                 .sheet(isPresented: $showingNewEstimateSheet) {
                     QuickBooksEstimateComposeView(customers: customers) { customer, amount, note, email, sendAfterCreate in
@@ -2520,7 +3074,13 @@ struct QuickBooksManagementView: View {
                     }
                     #if DEBUG
                     if catalogReconciliationFixtureRequested {
-                        items = Self.catalogReconciliationFixtureItems
+                        if catalogComparisonUnavailableFixtureRequested {
+                            items = []
+                        } else if linkedPricebookReviewFixtureRequested {
+                            items = Self.linkedPricebookReviewFixtureItems
+                        } else {
+                            items = Self.catalogReconciliationFixtureItems
+                        }
                         showCatalogReconciliationQueue = true
                     }
                     if accountingMappingFixtureRequested {
@@ -2534,7 +3094,9 @@ struct QuickBooksManagementView: View {
                     if catalogReconciliationFixtureRequested || accountingMappingFixtureRequested {
                         statusMessage = accountingMappingFixtureRequested
                             ? "Accounting mapping preview loaded."
-                            : "Catalog reconciliation preview loaded."
+                            : (catalogComparisonUnavailableFixtureRequested
+                                ? "Catalog comparison unavailable preview loaded."
+                                : "Catalog reconciliation preview loaded.")
                         return
                     }
                     #endif
@@ -2717,22 +3279,38 @@ struct QuickBooksManagementView: View {
     }
 
     private func createCustomer(name: String, email: String?, phone: String?) {
-        let payload = QuickBooksCustomerCreate(
-            DisplayName: name,
-            PrimaryPhone: phone.map { QuickBooksPhoneNumber(FreeFormNumber: $0) },
-            PrimaryEmailAddr: email.map { QuickBooksEmailAddress(Address: $0) },
-            BillAddr: nil
-        )
+        let localCustomer = Customer(name: name, phone: phone, email: email)
+        modelContext.insert(localCustomer)
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.delete(localCustomer)
+            actionMessage = "Could not save the customer locally: \(error.localizedDescription)"
+            return
+        }
 
-        performAction(message: "Creating customer in QuickBooks...") {
-            liveAPI.createCustomer(payload) { result in
+        guard isAuthenticated else {
+            actionMessage = "Saved \(localCustomer.name) locally. Connect QuickBooks or use Customers → Sync to publish it."
+            return
+        }
+
+        performAction(message: "Reconciling customer with QuickBooks...") {
+            liveAPI.recoverOrCreateCustomer(
+                QuickBooksCustomerCreateOperation.draft(for: localCustomer)
+            ) { result in
                 DispatchQueue.main.async {
                     switch result {
                     case .success(let customer):
-                        actionMessage = "Customer created: \(customer.DisplayName)"
+                        localCustomer.quickBooksID = customer.Id
+                        do {
+                            try modelContext.save()
+                            actionMessage = "Customer linked: \(customer.DisplayName)"
+                        } catch {
+                            actionMessage = "QuickBooks linked \(customer.DisplayName), but the local confirmation could not be saved: \(error.localizedDescription)"
+                        }
                         syncAllQuickBooksData()
                     case .failure(let error):
-                        actionMessage = "Customer creation failed: \(error.localizedDescription)"
+                        actionMessage = "Saved \(localCustomer.name) locally. QuickBooks reconciliation needs attention; retry will read QuickBooks before any create: \(error.localizedDescription)"
                         isLoading = false
                     }
                 }
@@ -2741,48 +3319,101 @@ struct QuickBooksManagementView: View {
     }
 
     private func createCatalogItem(_ draft: QuickBooksCatalogItemDraft) {
-        guard let incomeAccountRef = QuickBooksItemAccountResolver.incomeAccountRef(
-            from: items,
-            configuration: accountingConfiguration
-        ) else {
-            actionMessage = "Open Overview → Accounting Mappings and choose an income account before creating catalog items."
+        let localItem = QuickBooksCatalogLocalCreationPolicy.makeItem(
+            name: draft.name,
+            itemType: draft.itemType,
+            sku: draft.sku,
+            unitPrice: draft.price,
+            purchaseCost: draft.purchaseCost,
+            isTaxable: draft.isTaxable,
+            itemDescription: draft.description,
+            purchaseDescription: draft.purchaseDescription,
+            preferredVendor: draft.vendorRef,
+            actorEmail: AppIdentity.currentEmail
+        )
+        modelContext.insert(localItem)
+        activeCatalogPublicationID = localItem.id
+        showCatalogPublicationQueue = true
+        do {
+            try modelContext.save()
+        } catch {
+            activeCatalogPublicationID = nil
+            modelContext.delete(localItem)
+            actionMessage = "Could not save the catalog item locally: \(error.localizedDescription)"
             return
         }
 
-        let payload = QuickBooksItemCreate(
-            Name: draft.name,
-            ItemType: draft.itemType.rawValue,
-            Description: draft.description,
-            Sku: draft.sku,
-            PurchaseDesc: draft.purchaseDescription ?? draft.description,
-            UnitPrice: draft.price,
-            PurchaseCost: draft.purchaseCost,
-            Taxable: nil,
-            IncomeAccountRef: incomeAccountRef,
-            ExpenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(
-                configuration: accountingConfiguration
-            ),
-            PrefVendorRef: draft.vendorRef
-        )
+        guard isAuthenticated else {
+            activeCatalogPublicationID = nil
+            actionMessage = "Saved \(localItem.name) locally. Connect QuickBooks to publish it."
+            return
+        }
+        publishApprovedCatalogItem(localItem)
+    }
 
-        performAction(message: "Creating catalog item in QuickBooks...") {
-            liveAPI.createItem(payload) { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success(let item):
-                        actionMessage = "Catalog item created: \(item.Name)"
-                        syncAllQuickBooksData()
-                    case .failure(let error):
-                        actionMessage = "Catalog item creation failed: \(error.localizedDescription)"
-                        isLoading = false
-                    }
-                }
+    private func setCatalogItem(_ item: Item, archived: Bool) throws {
+        let priorReviewStatus = item.pricebookReviewStatus
+        let priorReviewer = item.pricebookReviewedByEmail
+        let priorReviewedAt = item.pricebookReviewedAt
+        let priorSyncStatus = item.quickBooksSyncStatus
+        let priorSyncDetail = item.quickBooksSyncDetail
+        let priorTimestamp = item.timestamp
+
+        if archived {
+            try CatalogItemLifecyclePolicy.validateArchive(
+                item,
+                catalogItems: localCatalogItems,
+                estimates: localEstimates,
+                invoices: localInvoices,
+                agreements: localMaintenanceAgreements
+            )
+            item.archiveFromPricebook(by: AppIdentity.currentEmail)
+        } else {
+            item.restoreToPricebook(by: AppIdentity.currentEmail)
+        }
+
+        do {
+            try modelContext.save()
+        } catch {
+            item.pricebookReviewStatus = priorReviewStatus
+            item.pricebookReviewedByEmail = priorReviewer
+            item.pricebookReviewedAt = priorReviewedAt
+            item.quickBooksSyncStatus = priorSyncStatus
+            item.quickBooksSyncDetail = priorSyncDetail
+            item.timestamp = priorTimestamp
+            throw error
+        }
+
+        if archived {
+            showArchivedCatalogItems = true
+            if item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                showCatalogReconciliationQueue = true
+                actionMessage = "Archived \(item.name) from new work. Review its staged QuickBooks deactivation in Catalog Reconciliation."
+            } else {
+                actionMessage = "Archived \(item.name) from new work. Historical documents and inventory evidence remain available."
             }
+        } else if item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            showCatalogReconciliationQueue = true
+            actionMessage = "Restored \(item.name) for new work. Review its staged QuickBooks reactivation in Catalog Reconciliation."
+        } else {
+            showCatalogPublicationQueue = true
+            actionMessage = "Restored \(item.name) for new work. QuickBooks publication is pending."
+        }
+    }
+
+    private func restoreCatalogItem(_ item: Item) {
+        do {
+            try setCatalogItem(item, archived: false)
+        } catch {
+            actionMessage = "Could not restore \(item.name): \(error.localizedDescription)"
         }
     }
 
     private func approvePricebookItem(_ item: Item) {
         let reviewerEmail = AppIdentity.currentEmail
+        let hasLinkedQuickBooksItem = item.quickBooksID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty == false
         item.approveForPricebook(by: reviewerEmail)
         activePricebookReviewID = item.id
         do {
@@ -2790,6 +3421,17 @@ struct QuickBooksManagementView: View {
         } catch {
             activePricebookReviewID = nil
             actionMessage = "Could not save the pricebook approval: \(error.localizedDescription)"
+            return
+        }
+
+        if hasLinkedQuickBooksItem {
+            showCatalogReconciliationQueue = true
+            guard isAuthenticated else {
+                activePricebookReviewID = nil
+                actionMessage = "\(item.name) is approved for the company pricebook. Connect QuickBooks to load its linked comparison; no QuickBooks change was sent."
+                return
+            }
+            refreshApprovedLinkedCatalogItem(item)
             return
         }
 
@@ -2802,9 +3444,48 @@ struct QuickBooksManagementView: View {
         publishApprovedCatalogItem(item)
     }
 
+    private func refreshApprovedLinkedCatalogItem(_ item: Item) {
+        actionMessage = "Approved \(item.name). Loading its linked QuickBooks comparison..."
+        #if DEBUG
+        if linkedPricebookReviewFixtureRequested {
+            finishApprovedCatalogLink(
+                item,
+                remoteItemResult: Result {
+                    try PricebookReviewPublication.linkedRemoteItem(
+                        for: item,
+                        in: Self.linkedPricebookReviewFixtureItems
+                    )
+                },
+                remoteItems: Self.linkedPricebookReviewFixtureItems
+            )
+            return
+        }
+        #endif
+        liveAPI.fetchItems { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .failure(let error):
+                    markApprovedPricebookPublicationFailure(item, error: error)
+                case .success(let remoteItems):
+                    finishApprovedCatalogLink(
+                        item,
+                        remoteItemResult: Result {
+                            try PricebookReviewPublication.linkedRemoteItem(
+                                for: item,
+                                in: remoteItems
+                            )
+                        },
+                        remoteItems: remoteItems
+                    )
+                }
+            }
+        }
+    }
+
     private func retryCatalogPublication(_ item: Item) {
         guard !item.requiresPricebookReview,
-              item.quickBooksCatalogSyncState != "synced" else { return }
+              !item.isCatalogArchived,
+              item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else { return }
 
         activeCatalogPublicationID = item.id
         item.quickBooksSyncStatus = "pending"
@@ -2827,6 +3508,13 @@ struct QuickBooksManagementView: View {
     }
 
     private func publishApprovedCatalogItem(_ item: Item) {
+        guard !item.isCatalogArchived else {
+            markApprovedPricebookPublicationFailure(
+                item,
+                error: CatalogItemLifecycleError.archivedCannotPublish(item.name)
+            )
+            return
+        }
         actionMessage = "Approved \(item.name). Checking QuickBooks for an existing match..."
         liveAPI.fetchItems { result in
             DispatchQueue.main.async {
@@ -2836,13 +3524,11 @@ struct QuickBooksManagementView: View {
                 case .success(let remoteItems):
                     do {
                         if let existing = try PricebookReviewPublication.matchingRemoteItem(for: item, in: remoteItems) {
-                            try QuickBooksCatalogMappingIntegrity.validateAssignment(
-                                of: existing.Id,
-                                to: item,
-                                in: localCatalogItems
+                            finishApprovedCatalogLink(
+                                item,
+                                remoteItemResult: .success(existing),
+                                remoteItems: remoteItems
                             )
-                            applyApprovedQuickBooksItem(existing, to: item)
-                            finishApprovedPricebookPublication(item, message: "Approved and linked \(item.name) to its existing QuickBooks catalog item.")
                             return
                         }
                     } catch {
@@ -2852,6 +3538,40 @@ struct QuickBooksManagementView: View {
                     createApprovedPricebookItem(item, remoteItems: remoteItems)
                 }
             }
+        }
+    }
+
+    private func finishApprovedCatalogLink(
+        _ item: Item,
+        remoteItemResult: Result<QuickBooksItem, Error>,
+        remoteItems: [QuickBooksItem]
+    ) {
+        do {
+            let remoteItem = try remoteItemResult.get()
+            try QuickBooksCatalogMappingIntegrity.validateAssignment(
+                of: remoteItem.Id,
+                to: item,
+                in: localCatalogItems
+            )
+            items = remoteItems.sorted {
+                $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending
+            }
+            let outcome = PricebookReviewPublication.linkApprovedItem(item, to: remoteItem)
+            switch outcome {
+            case .synchronized:
+                finishApprovedPricebookPublication(
+                    item,
+                    message: "Approved and linked \(item.name). Its QuickBooks catalog values already match."
+                )
+            case .reconciliationRequired(let differenceCount):
+                showCatalogReconciliationQueue = true
+                finishApprovedPricebookPublication(
+                    item,
+                    message: "Approved and linked \(item.name). Review \(differenceCount) linked QuickBooks difference\(differenceCount == 1 ? "" : "s") before choosing which version to publish."
+                )
+            }
+        } catch {
+            markApprovedPricebookPublicationFailure(item, error: error)
         }
     }
 
@@ -2866,26 +3586,17 @@ struct QuickBooksManagementView: View {
             )
             return
         }
-        let payload = QuickBooksItemCreate(
-            Name: item.name,
-            ItemType: item.itemType.rawValue,
-            Description: item.itemDescription,
-            Sku: item.sku,
-            PurchaseDesc: item.purchaseDescription ?? item.itemDescription,
-            UnitPrice: item.unitPrice,
-            PurchaseCost: item.purchaseCost,
-            Taxable: item.isTaxable,
-            IncomeAccountRef: incomeAccountRef,
-            ExpenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(
+        let payload = QuickBooksCatalogCreateOperation.payload(
+            for: item,
+            incomeAccountRef: incomeAccountRef,
+            expenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(
                 configuration: accountingConfiguration
-            ),
-            PrefVendorRef: item.preferredVendorQuickBooksID.flatMap { quickBooksID in
-                quickBooksID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? nil
-                    : QuickBooksReference(value: quickBooksID, name: item.preferredVendorName)
-            }
+            )
         )
-        liveAPI.createItem(payload) { result in
+        liveAPI.createItem(
+            payload,
+            requestID: QuickBooksCatalogCreateOperation.requestID(for: item.id)
+        ) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .failure(let error):
@@ -2904,6 +3615,7 @@ struct QuickBooksManagementView: View {
         item.quickBooksSyncStatus = "synced"
         item.quickBooksSyncDetail = nil
         item.quickBooksLastSyncedAt = Date()
+        item.applyQuickBooksCatalogAvailability(quickBooksItem.Active)
         item.name = quickBooksItem.Name
         item.itemTypeRawValue = quickBooksItem.ItemType ?? item.itemTypeRawValue
         item.unitPrice = quickBooksItem.UnitPrice ?? item.unitPrice
@@ -2933,8 +3645,13 @@ struct QuickBooksManagementView: View {
         item.quickBooksSyncStatus = "needs_attention"
         item.quickBooksSyncDetail = error.localizedDescription
         item.quickBooksLastSyncedAt = Date()
+        if item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            showCatalogReconciliationQueue = true
+        } else {
+            showCatalogPublicationQueue = true
+        }
         try? modelContext.save()
-        actionMessage = "\(item.name) is approved locally, but QuickBooks publication needs attention: \(error.localizedDescription)"
+        actionMessage = "\(item.name) is approved locally, but QuickBooks catalog review needs attention: \(error.localizedDescription)"
     }
 
     private func createEstimate(
@@ -3144,54 +3861,228 @@ struct QuickBooksManagementView: View {
     }
 
     private func createVendor(name: String, email: String?, phone: String?) {
-        let payload = QuickBooksVendorCreate(
-            DisplayName: name,
-            PrimaryEmailAddr: email.map { QuickBooksEmailAddress(Address: $0) },
-            PrimaryPhone: phone.map { QuickBooksPhoneNumber(FreeFormNumber: $0) }
-        )
+        let normalizedName = name
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased()
+        if let existing = locallyKnownVendors.first(where: {
+            $0.name.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased() == normalizedName
+        }) {
+            actionMessage = existing.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                ? "\(existing.name) is already linked to QuickBooks."
+                : "\(existing.name) is already saved locally. Review it in the pending vendor queue before publishing."
+            return
+        }
 
-        performAction(message: "Creating vendor in QuickBooks...") {
-            liveAPI.createVendor(payload) { result in
+        let localVendor = Vendor(
+            name: name,
+            contactInfo: QuickBooksVendorCreateOperation.storedContactInfo(
+                email: email,
+                phone: phone
+            )
+        )
+        modelContext.insert(localVendor)
+        do {
+            try modelContext.save()
+            newlyCreatedLocalVendors.append(localVendor)
+        } catch {
+            modelContext.delete(localVendor)
+            actionMessage = "Could not save the vendor locally: \(error.localizedDescription)"
+            return
+        }
+
+        guard isAuthenticated else {
+            actionMessage = "Saved \(localVendor.name) locally. Connect QuickBooks, then publish it from the pending vendor queue."
+            return
+        }
+
+        performAction(message: "Reconciling vendor with QuickBooks...") {
+            liveAPI.recoverOrCreateVendor(
+                QuickBooksVendorCreateOperation.draft(for: localVendor)
+            ) { result in
                 DispatchQueue.main.async {
+                    isLoading = false
                     switch result {
                     case .success(let vendor):
-                        actionMessage = "Vendor created: \(vendor.DisplayName)"
-                        syncAllQuickBooksData()
+                        applyQuickBooksVendor(vendor, to: localVendor)
+                        do {
+                            try modelContext.save()
+                            if !vendors.contains(where: { $0.Id == vendor.Id }) {
+                                vendors.append(vendor)
+                                vendors.sort { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
+                            }
+                            actionMessage = "Vendor linked: \(vendor.DisplayName)"
+                        } catch {
+                            actionMessage = "QuickBooks linked \(vendor.DisplayName), but the local confirmation could not be saved: \(error.localizedDescription)"
+                        }
                     case .failure(let error):
-                        actionMessage = "Vendor creation failed: \(error.localizedDescription)"
-                        isLoading = false
+                        actionMessage = "Saved \(localVendor.name) locally. QuickBooks reconciliation needs attention; retry will read QuickBooks before any create: \(error.localizedDescription)"
                     }
                 }
             }
         }
     }
 
-    private func createPayment(for invoice: QuickBooksInvoice, amount: Double, note: String?, paymentMethodRef: QuickBooksReference?) {
-        let payload = QuickBooksPaymentCreate(
-            CustomerRef: invoice.CustomerRef,
-            TotalAmt: amount,
-            PrivateNote: note,
-            PaymentRefNum: nil,
-            Line: [
-                QuickBooksPaymentLine(
-                    Amount: amount,
-                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoice.Id, TxnType: "Invoice")]
-                )
-            ],
-            PaymentMethodRef: paymentMethodRef,
-            CreditCardPayment: nil
-        )
+    private func publishPendingLocalVendors() {
+        guard isAuthenticated else {
+            actionMessage = "Connect QuickBooks before publishing pending vendors."
+            return
+        }
+        let pending = localVendorPublicationQueue
+        guard !pending.isEmpty else {
+            actionMessage = "Every local vendor already has a QuickBooks link."
+            return
+        }
 
-        performAction(message: "Recording payment in QuickBooks...") {
-            liveAPI.createPayment(payload) { result in
+        performAction(message: "Reconciling \(pending.count) local vendor\(pending.count == 1 ? "" : "s") with QuickBooks...") {
+            liveAPI.fetchVendors { result in
                 DispatchQueue.main.async {
                     switch result {
-                    case .success(let payment):
-                        actionMessage = "Payment created: \(payment.Id)"
-                        syncAllQuickBooksData()
                     case .failure(let error):
-                        actionMessage = "Payment creation failed: \(error.localizedDescription)"
                         isLoading = false
+                        actionMessage = "Vendor publication stopped before creating anything because QuickBooks reconciliation failed: \(error.localizedDescription)"
+                    case .success(let remoteVendors):
+                        publishLocalVendorBatch(
+                            pending,
+                            remoteVendors: remoteVendors,
+                            linked: 0,
+                            failed: 0
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func publishLocalVendorBatch(
+        _ pending: [Vendor],
+        remoteVendors: [QuickBooksVendor],
+        linked: Int,
+        failed: Int
+    ) {
+        guard isAuthenticated else {
+            isLoading = false
+            actionMessage = "Vendor publication stopped because QuickBooks is no longer connected."
+            return
+        }
+        guard let localVendor = pending.first else {
+            isLoading = false
+            do {
+                try modelContext.save()
+                vendors = remoteVendors.sorted {
+                    $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending
+                }
+                actionMessage = "Vendor publication complete: \(linked) linked, \(failed) need attention."
+            } catch {
+                actionMessage = "QuickBooks vendor publication completed, but the local link confirmations could not be saved: \(error.localizedDescription)"
+            }
+            return
+        }
+
+        liveAPI.recoverOrCreateVendor(
+            QuickBooksVendorCreateOperation.draft(for: localVendor),
+            remoteVendors: remoteVendors
+        ) { result in
+            DispatchQueue.main.async {
+                var nextRemoteVendors = remoteVendors
+                var linkedCount = linked
+                var failedCount = failed
+                switch result {
+                case .success(let quickBooksVendor):
+                    applyQuickBooksVendor(quickBooksVendor, to: localVendor)
+                    if !nextRemoteVendors.contains(where: { $0.Id == quickBooksVendor.Id }) {
+                        nextRemoteVendors.append(quickBooksVendor)
+                    }
+                    linkedCount += 1
+                case .failure:
+                    failedCount += 1
+                }
+                publishLocalVendorBatch(
+                    Array(pending.dropFirst()),
+                    remoteVendors: nextRemoteVendors,
+                    linked: linkedCount,
+                    failed: failedCount
+                )
+            }
+        }
+    }
+
+    private func applyQuickBooksVendor(_ quickBooksVendor: QuickBooksVendor, to localVendor: Vendor) {
+        let draft = QuickBooksVendorCreateOperation.draft(for: localVendor)
+        localVendor.quickBooksID = quickBooksVendor.Id
+        localVendor.name = quickBooksVendor.DisplayName
+        localVendor.contactInfo = QuickBooksVendorCreateOperation.storedContactInfo(
+            email: quickBooksVendor.PrimaryEmailAddr?.Address ?? draft.email,
+            phone: quickBooksVendor.PrimaryPhone?.FreeFormNumber ?? draft.phone
+        )
+    }
+
+    private func createPayment(for invoice: QuickBooksInvoice, amount: Double, note: String?, paymentMethodRef: QuickBooksReference?) {
+        guard let localInvoice = localInvoice(for: invoice) else {
+            actionMessage = "This QuickBooks invoice is not linked to a GunnAire invoice. Open it in QuickBooks instead of creating an untracked payment here."
+            return
+        }
+        guard localInvoice.isReadyForPaymentCollection else {
+            actionMessage = localInvoice.paymentCollectionBlockedMessage ?? "This invoice is not ready for payment collection."
+            return
+        }
+        let availableBalance = min(
+            outstandingQuickBooksBalance(for: invoice),
+            localOutstandingBalance(for: localInvoice)
+        )
+        guard amount > 0, amount <= availableBalance + 0.005 else {
+            let balanceLabel = availableBalance.formatted(.currency(code: "USD"))
+            actionMessage = "Enter a payment no greater than the open balance of \(balanceLabel)."
+            return
+        }
+
+        let methodName = paymentMethodRef?.displayName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let recordedMethod = methodName?.isEmpty == false ? methodName : nil
+        let localPayment = Payment(
+            invoice: localInvoice,
+            quickBooksAccountingSyncStatus: "pending",
+            quickBooksAccountingSyncDetail: "Saved locally; QuickBooks accounting publication is pending.",
+            processorSyncStatus: "recorded",
+            amount: amount,
+            method: recordedMethod ?? "manual payment",
+            notes: note
+        )
+        modelContext.insert(localPayment)
+        localInvoice.applyLocalPaymentAmount(amount)
+        localInvoice.status = availableBalance - amount <= 0.005 ? "paid" : "partial"
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.delete(localPayment)
+            actionMessage = "The payment could not be saved locally, so no QuickBooks request was sent: \(error.localizedDescription)"
+            return
+        }
+
+        performAction(message: "Payment saved locally. Publishing it to QuickBooks...") {
+            Task {
+                do {
+                    let quickBooksPayment = try await QuickBooksPaymentsService.shared
+                        .syncManualAccountingPayment(for: localPayment)
+                    await MainActor.run {
+                        localPayment.quickBooksID = quickBooksPayment.Id
+                        localPayment.quickBooksAccountingSyncStatus = "synced"
+                        localPayment.quickBooksAccountingSyncDetail = nil
+                        do {
+                            try modelContext.save()
+                            actionMessage = "Payment saved locally and linked to QuickBooks: \(quickBooksPayment.Id)."
+                        } catch {
+                            actionMessage = "QuickBooks accepted payment \(quickBooksPayment.Id), but its local link could not be saved. Retry the same payment from Payments; the recovery marker prevents another QuickBooks payment."
+                        }
+                        syncAllQuickBooksData()
+                    }
+                } catch {
+                    await MainActor.run {
+                        localPayment.quickBooksAccountingSyncStatus = "needs_attention"
+                        localPayment.quickBooksAccountingSyncDetail = error.localizedDescription
+                        try? modelContext.save()
+                        isLoading = false
+                        actionMessage = "Payment is saved locally, but QuickBooks publication needs attention: \(error.localizedDescription)"
                     }
                 }
             }
@@ -3242,43 +4133,6 @@ struct QuickBooksManagementView: View {
         }
     }
 
-    private func takeLiveCustomerPayment(for invoice: QuickBooksInvoice) {
-        let amountDue = outstandingQuickBooksBalance(for: invoice)
-        guard amountDue > 0 else {
-            actionMessage = "This QuickBooks invoice is already paid."
-            return
-        }
-        activePaymentInvoiceID = invoice.Id
-        let payload = QuickBooksPaymentCreate(
-            CustomerRef: invoice.CustomerRef,
-            TotalAmt: amountDue,
-            PrivateNote: "Created from GunnAire Ops for invoice \(invoice.DocNumber ?? invoice.Id)",
-            PaymentRefNum: nil,
-            Line: [
-                QuickBooksPaymentLine(
-                    Amount: amountDue,
-                    LinkedTxn: [QuickBooksLinkedTxn(TxnId: invoice.Id, TxnType: "Invoice")]
-                )
-            ],
-            PaymentMethodRef: nil,
-            CreditCardPayment: nil
-        )
-
-        liveAPI.createPayment(payload) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let payment):
-                    actionMessage = "Payment created: \(payment.Id) for invoice \(invoice.DocNumber ?? invoice.Id)"
-                    syncAllQuickBooksData()
-                case .failure(let error):
-                    actionMessage = "Payment failed for invoice \(invoice.DocNumber ?? invoice.Id): \(error.localizedDescription)"
-                    isLoading = false
-                }
-                activePaymentInvoiceID = nil
-            }
-        }
-    }
-
     private func processCardCharge(for invoice: Invoice, amount: Double, cardInput: QuickBooksPaymentsCardInput, note: String?) {
         guard quickBooksPaymentsEnabled else {
             actionMessage = quickBooksPaymentsUnavailableMessage
@@ -3288,7 +4142,9 @@ struct QuickBooksManagementView: View {
         performAction(message: "Processing QuickBooks card charge...") {
             Task {
                 do {
+                    let localPaymentID = UUID()
                     let result = try await QuickBooksPaymentsService.shared.processCardPayment(
+                        localPaymentID: localPaymentID,
                         invoice: invoice,
                         amount: amount,
                         cardInput: cardInput,
@@ -3299,6 +4155,7 @@ struct QuickBooksManagementView: View {
                     await MainActor.run {
                         modelContext.insert(
                             Payment(
+                                id: localPaymentID,
                                 invoice: invoice,
                                 quickBooksID: result.accountingPayment?.Id,
                                 quickBooksChargeID: result.charge.id,
@@ -3641,7 +4498,7 @@ struct QuickBooksManagementView: View {
         Button(
             activePricebookReviewID == item.id
                 ? "Approving..."
-                : (isAuthenticated ? "Approve & Publish" : "Approve for Pricebook")
+                : pricebookApprovalButtonTitle(for: item)
         ) {
             approvePricebookItem(item)
         }
@@ -3650,6 +4507,24 @@ struct QuickBooksManagementView: View {
         .foregroundStyle(Color.primaryBlack)
         .disabled(activePricebookReviewID != nil || activeCatalogPublicationID != nil)
         .accessibilityIdentifier("ApprovePricebookItem-\(item.id.uuidString)")
+    }
+
+    private func pricebookApprovalButtonTitle(for item: Item) -> String {
+        guard isAuthenticated else { return "Approve for Pricebook" }
+        return item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? "Approve & Compare"
+            : "Approve & Publish"
+    }
+
+    private func companyPricebookSyncTint(_ disposition: CompanyPricebookSyncDisposition) -> Color {
+        switch disposition {
+        case .synchronized:
+            .green
+        case .publicationPending:
+            .secondary
+        case .comparisonPending, .needsAttention:
+            .orange
+        }
     }
 
     @ViewBuilder
@@ -3845,10 +4720,10 @@ struct QuickBooksManagementView: View {
     }
 
     private func localInvoice(for quickBooksInvoice: QuickBooksInvoice) -> Invoice? {
-        localInvoices.first {
-            ($0.quickBooksID == quickBooksInvoice.Id) ||
-            (($0.quickBooksID == quickBooksInvoice.DocNumber) && !(quickBooksInvoice.DocNumber ?? "").isEmpty)
-        }
+        QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
+            for: quickBooksInvoice,
+            in: localInvoices
+        )
     }
 
     private func retryLocalEstimatePublication(_ estimate: Estimate) {
@@ -4996,6 +5871,21 @@ private struct QuickBooksPaymentComposeView: View {
         return invoices.first
     }
 
+    private var enteredAmount: Double? {
+        Double(amountText)
+    }
+
+    private var selectedInvoiceBalance: Double {
+        max(selectedInvoice?.Balance ?? selectedInvoice?.TotalAmt ?? 0, 0)
+    }
+
+    private var canCreate: Bool {
+        guard selectedInvoice != nil,
+              let enteredAmount,
+              enteredAmount > 0 else { return false }
+        return enteredAmount <= selectedInvoiceBalance + 0.005
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -5022,6 +5912,11 @@ private struct QuickBooksPaymentComposeView: View {
 
                     TextField("Amount", text: $amountText)
                         .keyboardType(.decimalPad)
+                    if let enteredAmount, enteredAmount > selectedInvoiceBalance + 0.005 {
+                        Text("Amount exceeds the open invoice balance of \(selectedInvoiceBalance.formatted(.currency(code: "USD"))).")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
                     TextField("Notes", text: $note)
                 }
             }
@@ -5037,7 +5932,7 @@ private struct QuickBooksPaymentComposeView: View {
                         onAdd(selectedInvoice, amount, note.isEmpty ? nil : note, paymentMethodRef)
                         dismiss()
                     }
-                    .disabled(selectedInvoice == nil || Double(amountText) == nil)
+                    .disabled(!canCreate)
                 }
             }
             .onAppear {
@@ -5361,10 +6256,13 @@ private struct QuickBooksVendorComposeView: View {
             Form {
                 Section("Vendor") {
                     TextField("Vendor Name", text: $name)
+                        .accessibilityIdentifier("QuickBooksVendorName")
                     TextField("Email", text: $email)
                         .keyboardType(.emailAddress)
+                        .accessibilityIdentifier("QuickBooksVendorEmail")
                     TextField("Phone", text: $phone)
                         .keyboardType(.phonePad)
+                        .accessibilityIdentifier("QuickBooksVendorPhone")
                 }
             }
             .navigationTitle("Add Vendor")
@@ -5382,6 +6280,7 @@ private struct QuickBooksVendorComposeView: View {
                         dismiss()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("CreateQuickBooksVendor")
                 }
             }
         }
@@ -5402,10 +6301,13 @@ private struct QuickBooksCustomerComposeView: View {
             Form {
                 Section("Customer") {
                     TextField("Customer Name", text: $name)
+                        .accessibilityIdentifier("QuickBooksCustomerName")
                     TextField("Email", text: $email)
                         .keyboardType(.emailAddress)
+                        .accessibilityIdentifier("QuickBooksCustomerEmail")
                     TextField("Phone", text: $phone)
                         .keyboardType(.phonePad)
+                        .accessibilityIdentifier("QuickBooksCustomerPhone")
                 }
             }
             .navigationTitle("Add Customer")
@@ -5423,6 +6325,7 @@ private struct QuickBooksCustomerComposeView: View {
                         dismiss()
                     }
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("CreateQuickBooksCustomer")
                 }
             }
         }
@@ -5435,6 +6338,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
     let item: Item
     let catalogItems: [Item]
     let vendors: [QuickBooksVendor]
+    let onSetArchived: (Bool) throws -> Void
     let onSaved: () -> Void
 
     @State private var name: String
@@ -5451,16 +6355,20 @@ private struct QuickBooksLocalCatalogItemEditView: View {
     @State private var assemblyComponents: [CatalogAssemblyComponentDefinition]
     @State private var assemblySearchText = ""
     @State private var assemblyValidationMessage: String?
+    @State private var lifecycleValidationMessage: String?
+    @FocusState private var isEditingNumericValue: Bool
 
     init(
         item: Item,
         catalogItems: [Item],
         vendors: [QuickBooksVendor],
+        onSetArchived: @escaping (Bool) throws -> Void,
         onSaved: @escaping () -> Void
     ) {
         self.item = item
         self.catalogItems = catalogItems
         self.vendors = vendors
+        self.onSetArchived = onSetArchived
         self.onSaved = onSaved
         let assembly = item.assemblyDefinition
         _name = State(initialValue: item.name)
@@ -5533,7 +6441,8 @@ private struct QuickBooksLocalCatalogItemEditView: View {
             purchaseCost: parsedPurchaseCost,
             isTaxable: isTaxable,
             purchaseDescription: nilIfBlank(purchaseDescription),
-            preferredVendorQuickBooksID: selectedPreferredVendor?.Id ?? item.preferredVendorQuickBooksID
+            preferredVendorQuickBooksID: selectedPreferredVendor?.Id ?? item.preferredVendorQuickBooksID,
+            isActive: item.isAvailableForNewWork
         )
     }
 
@@ -5551,6 +6460,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
         return catalogItems
             .filter { candidate in
                 guard candidate.id != item.id,
+                      candidate.isAvailableForNewWork,
                       candidate.assemblyDefinition == nil,
                       !selectedIDs.contains(candidate.id) else { return false }
                 if query.isEmpty { return true }
@@ -5595,6 +6505,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                         .textInputAutocapitalization(.characters)
                     TextField("Sales price", text: $unitPrice)
                         .keyboardType(.decimalPad)
+                        .focused($isEditingNumericValue)
                         .accessibilityIdentifier("CatalogEditSalesPrice")
                     Toggle("Taxable", isOn: $isTaxable)
                 }
@@ -5602,6 +6513,7 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                 Section("Purchasing") {
                     TextField("Purchase cost", text: $purchaseCost)
                         .keyboardType(.decimalPad)
+                        .focused($isEditingNumericValue)
                     TextField("Purchase description", text: $purchaseDescription, axis: .vertical)
                         .lineLimit(2...4)
                     Picker("Preferred vendor", selection: $preferredVendorID) {
@@ -5618,6 +6530,37 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                     Text("A linked preferred vendor can be replaced here. Removing it requires review in QuickBooks.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                Section("Availability") {
+                    Label(
+                        item.isCatalogArchived ? "Archived from new work" : "Available for new work",
+                        systemImage: item.isCatalogArchived ? "archivebox" : "checkmark.circle"
+                    )
+                    .foregroundStyle(item.isCatalogArchived ? Color.secondary : Color.green)
+
+                    Text("Historical jobs, invoices, inventory movements, and purchasing evidence keep this item. A linked QuickBooks activation change is always staged for explicit review.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if item.isCatalogArchived {
+                        Button("Restore to Pricebook") {
+                            setArchived(false)
+                        }
+                        .accessibilityIdentifier("RestoreCatalogItem")
+                    } else {
+                        Button("Archive from New Work", role: .destructive) {
+                            setArchived(true)
+                        }
+                        .accessibilityIdentifier("ArchiveCatalogItem")
+                    }
+
+                    if let lifecycleValidationMessage {
+                        Label(lifecycleValidationMessage, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("CatalogLifecycleValidation")
+                    }
                 }
 
                 if editableItemType == .service {
@@ -5745,12 +6688,28 @@ private struct QuickBooksLocalCatalogItemEditView: View {
                             : "StageCatalogChanges"
                     )
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { isEditingNumericValue = false }
+                        .accessibilityLabel("Done Editing Catalog Item")
+                        .accessibilityIdentifier("DoneEditingCatalogItem")
+                }
             }
         }
     }
 
     private func assemblyItem(_ itemID: UUID) -> Item? {
         catalogItems.first { $0.id == itemID }
+    }
+
+    private func setArchived(_ archived: Bool) {
+        do {
+            try onSetArchived(archived)
+            lifecycleValidationMessage = nil
+            dismiss()
+        } catch {
+            lifecycleValidationMessage = error.localizedDescription
+        }
     }
 
     private func assemblyItemName(_ itemID: UUID) -> String {
@@ -5846,6 +6805,7 @@ private struct QuickBooksCatalogItemDraft {
     let sku: String?
     let price: Double
     let purchaseCost: Double?
+    let isTaxable: Bool
     let description: String?
     let purchaseDescription: String?
     let vendorRef: QuickBooksReference?
@@ -5862,6 +6822,7 @@ private struct QuickBooksCatalogItemComposeView: View {
     @State private var sku = ""
     @State private var price = ""
     @State private var purchaseCost = ""
+    @State private var isTaxable = false
     @State private var description = ""
     @State private var purchaseDescription = ""
     @State private var selectedVendorID = ""
@@ -5871,8 +6832,10 @@ private struct QuickBooksCatalogItemComposeView: View {
             Form {
                 Section("Sales") {
                     TextField("Name", text: $name)
+                        .accessibilityIdentifier("QuickBooksCatalogItemName")
                     TextField("SKU", text: $sku)
                         .textInputAutocapitalization(.characters)
+                        .accessibilityIdentifier("QuickBooksCatalogItemSKU")
                     Picker("Item Type", selection: $itemType) {
                         ForEach(CatalogItemType.allCases) { type in
                             Text(type.rawValue).tag(type)
@@ -5881,6 +6844,9 @@ private struct QuickBooksCatalogItemComposeView: View {
                     .pickerStyle(.segmented)
                     TextField("Price (optional)", text: $price)
                         .keyboardType(.decimalPad)
+                        .accessibilityIdentifier("QuickBooksCatalogItemPrice")
+                    Toggle("Taxable", isOn: $isTaxable)
+                        .accessibilityIdentifier("QuickBooksCatalogItemTaxable")
                     TextField("Description", text: $description)
                 }
 
@@ -5914,6 +6880,7 @@ private struct QuickBooksCatalogItemComposeView: View {
                             sku: sku.nilIfBlank,
                             price: amount,
                             purchaseCost: QuickBooksCatalogAmountParser.parseOptional(purchaseCost),
+                            isTaxable: isTaxable,
                             description: description.nilIfBlank,
                             purchaseDescription: purchaseDescription.nilIfBlank,
                             vendorRef: vendorRef
@@ -5926,6 +6893,7 @@ private struct QuickBooksCatalogItemComposeView: View {
                         QuickBooksCatalogAmountParser.parseRequiredOrZero(price) == nil ||
                         !QuickBooksCatalogAmountParser.isValidOptionalAmount(purchaseCost)
                     )
+                    .accessibilityIdentifier("CreateQuickBooksCatalogItem")
                 }
             }
         }

@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-08-31",
+  "app": {
+    "name": "GunnAire Ops",
+    "bundleID": "com.gunnaire.businesssuite",
+    "primaryLocale": "en-US",
+    "privacyPolicyURL": "https://gunnaire.com/privacy-policy.html",
+    "supportURL": "https://gunnaire.com",
+    "marketingURL": "https://gunnaire.com"
+  },
+  "appReview": {
+    "requiresSignIn": true,
+    "credentialStorage": "App Store Connect only",
+    "notes": "Private GunnAire business operations app. Review credentials and personal contact details must never be committed to source control."
+  },
+  "privacy": {
+    "tracking": false,
+    "dataTypes": [
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypeName",
+        "category": "Contact Info",
+        "displayName": "Name",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "Staff, customer, technician, vendor, and approval identity in business records."
+      },
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypeEmailAddress",
+        "category": "Contact Info",
+        "displayName": "Email Address",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "Business sign-in, staff identity, customer communication, and delivery records."
+      },
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypePhoneNumber",
+        "category": "Contact Info",
+        "displayName": "Phone Number",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "Customer and staff contact details used for field-service coordination."
+      },
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypePhysicalAddress",
+        "category": "Contact Info",
+        "displayName": "Physical Address",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "Customer billing and HVAC service-location records, dispatch, and documents."
+      },
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypeEmailsOrTextMessages",
+        "category": "User Content",
+        "displayName": "Emails or Text Messages",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "Customer communication drafts, delivery through approved providers, and privacy-minimal delivery evidence."
+      },
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypePhotosorVideos",
+        "category": "User Content",
+        "displayName": "Photos or Videos",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "Job, receipt, equipment data-plate, and supporting service-document media."
+      },
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypeOtherUserContent",
+        "category": "User Content",
+        "displayName": "Other User Content",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "Job notes, field forms, approvals, signatures, service findings, and attachments."
+      },
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypeUserID",
+        "category": "Identifiers",
+        "displayName": "User ID",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "Apple or Google business identity, staff authorization, and customer/business-record identifiers."
+      },
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypeDeviceID",
+        "category": "Identifiers",
+        "displayName": "Device ID",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "Account-bound APNs device registration and notification delivery lifecycle."
+      },
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypeOtherFinancialInfo",
+        "category": "Financial Info",
+        "displayName": "Other Financial Info",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "Estimates, invoices, job costs, expense claims, purchase orders, and reconciliation records."
+      },
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypePaymentInfo",
+        "category": "Financial Info",
+        "displayName": "Payment Info",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "Payment status, provider transaction references, and safe stored-payment-method metadata; raw card credentials are not stored by GunnAire Ops."
+      },
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypePurchaseHistory",
+        "category": "Purchases",
+        "displayName": "Purchase History",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "Customer invoice line history and business procurement, inventory, and supplier records."
+      },
+      {
+        "manifestDataType": "NSPrivacyCollectedDataTypeOtherDataTypes",
+        "category": "Other Data",
+        "displayName": "Other Data Types",
+        "linkedToUser": true,
+        "tracking": false,
+        "purposes": [
+          "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+        ],
+        "usage": "HVAC equipment, maintenance, dispatch, time, fleet, inventory, warranty, and operational audit records."
+      }
+    ]
+  }
+}

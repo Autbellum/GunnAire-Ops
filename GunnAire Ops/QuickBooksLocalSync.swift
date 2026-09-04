@@ -116,6 +116,18 @@ enum QuickBooksLocalSync {
             if item.modelContext == nil {
                 modelContext.insert(item)
             }
+            if item.requiresPricebookReview {
+                // A provider match may establish the accounting identity, but
+                // it is not administrator approval. Preserve every field value
+                // and the original author so a background refresh cannot turn
+                // a technician draft into a reusable company pricebook item.
+                item.quickBooksID = quickBooksItem.Id
+                item.quickBooksSyncStatus = "needs_review"
+                item.quickBooksSyncDetail = "A matching QuickBooks item was found. Administrator pricebook review is still required before this draft becomes reusable."
+                item.quickBooksLastSyncedAt = Date()
+                itemsByQBID[normalizedQuickBooksID] = item
+                continue
+            }
             if item.hasPendingQuickBooksCatalogUpdate,
                !QuickBooksCatalogReconciliation.differences(
                     localItem: item,
@@ -131,6 +143,7 @@ enum QuickBooksLocalSync {
             item.quickBooksSyncStatus = "synced"
             item.quickBooksSyncDetail = nil
             item.quickBooksLastSyncedAt = Date()
+            item.applyQuickBooksCatalogAvailability(quickBooksItem.Active)
             item.name = quickBooksItem.Name
             item.itemTypeRawValue = quickBooksItem.ItemType ?? item.itemTypeRawValue
             item.unitPrice = quickBooksItem.UnitPrice ?? item.unitPrice

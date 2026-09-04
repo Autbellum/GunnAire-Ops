@@ -239,6 +239,11 @@ struct GmailSendRequest: Codable {
     let threadId: String?
 }
 
+private struct GmailLabelModificationRequest: Codable {
+    let addLabelIds: [String]
+    let removeLabelIds: [String]
+}
+
 struct GmailAttachment: Identifiable {
     let id = UUID()
     let fileName: String
@@ -833,6 +838,37 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                 completion(.failure(error))
             }
         }
+    }
+
+    func markGmailMessageRead(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        if let businessAccountLinkError {
+            completion(.failure(businessAccountLinkError))
+            return
+        }
+        let escapedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        guard let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)/modify") else {
+            completion(.failure(GoogleAuthError.invalidEndpoint))
+            return
+        }
+        let payload = GmailLabelModificationRequest(addLabelIds: [], removeLabelIds: ["UNREAD"])
+        authorizedJSONRequest(url: url, method: "POST", body: payload) { (result: Result<GmailMessageDetail, Error>) in
+            completion(result.map { _ in () })
+        }
+    }
+
+    /// Gmail's recoverable delete action. Messages are moved to Trash instead
+    /// of being permanently deleted so office staff can recover mistakes.
+    func moveGmailMessageToTrash(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        if let businessAccountLinkError {
+            completion(.failure(businessAccountLinkError))
+            return
+        }
+        let escapedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        guard let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)/trash") else {
+            completion(.failure(GoogleAuthError.invalidEndpoint))
+            return
+        }
+        authorizedEmptyRequest(url: url, method: "POST", completion: completion)
     }
 
     func sendGmailMessage(

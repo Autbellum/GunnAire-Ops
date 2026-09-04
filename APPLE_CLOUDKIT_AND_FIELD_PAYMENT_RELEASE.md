@@ -4,7 +4,7 @@
 
 The app uses the private CloudKit database container
 `iCloud.com.gunnaire.businesssuite` for its SwiftData store. Apple configuration
-and schema status as of 2026-08-30.
+and schema status as of 2026-08-31.
 
 ### Current capability and schema status
 
@@ -33,18 +33,44 @@ and schema status as of 2026-08-30.
   gated on a participating certified payment service provider, Account Holder
   entitlement approval, provider integration, and signed physical-iPhone
   acceptance.
-- Exact build `1.0 (2026083021)` is retained as a development-signed iOS
+- Exact current build `1.0 (2026083101)` is retained as a development-signed iOS
+  Release archive and universal arm64/x86_64 Mac Catalyst Release app. Strict
+  signature verification confirms Apple login, CloudKit, Push Notifications,
+  and Associated Domains in both products. The iOS app/dSYM UUID matches at
+  `C62573CC-15F9-3413-A341-8452EF322FBA`; Mac app/dSYM UUIDs match at
+  `641B4DEA-FB67-3D3C-831F-8CF5B0A3F309` and
+  `B8BC1EC8-08FF-3F56-92F5-DD6289C6E767`. Exact retained-artifact and CloudKit
+  export preflight reports **61 checks, 4 expected warnings, and 0 failures**;
+  one warning records that online probes were intentionally omitted. The exact
+  read-only online probe reports **64/3/0**: production serves reviewed backend
+  `2026.08.30.16`, Apple notification routing rejects a malformed envelope with
+  HTTP 400, and the QBO callback reaches the app scheme. Complete iPad and Mac
+  logic suites pass **672/672** each, and the complete iPad UI target passes
+  **92/92 logical workflows** with **95/95 device executions**. The retained
+  consolidated evidence is
+  `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/release-verification-2026083101.json`.
+- The final signed-hardware gate is executable rather than an informal
+  checklist. Run `Tools/physical_device_acceptance.py` with the exact retained
+  archive and Mac app, then follow `PHYSICAL_DEVICE_ACCEPTANCE.md`. The
+  read-only inventory omits device names, serial numbers, UDIDs, ECIDs,
+  accounts, customer data, and credentials. Its structured record validator
+  requires real evidence for every iPad/Mac/iPhone, CloudKit, offline, Handoff,
+  QBO sandbox item/invoice, payment recovery, Google, APNs, scanning, role,
+  accessibility, and revocation scenario; it refuses stale builds, missing
+  evidence, privacy-unsafe records, or Production QBO/CloudKit claims without
+  an explicit authorization reference.
+- Prior exact build `1.0 (2026083021)` is retained as a development-signed iOS
   Release archive and universal arm64/x86_64 Mac Catalyst Release app. Strict
   signature verification confirms Apple login, CloudKit, Push Notifications,
   and Associated Domains in both products. The iOS app/dSYM UUID matches at
   `7C335331-C438-3C6E-B889-77AE067DE476`; Mac app/dSYM UUIDs match at
   `97010FC5-A7B9-3148-9B2D-7906D4ED0D9B` and
   `B88F9531-0261-36DD-9C29-0B5EAA729A24`. Exact retained-artifact and CloudKit
-  export preflight reports **61 checks, 5 expected warnings, and 0 failures**;
-  one warning records that online probes were intentionally omitted. The
-  read-only online probe reports **63/4/1** solely because production remains
-  backend `2026.08.30.15` while source expects undeployed `.16`; Apple
-  notification routing and the QBO callback pass. Complete iPad and Mac logic
+  export preflight reports **61 checks, 4 expected warnings, and 0 failures**;
+  one warning records that online probes were intentionally omitted. The exact
+  read-only online probe reports **64/3/0**: production serves reviewed backend
+  `2026.08.30.16`, Apple notification routing rejects a malformed envelope with
+  HTTP 400, and the QBO callback reaches the app scheme. Complete iPad and Mac logic
   suites pass **672/672** each; role-scoped iPad Find/navigation passes **4/4**,
   direct Mac global Find passes **1/1** after a controlled stale-test-service
   recycle, and the compact field iPhone Find passes **1/1**. This authorization
@@ -337,7 +363,7 @@ The project now uses the enabled Push Notifications capability for optional staf
 
 A new field-payment assignment queues one idempotent delivery per active device without delaying assignment creation. APNs previews are intentionally generic and omit customer names, addresses, balances, amounts, and payment data. The route contains only a versioned invoice UUID; the receiving app still applies its current role, assignment, invoice-visibility, and balance policy before opening Payments → Collect. Logout, session expiry, user deactivation, and permanent APNs token errors deactivate the registration and suppress its pending deliveries.
 
-Backend source `2026.08.30.15` is deployed and passes the 69-test suite. Native push and compact Settings behavior retain framework-appropriate unit/UI coverage. Before activation, create and store an authorized APNs signing key plus a separate Fernet device-token key in Render; confirm Admin readiness; update App Store privacy answers for the linked device identifier used only for app functionality; and prove sandbox and TestFlight/production delivery, tap routing, logout, deactivation, credential revocation, and invalid-token cleanup on signed hardware.
+Backend source `2026.08.30.16` is deployed and passes the 70-test suite. Native push and compact Settings behavior retain framework-appropriate unit/UI coverage. Before activation, create and store an authorized APNs signing key plus a separate Fernet device-token key in Render; confirm Admin readiness; update App Store privacy answers for the linked device identifier used only for app functionality; and prove sandbox and TestFlight/production delivery, tap routing, logout, deactivation, credential revocation, and invalid-token cleanup on signed hardware.
 
 ## Field iPhone payment handoff
 

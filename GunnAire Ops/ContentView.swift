@@ -29,10 +29,80 @@ struct AppStoreScreenshotPrivacyPolicy: Equatable, Sendable {
     }
 }
 
+/// Registers the numbered workspace shortcuts with UIKit on native iPadOS.
+/// SwiftUI scene commands render correctly in the Mac menu bar, but they are
+/// not consistently inserted into the responder chain for an iPad split view.
+private struct GunnAireIPadKeyCommandBridge: UIViewRepresentable {
+    let onRoute: (GunnAireAppRoute) -> Void
+
+    func makeUIView(context: Context) -> KeyCommandResponderView {
+        let view = KeyCommandResponderView()
+        view.onRoute = onRoute
+        return view
+    }
+
+    func updateUIView(_ uiView: KeyCommandResponderView, context: Context) {
+        uiView.onRoute = onRoute
+        uiView.activateIfAvailable()
+    }
+
+    final class KeyCommandResponderView: UIView {
+        var onRoute: ((GunnAireAppRoute) -> Void)?
+
+        override var canBecomeFirstResponder: Bool { true }
+
+        override var keyCommands: [UIKeyCommand]? {
+            let definitions = GunnAireNavigationCommandDefinition.primary.compactMap { definition -> (String, String)? in
+                guard let shortcutKey = definition.shortcutKey else { return nil }
+                return (shortcutKey.description, definition.title)
+            }
+            return definitions.map { input, title in
+                let command = UIKeyCommand(
+                    title: title,
+                    action: #selector(handleKeyCommand(_:)),
+                    input: input,
+                    modifierFlags: .command
+                )
+                command.wantsPriorityOverSystemBehavior = true
+                return command
+            }
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil, !isFirstResponder else { return }
+            // The command host can become visible before SwiftUI's next update
+            // pass. Claim the responder synchronously so an attached keyboard
+            // works as soon as the workspace is visible, with the async retry
+            // retained for UIKit transitions that temporarily reject it.
+            if !becomeFirstResponder() {
+                activateIfAvailable()
+            }
+        }
+
+        func activateIfAvailable() {
+            guard window != nil, !isFirstResponder else { return }
+            DispatchQueue.main.async { [weak self] in
+                _ = self?.becomeFirstResponder()
+            }
+        }
+
+        @objc private func handleKeyCommand(_ command: UIKeyCommand) {
+            guard let input = command.input else { return }
+            let route = GunnAireNavigationCommandDefinition.primary.first {
+                $0.shortcutKey?.description == input
+            }?.route
+            guard let route else { return }
+            onRoute?(route)
+        }
+    }
+}
+
 // MARK: - ContentView with NavigationSplitView Sidebar
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @EnvironmentObject private var cloudKitEventMonitor: GunnAireCloudKitEventMonitor
     @AppStorage("hasAuthenticatedUser") private var hasAuthenticatedUser = false
     @Query(sort: \AppUser.email, order: .forward) private var users: [AppUser]
@@ -288,6 +358,9 @@ struct ContentView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .background(alignment: .topLeading) {
+            nativeIPadNavigationShortcutHost
+        }
         .overlay(alignment: .top) {
             appWideFieldCollectionPromptBanner
         }
@@ -316,7 +389,7 @@ struct ContentView: View {
                 visibleItems: updatedItems
             )
             guard resolvedSelection != selectedSidebarItem else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
                 selectedSidebarItem = resolvedSelection
             }
         }
@@ -429,6 +502,12 @@ struct ContentView: View {
             )
             applyPendingAppRouteIfNeeded()
         }
+        .focusedSceneValue(
+            \.gunnaireNavigationCommandContext,
+            GunnAireNavigationCommandContext(
+                visibleSidebarItems: Set(visibleSidebarItems)
+            )
+        )
         .tint(Color.brandGold)
     }
 
@@ -523,6 +602,29 @@ struct ContentView: View {
                 .tag(item)
                 .listRowBackground(selectedSidebarItem == item ? Color.brandGold.opacity(0.12) : Color.clear)
         }
+    }
+
+    /// Scene command menus remain the native Mac presentation. Native iPadOS
+    /// needs an in-view command responder for attached-keyboard shortcuts to
+    /// remain dependable while focus moves between split-view columns, forms,
+    /// and sheets. These buttons have no visual or accessibility footprint;
+    /// authorization still flows through the same central route resolver.
+    @ViewBuilder
+    private var nativeIPadNavigationShortcutHost: some View {
+        #if targetEnvironment(macCatalyst)
+        EmptyView()
+        #else
+        GunnAireIPadKeyCommandBridge(onRoute: openKeyboardRoute)
+        .frame(width: 1, height: 1)
+        .opacity(0.01)
+        .clipped()
+        .accessibilityHidden(true)
+        #endif
+    }
+
+    private func openKeyboardRoute(_ route: GunnAireAppRoute) {
+        GunnAireAppIntentRouter.store(route)
+        applyPendingAppRouteIfNeeded()
     }
     
     private func iconName(for item: SidebarItem) -> String {
@@ -691,7 +793,7 @@ struct ContentView: View {
     /// every iPad and Mac workspace without duplicating business queries here.
     private func openAppWideFind() {
         guard visibleSidebarItems.contains(.commandCenter) else { return }
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
             selectedSidebarItem = .commandCenter
             columnVisibility = prefersPersistentSidebar ? .doubleColumn : .detailOnly
         }
@@ -701,7 +803,7 @@ struct ContentView: View {
     private func applyPendingAppRouteIfNeeded() {
         guard let route = pendingAppRoute else { return }
         let targetItem = route.sidebarItem
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
             if visibleSidebarItems.contains(targetItem) {
                 selectedSidebarItem = targetItem
             } else {
@@ -734,6 +836,7 @@ struct ContentView: View {
 struct ServiceCallDetailView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.gunnaireReduceMotion) private var reduceMotion
     @Query(sort: \ServiceCall.scheduledDate, order: .reverse) private var serviceCalls: [ServiceCall]
     @Query(sort: \Estimate.createdAt, order: .reverse) private var estimates: [Estimate]
     @Query(sort: \Invoice.createdAt, order: .reverse) private var invoices: [Invoice]
@@ -998,6 +1101,18 @@ GunnAire
         return estimates
             .filter { $0.serviceCallID == call.id && $0.proposalGroupID == groupID }
             .sorted { ($0.proposalOptionKind?.comparisonRank ?? Int.max) < ($1.proposalOptionKind?.comparisonRank ?? Int.max) }
+    }
+
+    private var portalApprovalEstimate: Estimate? {
+        guard let estimate = linkedEstimate,
+              estimate.serviceCallID == call.id,
+              !estimate.proposalIsFinalized,
+              !["rejected", "not-selected"].contains(estimate.status.lowercased()),
+              estimate.customerApprovalBlockedMessage == nil,
+              EstimateProposalPolicy.selectionIssue(for: estimate, in: estimates) == nil else {
+            return nil
+        }
+        return estimate
     }
 
     private var totalPaid: Double {
@@ -2414,77 +2529,6 @@ GunnAire
 
                     GroupBox("Work Performed") {
                         VStack(alignment: .leading, spacing: 10) {
-                            if workPerformedEntries.isEmpty {
-                                Label(
-                                    requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
-                                        ? "A work log is required before this job can be completed."
-                                        : "No work-performed entries have been added yet.",
-                                    systemImage: requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
-                                        ? "exclamationmark.triangle.fill"
-                                        : "text.badge.plus"
-                                )
-                                .font(.caption)
-                                .foregroundStyle(
-                                    requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
-                                        ? Color.orange
-                                        : Color.secondary
-                                )
-                                .accessibilityIdentifier("WorkPerformedEmptyState")
-                            } else {
-                                let visibleEntries = expandedWorkLogHistory
-                                    ? workPerformedEntries
-                                    : Array(workPerformedEntries.prefix(3))
-                                ForEach(visibleEntries) { entry in
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        HStack(alignment: .firstTextBaseline) {
-                                            Text(ServiceWorkLogPolicy.actorDisplayName(entry.actorEmail) ?? "GunnAire staff")
-                                                .font(.caption.weight(.semibold))
-                                            Spacer()
-                                            Text(entry.occurredAt.formatted(date: .abbreviated, time: .shortened))
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        Text(entry.detail)
-                                            .font(.caption)
-                                            .textSelection(.enabled)
-                                    }
-                                    .padding(9)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                    .accessibilityElement(children: .combine)
-                                }
-                                if workPerformedEntries.count > 3 {
-                                    Button(expandedWorkLogHistory ? "Show Recent Entries" : "Show All \(workPerformedEntries.count) Entries") {
-                                        withAnimation { expandedWorkLogHistory.toggle() }
-                                    }
-                                    .font(.caption.weight(.semibold))
-                                    .accessibilityIdentifier("ToggleFullWorkLog")
-                                }
-                            }
-
-                            Divider()
-
-                            if let currentCustomerWorkSummary {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Label("Customer work summary ready", systemImage: "doc.text.fill")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.green)
-                                    Text(currentCustomerWorkSummary)
-                                        .font(.caption)
-                                        .lineLimit(4)
-                                    if !customerWorkSummaryRevisions.isEmpty {
-                                        Text("\(customerWorkSummaryRevisions.count) retained summary revision\(customerWorkSummaryRevisions.count == 1 ? "" : "s")")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                .accessibilityIdentifier("CurrentCustomerWorkSummary")
-                            } else {
-                                Text("The customer-facing service report summary has not been prepared yet.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
                             if canUpdateCurrentJob {
                                 ViewThatFits(in: .horizontal) {
                                     HStack(spacing: 8) {
@@ -2532,6 +2576,79 @@ GunnAire
                                         .accessibilityIdentifier("ReviewCustomerWorkSummary")
                                     }
                                 }
+                            }
+
+                            if workPerformedEntries.isEmpty {
+                                Label(
+                                    requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
+                                        ? "A work log is required before this job can be completed."
+                                        : "No work-performed entries have been added yet.",
+                                    systemImage: requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
+                                        ? "exclamationmark.triangle.fill"
+                                        : "text.badge.plus"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(
+                                    requireWorkPerformedLogForCloseout && call.requiresTechnicalServiceReportCompletion
+                                        ? Color.orange
+                                        : Color.secondary
+                                )
+                                .accessibilityIdentifier("WorkPerformedEmptyState")
+                            } else {
+                                let visibleEntries = expandedWorkLogHistory
+                                    ? workPerformedEntries
+                                    : Array(workPerformedEntries.prefix(3))
+                                ForEach(visibleEntries) { entry in
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        HStack(alignment: .firstTextBaseline) {
+                                            Text(ServiceWorkLogPolicy.actorDisplayName(entry.actorEmail) ?? "GunnAire staff")
+                                                .font(.caption.weight(.semibold))
+                                            Spacer()
+                                            Text(entry.occurredAt.formatted(date: .abbreviated, time: .shortened))
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Text(entry.detail)
+                                            .font(.caption)
+                                            .textSelection(.enabled)
+                                    }
+                                    .padding(9)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .accessibilityElement(children: .combine)
+                                }
+                                if workPerformedEntries.count > 3 {
+                                    Button(expandedWorkLogHistory ? "Show Recent Entries" : "Show All \(workPerformedEntries.count) Entries") {
+                                        withAnimation(GunnAireAccessibilityMotionPolicy.standardAnimation(reduceMotion: reduceMotion)) {
+                                            expandedWorkLogHistory.toggle()
+                                        }
+                                    }
+                                    .font(.caption.weight(.semibold))
+                                    .accessibilityIdentifier("ToggleFullWorkLog")
+                                }
+                            }
+
+                            Divider()
+
+                            if let currentCustomerWorkSummary {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Label("Customer work summary ready", systemImage: "doc.text.fill")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.green)
+                                    Text(currentCustomerWorkSummary)
+                                        .font(.caption)
+                                        .lineLimit(4)
+                                    if !customerWorkSummaryRevisions.isEmpty {
+                                        Text("\(customerWorkSummaryRevisions.count) retained summary revision\(customerWorkSummaryRevisions.count == 1 ? "" : "s")")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .accessibilityIdentifier("CurrentCustomerWorkSummary")
+                            } else {
+                                Text("The customer-facing service report summary has not been prepared yet.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
 
                             Text("Entries are append-only and remain available offline. The reviewed summary feeds the existing service report and customer-document workflow.")
@@ -3229,6 +3346,7 @@ GunnAire
             CustomerPortalLinkComposer(
                 call: call,
                 invoice: linkedInvoice,
+                estimate: portalApprovalEstimate,
                 balanceDue: linkedInvoice == nil ? nil : invoiceBalanceDue
             )
             .tint(Color.brandGold)
@@ -3573,6 +3691,7 @@ private struct CustomerPortalLinkComposer: View {
     @Environment(\.dismiss) private var dismiss
     let call: ServiceCall
     let invoice: Invoice?
+    let estimate: Estimate?
     let balanceDue: Double?
 
     @State private var expiryDays = 14
@@ -3591,9 +3710,25 @@ private struct CustomerPortalLinkComposer: View {
                     Text(call.customer.name)
                     Text(call.customer.email ?? "No email")
                         .foregroundStyle(.secondary)
-                    Text("This link only shows this appointment and its linked invoice summary. It cannot be used to browse customer records, edit a job, or take a payment.")
+                    Text(estimate == nil
+                         ? "This link only shows this appointment and its linked invoice summary. It cannot browse customer records, edit a job, or take a payment."
+                         : "This link shows this appointment and the exact selected estimate. The customer can approve that estimate; scheduling, job edits, and payment remain separate.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                if let estimate {
+                    Section("Estimate Approval") {
+                        LabeledContent {
+                            Text(estimate.amount.formatted(.currency(code: "USD")))
+                                .accessibilityIdentifier("PortalEstimateAmount")
+                        } label: {
+                            Text(estimate.proposalLabel)
+                        }
+                        Text("Approval is bound to this exact amount and line-item revision. If the estimate changes, the response will require administrator review instead of applying automatically.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section("Link Expiry") {
@@ -3651,6 +3786,7 @@ private struct CustomerPortalLinkComposer: View {
                     customer: call.customer,
                     serviceCall: call,
                     invoice: invoice,
+                    estimate: estimate,
                     balanceDue: balanceDue,
                     expiresInDays: expiryDays
                 )

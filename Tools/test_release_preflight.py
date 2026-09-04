@@ -1,6 +1,9 @@
 import contextlib
 import copy
 import io
+import json
+import plistlib
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -105,6 +108,100 @@ class CloudKitV22PreflightTests(unittest.TestCase):
 
         self.assertTrue(results.failures)
         self.assertTrue(any("security grants" in failure.lower() for failure in results.failures))
+
+
+class AppStoreMetadataPreflightTests(unittest.TestCase):
+    def contract(self) -> dict:
+        return {
+            "schemaVersion": 1,
+            "app": {
+                "bundleID": release_preflight.EXPECTED_BUNDLE_ID,
+                "primaryLocale": release_preflight.EXPECTED_APP_STORE_LOCALE,
+                "privacyPolicyURL": "https://gunnaire.com/privacy-policy.html",
+                "supportURL": "https://gunnaire.com",
+                "marketingURL": "https://gunnaire.com",
+            },
+            "appReview": {
+                "requiresSignIn": True,
+                "credentialStorage": "App Store Connect only",
+            },
+            "privacy": {
+                "tracking": False,
+                "dataTypes": [
+                    {
+                        "manifestDataType": "NSPrivacyCollectedDataTypeName",
+                        "category": "Contact Info",
+                        "displayName": "Name",
+                        "linkedToUser": True,
+                        "tracking": False,
+                        "purposes": [release_preflight.EXPECTED_APP_STORE_PRIVACY_PURPOSE],
+                        "usage": "Business identity",
+                    }
+                ],
+            },
+        }
+
+    def privacy_manifest(self) -> dict:
+        return {
+            "NSPrivacyTracking": False,
+            "NSPrivacyCollectedDataTypes": [
+                {
+                    "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeName",
+                    "NSPrivacyCollectedDataTypeLinked": True,
+                    "NSPrivacyCollectedDataTypeTracking": False,
+                    "NSPrivacyCollectedDataTypePurposes": [
+                        release_preflight.EXPECTED_APP_STORE_PRIVACY_PURPOSE
+                    ],
+                }
+            ],
+        }
+
+    def check(self, contract: dict, manifest=None) -> release_preflight.Results:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata_path = root / release_preflight.EXPECTED_APP_STORE_METADATA_PATH
+            metadata_path.parent.mkdir(parents=True)
+            metadata_path.write_text(json.dumps(contract), encoding="utf-8")
+            privacy_path = root / "GunnAire Ops" / "PrivacyInfo.xcprivacy"
+            privacy_path.parent.mkdir(parents=True)
+            with privacy_path.open("wb") as stream:
+                plistlib.dump(manifest or self.privacy_manifest(), stream)
+            results = release_preflight.Results()
+            with contextlib.redirect_stdout(io.StringIO()):
+                release_preflight.check_app_store_metadata(root, results)
+            return results
+
+    def test_exact_app_store_privacy_contract_is_accepted(self) -> None:
+        results = self.check(self.contract())
+
+        self.assertEqual(results.failures, [])
+        self.assertEqual(results.warnings, 0)
+
+    def test_missing_manifest_data_type_is_rejected(self) -> None:
+        contract = self.contract()
+        contract["privacy"]["dataTypes"] = []
+
+        results = self.check(contract)
+
+        self.assertTrue(any("differ" in failure.lower() for failure in results.failures))
+
+    def test_linkage_or_purpose_drift_is_rejected(self) -> None:
+        contract = self.contract()
+        answer = contract["privacy"]["dataTypes"][0]
+        answer["linkedToUser"] = False
+        answer["purposes"] = []
+
+        results = self.check(contract)
+
+        self.assertTrue(any("do not match" in failure.lower() for failure in results.failures))
+
+    def test_review_credentials_cannot_be_committed(self) -> None:
+        contract = self.contract()
+        contract["appReview"]["reviewPassword"] = "should-not-be-here"
+
+        results = self.check(contract)
+
+        self.assertTrue(any("credentials" in failure.lower() for failure in results.failures))
 
 
 if __name__ == "__main__":

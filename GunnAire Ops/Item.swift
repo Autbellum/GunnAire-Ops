@@ -18,6 +18,7 @@ enum CatalogItemType: String, Codable, CaseIterable, Identifiable {
 enum PricebookReviewStatus: String, Codable, CaseIterable {
     case approved
     case needsReview = "needs_review"
+    case archived
 }
 
 /// A reusable service package can either remain one customer-facing flat-rate
@@ -777,9 +778,10 @@ private struct CatalogDocumentSnapshotEnvelope: Codable {
 final class Item {
     var id: UUID = UUID()
     var quickBooksID: String?
-    /// `pending`, `synced`, or `needs_attention`. This is intentionally stored
-    /// with the pricebook item so an offline-created line can be retried after
-    /// the originating invoice screen has been dismissed.
+    /// `pending`, `pending_update`, `synced`, `needs_review`, `archived`, or
+    /// `needs_attention`. This is intentionally stored with the pricebook item
+    /// so offline creation and administrator-staged changes remain recoverable
+    /// after the originating screen has been dismissed.
     var quickBooksSyncStatus: String = "pending"
     var quickBooksSyncDetail: String?
     var quickBooksLastSyncedAt: Date?
@@ -886,6 +888,21 @@ final class Item {
         pricebookReviewStatus == .needsReview
     }
 
+    /// Archived items remain available to historical documents, inventory
+    /// movements, purchasing evidence, and service history, but cannot be
+    /// selected for new customer work or recurring billing.
+    var isCatalogArchived: Bool {
+        pricebookReviewStatus == .archived
+    }
+
+    /// Only an administrator-approved record is part of the reusable company
+    /// pricebook. A field-created draft stays usable on the document where it
+    /// originated through `CatalogItemSelectionPolicy`, but cannot leak into a
+    /// different job, agreement, purchase order, or replenishment suggestion.
+    var isAvailableForNewWork: Bool {
+        pricebookReviewStatus == .approved
+    }
+
     var assemblyDefinition: CatalogAssemblyDefinition? {
         get { CatalogAssemblyDefinition.decoded(from: flatRateAssemblyJSON) }
         set { flatRateAssemblyJSON = newValue?.encodedJSON }
@@ -908,10 +925,47 @@ final class Item {
         pricebookReviewStatus = .approved
         pricebookReviewedByEmail = Self.normalizedOptionalValue(reviewerEmail)
         pricebookReviewedAt = date
-        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            quickBooksSyncStatus = "pending_update"
+            quickBooksSyncDetail = "Pricebook review approved; load the linked QuickBooks version and review any differences before publishing."
+        } else {
             quickBooksSyncStatus = "pending"
             quickBooksSyncDetail = "Pricebook review approved; QuickBooks publication is pending."
         }
+        timestamp = date
+    }
+
+    func archiveFromPricebook(by reviewerEmail: String?, at date: Date = Date()) {
+        pricebookReviewStatus = .archived
+        pricebookReviewedByEmail = Self.normalizedOptionalValue(reviewerEmail)
+        pricebookReviewedAt = date
+        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            quickBooksSyncStatus = "pending_update"
+            quickBooksSyncDetail = "Pricebook archive is saved locally and waiting for explicit QuickBooks publication."
+        } else {
+            quickBooksSyncStatus = "archived"
+            quickBooksSyncDetail = nil
+        }
+        timestamp = date
+    }
+
+    func restoreToPricebook(by reviewerEmail: String?, at date: Date = Date()) {
+        pricebookReviewStatus = .approved
+        pricebookReviewedByEmail = Self.normalizedOptionalValue(reviewerEmail)
+        pricebookReviewedAt = date
+        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            quickBooksSyncStatus = "pending_update"
+            quickBooksSyncDetail = "Pricebook restoration is saved locally and waiting for explicit QuickBooks publication."
+        } else {
+            quickBooksSyncStatus = "pending"
+            quickBooksSyncDetail = "Pricebook restoration is saved locally; QuickBooks publication is pending."
+        }
+        timestamp = date
+    }
+
+    func applyQuickBooksCatalogAvailability(_ active: Bool?) {
+        guard let active else { return }
+        pricebookReviewStatus = active ? .approved : .archived
     }
 
     var hasPendingQuickBooksCatalogUpdate: Bool {
@@ -932,14 +986,51 @@ final class Item {
     }
 
     var needsQuickBooksAttention: Bool {
-        quickBooksSyncStatus == "needs_attention"
+        quickBooksCatalogSyncState == "needs_attention"
     }
 
+    /// Operational catalog state shown outside the provider reconciliation
+    /// console. A durable staged update must never look synced merely because
+    /// the item already owns a QuickBooks ID. Creation and update recovery stay
+    /// separate: callers that create missing QBO items must still require an
+    /// empty `quickBooksID` explicitly.
     var quickBooksCatalogSyncState: String {
-        if quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            return "synced"
+        let status = quickBooksSyncStatus
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let hasQuickBooksID = quickBooksID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty == false
+
+        if requiresPricebookReview || status == "needs_review" {
+            return "needs_review"
         }
-        return quickBooksSyncStatus
+        if status == "needs_attention" {
+            return "needs_attention"
+        }
+        if isCatalogArchived {
+            if hasQuickBooksID && status == "pending_update" {
+                return "pending_update"
+            }
+            return "archived"
+        }
+        if !hasQuickBooksID {
+            switch status {
+            case "", "pending", "pending_update", "synced":
+                return "pending"
+            default:
+                return "needs_attention"
+            }
+        }
+
+        switch status {
+        case "", "synced":
+            return "synced"
+        case "pending", "pending_update":
+            return "pending_update"
+        default:
+            return "needs_attention"
+        }
     }
 
     /// Finds the one local catalog record that can safely be reconciled with a
@@ -966,6 +1057,7 @@ final class Item {
         guard !normalizedName.isEmpty else { return nil }
         let candidates = items.filter {
             normalizedCatalogValue($0.quickBooksID ?? "").isEmpty &&
+            !$0.isCatalogArchived &&
             normalizedCatalogValue($0.name) == normalizedName &&
             normalizedCatalogValuesAreCompatible($0.sku, sku)
         }
@@ -986,6 +1078,28 @@ final class Item {
         guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               !normalized.isEmpty else { return nil }
         return normalized
+    }
+}
+
+/// Keeps a field-created pricebook draft scoped to the estimate or invoice
+/// where it originated until an administrator approves it. Selected archived
+/// or draft lines remain visible only so staff can review or remove historical
+/// document content; they are never silently reusable as new company work.
+enum CatalogItemSelectionPolicy {
+    static func canAdd(
+        _ item: Item,
+        documentScopedReviewItemIDs: Set<UUID>
+    ) -> Bool {
+        item.isAvailableForNewWork ||
+            (item.requiresPricebookReview && documentScopedReviewItemIDs.contains(item.id))
+    }
+
+    static func canDisplay(
+        _ item: Item,
+        isSelected: Bool,
+        documentScopedReviewItemIDs: Set<UUID>
+    ) -> Bool {
+        isSelected || canAdd(item, documentScopedReviewItemIDs: documentScopedReviewItemIDs)
     }
 }
 
