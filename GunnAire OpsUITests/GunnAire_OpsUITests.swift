@@ -2201,6 +2201,86 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testJobPhotoCanOpenCopyPreservingMarkup() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedPhotoMarkup"
+        ]
+        app.launch()
+
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
+        for _ in 0..<6 where !documentation.exists || !documentation.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(documentation.waitForExistence(timeout: 3))
+        documentation.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        stagePicker.buttons["Files"].tap()
+
+        let attachmentGroup = app.buttons["Diagnostic Photo, 1"]
+        for _ in 0..<12 where !attachmentGroup.exists || !attachmentGroup.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(attachmentGroup.waitForExistence(timeout: 3))
+        attachmentGroup.tap()
+
+        let annotate = app.buttons["AnnotateAttachment-A1000000-0000-4000-8000-000000000050"]
+        for _ in 0..<4 where !annotate.exists || !annotate.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(annotate.waitForExistence(timeout: 3))
+        XCTAssertEqual(annotate.label, "Annotate")
+        annotate.tap()
+
+        let previewNavigationBar = app.navigationBars.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "UI-Diagnostic-Photo")
+        ).firstMatch
+        XCTAssertTrue(previewNavigationBar.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 3))
+        let markup = app.switches["QLOverlayMarkupButtonAccessibilityIdentifier"]
+        XCTAssertTrue(markup.waitForExistence(timeout: 5))
+        markup.tap()
+        let markupCanvas = app.descendants(matching: .any)[
+            "QLMarkupImageItemViewControllerMarkupImageViewAccessibilityIdentifier"
+        ]
+        XCTAssertTrue(markupCanvas.waitForExistence(timeout: 5))
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Copy-preserving job photo markup"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        let strokeStart = markupCanvas.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.55))
+        let strokeEnd = markupCanvas.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.55))
+        strokeStart.press(forDuration: 0.2, thenDragTo: strokeEnd)
+        markup.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 8))
+        let updatedGroup = app.buttons["Diagnostic Photo, 2"]
+        for _ in 0..<10 where !updatedGroup.exists || !updatedGroup.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(updatedGroup.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["UI-Diagnostic-Photo.png"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts[
+                "Annotated copy of UI-Diagnostic-Photo.png — Control-board wiring before repair"
+            ].waitForExistence(timeout: 5)
+        )
+    }
+
+    @MainActor
     func testJobCloseoutNextActionOpensTheRequiredWorkflowStage() throws {
         let app = XCUIApplication()
         app.launchArguments = [

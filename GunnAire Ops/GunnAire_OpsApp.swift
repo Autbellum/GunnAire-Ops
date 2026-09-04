@@ -11,6 +11,7 @@ import SwiftUI
 import SwiftData
 import os
 import AppIntents
+import UIKit
 
 @main
 struct GunnAire_OpsApp: App {
@@ -284,6 +285,7 @@ private enum GunnAireUITestFixtures {
     private static let timeOffTechnicianID = UUID(uuidString: "A1000000-0000-4000-8000-000000000047")!
     private static let routeServiceCallID = UUID(uuidString: "A1000000-0000-4000-8000-000000000048")!
     private static let archivedCatalogItemID = UUID(uuidString: "A1000000-0000-4000-8000-000000000049")!
+    private static let photoMarkupAttachmentID = UUID(uuidString: "A1000000-0000-4000-8000-000000000050")!
 
     static func prepareIfRequested(in context: ModelContext) throws {
         let arguments = ProcessInfo.processInfo.arguments
@@ -327,6 +329,7 @@ private enum GunnAireUITestFixtures {
         let isBusinessTaskFixture = arguments.contains("-uiTestSeedBusinessTask")
         let isTimeOffRequestFixture = arguments.contains("-uiTestSeedTimeOffRequest")
         let isTechnicianRouteFixture = arguments.contains("-uiTestSeedTechnicianRoute")
+        let isPhotoMarkupFixture = arguments.contains("-uiTestSeedPhotoMarkup")
 
         let appUsers = try context.fetch(FetchDescriptor<AppUser>())
         for user in appUsers where
@@ -441,6 +444,7 @@ private enum GunnAireUITestFixtures {
         }
         let documentAttachments = try context.fetch(FetchDescriptor<ServiceDocumentAttachment>())
         for attachment in documentAttachments where attachment.id == warrantyEvidenceID ||
+            attachment.id == photoMarkupAttachmentID ||
             attachment.customer?.id == customerID ||
             attachment.fleetVehicleID == fleetVehicleID ||
             attachment.expenseClaimID == fieldExpenseClaimID {
@@ -625,6 +629,7 @@ private enum GunnAireUITestFixtures {
             isOperationalAlertFixture ||
             isTimeOffRequestFixture ||
             isTechnicianRouteFixture ||
+            isPhotoMarkupFixture ||
             isOfflineCompanyPricebookFixture
         guard shouldSeedOperationalFixture else {
             if let existingFixtureCustomer {
@@ -993,6 +998,31 @@ private enum GunnAireUITestFixtures {
         context.insert(equipment)
         context.insert(serviceLocation)
         context.insert(call)
+        if isPhotoMarkupFixture {
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: 640, height: 480))
+            let data = renderer.pngData { rendererContext in
+                UIColor(red: 0.08, green: 0.16, blue: 0.23, alpha: 1).setFill()
+                rendererContext.fill(CGRect(x: 0, y: 0, width: 640, height: 480))
+                UIColor(red: 0.95, green: 0.68, blue: 0.18, alpha: 1).setFill()
+                rendererContext.fill(CGRect(x: 72, y: 88, width: 496, height: 304))
+            }
+            let fixtureURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("UI-Diagnostic-Photo.png")
+            try data.write(to: fixtureURL, options: .atomic)
+            context.insert(ServiceDocumentAttachment(
+                id: photoMarkupAttachmentID,
+                customer: customer,
+                serviceCallID: serviceCallID,
+                customerEquipmentID: equipmentID,
+                invoiceID: invoiceID,
+                kind: .diagnosticPhoto,
+                displayName: fixtureURL.lastPathComponent,
+                caption: "Control-board wiring before repair",
+                localFilePath: fixtureURL.path,
+                contentType: "image/png",
+                fileSizeBytes: data.count
+            ))
+        }
         if isTechnicianRouteFixture {
             context.insert(ServiceCall(
                 id: routeServiceCallID,
