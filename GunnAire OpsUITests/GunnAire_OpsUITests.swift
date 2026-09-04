@@ -6285,7 +6285,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(connectQuickBooks.exists)
         XCTAssertTrue(connectQuickBooks.isHittable)
         XCTAssertFalse(app.buttons["VerifyContactlessQuickBooksPayment"].exists)
-        XCTAssertTrue(app.buttons["Record Cash, Check, or Another Verified Payment"].exists)
+        let recordVerifiedPayment = app.buttons["Record Cash, Check, or Another Verified Payment"]
+        for _ in 0..<3 where !recordVerifiedPayment.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(recordVerifiedPayment.exists)
+        XCTAssertTrue(recordVerifiedPayment.isHittable)
 
         app.terminate()
         app.launchArguments.removeAll { $0 == "-uiTestForceQuickBooksDisconnected" }
