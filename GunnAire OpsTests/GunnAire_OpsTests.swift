@@ -19414,6 +19414,7 @@ struct GunnAire_OpsTests {
         )
         #expect(impact == PricebookReviewDocumentImpact(estimateCount: 1, invoiceCount: 1))
         #expect(impact.summary == "Required by 1 estimate and 1 invoice waiting for QuickBooks.")
+        #expect(impact.publicationNextStep == "Review 1 estimate and 1 invoice waiting for QuickBooks.")
 
         let queue = PricebookReviewQueue.queuedItems(
             from: [unusedItem, blockingItem],
@@ -20322,6 +20323,83 @@ struct GunnAire_OpsTests {
         #expect(local.unitPrice == 189)
     }
 
+    @Test func authoritativeQuickBooksCatalogSnapshotClearsProviderFieldsAndPreservesOperationsMetadata() throws {
+        let syncDate = Date(timeIntervalSinceReferenceDate: 1_476_000)
+        let componentID = try #require(UUID(uuidString: "D46ACD5E-C208-4B3C-E34A-9FF337906598"))
+        let assembly = CatalogAssemblyDefinition(
+            presentation: .flatRate,
+            components: [CatalogAssemblyComponentDefinition(itemID: componentID, quantity: 2)]
+        )
+        let local = Item(
+            quickBooksID: " OLD-ID ",
+            quickBooksSyncStatus: "pending_update",
+            quickBooksSyncDetail: "Old pending detail",
+            name: "Old Local Name",
+            itemType: .nonInventory,
+            unitPrice: 199,
+            purchaseCost: 80,
+            isTaxable: true,
+            itemDescription: "Old description",
+            sku: "OLD-SKU",
+            preferredVendorName: "Old Vendor",
+            preferredVendorQuickBooksID: "OLD-VENDOR-ID",
+            vendorPartNumber: "LNX-42W99",
+            purchaseURL: "https://vendor.example/42W99",
+            purchaseDescription: "Old purchase description",
+            tracksInventory: true,
+            reorderPoint: 3,
+            defaultInventoryLocation: "Truck 5",
+            flatRateAssemblyJSON: assembly.encodedJSON
+        )
+        let remote = try JSONDecoder().decode(
+            QuickBooksItem.self,
+            from: Data(#"{"Id":" QBO-ITEM-42 ","Name":"Remote Service","Type":"Service","Active":true}"#.utf8)
+        )
+
+        QuickBooksCatalogSnapshotApplication.apply(remote, to: local, at: syncDate)
+
+        #expect(local.quickBooksID == "QBO-ITEM-42")
+        #expect(local.quickBooksSyncStatus == "synced")
+        #expect(local.quickBooksSyncDetail == nil)
+        #expect(local.quickBooksLastSyncedAt == syncDate)
+        #expect(local.name == "Remote Service")
+        #expect(local.itemType == .service)
+        #expect(local.unitPrice == 0)
+        #expect(local.purchaseCost == nil)
+        #expect(!local.isTaxable)
+        #expect(local.itemDescription == nil)
+        #expect(local.sku == nil)
+        #expect(local.purchaseDescription == nil)
+        #expect(local.preferredVendorName == nil)
+        #expect(local.preferredVendorQuickBooksID == nil)
+        #expect(local.vendorPartNumber == "LNX-42W99")
+        #expect(local.purchaseURL == "https://vendor.example/42W99")
+        #expect(local.tracksInventory)
+        #expect(local.reorderPoint == 3)
+        #expect(local.defaultInventoryLocation == "Truck 5")
+        #expect(local.assemblyDefinition == assembly)
+    }
+
+    @Test func authoritativeQuickBooksCatalogSnapshotNormalizesRemoteText() throws {
+        let local = Item(name: "Local", unitPrice: 1)
+        let remote = try JSONDecoder().decode(
+            QuickBooksItem.self,
+            from: Data(#"{"Id":"QBO-ITEM-43","Name":"Remote Part","Type":"NonInventory","Description":"  New description  ","Sku":"  NEW-SKU  ","PurchaseDesc":"  Supplier description  ","UnitPrice":289,"PurchaseCost":72,"Taxable":true,"Active":false,"PrefVendorRef":{"value":" VENDOR-9 ","name":" Johnstone Supply "}}"#.utf8)
+        )
+
+        QuickBooksCatalogSnapshotApplication.apply(remote, to: local)
+
+        #expect(local.itemDescription == "New description")
+        #expect(local.sku == "NEW-SKU")
+        #expect(local.purchaseDescription == "Supplier description")
+        #expect(local.preferredVendorName == "Johnstone Supply")
+        #expect(local.preferredVendorQuickBooksID == "VENDOR-9")
+        #expect(local.unitPrice == 289)
+        #expect(local.purchaseCost == 72)
+        #expect(local.isTaxable)
+        #expect(local.isCatalogArchived)
+    }
+
     @Test func catalogCreationStartsLocallyAndReusesOneQuickBooksOperationAcrossRetries() throws {
         let itemID = try #require(UUID(uuidString: "A13EAB2B-9FD5-4809-B017-6CC0046D4265"))
         let createdAt = Date(timeIntervalSinceReferenceDate: 1_500_000)
@@ -21071,7 +21149,16 @@ struct GunnAire_OpsTests {
             quickBooksSyncStatus: "pending_update",
             quickBooksSyncDetail: "Reviewed local price change",
             name: "GunnAire Diagnostic",
-            unitPrice: 209
+            unitPrice: 209,
+            purchaseCost: 45,
+            isTaxable: true,
+            itemDescription: "Locally staged description",
+            sku: "LOCAL-STAGED-SKU",
+            preferredVendorName: "Johnstone Supply",
+            preferredVendorQuickBooksID: "VENDOR-12",
+            vendorPartNumber: "JHN-5566",
+            tracksInventory: true,
+            defaultInventoryLocation: "Truck 2"
         )
         context.insert(local)
         try context.save()
@@ -21090,6 +21177,8 @@ struct GunnAire_OpsTests {
             into: context
         )
         #expect(local.unitPrice == 209)
+        #expect(local.itemDescription == "Locally staged description")
+        #expect(local.sku == "LOCAL-STAGED-SKU")
         #expect(local.quickBooksSyncStatus == "pending_update")
 
         local.quickBooksSyncStatus = "synced"
@@ -21103,6 +21192,15 @@ struct GunnAire_OpsTests {
             into: context
         )
         #expect(local.unitPrice == 189)
+        #expect(local.purchaseCost == nil)
+        #expect(!local.isTaxable)
+        #expect(local.itemDescription == nil)
+        #expect(local.sku == nil)
+        #expect(local.preferredVendorName == nil)
+        #expect(local.preferredVendorQuickBooksID == nil)
+        #expect(local.vendorPartNumber == "JHN-5566")
+        #expect(local.tracksInventory)
+        #expect(local.defaultInventoryLocation == "Truck 2")
         #expect(local.quickBooksSyncStatus == "synced")
     }
 

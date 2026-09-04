@@ -2561,10 +2561,6 @@ final class GunnAire_OpsUITests: XCTestCase {
         salesPrice.typeText("100")
         let saveItem = app.buttons["Save"]
         XCTAssertTrue(saveItem.waitForExistence(timeout: 3))
-        let doneEditingItem = app.buttons["Done Editing Item"]
-        if doneEditingItem.waitForExistence(timeout: 1) {
-            doneEditingItem.tap()
-        }
         XCTAssertTrue(waitForHittable(saveItem))
         saveItem.tap()
 
@@ -5540,6 +5536,14 @@ final class GunnAire_OpsUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(invoicePublication.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Retry Publication"].exists)
+        let invoiceQueue = app.buttons["Review 1 pending invoice"]
+        for _ in 0..<3 where !invoiceQueue.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(invoiceQueue.waitForExistence(timeout: 3))
+        XCTAssertEqual(invoiceQueue.label, "Review 1 pending invoice")
+        invoiceQueue.tap()
         XCTAssertTrue(app.staticTexts["UI Test Collectible Customer"].exists)
         XCTAssertTrue(app.buttons["Retry Publication"].exists)
         XCTAssertFalse(app.buttons["Retry Publication"].isEnabled)

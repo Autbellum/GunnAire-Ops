@@ -557,8 +557,7 @@ enum PricebookReviewPublication {
             remoteItem: remoteItem
         )
         guard !differences.isEmpty else {
-            localItem.quickBooksSyncStatus = "synced"
-            localItem.quickBooksSyncDetail = nil
+            QuickBooksCatalogSnapshotApplication.apply(remoteItem, to: localItem, at: date)
             return .synchronized
         }
         localItem.quickBooksSyncStatus = "pending_update"
@@ -590,6 +589,17 @@ struct PricebookReviewDocumentImpact: Equatable {
             ? nil
             : "\(invoiceCount) \(invoiceCount == 1 ? "invoice" : "invoices")"
         return "Required by \([estimateSummary, invoiceSummary].compactMap { $0 }.joined(separator: " and ")) waiting for QuickBooks."
+    }
+
+    var publicationNextStep: String? {
+        guard totalCount > 0 else { return nil }
+        let estimateSummary = estimateCount == 0
+            ? nil
+            : "\(estimateCount) \(estimateCount == 1 ? "estimate" : "estimates")"
+        let invoiceSummary = invoiceCount == 0
+            ? nil
+            : "\(invoiceCount) \(invoiceCount == 1 ? "invoice" : "invoices")"
+        return "Review \([estimateSummary, invoiceSummary].compactMap { $0 }.joined(separator: " and ")) waiting for QuickBooks."
     }
 }
 
@@ -1100,6 +1110,7 @@ struct QuickBooksManagementView: View {
     @State private var showCompanyPricebook = false
     @State private var showCatalogList = false
     @State private var showEstimatePublicationQueue = false
+    @State private var showInvoicePublicationQueue = false
     @State private var showCatalogPublicationQueue = false
     @State private var showCatalogReconciliationQueue = false
     @State private var showArchivedCatalogItems = false
@@ -1767,60 +1778,68 @@ struct QuickBooksManagementView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
-                            ForEach(localInvoicePublicationQueue) { invoice in
-                                VStack(alignment: .leading, spacing: 7) {
-                                    HStack(alignment: .firstTextBaseline) {
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(invoice.customer.name)
-                                                .font(.headline)
-                                            Text(invoice.lineItemSummary.isEmpty ? "Invoice \(invoice.id.uuidString.prefix(8))" : invoice.lineItemSummary)
-                                                .font(.caption)
+                            DisclosureGroup(isExpanded: $showInvoicePublicationQueue) {
+                                ForEach(localInvoicePublicationQueue) { invoice in
+                                    VStack(alignment: .leading, spacing: 7) {
+                                        HStack(alignment: .firstTextBaseline) {
+                                            VStack(alignment: .leading, spacing: 3) {
+                                                Text(invoice.customer.name)
+                                                    .font(.headline)
+                                                Text(invoice.lineItemSummary.isEmpty ? "Invoice \(invoice.id.uuidString.prefix(8))" : invoice.lineItemSummary)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                                    .lineLimit(2)
+                                            }
+                                            Spacer()
+                                            Text(invoice.amount, format: .currency(code: "USD"))
+                                                .font(.subheadline.weight(.semibold))
+                                        }
+
+                                        Label(
+                                            invoice.needsQuickBooksAttention ? "Needs attention" : "Publication pending",
+                                            systemImage: invoice.needsQuickBooksAttention ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath"
+                                        )
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(invoice.needsQuickBooksAttention ? Color.orange : Color.secondary)
+
+                                        if let detail = invoice.quickBooksSyncDetail?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                           !detail.isEmpty {
+                                            Text(detail)
+                                                .font(.caption2)
                                                 .foregroundStyle(.secondary)
-                                                .lineLimit(2)
                                         }
-                                        Spacer()
-                                        Text(invoice.amount, format: .currency(code: "USD"))
-                                            .font(.subheadline.weight(.semibold))
-                                    }
 
-                                    Label(
-                                        invoice.needsQuickBooksAttention ? "Needs attention" : "Publication pending",
-                                        systemImage: invoice.needsQuickBooksAttention ? "exclamationmark.triangle.fill" : "arrow.triangle.2.circlepath"
-                                    )
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(invoice.needsQuickBooksAttention ? Color.orange : Color.secondary)
-
-                                    if let detail = invoice.quickBooksSyncDetail?.trimmingCharacters(in: .whitespacesAndNewlines),
-                                       !detail.isEmpty {
-                                        Text(detail)
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-
-                                    HStack {
-                                        Button(activeLocalInvoicePublicationID == invoice.id ? "Retrying..." : "Retry Publication") {
-                                            retryLocalInvoicePublication(invoice)
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(Color.brandGold)
-                                        .foregroundStyle(Color.primaryBlack)
-                                        .disabled(!isAuthenticated || activeLocalInvoicePublicationID != nil)
-
-                                        if let call = localServiceCall(for: invoice) {
-                                            Button("Open Job Billing") {
-                                                GunnAireAppIntentRouter.storeInvoiceBuilderRoute(call.id)
+                                        HStack {
+                                            Button(activeLocalInvoicePublicationID == invoice.id ? "Retrying..." : "Retry Publication") {
+                                                retryLocalInvoicePublication(invoice)
                                             }
-                                            .buttonStyle(.bordered)
-                                        } else {
-                                            Button("Open Invoices") {
-                                                GunnAireAppIntentRouter.store(.invoices)
+                                            .buttonStyle(.borderedProminent)
+                                            .tint(Color.brandGold)
+                                            .foregroundStyle(Color.primaryBlack)
+                                            .disabled(!isAuthenticated || activeLocalInvoicePublicationID != nil)
+
+                                            if let call = localServiceCall(for: invoice) {
+                                                Button("Open Job Billing") {
+                                                    GunnAireAppIntentRouter.storeInvoiceBuilderRoute(call.id)
+                                                }
+                                                .buttonStyle(.bordered)
+                                            } else {
+                                                Button("Open Invoices") {
+                                                    GunnAireAppIntentRouter.store(.invoices)
+                                                }
+                                                .buttonStyle(.bordered)
                                             }
-                                            .buttonStyle(.bordered)
                                         }
                                     }
+                                    .padding(.vertical, 3)
                                 }
-                                .padding(.vertical, 3)
+                            } label: {
+                                Label(
+                                    "Review \(localInvoicePublicationQueue.count) pending \(localInvoicePublicationQueue.count == 1 ? "invoice" : "invoices")",
+                                    systemImage: "doc.badge.arrow.up"
+                                )
                             }
+                            .accessibilityIdentifier("QuickBooksInvoicePublicationDisclosure")
                         }
                     }
                     .accessibilityIdentifier("QuickBooksLocalInvoicePublicationQueue")
@@ -3611,21 +3630,7 @@ struct QuickBooksManagementView: View {
     }
 
     private func applyApprovedQuickBooksItem(_ quickBooksItem: QuickBooksItem, to item: Item) {
-        item.quickBooksID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
-        item.quickBooksSyncStatus = "synced"
-        item.quickBooksSyncDetail = nil
-        item.quickBooksLastSyncedAt = Date()
-        item.applyQuickBooksCatalogAvailability(quickBooksItem.Active)
-        item.name = quickBooksItem.Name
-        item.itemTypeRawValue = quickBooksItem.ItemType ?? item.itemTypeRawValue
-        item.unitPrice = quickBooksItem.UnitPrice ?? item.unitPrice
-        item.purchaseCost = quickBooksItem.PurchaseCost ?? item.purchaseCost
-        item.isTaxable = quickBooksItem.Taxable ?? item.isTaxable
-        item.itemDescription = quickBooksItem.Description ?? item.itemDescription
-        item.sku = quickBooksItem.Sku ?? item.sku
-        item.purchaseDescription = quickBooksItem.PurchaseDesc ?? item.purchaseDescription
-        item.preferredVendorName = quickBooksItem.PrefVendorRef?.name ?? item.preferredVendorName
-        item.preferredVendorQuickBooksID = quickBooksItem.PrefVendorRef?.value ?? item.preferredVendorQuickBooksID
+        QuickBooksCatalogSnapshotApplication.apply(quickBooksItem, to: item)
     }
 
     private func finishApprovedPricebookPublication(_ item: Item, message: String) {
@@ -3633,7 +3638,18 @@ struct QuickBooksManagementView: View {
         activeCatalogPublicationID = nil
         do {
             try modelContext.save()
-            actionMessage = message
+            let impact = PricebookReviewQueue.documentImpact(
+                for: item,
+                estimates: localEstimates,
+                invoices: localInvoices
+            )
+            if impact.estimateCount > 0 {
+                showEstimatePublicationQueue = true
+            }
+            if impact.invoiceCount > 0 {
+                showInvoicePublicationQueue = true
+            }
+            actionMessage = impact.publicationNextStep.map { "\(message) Next, \($0.lowercased())" } ?? message
         } catch {
             actionMessage = "QuickBooks accepted \(item.name), but the local catalog link could not be saved: \(error.localizedDescription)"
         }

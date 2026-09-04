@@ -139,21 +139,7 @@ enum QuickBooksLocalSync {
                 itemsByQBID[normalizedQuickBooksID] = item
                 continue
             }
-            item.quickBooksID = quickBooksItem.Id
-            item.quickBooksSyncStatus = "synced"
-            item.quickBooksSyncDetail = nil
-            item.quickBooksLastSyncedAt = Date()
-            item.applyQuickBooksCatalogAvailability(quickBooksItem.Active)
-            item.name = quickBooksItem.Name
-            item.itemTypeRawValue = quickBooksItem.ItemType ?? item.itemTypeRawValue
-            item.unitPrice = quickBooksItem.UnitPrice ?? item.unitPrice
-            item.purchaseCost = quickBooksItem.PurchaseCost ?? item.purchaseCost
-            item.isTaxable = quickBooksItem.Taxable ?? item.isTaxable
-            item.itemDescription = quickBooksItem.Description
-            item.sku = quickBooksItem.Sku ?? item.sku
-            item.purchaseDescription = quickBooksItem.PurchaseDesc ?? item.purchaseDescription
-            item.preferredVendorName = quickBooksItem.PrefVendorRef?.name ?? item.preferredVendorName
-            item.preferredVendorQuickBooksID = quickBooksItem.PrefVendorRef?.value ?? item.preferredVendorQuickBooksID
+            QuickBooksCatalogSnapshotApplication.apply(quickBooksItem, to: item)
             itemsByQBID[normalizedQuickBooksID] = item
         }
 
