@@ -382,6 +382,17 @@ struct BackendCustomerPortalLinkRecord: Codable, Identifiable {
     let appointmentSummary: String?
     let invoiceReference: String?
     let balanceDue: Double?
+    let estimateID: String?
+    let estimateLabel: String?
+    let estimateAmount: Double?
+    let estimateRevision: String?
+    let estimateResponseID: String?
+    let estimateResponseName: String?
+    let estimateRespondedAt: String?
+    let estimateResolutionStatus: String?
+    let estimateResolutionDetail: String?
+    let estimateResolvedAt: String?
+    let estimateResolvedBy: String?
     let expiresAt: String
     let revokedAt: String?
     let openedCount: Int?
@@ -650,7 +661,17 @@ enum GunnAireBackendService {
         let appointmentSummary: String?
         let invoiceReference: String?
         let balanceDue: Double?
+        let estimateID: String?
+        let estimateLabel: String?
+        let estimateAmount: Double?
+        let estimateRevision: String?
         let expiresInDays: Int
+    }
+
+    private struct CustomerPortalEstimateResolutionPayload: Codable {
+        let responseID: String
+        let status: String
+        let detail: String?
     }
 
     static var isConfigured: Bool {
@@ -1069,6 +1090,7 @@ enum GunnAireBackendService {
         customer: Customer,
         serviceCall: ServiceCall,
         invoice: Invoice?,
+        estimate: Estimate? = nil,
         balanceDue: Double?,
         expiresInDays: Int
     ) async throws -> BackendCustomerPortalLink {
@@ -1081,10 +1103,16 @@ enum GunnAireBackendService {
             customerEmail: email,
             serviceCallID: serviceCall.id.uuidString,
             invoiceID: invoice?.id.uuidString,
-            title: invoice == nil ? "Your GunnAire service update" : "Your GunnAire appointment and invoice",
+            title: estimate != nil
+                ? "Your GunnAire estimate and service update"
+                : (invoice == nil ? "Your GunnAire service update" : "Your GunnAire appointment and invoice"),
             appointmentSummary: serviceCall.customerAppointmentSummary,
             invoiceReference: invoiceReference,
             balanceDue: balanceDue,
+            estimateID: estimate?.id.uuidString,
+            estimateLabel: estimate?.proposalLabel,
+            estimateAmount: estimate?.amount,
+            estimateRevision: estimate?.customerPortalRevision,
             expiresInDays: expiresInDays
         )
         let data = try JSONEncoder().encode(payload)
@@ -1100,6 +1128,27 @@ enum GunnAireBackendService {
     static func revokeCustomerPortalLink(id: String) async throws {
         let encodedID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         _ = try await send(path: "/api/customer-portal-links/\(encodedID)", method: "DELETE")
+    }
+
+    static func resolveCustomerPortalEstimateResponse(
+        linkID: String,
+        responseID: String,
+        status: String,
+        detail: String? = nil
+    ) async throws -> BackendCustomerPortalLinkRecord {
+        let encodedID = linkID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? linkID
+        let payload = CustomerPortalEstimateResolutionPayload(
+            responseID: responseID,
+            status: status,
+            detail: detail
+        )
+        let data = try JSONEncoder().encode(payload)
+        let responseData = try await send(
+            path: "/api/customer-portal-links/\(encodedID)/estimate-response-resolution",
+            method: "POST",
+            body: data
+        )
+        return try JSONDecoder().decode(BackendCustomerPortalLinkRecord.self, from: responseData)
     }
 
     @MainActor

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterator
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from unittest import mock
 
 from Backend import gunnaire_backend as backend
@@ -77,6 +77,15 @@ class CustomerPortalTests(unittest.TestCase):
             "invoiceReference": "INV-1042",
             "balanceDue": 456.789,
             "expiresInDays": 14,
+        }
+
+    def portal_approval_payload(self) -> dict[str, object]:
+        return {
+            **self.portal_payload(),
+            "estimateID": str(uuid.uuid4()),
+            "estimateLabel": "Best <Comfort> Option",
+            "estimateAmount": 12_345.678,
+            "estimateRevision": "a" * 64,
         }
 
     def request(
@@ -216,6 +225,14 @@ class CustomerPortalTests(unittest.TestCase):
                 {**base, "expiresInDays": True},
                 {**base, "customerName": ["not", "text"]},
                 {**base, "serviceCallID": None, "invoiceID": None},
+                {**base, "estimateID": str(uuid.uuid4())},
+                {
+                    **base,
+                    "estimateID": str(uuid.uuid4()),
+                    "estimateLabel": "Service estimate",
+                    "estimateAmount": 100,
+                    "estimateRevision": "not-a-digest",
+                },
                 ["not", "an", "object"],
             ]
         )
@@ -237,6 +254,126 @@ class CustomerPortalTests(unittest.TestCase):
             with backend.db() as connection:
                 count = connection.execute("SELECT COUNT(*) FROM customer_portal_links").fetchone()[0]
             self.assertEqual(count, 0)
+
+    def test_exact_estimate_approval_is_one_time_and_requires_admin_reconciliation(self) -> None:
+        with self.running_server() as base_url:
+            created = self.create_link(base_url, self.portal_approval_payload())
+            link_id = str(created["id"])
+            token = urlparse(str(created["url"])).path.removeprefix("/portal/")
+
+            with urllib.request.urlopen(
+                self.request(base_url, f"/portal/{token}", authenticated=False),
+                timeout=5,
+            ) as response:
+                page = response.read().decode("utf-8")
+                headers = response.headers
+            self.assertIn("Approve this estimate", page)
+            self.assertIn("Best &lt;Comfort&gt; Option", page)
+            self.assertIn("$12,345.68", page)
+            self.assertIn(f'action="/portal/{token}/estimate-response"', page)
+            self.assertIn("form-action 'self'", headers["Content-Security-Policy"])
+
+            invalid_form_data = urlencode(
+                {"approvalName": "Alex\nCustomer", "approvalConfirmed": "yes"}
+            ).encode("utf-8")
+            invalid_approval_request = urllib.request.Request(
+                f"{base_url}/portal/{token}/estimate-response",
+                data=invalid_form_data,
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with self.assertRaises(urllib.error.HTTPError) as invalid_name:
+                urllib.request.urlopen(invalid_approval_request, timeout=5)
+            self.assertEqual(invalid_name.exception.code, 400)
+
+            form_data = urlencode(
+                {"approvalName": "Alex <Customer>", "approvalConfirmed": "yes"}
+            ).encode("utf-8")
+            approval_request = urllib.request.Request(
+                f"{base_url}/portal/{token}/estimate-response",
+                data=form_data,
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with urllib.request.urlopen(approval_request, timeout=5) as response:
+                confirmation = response.read().decode("utf-8")
+            self.assertEqual(response.status, 200)
+            self.assertIn("Estimate approved", confirmation)
+            self.assertIn("Alex &lt;Customer&gt;", confirmation)
+            self.assertNotIn("Alex <Customer>", confirmation)
+
+            with backend.db() as connection:
+                stored = connection.execute(
+                    "SELECT * FROM customer_portal_links WHERE id = ?",
+                    (link_id,),
+                ).fetchone()
+            response_id = stored["estimate_response_id"]
+            first_response_time = stored["estimate_responded_at"]
+            self.assertIsNotNone(response_id)
+            self.assertEqual(stored["estimate_response_name"], "Alex <Customer>")
+            self.assertEqual(stored["estimate_resolution_status"], "pending")
+
+            replay_data = urlencode(
+                {"approvalName": "Changed Name", "approvalConfirmed": "yes"}
+            ).encode("utf-8")
+            replay_request = urllib.request.Request(
+                f"{base_url}/portal/{token}/estimate-response",
+                data=replay_data,
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with urllib.request.urlopen(replay_request, timeout=5) as response:
+                replay_page = response.read().decode("utf-8")
+            self.assertIn("Alex &lt;Customer&gt;", replay_page)
+            self.assertNotIn("Changed Name", replay_page)
+            with backend.db() as connection:
+                replayed = connection.execute(
+                    "SELECT * FROM customer_portal_links WHERE id = ?",
+                    (link_id,),
+                ).fetchone()
+            self.assertEqual(replayed["estimate_response_id"], response_id)
+            self.assertEqual(replayed["estimate_responded_at"], first_response_time)
+
+            resolution = self.request(
+                base_url,
+                f"/api/customer-portal-links/{link_id}/estimate-response-resolution",
+                method="POST",
+                payload={"responseID": response_id, "status": "applied"},
+            )
+            with urllib.request.urlopen(resolution, timeout=5) as response:
+                applied = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(applied["estimateResolutionStatus"], "applied")
+            self.assertEqual(applied["estimateResponseID"], response_id)
+            self.assertNotIn("token", applied)
+            self.assertNotIn("tokenHash", applied)
+
+            with self.assertRaises(urllib.error.HTTPError) as downgrade:
+                urllib.request.urlopen(
+                    self.request(
+                        base_url,
+                        f"/api/customer-portal-links/{link_id}/estimate-response-resolution",
+                        method="POST",
+                        payload={
+                            "responseID": response_id,
+                            "status": "needs_attention",
+                            "detail": "Do not downgrade applied evidence",
+                        },
+                    ),
+                    timeout=5,
+                )
+            self.assertEqual(downgrade.exception.code, 409)
+
+            with self.assertRaises(urllib.error.HTTPError) as invalid_link_id:
+                urllib.request.urlopen(
+                    self.request(
+                        base_url,
+                        "/api/customer-portal-links/------------------------------------/estimate-response-resolution",
+                        method="POST",
+                        payload={"responseID": response_id, "status": "applied"},
+                    ),
+                    timeout=5,
+                )
+            self.assertEqual(invalid_link_id.exception.code, 400)
 
     def test_expired_or_corrupt_links_never_render_or_increment(self) -> None:
         with self.running_server() as base_url:
@@ -327,6 +464,16 @@ class CustomerPortalTests(unittest.TestCase):
                     f"/api/customer-portal-links/{link_id}",
                     method="DELETE",
                 ),
+                self.request(
+                    base_url,
+                    f"/api/customer-portal-links/{link_id}/estimate-response-resolution",
+                    method="POST",
+                    payload={
+                        "responseID": str(uuid.uuid4()),
+                        "status": "needs_attention",
+                        "detail": "Restricted",
+                    },
+                ),
             )
             for request in requests:
                 with self.assertRaises(urllib.error.HTTPError) as forbidden:
@@ -377,6 +524,13 @@ class CustomerPortalTests(unittest.TestCase):
             self.assertIn("opened_count", columns)
             self.assertEqual(columns["opened_count"]["dflt_value"], "0")
             self.assertIn("last_opened_at", columns)
+            for column in (
+                "estimate_id", "estimate_label", "estimate_amount", "estimate_revision",
+                "estimate_response_id", "estimate_response_name", "estimate_responded_at",
+                "estimate_resolution_status", "estimate_resolution_detail",
+                "estimate_resolved_at", "estimate_resolved_by",
+            ):
+                self.assertIn(column, columns)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 // Estimate.swift
 // Model for service estimates
 import Foundation
+import CryptoKit
 import SwiftData
 
 enum EstimateProposalOption: String, CaseIterable, Identifiable, Codable {
@@ -264,6 +265,34 @@ final class Estimate {
         return proposalOptionKind?.displayName ?? "Estimate"
     }
 
+    /// Privacy-safe immutable snapshot identifier used when a customer approves
+    /// an estimate through an expiring portal capability. The portal receives
+    /// only this digest, not the line-item snapshot used to produce it.
+    var customerPortalRevision: String {
+        let amountCents = Int64((amount * 100).rounded())
+        let createdMilliseconds = Int64((createdAt.timeIntervalSince1970 * 1_000).rounded())
+        let components = [
+            "portal-estimate-v1",
+            id.uuidString.lowercased(),
+            customer?.id.uuidString.lowercased() ?? "",
+            String(amountCents),
+            String(createdMilliseconds),
+            serviceCallID?.uuidString.lowercased() ?? "",
+            serviceLocationID?.uuidString.lowercased() ?? "",
+            parentEstimateID?.uuidString.lowercased() ?? "",
+            proposalGroupID?.uuidString.lowercased() ?? "",
+            proposalOption ?? "",
+            lineItemSummary,
+            catalogSnapshotJSON ?? "",
+        ]
+        let canonical = components
+            .map { "\($0.utf8.count):\($0)" }
+            .joined(separator: "|")
+        return SHA256.hash(data: Data(canonical.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
     var proposalIsFinalized: Bool {
         hasRecordedCustomerApproval || ["accepted", "invoiced"].contains(status.lowercased())
     }
@@ -438,7 +467,8 @@ enum EstimateProposalPolicy {
         method: EstimateApprovalMethod,
         reference: String?,
         signatureImageBase64: String?,
-        recordedByEmail: String?
+        recordedByEmail: String?,
+        at date: Date = Date()
     ) -> Bool {
         guard select(estimate, in: estimates) else { return false }
         guard estimate.recordCustomerApproval(
@@ -446,7 +476,8 @@ enum EstimateProposalPolicy {
             method: method,
             reference: reference,
             signatureImageBase64: signatureImageBase64,
-            recordedByEmail: recordedByEmail
+            recordedByEmail: recordedByEmail,
+            at: date
         ) else {
             return false
         }
