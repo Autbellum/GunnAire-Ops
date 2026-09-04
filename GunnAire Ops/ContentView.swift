@@ -1000,6 +1000,18 @@ GunnAire
             .sorted { ($0.proposalOptionKind?.comparisonRank ?? Int.max) < ($1.proposalOptionKind?.comparisonRank ?? Int.max) }
     }
 
+    private var portalApprovalEstimate: Estimate? {
+        guard let estimate = linkedEstimate,
+              estimate.serviceCallID == call.id,
+              !estimate.proposalIsFinalized,
+              !["rejected", "not-selected"].contains(estimate.status.lowercased()),
+              estimate.customerApprovalBlockedMessage == nil,
+              EstimateProposalPolicy.selectionIssue(for: estimate, in: estimates) == nil else {
+            return nil
+        }
+        return estimate
+    }
+
     private var totalPaid: Double {
         linkedPayments.reduce(0) { partial, payment in
             partial + (payment.isRefund ? -payment.amount : payment.amount)
@@ -3229,6 +3241,7 @@ GunnAire
             CustomerPortalLinkComposer(
                 call: call,
                 invoice: linkedInvoice,
+                estimate: portalApprovalEstimate,
                 balanceDue: linkedInvoice == nil ? nil : invoiceBalanceDue
             )
             .tint(Color.brandGold)
@@ -3573,6 +3586,7 @@ private struct CustomerPortalLinkComposer: View {
     @Environment(\.dismiss) private var dismiss
     let call: ServiceCall
     let invoice: Invoice?
+    let estimate: Estimate?
     let balanceDue: Double?
 
     @State private var expiryDays = 14
@@ -3591,9 +3605,25 @@ private struct CustomerPortalLinkComposer: View {
                     Text(call.customer.name)
                     Text(call.customer.email ?? "No email")
                         .foregroundStyle(.secondary)
-                    Text("This link only shows this appointment and its linked invoice summary. It cannot be used to browse customer records, edit a job, or take a payment.")
+                    Text(estimate == nil
+                         ? "This link only shows this appointment and its linked invoice summary. It cannot browse customer records, edit a job, or take a payment."
+                         : "This link shows this appointment and the exact selected estimate. The customer can approve that estimate; scheduling, job edits, and payment remain separate.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                if let estimate {
+                    Section("Estimate Approval") {
+                        LabeledContent {
+                            Text(estimate.amount.formatted(.currency(code: "USD")))
+                                .accessibilityIdentifier("PortalEstimateAmount")
+                        } label: {
+                            Text(estimate.proposalLabel)
+                        }
+                        Text("Approval is bound to this exact amount and line-item revision. If the estimate changes, the response will require administrator review instead of applying automatically.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 Section("Link Expiry") {
@@ -3651,6 +3681,7 @@ private struct CustomerPortalLinkComposer: View {
                     customer: call.customer,
                     serviceCall: call,
                     invoice: invoice,
+                    estimate: estimate,
                     balanceDue: balanceDue,
                     expiresInDays: expiryDays
                 )

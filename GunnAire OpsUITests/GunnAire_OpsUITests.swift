@@ -1918,6 +1918,57 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testJobBillingSharesOnlyTheExactPendingEstimateInCustomerPortal() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedPendingEstimate"
+        ]
+        app.launchEnvironment["GUNNAIRE_BACKEND_BASE_URL"] = "https://portal-test.example.invalid"
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "google-id-token"
+        app.launch()
+
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let job = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        for _ in 0..<8 where !job.exists || !job.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(job.waitForExistence(timeout: 3))
+        XCTAssertTrue(job.isHittable)
+        job.tap()
+
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+        let workspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Billing"].tap()
+
+        let sharePortal = app.buttons["Share Customer Portal"]
+        for _ in 0..<14 where !sharePortal.exists || !sharePortal.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(sharePortal.waitForExistence(timeout: 3))
+        XCTAssertTrue(sharePortal.isHittable)
+        sharePortal.tap()
+
+        XCTAssertTrue(app.navigationBars["Customer Portal"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Estimate Approval"].exists)
+        XCTAssertTrue(app.staticTexts["Estimate"].exists)
+        let amount = app.staticTexts["PortalEstimateAmount"]
+        XCTAssertTrue(amount.exists)
+        XCTAssertEqual(amount.label, "$425.00")
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] 'exact amount and line-item revision'")
+        ).firstMatch.exists)
+        XCTAssertTrue(app.buttons["Create Link"].exists)
+    }
+
+    @MainActor
     func testEligibleEstimatePresentsSecureProviderHostedFinancingHandoff() throws {
         let app = XCUIApplication()
         app.launchArguments = [

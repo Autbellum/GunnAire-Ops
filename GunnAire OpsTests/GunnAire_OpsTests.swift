@@ -23524,6 +23524,17 @@ struct GunnAire_OpsTests {
           "appointmentSummary": null,
           "invoiceReference": null,
           "balanceDue": null,
+          "estimateID": "8F000000-0000-4000-8000-000000000001",
+          "estimateLabel": "Better",
+          "estimateAmount": 4200,
+          "estimateRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "estimateResponseID": "8F000000-0000-4000-8000-000000000002",
+          "estimateResponseName": "Portal Customer",
+          "estimateRespondedAt": "2026-08-27T17:30:00+00:00",
+          "estimateResolutionStatus": "pending",
+          "estimateResolutionDetail": null,
+          "estimateResolvedAt": null,
+          "estimateResolvedBy": null,
           "expiresAt": "2026-09-10T12:00:00+00:00",
           "revokedAt": null,
           "openedCount": 2,
@@ -23556,8 +23567,186 @@ struct GunnAire_OpsTests {
 
         #expect(currentRecord.openedCount == 2)
         #expect(currentRecord.lastOpenedAt == "2026-08-27T18:00:00+00:00")
+        #expect(currentRecord.estimateLabel == "Better")
+        #expect(currentRecord.estimateAmount == 4_200)
+        #expect(currentRecord.estimateResolutionStatus == "pending")
         #expect(legacyRecord.openedCount == nil)
         #expect(legacyRecord.lastOpenedAt == nil)
+        #expect(legacyRecord.estimateID == nil)
+        #expect(legacyRecord.estimateResponseID == nil)
+    }
+
+    @MainActor
+    @Test func customerPortalApprovalAppliesOnlyTheExactEstimateRevision() throws {
+        let customer = Customer(
+            id: UUID(uuidString: "8F100000-0000-4000-8000-000000000001")!,
+            name: "Portal Customer",
+            email: "portal.customer@example.com"
+        )
+        let callID = UUID(uuidString: "8F100000-0000-4000-8000-000000000002")!
+        let estimateID = UUID(uuidString: "8F100000-0000-4000-8000-000000000003")!
+        let responseID = UUID(uuidString: "8F100000-0000-4000-8000-000000000004")!
+        let createdAt = Date(timeIntervalSince1970: 1_788_200_000)
+        let respondedAt = createdAt.addingTimeInterval(600)
+        let call = ServiceCall(
+            id: callID,
+            type: .repair,
+            scheduledDate: createdAt,
+            customer: customer,
+            followUpRequired: true,
+            followUpAction: "Review proposal",
+            followUpDueDate: respondedAt.addingTimeInterval(86_400)
+        )
+        let estimate = Estimate(
+            id: estimateID,
+            serviceCallID: callID,
+            proposalOption: EstimateProposalOption.better.rawValue,
+            customer: customer,
+            lineItemSummary: "Repair compressor circuit",
+            catalogSnapshotJSON: "[]",
+            amount: 4_200,
+            createdAt: createdAt
+        )
+        let timestamp = ISO8601DateFormatter().string(from: respondedAt)
+        let linkPayload: [String: Any] = [
+            "id": "portal-approval",
+            "customerName": customer.name,
+            "customerEmail": customer.email!,
+            "serviceCallID": callID.uuidString,
+            "title": "Estimate approval",
+            "estimateID": estimateID.uuidString,
+            "estimateLabel": estimate.proposalLabel,
+            "estimateAmount": estimate.amount,
+            "estimateRevision": estimate.customerPortalRevision,
+            "estimateResponseID": responseID.uuidString,
+            "estimateResponseName": "Alex Customer",
+            "estimateRespondedAt": timestamp,
+            "estimateResolutionStatus": "pending",
+            "expiresAt": ISO8601DateFormatter().string(from: respondedAt.addingTimeInterval(86_400)),
+            "createdAt": ISO8601DateFormatter().string(from: createdAt),
+            "createdBy": "admin@gunnaire.com",
+        ]
+        let linkData = try JSONSerialization.data(withJSONObject: linkPayload)
+        let link = try JSONDecoder().decode(BackendCustomerPortalLinkRecord.self, from: linkData)
+
+        let result = try CustomerPortalEstimateApprovalPolicy.apply(
+            link,
+            estimates: [estimate],
+            serviceCalls: [call],
+            recordedByEmail: "admin@gunnaire.com",
+            now: respondedAt.addingTimeInterval(30)
+        )
+        #expect(!result.wasAlreadyApplied)
+        #expect(result.estimate === estimate)
+        #expect(result.serviceCall === call)
+        #expect(estimate.hasRecordedCustomerApproval)
+        #expect(estimate.customerApprovedByName == "Alex Customer")
+        #expect(estimate.customerApprovedAt == respondedAt)
+        #expect(estimate.customerApprovalMethod == .email)
+        #expect(estimate.customerApprovalReference == "Customer portal response \(responseID.uuidString.lowercased())")
+        #expect(estimate.customerApprovalRecordedByEmail == "admin@gunnaire.com")
+        #expect(call.linkedEstimateID == estimate.id)
+        #expect(!call.followUpRequired)
+        #expect(call.followUpAction == nil)
+        #expect(call.followUpDueDate == nil)
+
+        let replay = try CustomerPortalEstimateApprovalPolicy.apply(
+            link,
+            estimates: [estimate],
+            serviceCalls: [call],
+            recordedByEmail: "admin@gunnaire.com",
+            now: respondedAt.addingTimeInterval(60)
+        )
+        #expect(replay.wasAlreadyApplied)
+
+        estimate.customerApprovedAt = respondedAt.addingTimeInterval(30)
+        #expect(throws: CustomerPortalEstimateApprovalImportIssue.approvalConflict) {
+            try CustomerPortalEstimateApprovalPolicy.apply(
+                link,
+                estimates: [estimate],
+                serviceCalls: [call],
+                recordedByEmail: "admin@gunnaire.com",
+                now: respondedAt.addingTimeInterval(60)
+            )
+        }
+        estimate.customerApprovedAt = respondedAt
+
+        var futureCreatedPayload = linkPayload
+        futureCreatedPayload["createdAt"] = ISO8601DateFormatter().string(from: respondedAt.addingTimeInterval(60))
+        let futureCreatedData = try JSONSerialization.data(withJSONObject: futureCreatedPayload)
+        let futureCreatedLink = try JSONDecoder().decode(BackendCustomerPortalLinkRecord.self, from: futureCreatedData)
+        #expect(throws: CustomerPortalEstimateApprovalImportIssue.responseTimeInvalid) {
+            try CustomerPortalEstimateApprovalPolicy.apply(
+                futureCreatedLink,
+                estimates: [estimate],
+                serviceCalls: [call],
+                recordedByEmail: "admin@gunnaire.com",
+                now: respondedAt.addingTimeInterval(60)
+            )
+        }
+    }
+
+    @MainActor
+    @Test func customerPortalApprovalRejectsChangedOrUnavailableLocalEvidence() throws {
+        let customer = Customer(
+            id: UUID(uuidString: "8F200000-0000-4000-8000-000000000001")!,
+            name: "Revision Customer",
+            email: "revision.customer@example.com"
+        )
+        let callID = UUID(uuidString: "8F200000-0000-4000-8000-000000000002")!
+        let estimate = Estimate(
+            id: UUID(uuidString: "8F200000-0000-4000-8000-000000000003")!,
+            serviceCallID: callID,
+            customer: customer,
+            lineItemSummary: "Original scope",
+            catalogSnapshotJSON: "[]",
+            amount: 1_250,
+            createdAt: Date(timeIntervalSince1970: 1_788_300_000)
+        )
+        let originalRevision = estimate.customerPortalRevision
+        let respondedAt = estimate.createdAt.addingTimeInterval(300)
+        let data = try JSONSerialization.data(withJSONObject: [
+            "id": "portal-stale",
+            "customerName": customer.name,
+            "customerEmail": customer.email!,
+            "serviceCallID": callID.uuidString,
+            "title": "Estimate approval",
+            "estimateID": estimate.id.uuidString,
+            "estimateLabel": estimate.proposalLabel,
+            "estimateAmount": estimate.amount,
+            "estimateRevision": originalRevision,
+            "estimateResponseID": UUID().uuidString,
+            "estimateResponseName": "Revision Customer",
+            "estimateRespondedAt": ISO8601DateFormatter().string(from: respondedAt),
+            "estimateResolutionStatus": "pending",
+            "expiresAt": ISO8601DateFormatter().string(from: respondedAt.addingTimeInterval(86_400)),
+            "createdAt": ISO8601DateFormatter().string(from: estimate.createdAt),
+            "createdBy": "admin@gunnaire.com",
+        ])
+        let link = try JSONDecoder().decode(BackendCustomerPortalLinkRecord.self, from: data)
+
+        #expect(throws: CustomerPortalEstimateApprovalImportIssue.jobUnavailable) {
+            try CustomerPortalEstimateApprovalPolicy.apply(
+                link,
+                estimates: [estimate],
+                serviceCalls: [],
+                recordedByEmail: "admin@gunnaire.com",
+                now: respondedAt
+            )
+        }
+
+        let call = ServiceCall(id: callID, type: .service, scheduledDate: estimate.createdAt, customer: customer)
+        estimate.amount = 1_350
+        #expect(throws: CustomerPortalEstimateApprovalImportIssue.snapshotChanged) {
+            try CustomerPortalEstimateApprovalPolicy.apply(
+                link,
+                estimates: [estimate],
+                serviceCalls: [call],
+                recordedByEmail: "admin@gunnaire.com",
+                now: respondedAt
+            )
+        }
+        #expect(!estimate.hasRecordedCustomerApproval)
     }
 
     @Test func quickBooksPaymentsTraceHeaderIsNeverAcceptedAsAChargeIdentifier() throws {
