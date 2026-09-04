@@ -2,6 +2,57 @@ import Foundation
 import Combine
 import UIKit
 
+enum FieldPaymentVerificationOutcome: Equatable {
+    case settled(confirmedPayment: Double)
+    case partial(confirmedPayment: Double, balanceDue: Double)
+    case unchanged(balanceDue: Double)
+    case balanceChanged(balanceDue: Double)
+
+    static func resolve(
+        previousBalance: Double,
+        refreshedBalance: Double,
+        newlyLinkedPaymentAmount: Double
+    ) -> Self {
+        let previous = max(previousBalance, 0)
+        let refreshed = max(refreshedBalance, 0)
+        let confirmedPayment = max(newlyLinkedPaymentAmount, 0)
+        let difference = previous - refreshed
+
+        if difference > 0.009, confirmedPayment > 0.009 {
+            if refreshed <= 0.009 {
+                return .settled(confirmedPayment: confirmedPayment)
+            }
+            return .partial(confirmedPayment: confirmedPayment, balanceDue: refreshed)
+        }
+        if abs(difference) > 0.009 {
+            return .balanceChanged(balanceDue: refreshed)
+        }
+        return .unchanged(balanceDue: refreshed)
+    }
+
+    var statusMessage: String {
+        switch self {
+        case .settled(let confirmedPayment):
+            return "QuickBooks confirmed \(confirmedPayment.formatted(.currency(code: "USD"))) in newly linked payment records. This invoice is paid."
+        case .partial(let confirmedPayment, let balanceDue):
+            return "QuickBooks confirmed \(confirmedPayment.formatted(.currency(code: "USD"))) in newly linked payment records. \(balanceDue.formatted(.currency(code: "USD"))) remains due."
+        case .unchanged(let balanceDue):
+            return "QuickBooks still reports \(balanceDue.formatted(.currency(code: "USD"))) due. No new payment was confirmed; do not record the card again."
+        case .balanceChanged(let balanceDue):
+            return "QuickBooks now reports \(balanceDue.formatted(.currency(code: "USD"))) due, but no newly linked payment explains the balance change. Review the invoice before collecting again."
+        }
+    }
+
+    var confirmsCollection: Bool {
+        switch self {
+        case .settled, .partial:
+            return true
+        case .unchanged, .balanceChanged:
+            return false
+        }
+    }
+}
+
 /// Hands a payment-collection context from the office iPad or Mac to a company
 /// iPhone through Apple's Handoff. No card data, customer contact details, or
 /// payment credentials leave the originating device in the activity payload.

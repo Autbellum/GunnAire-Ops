@@ -76,10 +76,12 @@ enum QuickBooksLocalSync {
                 estimatesByQBID[quickBooksID] = estimate
             }
         }
-        var paymentsByQBID: [String: Payment] = [:]
+        var paymentsBySyncKey: [String: Payment] = [:]
         for payment in existingPayments {
-            guard let quickBooksID = payment.quickBooksID?.nilIfEmpty else { continue }
-            paymentsByQBID[quickBooksID] = paymentsByQBID[quickBooksID] ?? payment
+            guard let quickBooksID = payment.quickBooksID?.nilIfEmpty,
+                  let invoiceQuickBooksID = payment.invoice?.quickBooksID?.nilIfEmpty else { continue }
+            let key = paymentSyncKey(paymentID: quickBooksID, invoiceID: invoiceQuickBooksID)
+            paymentsBySyncKey[key] = paymentsBySyncKey[key] ?? payment
         }
         let importedPaymentTotalsByInvoiceID = paymentTotalsByInvoiceID(from: payments)
 
@@ -282,39 +284,42 @@ enum QuickBooksLocalSync {
 
         var invoicesAffectedByImportedPayments: [UUID: Invoice] = [:]
         for quickBooksPayment in payments {
-            let linkedTransactions = quickBooksPayment.Line?
-                .flatMap { $0.LinkedTxn ?? [] } ?? []
-            guard let linkedInvoiceID = linkedTransactions
-                .first(where: { $0.TxnType.caseInsensitiveCompare("Invoice") == .orderedSame })?.TxnId,
-                  let invoice = invoicesByQBID[linkedInvoiceID] else {
-                continue
-            }
-            let existingPayment = paymentsByQBID[quickBooksPayment.Id]
-            let payment = existingPayment
-                ?? Payment(
-                    invoice: invoice,
-                    amount: quickBooksPayment.TotalAmt,
-                    method: defaultImportedPaymentMethod(for: quickBooksPayment)
+            for (linkedInvoiceID, appliedAmount) in QuickBooksPaymentAllocation
+                .amountsByInvoiceID(for: quickBooksPayment)
+                .sorted(by: { $0.key < $1.key }) {
+                guard appliedAmount > 0.009,
+                      let invoice = invoicesByQBID[linkedInvoiceID] else { continue }
+                let key = paymentSyncKey(
+                    paymentID: quickBooksPayment.Id,
+                    invoiceID: linkedInvoiceID
                 )
-            if payment.modelContext == nil {
-                modelContext.insert(payment)
+                let existingPayment = paymentsBySyncKey[key]
+                let payment = existingPayment
+                    ?? Payment(
+                        invoice: invoice,
+                        amount: appliedAmount,
+                        method: defaultImportedPaymentMethod(for: quickBooksPayment)
+                    )
+                if payment.modelContext == nil {
+                    modelContext.insert(payment)
+                }
+                payment.quickBooksID = quickBooksPayment.Id
+                payment.invoice = invoice
+                payment.amount = appliedAmount
+                payment.method = resolvedImportedPaymentMethod(existing: payment, quickBooksPayment: quickBooksPayment)
+                payment.date = parseQuickBooksDate(quickBooksPayment.TxnDate) ?? payment.date
+                if payment.notes?.nilIfEmpty == nil {
+                    payment.notes = quickBooksPayment.PrivateNote
+                }
+                if payment.authorizationReference?.nilIfEmpty == nil {
+                    payment.authorizationReference = quickBooksPayment.PaymentRefNum
+                }
+                if let processor = resolvedImportedProcessor(existing: payment) {
+                    payment.processor = processor
+                }
+                paymentsBySyncKey[key] = payment
+                invoicesAffectedByImportedPayments[invoice.id] = invoice
             }
-            payment.quickBooksID = quickBooksPayment.Id
-            payment.invoice = invoice
-            payment.amount = quickBooksPayment.TotalAmt
-            payment.method = resolvedImportedPaymentMethod(existing: payment, quickBooksPayment: quickBooksPayment)
-            payment.date = parseQuickBooksDate(quickBooksPayment.TxnDate) ?? payment.date
-            if payment.notes?.nilIfEmpty == nil {
-                payment.notes = quickBooksPayment.PrivateNote
-            }
-            if payment.authorizationReference?.nilIfEmpty == nil {
-                payment.authorizationReference = quickBooksPayment.PaymentRefNum
-            }
-            if let processor = resolvedImportedProcessor(existing: payment) {
-                payment.processor = processor
-            }
-            paymentsByQBID[quickBooksPayment.Id] = payment
-            invoicesAffectedByImportedPayments[invoice.id] = invoice
         }
 
         for invoice in invoicesAffectedByImportedPayments.values {
@@ -322,9 +327,18 @@ enum QuickBooksLocalSync {
                   !refreshedInvoiceQuickBooksIDs.contains(quickBooksID) else {
                 continue
             }
-            let invoicePayments = paymentsByQBID.values.filter { $0.invoice.id == invoice.id }
-            invoice.quickBooksBalanceDue = localOutstandingBalance(for: invoice, payments: invoicePayments)
-            invoice.status = Invoice.resolvedStatus(for: invoice, payments: invoicePayments)
+            let balance = max(
+                invoice.amount - (importedPaymentTotalsByInvoiceID[quickBooksID] ?? 0),
+                0
+            )
+            invoice.quickBooksBalanceDue = balance
+            if balance <= 0.009 {
+                invoice.status = "paid"
+            } else if balance < invoice.amount - 0.009 {
+                invoice.status = "partial"
+            } else if invoice.normalizedStatus != "overdue" {
+                invoice.status = "unpaid"
+            }
         }
 
         let reconciledEstimates = try modelContext.fetch(FetchDescriptor<Estimate>())
@@ -687,15 +701,6 @@ enum QuickBooksLocalSync {
         abs(lhs - rhs) <= 0.01
     }
 
-    private static func localOutstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
-        let netPaid = payments
-            .filter { $0.invoice.id == invoice.id }
-            .reduce(0) { partial, payment in
-                partial + (payment.isRefund ? -payment.amount : payment.amount)
-            }
-        return max(invoice.amount - netPaid, 0)
-    }
-
     private static func documentReferenceMatches(
         localSummary: String,
         localNotes: String?,
@@ -723,18 +728,15 @@ enum QuickBooksLocalSync {
     private static func paymentTotalsByInvoiceID(from payments: [QuickBooksPayment]) -> [String: Double] {
         var totals: [String: Double] = [:]
         for payment in payments {
-            for line in payment.Line ?? [] {
-                let invoiceIDs = (line.LinkedTxn ?? [])
-                    .filter { $0.TxnType.caseInsensitiveCompare("Invoice") == .orderedSame }
-                    .map(\.TxnId)
-                guard !invoiceIDs.isEmpty else { continue }
-                let amount = invoiceIDs.count == 1 ? line.Amount : line.Amount / Double(invoiceIDs.count)
-                for invoiceID in invoiceIDs {
-                    totals[invoiceID, default: 0] += amount
-                }
+            for (invoiceID, amount) in QuickBooksPaymentAllocation.amountsByInvoiceID(for: payment) {
+                totals[invoiceID, default: 0] += amount
             }
         }
         return totals
+    }
+
+    private static func paymentSyncKey(paymentID: String, invoiceID: String) -> String {
+        "\(paymentID)\u{1f}\(invoiceID)"
     }
 
     private static func defaultImportedPaymentMethod(for quickBooksPayment: QuickBooksPayment) -> String {

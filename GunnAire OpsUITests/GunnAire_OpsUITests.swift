@@ -6075,6 +6075,76 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         XCTAssertTrue(quickBooksAppHandoff.exists)
         XCTAssertTrue(goPaymentAppHandoff.exists)
+        let accountingInstruction = app.staticTexts["ContactlessAccountingVerificationInstruction"]
+        for _ in 0..<3 where !accountingInstruction.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(accountingInstruction.exists)
+        XCTAssertTrue(accountingInstruction.label.contains("Leave the invoice open. Accounting will verify"))
+        XCTAssertFalse(app.buttons["VerifyContactlessQuickBooksPayment"].exists)
+    }
+
+    @MainActor
+    func testFinancialContactlessGuideKeepsVerificationBesideTheHandoff() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedQuickBooksLinkedCollection",
+            "-uiTestForceQuickBooksDisconnected",
+            "-GunnAirePendingAppRoute", "payments",
+            "-GunnAirePendingInvoiceID", screenshotInvoiceID,
+            "-GunnAirePendingOpenPaymentCollection", "YES",
+            "-GunnAirePendingContactlessPaymentGuide", "YES"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Contactless Payment"].waitForExistence(timeout: 8))
+        let connectQuickBooks = app.buttons["ConnectQuickBooksForContactlessVerification"]
+        for _ in 0..<5 where !connectQuickBooks.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(connectQuickBooks.exists)
+        XCTAssertTrue(connectQuickBooks.isHittable)
+        XCTAssertFalse(app.buttons["VerifyContactlessQuickBooksPayment"].exists)
+        XCTAssertTrue(app.buttons["Record Cash, Check, or Another Verified Payment"].exists)
+
+        app.terminate()
+        app.launchArguments.removeAll { $0 == "-uiTestForceQuickBooksDisconnected" }
+        app.launchArguments.append("-uiTestForceQuickBooksConnected")
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Contactless Payment"].waitForExistence(timeout: 8))
+        let verifyPayment = app.buttons["VerifyContactlessQuickBooksPayment"]
+        for _ in 0..<5 where !verifyPayment.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(verifyPayment.exists)
+        XCTAssertTrue(verifyPayment.isEnabled)
+        XCTAssertTrue(verifyPayment.isHittable)
+        XCTAssertFalse(app.buttons["ConnectQuickBooksForContactlessVerification"].exists)
+
+        app.terminate()
+        app.launchArguments.removeAll {
+            $0 == "-uiTestAuthenticatedAdmin" || $0 == "-uiTestForceQuickBooksConnected"
+        }
+        app.launchArguments.append(contentsOf: [
+            "-uiTestAuthenticatedAccounting",
+            "-uiTestForceQuickBooksDisconnected"
+        ])
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Contactless Payment"].waitForExistence(timeout: 8))
+        let adminConnectionInstruction = app.staticTexts["ContactlessQuickBooksAdminConnectionInstruction"]
+        for _ in 0..<5 where !adminConnectionInstruction.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(adminConnectionInstruction.exists)
+        XCTAssertFalse(app.buttons["ConnectQuickBooksForContactlessVerification"].exists)
+        XCTAssertFalse(app.buttons["VerifyContactlessQuickBooksPayment"].exists)
     }
 
     @MainActor

@@ -3668,6 +3668,31 @@ struct QuickBooksPayment: Codable, Identifiable {
     }
 }
 
+enum QuickBooksPaymentAllocation {
+    static func amountsByInvoiceID(for payment: QuickBooksPayment) -> [String: Double] {
+        (payment.Line ?? []).reduce(into: [:]) { allocations, line in
+            guard line.Amount.isFinite, line.Amount > 0 else { return }
+            let invoiceIDs = Set(
+                (line.LinkedTxn ?? [])
+                    .filter { $0.TxnType.caseInsensitiveCompare("Invoice") == .orderedSame }
+                    .map { $0.TxnId.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+            // A QuickBooks payment normally provides one invoice link per line.
+            // If a provider response makes one line ambiguous, fail closed rather
+            // than inventing an allocation that could overstate an invoice payment.
+            guard let invoiceID = invoiceIDs.first, invoiceIDs.count == 1 else { return }
+            allocations[invoiceID, default: 0] += line.Amount
+        }
+    }
+
+    static func amountApplied(by payment: QuickBooksPayment, toInvoiceID invoiceID: String) -> Double {
+        let expectedInvoiceID = invoiceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !expectedInvoiceID.isEmpty else { return 0 }
+        return amountsByInvoiceID(for: payment)[expectedInvoiceID] ?? 0
+    }
+}
+
 struct QuickBooksPaymentCreate: Codable {
     let CustomerRef: QuickBooksReference?
     let TotalAmt: Double
