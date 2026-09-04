@@ -123,7 +123,11 @@ struct GmailView: View {
     @State private var didConsumePendingDraft = false
 
     private var usesMailUITestFixture: Bool {
+        #if DEBUG
         ProcessInfo.processInfo.arguments.contains("-uiTestSeedMailInbox")
+        #else
+        false
+        #endif
     }
 
     private var isMailConnected: Bool {
