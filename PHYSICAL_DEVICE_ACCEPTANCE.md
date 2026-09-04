@@ -4,6 +4,26 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
+## Build-2026090405 Invoice sidebar recheck
+
+The retained physical-iPad crash was symbolicated to recursive SwiftUI generic
+metadata construction above the standalone Invoice workspace. Build
+`2026090405` type-erases the selected split-view detail, preventing a sidebar
+transition from constructing all thirteen destination trees at once. The change
+does not alter an invoice, QBO payload, role, persistent model, or CloudKit
+schema.
+
+Exact verification passes 705/705 Mac Catalyst logic tests and 2/2 focused
+13-inch M5 iPad Simulator Invoice journeys. The optimized Apple
+Development-signed Release passes strict signature validation and was installed
+over the physical M5 iPad's retained application data without deleting the
+store. It remained alive for 120 seconds on a forced Invoice route and is open
+again in Invoices as PID 4181. The device crash count remains 27; no
+build-`2026090405` report exists. Evidence is in the September 4 release folder
+as `physical-invoice-sidebar-recheck-2026090405.json` and the associated Invoice
+Sidebar Regression, Full Mac Logic, iPad Release Build, and Physical Retained
+Store Attempt result bundles.
+
 ## Build-2026090404 photo markup and Invoice recheck
 
 Build `2026090404` adds native copy-preserving Markup for job image

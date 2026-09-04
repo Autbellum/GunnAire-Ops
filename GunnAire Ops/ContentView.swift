@@ -219,6 +219,60 @@ struct ContentView: View {
         UIDevice.current.userInterfaceIdiom == .pad
         #endif
     }
+
+    /// Keep the split-view detail type shallow when switching workspaces.
+    /// Several back-office destinations contain large SwiftUI form trees. If
+    /// they all remain in one generic `ViewBuilder` switch, a physical device
+    /// can recursively resolve every branch while navigating and exhaust the
+    /// main-thread stack before the selected workspace appears.
+    private var selectedWorkspaceDetail: AnyView {
+        guard !visibleSidebarItems.isEmpty else {
+            return AnyView(
+                ContentUnavailableView(
+                    "Account setup required",
+                    systemImage: "person.badge.key",
+                    description: Text("Your signed-in business account has not been assigned an active role. Ask an administrator to activate your access, then reopen GunnAire Ops.")
+                )
+            )
+        }
+
+        guard let selectedSidebarItem,
+              visibleSidebarItems.contains(selectedSidebarItem) else {
+            return AnyView(
+                Text("Select a menu item")
+                    .foregroundColor(.secondary)
+            )
+        }
+
+        switch selectedSidebarItem {
+        case .commandCenter:
+            return AnyView(OperationsDashboardView(showingCommandPalette: $showingAppWideFind))
+        case .timeClock:
+            return AnyView(TimeClockView())
+        case .scheduleAndJobs:
+            return AnyView(ScheduleView())
+        case .customers:
+            return AnyView(CustomersView())
+        case .mail:
+            return AnyView(GmailView())
+        case .estimates:
+            return AnyView(BillingDocumentsView(workspaceMode: .estimates))
+        case .invoices:
+            return AnyView(BillingDocumentsView(workspaceMode: .invoices))
+        case .payments:
+            return AnyView(PaymentsAndReceiptsView())
+        case .reports:
+            return AnyView(BusinessReportsView())
+        case .receiptsBills:
+            return AnyView(ReceiptsAndBillsView())
+        case .quickBooksManagement:
+            return AnyView(QuickBooksManagementView())
+        case .syncIntegrations:
+            return AnyView(SyncIntegrationsView())
+        case .onsiteDocumentation:
+            return AnyView(OnsiteDocumentationView())
+        }
+    }
     
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -313,47 +367,7 @@ struct ContentView: View {
         } detail: {
             ZStack {
                 WatermarkBackground()
-                Group {
-                    if visibleSidebarItems.isEmpty {
-                        ContentUnavailableView(
-                            "Account setup required",
-                            systemImage: "person.badge.key",
-                            description: Text("Your signed-in business account has not been assigned an active role. Ask an administrator to activate your access, then reopen GunnAire Ops.")
-                        )
-                    } else if let selectedSidebarItem, visibleSidebarItems.contains(selectedSidebarItem) {
-                        switch selectedSidebarItem {
-                        case .commandCenter:
-                            OperationsDashboardView(showingCommandPalette: $showingAppWideFind)
-                        case .timeClock:
-                            TimeClockView()
-                        case .scheduleAndJobs:
-                            ScheduleView()
-                        case .customers:
-                            CustomersView()
-                        case .mail:
-                            GmailView()
-                        case .estimates:
-                            BillingDocumentsView(workspaceMode: .estimates)
-                        case .invoices:
-                            BillingDocumentsView(workspaceMode: .invoices)
-                        case .payments:
-                            PaymentsAndReceiptsView()
-                        case .reports:
-                            BusinessReportsView()
-                        case .receiptsBills:
-                            ReceiptsAndBillsView()
-                        case .quickBooksManagement:
-                            QuickBooksManagementView()
-                        case .syncIntegrations:
-                            SyncIntegrationsView()
-                        case .onsiteDocumentation:
-                            OnsiteDocumentationView()
-                        }
-                    } else {
-                        Text("Select a menu item")
-                            .foregroundColor(.secondary)
-                    }
-                }
+                selectedWorkspaceDetail
                 .tint(Color.brandGold)
             }
         }
