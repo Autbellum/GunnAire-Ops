@@ -1592,67 +1592,73 @@ GunnAire
             List {
                 activeJobSections
 
-                if !isJobDocumentationMode && canViewFinancials {
-                    Section("Workspace Snapshot") {
-                        switch workspaceMode {
-                        case .all:
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Billing Overview")
-                                    .font(.headline)
-                                HStack {
-                                    workspaceMetricView(title: "Pending Estimates", value: "\(estimateMetrics.pending)")
-                                    Spacer()
-                                    workspaceMetricView(title: "Open Invoices", value: "\(invoiceMetrics.open)")
+                AnyView(Group {
+                    if !isJobDocumentationMode && canViewFinancials {
+                        Section("Workspace Snapshot") {
+                            switch workspaceMode {
+                            case .all:
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("Billing Overview")
+                                        .font(.headline)
+                                    HStack {
+                                        workspaceMetricView(title: "Pending Estimates", value: "\(estimateMetrics.pending)")
+                                        Spacer()
+                                        workspaceMetricView(title: "Open Invoices", value: "\(invoiceMetrics.open)")
+                                    }
+                                    HStack {
+                                        workspaceMetricView(title: "Estimate Follow-Up", value: "\(estimateMetrics.followUp)")
+                                        Spacer()
+                                        workspaceMetricView(title: "Outstanding", value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
+                                    }
                                 }
+                            case .estimates:
                                 HStack {
-                                    workspaceMetricView(title: "Estimate Follow-Up", value: "\(estimateMetrics.followUp)")
+                                    workspaceMetricView(title: "Pending", value: "\(estimateMetrics.pending)")
+                                    Spacer()
+                                    workspaceMetricView(title: "Accepted", value: "\(estimateMetrics.accepted)")
+                                    Spacer()
+                                    workspaceMetricView(title: "Follow-Up", value: "\(estimateMetrics.followUp)")
+                                }
+                            case .invoices:
+                                HStack {
+                                    workspaceMetricView(title: "Open", value: "\(invoiceMetrics.open)")
+                                    Spacer()
+                                    workspaceMetricView(title: "Overdue", value: "\(invoiceMetrics.overdue)")
                                     Spacer()
                                     workspaceMetricView(title: "Outstanding", value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
                                 }
                             }
-                        case .estimates:
-                            HStack {
-                                workspaceMetricView(title: "Pending", value: "\(estimateMetrics.pending)")
-                                Spacer()
-                                workspaceMetricView(title: "Accepted", value: "\(estimateMetrics.accepted)")
-                                Spacer()
-                                workspaceMetricView(title: "Follow-Up", value: "\(estimateMetrics.followUp)")
-                            }
-                        case .invoices:
-                            HStack {
-                                workspaceMetricView(title: "Open", value: "\(invoiceMetrics.open)")
-                                Spacer()
-                                workspaceMetricView(title: "Overdue", value: "\(invoiceMetrics.overdue)")
-                                Spacer()
-                                workspaceMetricView(title: "Outstanding", value: invoiceMetrics.outstandingBalance.formatted(.currency(code: "USD")))
-                            }
                         }
                     }
-                }
+                })
 
-                if !isJobDocumentationMode, let generatedCustomerDocumentURL {
-                    Section("Customer Documents") {
-                        ShareLink(item: generatedCustomerDocumentURL) {
-                            Label("Share Last Generated Document", systemImage: "square.and.arrow.up")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.brandGold)
-                        .foregroundStyle(Color.primaryBlack)
+                AnyView(Group {
+                    if !isJobDocumentationMode, let generatedCustomerDocumentURL {
+                        Section("Customer Documents") {
+                            ShareLink(item: generatedCustomerDocumentURL) {
+                                Label("Share Last Generated Document", systemImage: "square.and.arrow.up")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Color.brandGold)
+                            .foregroundStyle(Color.primaryBlack)
 
-                        Button {
-                            emailGeneratedCustomerDocument(generatedCustomerDocumentURL)
-                        } label: {
-                            Label(isEmailingGeneratedDocument ? "Emailing..." : "Email Last Generated Document", systemImage: "paperplane")
+                            Button {
+                                emailGeneratedCustomerDocument(generatedCustomerDocumentURL)
+                            } label: {
+                                Label(isEmailingGeneratedDocument ? "Emailing..." : "Email Last Generated Document", systemImage: "paperplane")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!canEmailGeneratedCustomerDocument)
                         }
-                        .buttonStyle(.bordered)
-                        .disabled(!canEmailGeneratedCustomerDocument)
                     }
-                }
+                })
 
-                if (canViewFinancials || canCollectFieldPayments) &&
-                    (currentJobEstimate != nil || currentJobInvoice != nil) &&
-                    (!isJobDocumentationMode || selectedJobStage == .billing) {
-                    Section("Current Job Documents") {
+                AnyView(Group {
+                    if (canViewFinancials || canCollectFieldPayments) &&
+                        (currentJobEstimate != nil || currentJobInvoice != nil) &&
+                        (!isJobDocumentationMode || selectedJobStage == .billing) {
+                        Section("Current Job Documents") {
+                            AnyView(Group {
                         if let estimate = currentJobEstimate {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Estimate")
@@ -1843,7 +1849,9 @@ GunnAire
                             }
                             .padding(.vertical, 2)
                         }
+                            })
 
+                            AnyView(Group {
                         if let invoice = currentJobInvoice {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(invoice.projectBillingDisplayTitle ?? "Invoice")
@@ -1928,76 +1936,80 @@ GunnAire
                             }
                             .padding(.vertical, 2)
                         }
+                            })
+                        }
                     }
-                }
+                })
 
-                if let customer = contextCustomer,
-                   !isJobDocumentationMode || selectedJobStage == .work {
-                    Section("Customer Context") {
-                        if let agreement = activeServiceAgreement {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Active Service Agreement")
-                                    .font(.headline)
-                                Text(agreement.schedulePattern)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text("Next visit: \(agreement.nextDate.formatted(date: .abbreviated, time: .omitted))")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                Text("Reminder: \(agreement.reminderDate.formatted(date: .abbreviated, time: .omitted))")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 2)
-                        }
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Customer History")
-                                .font(.headline)
-                            Text(customerActivitySummary(customer))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            if canViewFinancials && customerLifetimeInvoiceTotal > 0 {
-                                Text("Lifetime invoiced: \(customerLifetimeInvoiceTotal, format: .currency(code: "USD"))")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-
-                        if !recentCustomerCalls.isEmpty {
-                            ForEach(recentCustomerCalls) { recentCall in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(serviceCallSummaryLine(recentCall))
+                AnyView(Group {
+                    if let customer = contextCustomer,
+                       !isJobDocumentationMode || selectedJobStage == .work {
+                        Section("Customer Context") {
+                            if let agreement = activeServiceAgreement {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Active Service Agreement")
+                                        .font(.headline)
+                                    Text(agreement.schedulePattern)
                                         .font(.caption)
-                                    Text(recentCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                        .foregroundColor(.secondary)
+                                    Text("Next visit: \(agreement.nextDate.formatted(date: .abbreviated, time: .omitted))")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
-                                    if let notes = recentCall.notes, !notes.isEmpty {
-                                        Text(notes)
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(2)
-                                    }
+                                    Text("Reminder: \(agreement.reminderDate.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
                                 }
                                 .padding(.vertical, 2)
                             }
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Customer History")
+                                    .font(.headline)
+                                Text(customerActivitySummary(customer))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                if canViewFinancials && customerLifetimeInvoiceTotal > 0 {
+                                    Text("Lifetime invoiced: \(customerLifetimeInvoiceTotal, format: .currency(code: "USD"))")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+
+                            if !recentCustomerCalls.isEmpty {
+                                ForEach(recentCustomerCalls) { recentCall in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(serviceCallSummaryLine(recentCall))
+                                            .font(.caption)
+                                        Text(recentCall.scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        if let notes = recentCall.notes, !notes.isEmpty {
+                                            Text(notes)
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                                .lineLimit(2)
+                                        }
+                                    }
+                                    .padding(.vertical, 2)
+                                }
+                            }
                         }
                     }
-                }
+                })
 
-                estimateActionQueues
+                AnyView(estimateActionQueues)
 
-                invoiceActionQueues
+                AnyView(invoiceActionQueues)
 
-                equipmentHistorySection
+                AnyView(equipmentHistorySection)
 
-                builderDetailsWorkspaceSection
+                AnyView(builderDetailsWorkspaceSection)
 
-                estimatesWorkspaceSection
+                AnyView(estimatesWorkspaceSection)
 
-                invoicesWorkspaceSection
+                AnyView(invoicesWorkspaceSection)
 
-                paymentsWorkspaceSection
+                AnyView(paymentsWorkspaceSection)
             }
             .navigationTitle(navigationTitle)
             .toolbar {
