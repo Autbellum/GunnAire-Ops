@@ -365,7 +365,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         app.launchArguments = [
             "-enableSplashVideo", "NO",
             "-disableCloudKitForTesting",
-            "-appStoreScreenshotFixtures"
+            "-appStoreScreenshotFixtures",
+            "-GunnAirePendingAppRoute", "commandCenter"
         ]
         app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
         app.launch()
@@ -377,6 +378,11 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         revealSidebarDestination("Invoices", in: app).tap()
         XCTAssertTrue(
+            app.otherElements["InvoiceWorkspaceTransitionGuard"].waitForExistence(timeout: 1) ||
+                app.navigationBars["Invoices"].waitForExistence(timeout: 1),
+            "The lightweight invoice transition host must take ownership before the billing workspace is constructed."
+        )
+        XCTAssertTrue(
             app.navigationBars["Invoices"].waitForExistence(timeout: 8),
             "Tapping Invoices from the normal sidebar must not exhaust the SwiftUI view-construction stack."
         )
@@ -387,6 +393,14 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         revealSidebarDestination("Invoices", in: app).tap()
         XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
+
+        for _ in 0..<3 {
+            revealSidebarDestination("Payments", in: app).tap()
+            XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 5))
+            revealSidebarDestination("Invoices", in: app).tap()
+            XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
+            XCTAssertTrue(app.segmentedControls["InvoiceWorkspaceLanePicker"].waitForExistence(timeout: 3))
+        }
 
         let survivesDeferredUpdates = expectation(description: "Invoices remains foregrounded after deferred view updates")
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
