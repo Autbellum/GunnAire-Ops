@@ -2671,6 +2671,44 @@ struct QuickBooksItem: Codable, Identifiable {
     }
 }
 
+/// Applies the provider-owned portion of a QuickBooks catalog record while
+/// preserving GunnAire-only operating metadata such as truck-stock controls,
+/// vendor part numbers, purchase links, and flat-rate package definitions.
+/// A missing optional provider value is authoritative: it clears a stale local
+/// value instead of allowing the app to claim the record is synchronized while
+/// still displaying data that was removed in QuickBooks.
+enum QuickBooksCatalogSnapshotApplication {
+    static func apply(
+        _ quickBooksItem: QuickBooksItem,
+        to item: Item,
+        at date: Date = Date()
+    ) {
+        item.quickBooksID = normalizedOptionalText(quickBooksItem.Id)
+        item.quickBooksSyncStatus = "synced"
+        item.quickBooksSyncDetail = nil
+        item.quickBooksLastSyncedAt = date
+        item.applyQuickBooksCatalogAvailability(quickBooksItem.Active ?? true)
+        item.name = quickBooksItem.Name
+        if let itemType = normalizedOptionalText(quickBooksItem.ItemType) {
+            item.itemTypeRawValue = itemType
+        }
+        item.unitPrice = quickBooksItem.UnitPrice ?? 0
+        item.purchaseCost = quickBooksItem.PurchaseCost
+        item.isTaxable = quickBooksItem.Taxable ?? false
+        item.itemDescription = normalizedOptionalText(quickBooksItem.Description)
+        item.sku = normalizedOptionalText(quickBooksItem.Sku)
+        item.purchaseDescription = normalizedOptionalText(quickBooksItem.PurchaseDesc)
+        item.preferredVendorName = normalizedOptionalText(quickBooksItem.PrefVendorRef?.name)
+        item.preferredVendorQuickBooksID = normalizedOptionalText(quickBooksItem.PrefVendorRef?.value)
+    }
+
+    private static func normalizedOptionalText(_ value: String?) -> String? {
+        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !normalized.isEmpty else { return nil }
+        return normalized
+    }
+}
+
 struct QuickBooksItemCreate: Codable {
     let Name: String
     let ItemType: String

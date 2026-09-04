@@ -7016,23 +7016,7 @@ GunnAire
 
     private func applyQuickBooksItem(_ quickBooksItem: QuickBooksItem, to item: Item) {
         guard !item.requiresPricebookReview else { return }
-        item.quickBooksID = quickBooksItem.Id.trimmingCharacters(in: .whitespacesAndNewlines)
-        item.quickBooksSyncStatus = "synced"
-        item.quickBooksSyncDetail = nil
-        item.quickBooksLastSyncedAt = Date()
-        item.applyQuickBooksCatalogAvailability(quickBooksItem.Active)
-        item.name = quickBooksItem.Name
-        if let itemType = quickBooksItem.ItemType {
-            item.itemTypeRawValue = itemType
-        }
-        item.unitPrice = quickBooksItem.UnitPrice ?? item.unitPrice
-        item.purchaseCost = quickBooksItem.PurchaseCost ?? item.purchaseCost
-        item.isTaxable = quickBooksItem.Taxable ?? item.isTaxable
-        item.itemDescription = quickBooksItem.Description ?? item.itemDescription
-        item.sku = quickBooksItem.Sku ?? item.sku
-        item.purchaseDescription = quickBooksItem.PurchaseDesc ?? item.purchaseDescription
-        item.preferredVendorName = quickBooksItem.PrefVendorRef?.name ?? item.preferredVendorName
-        item.preferredVendorQuickBooksID = quickBooksItem.PrefVendorRef?.value ?? item.preferredVendorQuickBooksID
+        QuickBooksCatalogSnapshotApplication.apply(quickBooksItem, to: item)
     }
 
     private func saveQuickBooksSyncState() {
