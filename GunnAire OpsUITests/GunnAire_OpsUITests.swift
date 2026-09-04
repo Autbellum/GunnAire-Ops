@@ -412,6 +412,75 @@ final class GunnAire_OpsUITests: XCTestCase {
         wait(for: [survivesDeferredUpdates], timeout: 20)
     }
 
+    @MainActor
+    func testExistingInvoiceCanReturnToBuilderAndAddALineItem() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-GunnAirePendingAppRoute", "invoices"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
+        let invoiceDisclosure = app.buttons["InvoiceDisclosure-\(screenshotInvoiceID)"]
+        for _ in 0..<8 where !invoiceDisclosure.exists || !invoiceDisclosure.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(invoiceDisclosure.waitForExistence(timeout: 3))
+        XCTAssertTrue(invoiceDisclosure.isHittable)
+        invoiceDisclosure.tap()
+
+        let editInvoice = app.buttons["Edit Line Items"]
+        for _ in 0..<4 where !editInvoice.exists || !editInvoice.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(editInvoice.waitForExistence(timeout: 3))
+        XCTAssertTrue(editInvoice.isHittable)
+        editInvoice.tap()
+
+        let lanePicker = app.segmentedControls["InvoiceWorkspaceLanePicker"]
+        XCTAssertTrue(lanePicker.buttons["New Invoice"].isSelected)
+        XCTAssertTrue(app.descendants(matching: .any)["ExistingInvoiceEditContext"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Update Invoice"].exists)
+
+        let createNewItem = app.buttons["Create New Item"]
+        for _ in 0..<6 where !createNewItem.exists || !createNewItem.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(createNewItem.waitForExistence(timeout: 3))
+        createNewItem.tap()
+
+        XCTAssertTrue(app.navigationBars["Create Item"].waitForExistence(timeout: 3))
+        replaceText(in: app.textFields["Item name"], with: "Invoice Workspace Added Part")
+        replaceText(in: app.textFields["Sales price (optional)"], with: "25")
+        let saveItem = app.navigationBars["Create Item"].buttons["Save"]
+        XCTAssertTrue(saveItem.waitForExistence(timeout: 3))
+        XCTAssertTrue(saveItem.isEnabled)
+        XCTAssertFalse(saveItem.frame.isEmpty)
+        saveItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        if app.navigationBars["Create Item"].exists {
+            saveItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Invoice Workspace Added Part"].waitForExistence(timeout: 3))
+        let updateInvoice = app.buttons["Update Invoice"]
+        for _ in 0..<8 where !updateInvoice.exists || !updateInvoice.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(updateInvoice.waitForExistence(timeout: 3))
+        XCTAssertTrue(updateInvoice.isEnabled)
+        updateInvoice.tap()
+
+        XCTAssertTrue(lanePicker.buttons["Overview"].waitForExistence(timeout: 5))
+        XCTAssertTrue(lanePicker.buttons["Overview"].isSelected)
+        XCTAssertTrue(app.staticTexts["$214.00"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
     /// Opt-in physical-device diagnostic that deliberately retains the installed
     /// production store and authentication state. Normal UI runs skip it so
     /// seeded fixtures remain deterministic.

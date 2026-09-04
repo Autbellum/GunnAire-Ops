@@ -102,6 +102,7 @@ struct BillingDocumentsView: View {
     @State private var pendingIntentServiceCallID: UUID?
     @State private var showingItemSelector = false
     @State private var showingItemCreator = false
+    @State private var selectedInvoiceForEditingID: UUID?
     @State private var selectedInvoiceForCloseout: Invoice?
     @State private var selectedEstimateForApproval: Estimate?
     @State private var selectedEstimateForScheduling: Estimate?
@@ -587,8 +588,12 @@ struct BillingDocumentsView: View {
     }
 
     private var currentJobInvoice: Invoice? {
-        guard let invoiceID = activeServiceCall?.linkedInvoiceID else { return nil }
-        return invoices.first { $0.id == invoiceID }
+        if let activeServiceCall {
+            guard let invoiceID = activeServiceCall.linkedInvoiceID else { return nil }
+            return invoices.first { $0.id == invoiceID }
+        }
+        guard let selectedInvoiceForEditingID else { return nil }
+        return invoices.first { $0.id == selectedInvoiceForEditingID }
     }
 
     private var configuredDefaultInvoicePaymentTerms: InvoicePaymentTerms {
@@ -1611,6 +1616,7 @@ GunnAire
                         AnyView(builderDetailsWorkspaceSection)
                     }
                 }
+                .id(invoiceWorkspaceLane)
                 .navigationTitle(navigationTitle)
                 .toolbar {
                     if showsDismissButton {
@@ -3208,6 +3214,25 @@ GunnAire
                         showsClearButton: true
                     )
 
+                    if let editingInvoiceID = selectedInvoiceForEditingID,
+                       let editingInvoice = invoices.first(where: { $0.id == editingInvoiceID }) {
+                        Label(
+                            "Editing \(editingInvoice.customer.name)'s existing invoice",
+                            systemImage: "square.and.pencil"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(Color.brandGold)
+                        .accessibilityIdentifier("ExistingInvoiceEditContext")
+
+                        Button("Cancel Invoice Edit", role: .cancel) {
+                            finishInvoiceWorkspaceEditing(
+                                message: "Invoice edit cancelled. The saved invoice was not changed."
+                            )
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("CancelInvoiceWorkspaceEdit")
+                    }
+
                     if let selectedCustomer {
                         if let call = activeServiceCall {
                             LabeledContent("Service Property") {
@@ -3534,6 +3559,21 @@ GunnAire
                                                 .font(.caption2)
                                                 .foregroundColor(.green)
                                         }
+                                        if canEditInvoice(invoice) {
+                                            Button("Edit Line Items") {
+                                                beginEditingInvoice(invoice)
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .accessibilityIdentifier("EditInvoice-\(invoice.id.uuidString)")
+                                        } else if let lockMessage = BillingInvoiceMutationPolicy.blockedMessage(
+                                            for: invoice,
+                                            payments: payments
+                                        ) {
+                                            Label("Line items locked", systemImage: "lock.fill")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                                .accessibilityHint(lockMessage)
+                                        }
                                         if canCollectFieldPayments {
                                             Button("Open Invoice") {
                                                 openInvoiceCloseout(invoice)
@@ -3576,6 +3616,7 @@ GunnAire
                                         }
                                     }
                                 }
+                                .accessibilityIdentifier("InvoiceDisclosure-\(invoice.id.uuidString)")
                                 .padding(.vertical, 4)
                             }
                         }
@@ -4142,8 +4183,18 @@ GunnAire
     @ViewBuilder
     private var lineItemBuilderView: some View {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Line Items")
-                            .font(.headline)
+                        HStack {
+                            Text("Line Items")
+                                .font(.headline)
+                            Spacer()
+                            Button {
+                                showingItemCreator = true
+                            } label: {
+                                Label("Create New Item", systemImage: "plus.square.on.square")
+                            }
+                            .buttonStyle(.bordered)
+                            .foregroundStyle(Color.brandGold)
+                        }
 
                         TextField("Search items to add", text: $itemSearchText)
                             .textInputAutocapitalization(.never)
@@ -8648,7 +8699,9 @@ GunnAire
                 invoice.customer = customer
                 invoice.serviceLocationID = activeServiceCall?.serviceLocationID ?? selectedServiceLocationID
                 invoice.siteAddress = selectedSiteAddressSnapshot
-                invoice.workType = InvoiceWorkType.inferred(from: activeServiceCall)
+                if let activeServiceCall {
+                    invoice.workType = InvoiceWorkType.inferred(from: activeServiceCall)
+                }
                 invoice.lineItemSummary = selectedSummary
                 invoice.catalogSnapshotJSON = selectedCatalogSnapshotJSON
                 invoice.amount = selectedTotal
@@ -8692,8 +8745,11 @@ GunnAire
                 isCreatingDocument = false
                 return
             }
+            let shouldReturnToInvoiceOverview = isUpdatingExistingInvoice && selectedInvoiceForEditingID == invoice.id
             syncInvoiceIfNeeded(invoice, customer: customer, items: selectedLineItems)
-            if !isUpdatingExistingInvoice {
+            if shouldReturnToInvoiceOverview {
+                finishInvoiceWorkspaceEditing()
+            } else if !isUpdatingExistingInvoice {
                 clearSelectedCatalogLines()
                 notes = ""
                 selectedInvoicePaymentTerms = configuredDefaultInvoicePaymentTerms
@@ -8728,6 +8784,55 @@ GunnAire
             return
         }
         selectedInvoiceForCloseout = invoice
+    }
+
+    private func canEditInvoice(_ invoice: Invoice) -> Bool {
+        guard BillingInvoiceMutationPolicy.blockedMessage(for: invoice, payments: payments) == nil else {
+            return false
+        }
+        if canViewFinancials {
+            return true
+        }
+        guard canCollectFieldPayments,
+              let call = serviceCall(for: invoice) else { return false }
+        return AppAccess.canAccessServiceCall(
+            call,
+            email: currentUserEmail,
+            users: users,
+            serviceCalls: serviceCalls,
+            technicians: technicians
+        )
+    }
+
+    private func beginEditingInvoice(_ invoice: Invoice) {
+        guard canEditInvoice(invoice) else {
+            actionMessage = BillingInvoiceMutationPolicy.blockedMessage(for: invoice, payments: payments)
+                ?? "This account cannot edit that invoice."
+            return
+        }
+
+        selectedInvoiceForEditingID = invoice.id
+        selectedDocumentKind = .invoice
+        selectedJobStage = .billing
+        loadInvoiceIntoBuilder(invoice, announce: false)
+        invoiceWorkspaceLane = .newInvoice
+        actionMessage = "Editing the existing invoice. Save with Update Invoice; QuickBooks remains pending until it confirms the complete line-item set."
+    }
+
+    private func finishInvoiceWorkspaceEditing(message: String? = nil) {
+        selectedInvoiceForEditingID = nil
+        if initialServiceCall == nil {
+            pendingIntentServiceCallID = nil
+        }
+        clearSelectedCatalogLines()
+        notes = ""
+        selectedInvoicePaymentTerms = configuredDefaultInvoicePaymentTerms
+        invoiceCustomDueDate = configuredDefaultInvoicePaymentTerms.dueDate(from: Date())
+            ?? Calendar.current.startOfDay(for: Date())
+        invoiceWorkspaceLane = .overview
+        if let message {
+            actionMessage = message
+        }
     }
 
     private func syncEstimateIfNeeded(_ estimate: Estimate, customer: Customer, items: [Item]) {
