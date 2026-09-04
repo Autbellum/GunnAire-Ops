@@ -258,7 +258,7 @@ struct ContentView: View {
         case .estimates:
             return AnyView(BillingDocumentsView(workspaceMode: .estimates))
         case .invoices:
-            return AnyView(BillingDocumentsView(workspaceMode: .invoices))
+            return AnyView(InvoiceWorkspaceTransitionHost())
         case .payments:
             return AnyView(PaymentsAndReceiptsView())
         case .reports:
@@ -368,6 +368,7 @@ struct ContentView: View {
             ZStack {
                 WatermarkBackground()
                 selectedWorkspaceDetail
+                .id(selectedSidebarItem)
                 .tint(Color.brandGold)
             }
         }
@@ -829,6 +830,41 @@ struct ContentView: View {
                 restrictedRouteTitle = targetItem.rawValue
             }
             columnVisibility = prefersPersistentSidebar ? .doubleColumn : .detailOnly
+        }
+    }
+}
+
+/// Keeps the split-view selection transition shallow before constructing the
+/// full invoice workspace. The billing builder intentionally remains feature
+/// complete, but its large SwiftUI metadata tree must not be materialized in
+/// the same render pass that removes the previous sidebar destination on a
+/// physical iPad. Doing both at once can exhaust Swift's metadata-resolution
+/// stack before the first invoice row is presented.
+private struct InvoiceWorkspaceTransitionHost: View {
+    @State private var isReady = false
+
+    var body: some View {
+        Group {
+            if isReady {
+                AnyView(BillingDocumentsView(workspaceMode: .invoices))
+            } else {
+                ProgressView("Loading invoices…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .navigationTitle("Invoices")
+                    .accessibilityIdentifier("InvoiceWorkspaceTransitionGuard")
+            }
+        }
+        .transition(.identity)
+        .task {
+            guard !isReady else { return }
+            await Task.yield()
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            isReady = true
         }
     }
 }
