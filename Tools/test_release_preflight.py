@@ -14,14 +14,14 @@ except ModuleNotFoundError:  # Direct execution from the Tools directory.
     import release_preflight
 
 
-class CloudKitV22PreflightTests(unittest.TestCase):
+class CloudKitV23PreflightTests(unittest.TestCase):
     def setUp(self) -> None:
         self.production = {
             record_name: {}
             for record_name in release_preflight.EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES
         }
         self.development = copy.deepcopy(self.production)
-        for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V22_ADDITIONS.items():
+        for record_name, fields in release_preflight.EXPECTED_CLOUDKIT_V23_ADDITIONS.items():
             self.development.setdefault(record_name, {}).update(fields)
         baseline_metadata = {
             "system_fields": release_preflight.EXPECTED_CLOUDKIT_SYSTEM_FIELDS,
@@ -63,7 +63,7 @@ class CloudKitV22PreflightTests(unittest.TestCase):
             )
         return results
 
-    def test_exact_cumulative_v22_schema_is_accepted(self) -> None:
+    def test_exact_cumulative_v23_schema_is_accepted(self) -> None:
         results = self.check(self.development, self.production)
 
         self.assertEqual(results.failures, [])
@@ -85,7 +85,7 @@ class CloudKitV22PreflightTests(unittest.TestCase):
         results = self.check(partial_development, self.production)
 
         self.assertTrue(results.failures)
-        self.assertTrue(any("v22" in failure.lower() for failure in results.failures))
+        self.assertTrue(any("v23" in failure.lower() for failure in results.failures))
 
     def test_partial_recurring_work_shift_fields_are_rejected(self) -> None:
         partial_development = copy.deepcopy(self.development)
@@ -94,7 +94,16 @@ class CloudKitV22PreflightTests(unittest.TestCase):
         results = self.check(partial_development, self.production)
 
         self.assertTrue(results.failures)
-        self.assertTrue(any("v22" in failure.lower() for failure in results.failures))
+        self.assertTrue(any("v23" in failure.lower() for failure in results.failures))
+
+    def test_partial_v23_operational_field_closure_is_rejected(self) -> None:
+        partial_development = copy.deepcopy(self.development)
+        partial_development["CD_Payment"].pop("CD_quickBooksClientTransID")
+
+        results = self.check(partial_development, self.production)
+
+        self.assertTrue(results.failures)
+        self.assertTrue(any("v23" in failure.lower() for failure in results.failures))
 
     def test_existing_record_security_grant_change_is_rejected(self) -> None:
         altered_metadata = copy.deepcopy(self.development_metadata)

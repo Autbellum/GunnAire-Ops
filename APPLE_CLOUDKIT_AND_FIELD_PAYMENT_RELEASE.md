@@ -24,7 +24,7 @@ The retained record is
 
 The app uses the private CloudKit database container
 `iCloud.com.gunnaire.businesssuite` for its SwiftData store. Apple configuration
-and schema status as of 2026-08-31.
+and schema status below is current as of 2026-09-04.
 
 ### Current capability and schema status
 
@@ -142,14 +142,14 @@ and schema status as of 2026-08-31.
   `.16` retains its prior **70/70** result. No CloudKit bootstrap, Development
   mutation, Production promotion, provider authorization, accounting write,
   refund, or payment was required or performed.
-- Production remains schema v15 across 24 record types in retained export
-  `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
+- Production remains schema v15 across 24 record types and 286 fields in retained
+  export `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
   `f81de36537620a10fe34fde22883a94dc6f5b00deea6fec08004160c0aae7594`.
   The signed isolated bootstrap now initializes the complete Development schema
-  v22 across 33 record types. Fresh export
-  `/Users/gunnaire/Downloads/cloudkit-development-11.ckdb` has SHA-256
-  `9d357a64b9b17b7efcc8256c5c0d8bb6670b86357e2b48a145d95a5603f77f8b`.
-- Source schema v22 retains the exact v16 attachment delta;
+  v23 across 33 record types and 621 fields. Fresh export
+  `/Users/gunnaire/Downloads/cloudkit-development-13.ckdb` has SHA-256
+  `1beb4588ec0ce4bf44bbc077596d934c179d0ed6054650c2eee5efb74499debd`.
+- Source schema v23 retains the exact v16 attachment delta;
   adds the v17 fleet vehicle/event pair and attachment linkage; the v18 field
   expense record and receipt linkage; the v19 customer operational-alert record;
   the v20 business-task/event pair; and the v21 technician-time-off
@@ -157,31 +157,35 @@ and schema status as of 2026-08-31.
   `CD_TechnicianAvailabilityBlock`; then adds the v22 19-field
   `CD_TechnicianWorkShift` record for regular/on-call weekly capacity,
   effective dates, time zone, stable creation evidence, and reason-required
-  retirement history. The isolated Debug bootstrap writes every optional value
-  through v22, and unit contracts assert the complete seed. The signed staging
-  run exposed and fixed ten previously absent optional values: six expense
-  review/reimbursement fields and four operational-alert resolution fields.
-  The release
-  preflight accepts only the exact cumulative additive v22 delta or an
-  exact post-promotion match, requires each new record family to be all-or-none,
-  and rejects partial v21 availability-block fields or a partial v22 shift
-  record.
+  retirement history. V23 closes every persisted optional operational attribute
+  with 123 approved fields across Customer, communications, equipment, Estimate,
+  Inventory Movement, Invoice, Payment, Project Milestone, Purchase Order,
+  maintenance agreements, Service Call, Service Request, Technician, Time Entry,
+  and Vendor. Thirty-nine were already present because retained Development data
+  had exercised them; the signed v23 bootstrap staged the remaining 84. The
+  isolated Debug bootstrap now writes every optional value through v23, and unit
+  contracts assert the complete seed and marker-only cleanup. Release preflight
+  accepts only the exact cumulative additive v23 delta or an exact post-promotion
+  match and rejects partial v21, v22, or v23 field families.
 - Exact export comparison proves Development differs from Production by only
-  the nine approved additive record families and 212 additive fields across 11
-  affected record types. No existing Production field, system field, or
-  security grant is removed or changed, and every added record uses the
-  approved system fields and default private-database grants. The exact schema
-  audit passes **9/9**; the strengthened verifier regression suite passes
-  **5/5**.
+  the approved nine additive record types and 335 additive fields across 26
+  affected record types. No existing Production field, system field, or security
+  grant is removed or changed, and every added record uses the approved system
+  fields and default private-database grants. Exact current verification passes
+  **706/706** iPad logic tests, **3/3** focused bootstrap/cleanup tests,
+  **23/23** release-tool tests, and **71/71** backend `.18` tests. Read-only
+  online preflight is **70 passed / 3 expected warnings / 1 failure**; CloudKit,
+  Apple notification routing, and the QBO callback pass, and the only failure is
+  that Render still serves healthy backend `.17` instead of reviewed `.18`.
 - Versioned marker cleanup identifies the synthetic operational alert by the
   dedicated bootstrap actor rather than its title, because CloudKit truncates
   that title to 32 characters. A regression now proves cleanup removes the
-  complete 32-model synthetic graph. The final signed cleanup left zero marker
-  strings, only the 16 intended starter rows, no pending bootstrap process, and
-  **29/29** successful CloudKit mirroring events with zero failures.
+  complete synthetic graph. The signed v23 export completed before cleanup; a
+  final independent cleanup launch then found zero marker records on its initial
+  and two delayed passes. No bootstrap process remains running.
 - Production was not promoted. Complete representative signed two-device
   iPad/Mac/iPhone role, offline, conflict, and reconnect acceptance before
-  deploying the reviewed v22 schema. After promotion, export Production again
+  deploying the reviewed v23 schema. After promotion, export Production again
   and require exact Development/Production parity before business use.
 
 Historical deployment evidence follows:

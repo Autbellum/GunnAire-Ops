@@ -362,6 +362,165 @@ EXPECTED_CLOUDKIT_V22_ADDITIONS = {
     },
 }
 EXPECTED_CLOUDKIT_V22_RECORD_TYPES = {"CD_TechnicianWorkShift"}
+EXPECTED_CLOUDKIT_V23_ADDITIONS = {
+    **EXPECTED_CLOUDKIT_V22_ADDITIONS,
+    "CD_Customer": {
+        "CD_address": _CLOUDKIT_STRING_FIELD,
+        "CD_communicationConsentUpdatedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_email": _CLOUDKIT_STRING_FIELD,
+        "CD_phone": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_CustomerCommunication": {
+        "CD_backendCommunicationID": _CLOUDKIT_STRING_FIELD,
+        "CD_backendSyncError": _CLOUDKIT_STRING_FIELD,
+        "CD_estimateID": _CLOUDKIT_STRING_FIELD,
+        "CD_invoiceID": _CLOUDKIT_STRING_FIELD,
+        "CD_providerMessageID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_CustomerEquipment": {
+        "CD_equipmentTypeRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_filterSize": _CLOUDKIT_STRING_FIELD,
+        "CD_installDate": _CLOUDKIT_DATE_FIELD,
+        "CD_location": _CLOUDKIT_STRING_FIELD,
+        "CD_manufacturer": _CLOUDKIT_STRING_FIELD,
+        "CD_modelNumber": _CLOUDKIT_STRING_FIELD,
+        "CD_notes": _CLOUDKIT_STRING_FIELD,
+        "CD_serialNumber": _CLOUDKIT_STRING_FIELD,
+        "CD_technicalBaselineReadingsJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_warrantyExpiration": _CLOUDKIT_DATE_FIELD,
+    },
+    "CD_Estimate": {
+        **EXPECTED_CLOUDKIT_V22_ADDITIONS["CD_Estimate"],
+        "CD_catalogSnapshotJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_changeOrderReason": _CLOUDKIT_STRING_FIELD,
+        "CD_parentEstimateID": _CLOUDKIT_STRING_FIELD,
+        "CD_proposalGroupID": _CLOUDKIT_STRING_FIELD,
+        "CD_proposalOption": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_InventoryMovement": {
+        **EXPECTED_CLOUDKIT_V22_ADDITIONS["CD_InventoryMovement"],
+        "CD_destinationLocation": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceCallID": _CLOUDKIT_STRING_FIELD,
+        "CD_sourceLocation": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_Invoice": {
+        **EXPECTED_CLOUDKIT_V22_ADDITIONS["CD_Invoice"],
+        "CD_catalogSnapshotJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_completionNotes": _CLOUDKIT_STRING_FIELD,
+        "CD_customerSignatureImageBase64": _CLOUDKIT_STRING_FIELD,
+        "CD_customerSignatureName": _CLOUDKIT_STRING_FIELD,
+        "CD_customerSignedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_finalizedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_quickBooksBalanceDue": _CLOUDKIT_NUMBER_FIELD,
+        "CD_quickBooksID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksLastSyncedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_quickBooksSyncDetail": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceCallID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_Payment": {
+        "CD_authorizationReference": _CLOUDKIT_STRING_FIELD,
+        "CD_cardLast4": _CLOUDKIT_STRING_FIELD,
+        "CD_processor": _CLOUDKIT_STRING_FIELD,
+        "CD_processorSyncDetail": _CLOUDKIT_STRING_FIELD,
+        "CD_processorSyncStatus": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksAccountingSyncDetail": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksAccountingSyncStatus": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksChargeID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksClientTransID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksDepositID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksRefundReceiptID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksSalesReceiptID": _CLOUDKIT_STRING_FIELD,
+        "CD_refundedPaymentID": _CLOUDKIT_STRING_FIELD,
+        "CD_settlementBatchID": _CLOUDKIT_STRING_FIELD,
+        "CD_storedCardID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_ProjectMilestone": {
+        "CD_milestoneDescription": _CLOUDKIT_STRING_FIELD,
+        "CD_scheduledVisitID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_PurchaseOrder": {
+        "CD_itemSKU": _CLOUDKIT_STRING_FIELD,
+        "CD_orderedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_receivedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_receivedToLocation": _CLOUDKIT_STRING_FIELD,
+        "CD_vendorPartNumber": _CLOUDKIT_STRING_FIELD,
+        "CD_vendorQuickBooksID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_RecurringMaintenanceContract": {
+        "CD_coveredEquipmentIDsJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_includedVisitsPerTerm": _CLOUDKIT_INTEGER_FIELD,
+        "CD_pricePerVisit": _CLOUDKIT_NUMBER_FIELD,
+        "CD_termEndsOn": _CLOUDKIT_DATE_FIELD,
+    },
+    "CD_ServiceCall": {
+        "CD_additionalTechnicianIDsJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_cancellationReason": _CLOUDKIT_STRING_FIELD,
+        "CD_cancelledAt": _CLOUDKIT_DATE_FIELD,
+        "CD_customerEquipmentID": _CLOUDKIT_STRING_FIELD,
+        "CD_documentationCompletedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_documentationStartedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_drainLineCondition": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentInstallDate": _CLOUDKIT_DATE_FIELD,
+        "CD_equipmentLocation": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentManufacturer": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentModel": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentName": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentNotes": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentSerialNumber": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentTypeRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentWarrantyExpiration": _CLOUDKIT_DATE_FIELD,
+        "CD_filterCondition": _CLOUDKIT_STRING_FIELD,
+        "CD_filterSize": _CLOUDKIT_STRING_FIELD,
+        "CD_findingsSummary": _CLOUDKIT_STRING_FIELD,
+        "CD_followUpAction": _CLOUDKIT_STRING_FIELD,
+        "CD_followUpDueDate": _CLOUDKIT_DATE_FIELD,
+        "CD_googleCalendarID": _CLOUDKIT_STRING_FIELD,
+        "CD_googleEventID": _CLOUDKIT_STRING_FIELD,
+        "CD_indoorCoilCondition": _CLOUDKIT_STRING_FIELD,
+        "CD_linkedEstimateID": _CLOUDKIT_STRING_FIELD,
+        "CD_linkedInvoiceID": _CLOUDKIT_STRING_FIELD,
+        "CD_outdoorCoilCondition": _CLOUDKIT_STRING_FIELD,
+        "CD_promisedArrivalWindowEnd": _CLOUDKIT_DATE_FIELD,
+        "CD_promisedArrivalWindowStart": _CLOUDKIT_DATE_FIELD,
+        "CD_recommendedWorkSummary": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceActionChecklistJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceReportReadingsJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceReportSummary": _CLOUDKIT_STRING_FIELD,
+        "CD_technicianArrivedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_technicianEnRouteAt": _CLOUDKIT_DATE_FIELD,
+        "CD_thermostatOperation": _CLOUDKIT_STRING_FIELD,
+        "CD_visitDispositionNotes": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_ServiceRequest": {
+        "CD_address": _CLOUDKIT_STRING_FIELD,
+        "CD_backendRequestID": _CLOUDKIT_STRING_FIELD,
+        "CD_convertedCustomerID": _CLOUDKIT_STRING_FIELD,
+        "CD_convertedServiceCallID": _CLOUDKIT_STRING_FIELD,
+        "CD_email": _CLOUDKIT_STRING_FIELD,
+        "CD_phone": _CLOUDKIT_STRING_FIELD,
+        "CD_preferredDate": _CLOUDKIT_DATE_FIELD,
+        "CD_qualifiedAt": _CLOUDKIT_DATE_FIELD,
+    },
+    "CD_Technician": {
+        "CD_laborCostPerHour": _CLOUDKIT_NUMBER_FIELD,
+        "CD_qualificationNotes": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceAreasJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_supportedEquipmentTypesJSON": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_TimeEntry": {
+        "CD_quickBooksTimeActivityID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksTimeActivitySyncError": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksTimeActivitySyncToken": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksTimeActivitySyncedAt": _CLOUDKIT_DATE_FIELD,
+    },
+    "CD_Vendor": {
+        "CD_contactInfo": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksID": _CLOUDKIT_STRING_FIELD,
+    },
+}
 EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES = {
     "CD_AppUser",
     "CD_Customer",
@@ -1496,22 +1655,22 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
             "Development changes remove or alter no Production CloudKit fields",
             f"Development removes or alters Production fields: {changed_or_removed}",
         )
-        malformed_existing_v22_fields: list[str] = []
-        for record_name, expected_fields in EXPECTED_CLOUDKIT_V22_ADDITIONS.items():
+        malformed_existing_v23_fields: list[str] = []
+        for record_name, expected_fields in EXPECTED_CLOUDKIT_V23_ADDITIONS.items():
             production_fields = prod.get(record_name, {})
             for field_name, expected_definition in expected_fields.items():
                 if (
                     field_name in production_fields
                     and production_fields[field_name] != expected_definition
                 ):
-                    malformed_existing_v22_fields.append(
+                    malformed_existing_v23_fields.append(
                         f"{record_name}.{field_name}"
                     )
         results.require(
-            not malformed_existing_v22_fields,
-            "Existing Production fields through v22 match their approved definitions",
-            "CloudKit Production contains malformed approved fields through v22: "
-            f"{malformed_existing_v22_fields}",
+            not malformed_existing_v23_fields,
+            "Existing Production fields through v23 match their approved definitions",
+            "CloudKit Production contains malformed approved fields through v23: "
+            f"{malformed_existing_v23_fields}",
         )
 
         def expected_remaining(
@@ -1538,6 +1697,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 if records.get(record_name, {}).get(field_name) != expected_definition
             ]
 
+        expected_remaining_v23_additions = expected_remaining(EXPECTED_CLOUDKIT_V23_ADDITIONS)
         expected_remaining_v22_additions = expected_remaining(EXPECTED_CLOUDKIT_V22_ADDITIONS)
         expected_remaining_v21_additions = expected_remaining(EXPECTED_CLOUDKIT_V21_ADDITIONS)
         expected_remaining_v20_additions = expected_remaining(EXPECTED_CLOUDKIT_V20_ADDITIONS)
@@ -1545,6 +1705,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         expected_remaining_v18_additions = expected_remaining(EXPECTED_CLOUDKIT_V18_ADDITIONS)
         expected_remaining_v17_additions = expected_remaining(EXPECTED_CLOUDKIT_V17_ADDITIONS)
         expected_remaining_v16_additions = expected_remaining(EXPECTED_CLOUDKIT_V16_ADDITIONS)
+        dev_missing_v23 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V23_ADDITIONS)
         dev_missing_v22 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V22_ADDITIONS)
         prod_missing_v22 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V22_ADDITIONS)
         dev_missing_v21 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V21_ADDITIONS)
@@ -1561,6 +1722,16 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         prod_missing_v16 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V16_ADDITIONS)
 
         if (
+            not dev_missing_v23
+            and (
+                not missing_or_changed(prod, EXPECTED_CLOUDKIT_V23_ADDITIONS)
+                or actual_additions == expected_remaining_v23_additions
+            )
+        ):
+            results.pass_(
+                "CloudKit Development contains the exact cumulative v23 operational field closure across every persisted optional business attribute"
+            )
+        elif (
             not dev_missing_v22
             and (
                 not prod_missing_v22
@@ -1569,6 +1740,9 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         ):
             results.pass_(
                 "CloudKit Development contains exactly the approved additive v22 recurring technician work-shift record plus the cumulative v21 schema relative to Production"
+            )
+            results.warn(
+                "CloudKit source v23 operational field closure is not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v21
@@ -1581,7 +1755,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 "CloudKit Development contains exactly the approved additive v21 technician time-off request, audit-event, and availability-cancellation fields plus the cumulative v20 schema relative to Production"
             )
             results.warn(
-                "CloudKit source v22 recurring technician work-shift record is not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v22 recurring technician work-shift record and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v20
@@ -1594,7 +1768,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 "CloudKit Development contains exactly the approved additive v20 team task and audit-event records plus the cumulative v19 schema relative to Production"
             )
             results.warn(
-                "CloudKit source v21 technician time-off and v22 recurring work-shift records are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v21 technician time-off, v22 recurring work-shift, and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v19
@@ -1607,7 +1781,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 "CloudKit Development contains exactly the approved additive v19 customer operational alert record and cumulative v18 schema relative to Production"
             )
             results.warn(
-                "CloudKit source v20 team task, v21 technician time-off, and v22 recurring work-shift records are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v20 team task, v21 technician time-off, v22 recurring work-shift, and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v18
@@ -1620,7 +1794,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 "CloudKit Development contains exactly the approved additive v18 expense record, receipt linkage, and cumulative fleet schema relative to Production"
             )
             results.warn(
-                "CloudKit source v19 operational alert, v20 task, v21 technician time-off, and v22 recurring work-shift records are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v19 operational alert, v20 task, v21 technician time-off, v22 recurring work-shift, and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v17
@@ -1633,7 +1807,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 "CloudKit Development contains exactly the approved additive v17 fleet records and document linkage relative to Production"
             )
             results.warn(
-                "CloudKit source v18 expense, v19 operational alert, v20 task, v21 technician time-off, and v22 recurring work-shift records are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v18 expense, v19 operational alert, v20 task, v21 technician time-off, v22 recurring work-shift, and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v16
@@ -1644,40 +1818,40 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         ):
             results.pass_("CloudKit exports exactly satisfy the approved v16 schema")
             results.warn(
-                "CloudKit source v17 fleet, v18 expense, v19 operational alert, v20 task, v21 technician time-off, and v22 recurring work-shift records are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v17 fleet, v18 expense, v19 operational alert, v20 task, v21 technician time-off, v22 recurring work-shift, and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V13_ADDITIONS:
             results.pass_(
                 "CloudKit Development v13 delta is exactly six additive tax fields on Estimate and Invoice"
             )
             results.warn(
-                "CloudKit source additions through v22 are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source additions through v23 are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V14_ADDITIONS:
             results.pass_(
                 "CloudKit Development v14 cumulative delta is exactly six tax fields plus Invoice.dueDate"
             )
             results.warn(
-                "CloudKit source additions through v22 are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source additions through v23 are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V15_ADDITIONS:
             results.pass_(
                 "CloudKit Development v15 cumulative delta is exactly the approved tax, due-date, inventory continuity, Item continuity, and service-package fields"
             )
             results.warn(
-                "CloudKit source additions through v22 are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source additions through v23 are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V16_ADDITIONS:
             results.pass_(
                 "CloudKit Development v16 cumulative delta is exactly the approved tax, due-date, inventory continuity, Item continuity, service-package, document-linkage, and Google Drive fields"
             )
             results.warn(
-                "CloudKit source v17 fleet, v18 expense, v19 operational alert, v20 task, v21 technician time-off, and v22 recurring work-shift records are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v17 fleet, v18 expense, v19 operational alert, v20 task, v21 technician time-off, v22 recurring work-shift, and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         else:
             results.fail(
-                "Unexpected CloudKit v13/v14/v15/v16/v17/v18/v19/v20/v21/v22 delta: "
-                f"{actual_additions}; missing Development v22 fields: {dev_missing_v22}"
+                "Unexpected CloudKit v13/v14/v15/v16/v17/v18/v19/v20/v21/v22/v23 delta: "
+                f"{actual_additions}; missing Development v23 fields: {dev_missing_v23}"
             )
         results.pass_(f"Development export SHA-256 is {sha256(development)}")
         results.pass_(f"Production export SHA-256 is {sha256(production)}")
@@ -1796,7 +1970,7 @@ def main() -> int:
             results,
         )
     else:
-        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15/v16/v17/v18/v19/v20/v21/v22 Production delta was not rechecked")
+        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15/v16/v17/v18/v19/v20/v21/v22/v23 Production delta was not rechecked")
 
     if args.online:
         check_online(backend_version, results)

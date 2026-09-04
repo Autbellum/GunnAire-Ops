@@ -930,7 +930,7 @@ enum GunnAireCloudKitRoundTripProbe {
 enum GunnAireCloudKitSchemaBootstrap {
     static let initializeArgument = "-initializeCloudKitSchema"
     static let cleanupArgument = "-cleanupCloudKitSchemaBootstrap"
-    static let schemaVersion = 22
+    static let schemaVersion = 23
 
     private static let marker = "__GUNNAIRE_CLOUDKIT_SCHEMA_BOOTSTRAP__"
     private static let bootstrapEmail = "schema-bootstrap@gunnaire.invalid"
@@ -1023,7 +1023,12 @@ enum GunnAireCloudKitSchemaBootstrap {
 
         let now = Date()
         let customer = Customer(
+            quickBooksID: "SCHEMA-BOOTSTRAP-CUSTOMER",
             name: marker,
+            phone: "000-000-0000",
+            email: bootstrapEmail,
+            address: "1 Schema Bootstrap Way",
+            communicationConsentUpdatedAt: now,
             storedPaymentMethods: [
                 StoredPaymentMethodReference(
                     id: "SCHEMA-BOOTSTRAP-PAYMENT-METHOD",
@@ -1038,6 +1043,10 @@ enum GunnAireCloudKitSchemaBootstrap {
         let technician = Technician(
             name: marker,
             contactInfo: bootstrapEmail,
+            supportedEquipmentTypes: [.splitSystemAC],
+            qualificationNotes: marker,
+            serviceAreas: ["Schema Bootstrap"],
+            laborCostPerHour: 1,
             quickBooksTimeEntityKind: .employee,
             quickBooksTimeEntityRef: "SCHEMA-BOOTSTRAP"
         )
@@ -1088,6 +1097,7 @@ enum GunnAireCloudKitSchemaBootstrap {
             flatRateAssemblyJSON: assemblyDefinition.encodedJSON,
             createdAt: now
         )
+        let bootstrapCatalogSnapshot = CatalogLineItemSnapshot.encoded(from: [item]) ?? "[]"
         let serviceLocation = CustomerServiceLocation(
             customer: customer,
             name: marker,
@@ -1100,18 +1110,74 @@ enum GunnAireCloudKitSchemaBootstrap {
             createdAt: now,
             updatedAt: now
         )
+        let customerEquipment = CustomerEquipment(
+            customer: customer,
+            serviceLocationID: serviceLocation.id,
+            equipmentType: .splitSystemAC,
+            name: marker,
+            manufacturer: marker,
+            modelNumber: marker,
+            serialNumber: "SCHEMA-BOOTSTRAP-SERIAL",
+            location: marker,
+            installDate: now.addingTimeInterval(-86_400),
+            warrantyExpiration: now.addingTimeInterval(86_400),
+            filterSize: marker,
+            notes: marker,
+            technicalBaselineReadingsJSON: "{\"schema\":\"bootstrap\"}",
+            isActive: false,
+            createdAt: now
+        )
         let serviceCall = ServiceCall(
+            googleCalendarID: "SCHEMA-BOOTSTRAP-CALENDAR",
+            googleEventID: "SCHEMA-BOOTSTRAP-EVENT",
+            googleEventManagedByApp: true,
             eventTitle: marker,
             siteAddress: serviceLocation.address,
             serviceLocationID: serviceLocation.id,
+            equipmentName: customerEquipment.name,
+            equipmentManufacturer: customerEquipment.manufacturer,
+            equipmentModel: customerEquipment.modelNumber,
+            equipmentSerialNumber: customerEquipment.serialNumber,
+            equipmentLocation: customerEquipment.location,
+            equipmentInstallDate: customerEquipment.installDate,
+            equipmentWarrantyExpiration: customerEquipment.warrantyExpiration,
+            customerEquipmentID: customerEquipment.id,
+            equipmentTypeRaw: HVACEquipmentType.splitSystemAC.rawValue,
+            equipmentNotes: marker,
+            serviceReportReadingsJSON: "{\"schema\":\"bootstrap\"}",
+            serviceActionChecklistJSON: "{\"schema\":\"bootstrap\"}",
+            filterSize: marker,
+            filterCondition: marker,
+            indoorCoilCondition: marker,
+            outdoorCoilCondition: marker,
+            drainLineCondition: marker,
+            thermostatOperation: marker,
+            serviceReportSummary: marker,
             type: .service,
             scheduledDate: now,
+            promisedArrivalWindowStart: now,
+            promisedArrivalWindowEnd: now.addingTimeInterval(3_600),
             assignedTechnician: technician,
+            additionalTechnicianIDs: [UUID()],
             customer: customer,
+            cancelledAt: now,
+            cancellationReason: marker,
             notes: marker,
+            findingsSummary: marker,
+            recommendedWorkSummary: marker,
             visitDisposition: .callback,
+            visitDispositionNotes: marker,
+            followUpRequired: true,
+            followUpAction: marker,
+            followUpDueDate: now.addingTimeInterval(86_400),
             maintenanceAgreementID: UUID(),
             maintenanceAgreementDueDate: now,
+            technicianEnRouteAt: now,
+            technicianArrivedAt: now,
+            documentationStartedAt: now,
+            documentationCompletedAt: now,
+            linkedEstimateID: UUID(),
+            linkedInvoiceID: UUID(),
             correctiveWorkReason: .unresolvedConcern
         )
         let correctiveFollowUp = ServiceCall(
@@ -1127,9 +1193,16 @@ enum GunnAireCloudKitSchemaBootstrap {
         )
         serviceCall.scheduledFollowUpServiceCallID = correctiveFollowUp.id
         let invoice = Invoice(
+            serviceCallID: serviceCall.id,
             serviceLocationID: serviceLocation.id,
             siteAddress: serviceLocation.address,
             customer: customer,
+            quickBooksID: "SCHEMA-BOOTSTRAP-INVOICE",
+            quickBooksBalanceDue: 1.08,
+            quickBooksSyncStatus: "synced",
+            quickBooksSyncDetail: marker,
+            quickBooksLastSyncedAt: now,
+            catalogSnapshotJSON: bootstrapCatalogSnapshot,
             amount: 1.08,
             salesTaxAmount: 0.08,
             taxCalculationStatus: .calculatedByQuickBooks,
@@ -1140,14 +1213,26 @@ enum GunnAireCloudKitSchemaBootstrap {
             projectContractAmount: 1,
             projectBillingPercent: 100,
             dueDate: now,
-            notes: marker
+            notes: marker,
+            customerSignatureName: marker,
+            customerSignatureImageBase64: Data(marker.utf8).base64EncodedString(),
+            customerSignedAt: now,
+            completionNotes: marker,
+            finalizedAt: now
         )
         let estimate = Estimate(
             serviceCallID: serviceCall.id,
             serviceLocationID: serviceLocation.id,
             siteAddress: serviceLocation.address,
             scheduledServiceCallID: correctiveFollowUp.id,
+            parentEstimateID: UUID(),
+            changeOrderReason: marker,
+            proposalGroupID: UUID(),
+            proposalOption: EstimateProposalOption.good.rawValue,
+            proposalIsRecommended: true,
             customer: customer,
+            quickBooksID: "SCHEMA-BOOTSTRAP-ESTIMATE",
+            catalogSnapshotJSON: bootstrapCatalogSnapshot,
             amount: 1.08,
             salesTaxAmount: 0.08,
             taxCalculationStatus: .calculatedByQuickBooks,
@@ -1161,17 +1246,21 @@ enum GunnAireCloudKitSchemaBootstrap {
             customerApprovalSignatureImageBase64: Data(marker.utf8).base64EncodedString(),
             notes: marker
         )
+        serviceCall.linkedEstimateID = estimate.id
+        serviceCall.linkedInvoiceID = invoice.id
         let template = FieldFormTemplate(title: marker, questions: [])
         let projectMilestone = ProjectMilestone(
             projectServiceCallID: serviceCall.id,
             estimateID: estimate.id,
             sequence: 0,
             title: marker,
+            milestoneDescription: marker,
             plannedDate: now,
             billingPercent: 100,
             plannedAmount: 1,
             billingTrigger: .customerApproval,
             status: .invoiced,
+            scheduledVisitID: correctiveFollowUp.id,
             invoiceID: invoice.id,
             completedAt: now,
             completedByEmail: bootstrapEmail,
@@ -1184,7 +1273,11 @@ enum GunnAireCloudKitSchemaBootstrap {
             planName: marker,
             schedulePattern: "Annual",
             nextDate: now,
-            active: false
+            active: false,
+            termEndsOn: now.addingTimeInterval(365 * 86_400),
+            pricePerVisit: 1,
+            includedVisitsPerTerm: 1,
+            coveredEquipmentIDs: [customerEquipment.id]
         )
         maintenanceAgreement.configureDraft(
             agreementPrice: 1,
@@ -1415,6 +1508,126 @@ enum GunnAireCloudKitSchemaBootstrap {
         workShift.retirementReason = marker
         workShift.retirementOperationID = UUID()
 
+        let payment = Payment(
+            invoice: invoice,
+            quickBooksID: "SCHEMA-BOOTSTRAP-PAYMENT",
+            quickBooksChargeID: "SCHEMA-BOOTSTRAP-CHARGE",
+            quickBooksClientTransID: "SCHEMA-BOOTSTRAP-CLIENT-TRANSACTION",
+            quickBooksRefundReceiptID: "SCHEMA-BOOTSTRAP-REFUND",
+            quickBooksDepositID: "SCHEMA-BOOTSTRAP-DEPOSIT",
+            quickBooksSalesReceiptID: "SCHEMA-BOOTSTRAP-SALES-RECEIPT",
+            quickBooksAccountingSyncStatus: "synced",
+            quickBooksAccountingSyncDetail: marker,
+            processorSyncStatus: "synced",
+            processorSyncDetail: marker,
+            settlementBatchID: "SCHEMA-BOOTSTRAP-BATCH",
+            storedCardID: "SCHEMA-BOOTSTRAP-STORED-CARD",
+            amount: 0,
+            date: now,
+            method: "card",
+            cardLast4: "0000",
+            authorizationReference: "SCHEMA-BOOTSTRAP-AUTHORIZATION",
+            notes: marker,
+            processor: OnsitePaymentProcessor.quickBooksPayments.rawValue,
+            refundedPaymentID: UUID()
+        )
+        let timeEntry = TimeEntry(
+            userEmail: bootstrapEmail,
+            clockIn: now,
+            clockOut: now,
+            serviceCall: serviceCall,
+            notes: marker,
+            activity: .job,
+            quickBooksTimeActivityID: "SCHEMA-BOOTSTRAP-TIME-ACTIVITY",
+            quickBooksTimeActivitySyncToken: "1",
+            quickBooksTimeActivitySyncedAt: now,
+            quickBooksTimeActivitySyncError: marker,
+            reviewStatus: .approved,
+            reviewedByEmail: bootstrapEmail,
+            reviewedAt: now,
+            reviewNote: marker,
+            reviewAuditJSON: TimeEntryReviewAudit.appending(
+                TimeEntryReviewEvent(
+                    action: .approved,
+                    actorEmail: bootstrapEmail,
+                    occurredAt: now,
+                    detail: marker
+                ),
+                to: nil
+            )
+        )
+        let vendor = Vendor(
+            quickBooksID: "SCHEMA-BOOTSTRAP-VENDOR",
+            name: marker,
+            contactInfo: bootstrapEmail
+        )
+        let customerCommunication = CustomerCommunication(
+            customer: customer,
+            serviceCallID: serviceCall.id,
+            invoiceID: invoice.id,
+            estimateID: estimate.id,
+            maintenanceContractID: maintenanceAgreement.id,
+            recipient: bootstrapEmail,
+            subject: marker,
+            deliveryStatus: "sent",
+            workflow: .appointmentConfirmation,
+            actorEmail: bootstrapEmail,
+            consentSnapshot: CustomerCommunicationConsentSnapshot(customer: customer),
+            providerStatusDetail: marker,
+            deliveredAt: now,
+            attachmentFileNames: [marker],
+            providerMessageID: "SCHEMA-BOOTSTRAP-PROVIDER-MESSAGE",
+            backendCommunicationID: "SCHEMA-BOOTSTRAP-COMMUNICATION",
+            backendSyncError: marker,
+            createdAt: now
+        )
+        let purchaseOrder = PurchaseOrder(
+            vendorName: marker,
+            vendorQuickBooksID: vendor.quickBooksID,
+            serviceCallID: serviceCall.id,
+            itemName: marker,
+            itemSKU: item.sku,
+            vendorPartNumber: item.vendorPartNumber,
+            quantity: 1,
+            unitCost: 0,
+            status: .received,
+            notes: marker,
+            createdByEmail: bootstrapEmail,
+            createdAt: now
+        )
+        purchaseOrder.orderedAt = now
+        purchaseOrder.receivedAt = now
+        purchaseOrder.receivedToLocation = marker
+        let inventoryMovement = InventoryMovement(
+            item: item,
+            type: .transfer,
+            quantity: 1,
+            sourceLocation: marker,
+            destinationLocation: marker,
+            serviceCallID: serviceCall.id,
+            notes: marker,
+            createdByEmail: bootstrapEmail,
+            createdAt: now
+        )
+        let serviceRequest = ServiceRequest(
+            backendRequestID: "SCHEMA-BOOTSTRAP-REQUEST",
+            customerName: marker,
+            phone: "000-000-0000",
+            email: bootstrapEmail,
+            address: serviceLocation.address,
+            requestedServiceType: .service,
+            urgency: .normal,
+            summary: marker,
+            preferredDate: now,
+            status: .qualified,
+            qualificationNotes: marker,
+            createdByEmail: bootstrapEmail,
+            createdAt: now
+        )
+        serviceRequest.qualifiedAt = now
+        serviceRequest.convertedCustomerID = customer.id
+        serviceRequest.convertedServiceCallID = serviceCall.id
+
         let models: [any PersistentModel] = [
             item,
             assemblyComponentItem,
@@ -1428,28 +1641,9 @@ enum GunnAireCloudKitSchemaBootstrap {
             maintenanceAgreement,
             invoice,
             estimate,
-            Payment(invoice: invoice, amount: 0, notes: marker),
-            TimeEntry(
-                userEmail: bootstrapEmail,
-                clockIn: now,
-                clockOut: now,
-                serviceCall: serviceCall,
-                notes: marker,
-                reviewStatus: .approved,
-                reviewedByEmail: bootstrapEmail,
-                reviewedAt: now,
-                reviewNote: marker,
-                reviewAuditJSON: TimeEntryReviewAudit.appending(
-                    TimeEntryReviewEvent(
-                        action: .approved,
-                        actorEmail: bootstrapEmail,
-                        occurredAt: now,
-                        detail: marker
-                    ),
-                    to: nil
-                )
-            ),
-            Vendor(name: marker),
+            payment,
+            timeEntry,
+            vendor,
             AppUser(email: bootstrapEmail),
             ServiceDocumentAttachment(
                 id: fieldExpenseReceiptID,
@@ -1482,31 +1676,11 @@ enum GunnAireCloudKitSchemaBootstrap {
                 googleDriveArchivedByEmail: bootstrapEmail
             ),
             maintenanceAgreementDocument,
-            CustomerEquipment(customer: customer, serviceLocationID: serviceLocation.id, name: marker),
-            CustomerCommunication(
-                customer: customer,
-                serviceCallID: serviceCall.id,
-                maintenanceContractID: UUID(),
-                recipient: bootstrapEmail,
-                subject: marker,
-                deliveryStatus: "sent",
-                workflow: .appointmentConfirmation,
-                actorEmail: bootstrapEmail,
-                consentSnapshot: CustomerCommunicationConsentSnapshot(customer: customer),
-                providerStatusDetail: marker,
-                deliveredAt: now
-            ),
-            PurchaseOrder(
-                vendorName: marker,
-                serviceCallID: serviceCall.id,
-                itemName: marker,
-                quantity: 1,
-                unitCost: 0,
-                notes: marker,
-                createdByEmail: bootstrapEmail
-            ),
-            InventoryMovement(item: item, type: .adjust, quantity: 0, notes: marker, createdByEmail: bootstrapEmail),
-            ServiceRequest(customerName: marker, summary: marker, createdByEmail: bootstrapEmail),
+            customerEquipment,
+            customerCommunication,
+            purchaseOrder,
+            inventoryMovement,
+            serviceRequest,
             ServiceCallActivity(serviceCallID: serviceCall.id, action: marker, detail: marker, actorEmail: bootstrapEmail),
             projectMilestone,
             template,
