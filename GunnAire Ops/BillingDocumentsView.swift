@@ -3302,9 +3302,19 @@ GunnAire
                 }
     }
 
-    @ViewBuilder
-    private var activeJobSections: some View {
-                if let call = activeServiceCall {
+    /// Keep the job-only branch behind a concrete type-erasure boundary.
+    ///
+    /// This workspace contains a deliberately rich set of job sections. When
+    /// the branch was exposed as one deeply nested opaque View type, SwiftUI
+    /// attempted to materialize all of that generic metadata even when the
+    /// invoice workspace did not have an active job. On physical devices that
+    /// exhausted the main-thread stack while opening the Invoices tab.
+    private var activeJobSections: AnyView {
+        guard let call = activeServiceCall else {
+            return AnyView(EmptyView())
+        }
+
+        return AnyView(Group {
                     Section("Job") {
                         Text(call.customer.name)
                             .font(.headline)
@@ -3738,7 +3748,7 @@ GunnAire
                         workflowSection(for: call)
                     }
                 }
-
+        )
     }
 
     @ViewBuilder

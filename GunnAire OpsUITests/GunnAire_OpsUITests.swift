@@ -282,6 +282,25 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testInvoiceWorkspaceOpensWithoutTerminating() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures",
+            "-GunnAirePendingAppRoute", "invoices"
+        ]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+
+        XCTAssertTrue(
+            app.navigationBars["Invoices"].waitForExistence(timeout: 8),
+            "The Invoices workspace must open without exhausting the SwiftUI view-construction stack."
+        )
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    @MainActor
     func testReducedMotionSkipsTheSplashAndKeepsCoreNavigationAvailable() throws {
         let app = XCUIApplication()
         app.launchArguments = [
