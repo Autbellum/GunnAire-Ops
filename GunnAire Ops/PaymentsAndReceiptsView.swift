@@ -54,6 +54,8 @@ struct PaymentsAndReceiptsView: View {
     @State private var deferredCollectionPrefersContactlessGuide = false
     @State private var deferredCollectionExpiresAt: Date?
     @State private var contactlessGuideMessage = ""
+    @State private var isShowingContactlessCollectionSteps = false
+    @State private var isVerifyingContactlessPayment = false
     @State private var syncingPaymentID: UUID?
     @State private var isProcessingQuickBooksPayment = false
     @State private var isProcessingQuickBooksRefund = false
@@ -93,6 +95,10 @@ struct PaymentsAndReceiptsView: View {
 
     private var isAdminUser: Bool {
         AppAccess.canViewFinancialManagement(email: signedInEmail, users: users)
+    }
+
+    private var canManageQuickBooks: Bool {
+        AppAccess.canAccessSidebarItem(.quickBooksManagement, email: signedInEmail, users: users)
     }
 
     private var visibleInvoiceIDsForFieldUser: Set<UUID> {
@@ -997,21 +1003,6 @@ struct PaymentsAndReceiptsView: View {
                         }
 
                         Section("Use Tap to Pay on iPhone in QuickBooks") {
-                            ForEach(Array(FieldPaymentHandoff.quickBooksTapToPaySteps.enumerated()), id: \.offset) { index, step in
-                                HStack(alignment: .top, spacing: 10) {
-                                    Text("\(index + 1)")
-                                        .font(.caption.weight(.bold))
-                                        .foregroundStyle(Color.primaryBlack)
-                                        .frame(width: 24, height: 24)
-                                        .background(Color.brandGold, in: Circle())
-                                    Text(step)
-                                }
-                            }
-
-                            Text("QuickBooks does not publish a supported link that opens a specific invoice, so GunnAire Ops provides the verified QBO identifier without sending customer or card data through Handoff.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
                             Link(destination: FieldPaymentHandoff.quickBooksMobileAppStoreURL) {
                                 Label("Open or Install QuickBooks Mobile", systemImage: "arrow.up.forward.app")
                             }
@@ -1021,12 +1012,62 @@ struct PaymentsAndReceiptsView: View {
                                 Label("Open or Install GoPayment", systemImage: "arrow.up.forward.app")
                             }
                             .accessibilityIdentifier("OpenGoPaymentApp")
+
+                            DisclosureGroup(
+                                "Show collection steps",
+                                isExpanded: $isShowingContactlessCollectionSteps
+                            ) {
+                                ForEach(Array(FieldPaymentHandoff.quickBooksTapToPaySteps.enumerated()), id: \.offset) { index, step in
+                                    HStack(alignment: .top, spacing: 10) {
+                                        Text("\(index + 1)")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(Color.primaryBlack)
+                                            .frame(width: 24, height: 24)
+                                            .background(Color.brandGold, in: Circle())
+                                        Text(step)
+                                    }
+                                }
+
+                                Text("QuickBooks does not provide a supported link to one specific invoice. Use the QBO invoice ID above; no customer or card data is placed in Handoff.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .accessibilityIdentifier("ContactlessQuickBooksCollectionSteps")
                         }
 
-                        Section("After Collection") {
-                            Text("Return to GunnAire Ops after QuickBooks confirms payment. Refresh QuickBooks before recording anything manually so the invoice is not paid twice.")
+                        Section("Confirm Payment") {
+                            Text("Return here after QuickBooks confirms payment. The app handoff alone never marks this invoice paid.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+
+                            if isAdminUser {
+                                if isQuickBooksConnected {
+                                    Button(isVerifyingContactlessPayment ? "Checking QuickBooks..." : "Check QuickBooks for Payment") {
+                                        Task {
+                                            await verifyContactlessPayment(for: invoice)
+                                        }
+                                    }
+                                    .disabled(isVerifyingContactlessPayment)
+                                    .accessibilityIdentifier("VerifyContactlessQuickBooksPayment")
+                                } else if canManageQuickBooks {
+                                    Button {
+                                        openQuickBooksConnectionFromContactlessGuide()
+                                    } label: {
+                                        Label("Connect QuickBooks to Verify", systemImage: "link.badge.plus")
+                                    }
+                                    .accessibilityIdentifier("ConnectQuickBooksForContactlessVerification")
+                                } else {
+                                    Text("An administrator must connect QuickBooks on this device before Accounting can verify the payment.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .accessibilityIdentifier("ContactlessQuickBooksAdminConnectionInstruction")
+                                }
+                            } else {
+                                Text("Leave the invoice open. Accounting will verify QuickBooks before another payment attempt.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("ContactlessAccountingVerificationInstruction")
+                            }
 
                             Button("Record Cash, Check, or Another Verified Payment") {
                                 openVerifiedPaymentEntryFromContactlessGuide()
@@ -1082,6 +1123,107 @@ struct PaymentsAndReceiptsView: View {
         Task { @MainActor in
             await Task.yield()
             showingRecordPaymentSheet = true
+        }
+    }
+
+    private func openQuickBooksConnectionFromContactlessGuide() {
+        showingContactlessPaymentGuide = false
+        Task { @MainActor in
+            await Task.yield()
+            GunnAireAppIntentRouter.store(.sync)
+        }
+    }
+
+    private func verifyContactlessPayment(for invoice: Invoice) async {
+        guard isAdminUser else {
+            contactlessGuideMessage = "Only Accounting or an administrator can verify QuickBooks payment records."
+            return
+        }
+        guard isQuickBooksConnected else {
+            contactlessGuideMessage = "Connect QuickBooks on this device before checking this payment."
+            return
+        }
+        guard let quickBooksInvoiceID = invoice.quickBooksID?.nilIfBlank else {
+            contactlessGuideMessage = "Publish this invoice to QuickBooks before checking its payment."
+            return
+        }
+
+        let previousBalance = outstandingBalance(for: invoice)
+        let knownQuickBooksPaymentIDs = Set(
+            payments
+                .filter { $0.invoice?.id == invoice.id }
+                .compactMap { $0.quickBooksID?.nilIfBlank }
+        )
+        isVerifyingContactlessPayment = true
+        defer { isVerifyingContactlessPayment = false }
+
+        do {
+            let remoteInvoice = try await fetchQuickBooksInvoiceForContactlessVerification(
+                id: quickBooksInvoiceID
+            )
+            guard remoteInvoice.Id == quickBooksInvoiceID else {
+                contactlessGuideMessage = "QuickBooks did not return this invoice. Reconnect the approved company or review the invoice in QuickBooks before collecting again."
+                return
+            }
+
+            let remotePayments = try await fetchQuickBooksPaymentsForContactlessVerification()
+            let linkedPayments = remotePayments.filter { payment in
+                QuickBooksPaymentAllocation.amountApplied(
+                    by: payment,
+                    toInvoiceID: quickBooksInvoiceID
+                ) > 0.009
+            }
+            let newlyLinkedPaymentAmount = linkedPayments
+                .filter { !knownQuickBooksPaymentIDs.contains($0.Id) }
+                .reduce(0) {
+                    $0 + QuickBooksPaymentAllocation.amountApplied(
+                        by: $1,
+                        toInvoiceID: quickBooksInvoiceID
+                    )
+                }
+
+            try QuickBooksLocalSync.importSnapshot(
+                customers: [],
+                items: [],
+                estimates: [],
+                invoices: [remoteInvoice],
+                payments: linkedPayments,
+                vendors: [],
+                into: modelContext
+            )
+
+            let refreshedPayments = try modelContext.fetch(FetchDescriptor<Payment>())
+            let refreshedBalance = Invoice.outstandingBalance(
+                for: invoice,
+                payments: refreshedPayments
+            )
+            let outcome = FieldPaymentVerificationOutcome.resolve(
+                previousBalance: previousBalance,
+                refreshedBalance: refreshedBalance,
+                newlyLinkedPaymentAmount: newlyLinkedPaymentAmount
+            )
+            contactlessGuideMessage = outcome.statusMessage
+            if outcome.confirmsCollection {
+                fieldPaymentHandoff.end(invoiceID: invoice.id)
+            }
+        } catch {
+            contactlessGuideMessage = "QuickBooks could not be checked. No payment status was changed. Try again, or review this invoice in QuickBooks before collecting again."
+        }
+    }
+
+    private func fetchQuickBooksInvoiceForContactlessVerification(id: String) async throws -> QuickBooksInvoice {
+        try await withCheckedThrowingContinuation { continuation in
+            liveAPI.fetchInvoice(id: id) { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
+    private func fetchQuickBooksPaymentsForContactlessVerification() async throws -> [QuickBooksPayment] {
+        try await withCheckedThrowingContinuation { continuation in
+            liveAPI.fetchPayments { result in
+                continuation.resume(with: result)
+            }
         }
     }
 
@@ -1165,7 +1307,15 @@ struct PaymentsAndReceiptsView: View {
     }
 
     private var isQuickBooksConnected: Bool {
-        liveAPI.isAuthenticated
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksConnected") {
+            return true
+        }
+        if ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksDisconnected") {
+            return false
+        }
+        #endif
+        return liveAPI.isAuthenticated
     }
 
     private func preparePaymentForm() {

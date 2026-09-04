@@ -1472,6 +1472,131 @@ struct GunnAire_OpsTests {
         #expect(FieldPaymentHandoff.invoiceID(from: activityWithoutExpiration, now: issuedAt) == nil)
     }
 
+    @Test func fieldPaymentVerificationRequiresAnAuthoritativeBalanceChange() {
+        let settled = FieldPaymentVerificationOutcome.resolve(
+            previousBalance: 189,
+            refreshedBalance: 0,
+            newlyLinkedPaymentAmount: 189
+        )
+        #expect(settled == .settled(confirmedPayment: 189))
+        #expect(settled.confirmsCollection)
+        #expect(settled.statusMessage.localizedCaseInsensitiveContains("paid"))
+
+        let partial = FieldPaymentVerificationOutcome.resolve(
+            previousBalance: 189,
+            refreshedBalance: 39,
+            newlyLinkedPaymentAmount: 150
+        )
+        #expect(partial == .partial(confirmedPayment: 150, balanceDue: 39))
+        #expect(partial.confirmsCollection)
+        #expect(partial.statusMessage.contains("$39.00"))
+
+        let unchanged = FieldPaymentVerificationOutcome.resolve(
+            previousBalance: 189,
+            refreshedBalance: 189.004,
+            newlyLinkedPaymentAmount: 0
+        )
+        #expect(unchanged == .unchanged(balanceDue: 189.004))
+        #expect(!unchanged.confirmsCollection)
+        #expect(unchanged.statusMessage.localizedCaseInsensitiveContains("do not record"))
+
+        let adjusted = FieldPaymentVerificationOutcome.resolve(
+            previousBalance: 189,
+            refreshedBalance: 225,
+            newlyLinkedPaymentAmount: 0
+        )
+        #expect(adjusted == .balanceChanged(balanceDue: 225))
+        #expect(!adjusted.confirmsCollection)
+        #expect(adjusted.statusMessage.localizedCaseInsensitiveContains("review"))
+
+        let unexplainedReduction = FieldPaymentVerificationOutcome.resolve(
+            previousBalance: 189,
+            refreshedBalance: 100,
+            newlyLinkedPaymentAmount: 0
+        )
+        #expect(unexplainedReduction == .balanceChanged(balanceDue: 100))
+        #expect(!unexplainedReduction.confirmsCollection)
+    }
+
+    @Test func quickBooksPaymentVerificationUsesOnlyTheExactInvoiceAllocation() throws {
+        let payment = try JSONDecoder().decode(
+            QuickBooksPayment.self,
+            from: Data(
+                #"{"Id":"payment-300","TotalAmt":300,"Line":[{"Amount":100,"LinkedTxn":[{"TxnId":"invoice-a","TxnType":"Invoice"}]},{"Amount":200,"LinkedTxn":[{"TxnId":"invoice-b","TxnType":"Invoice"}]}]}"#.utf8
+            )
+        )
+
+        #expect(QuickBooksPaymentAllocation.amountApplied(by: payment, toInvoiceID: "invoice-a") == 100)
+        #expect(QuickBooksPaymentAllocation.amountApplied(by: payment, toInvoiceID: "invoice-b") == 200)
+        #expect(QuickBooksPaymentAllocation.amountApplied(by: payment, toInvoiceID: "invoice-c") == 0)
+        #expect(QuickBooksPaymentAllocation.amountApplied(by: payment, toInvoiceID: " ") == 0)
+
+        let ambiguousLine = try JSONDecoder().decode(
+            QuickBooksPayment.self,
+            from: Data(
+                #"{"Id":"payment-ambiguous","TotalAmt":300,"Line":[{"Amount":300,"LinkedTxn":[{"TxnId":"invoice-a","TxnType":"Invoice"},{"TxnId":"invoice-b","TxnType":"Invoice"}]}]}"#.utf8
+            )
+        )
+        #expect(QuickBooksPaymentAllocation.amountApplied(by: ambiguousLine, toInvoiceID: "invoice-a") == 0)
+        #expect(QuickBooksPaymentAllocation.amountApplied(by: ambiguousLine, toInvoiceID: "invoice-b") == 0)
+    }
+
+    @MainActor
+    @Test func quickBooksLocalSyncPreservesEveryInvoiceAllocationInASplitPayment() throws {
+        let schema = GunnAireModelSchema.schema
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)]
+        )
+        let context = ModelContext(container)
+        let customer = Customer(quickBooksID: "customer-split", name: "Split Payment Customer")
+        let firstInvoice = Invoice(
+            customer: customer,
+            quickBooksID: "invoice-a",
+            lineItemSummary: "First service visit",
+            amount: 100,
+            status: "unpaid"
+        )
+        let secondInvoice = Invoice(
+            customer: customer,
+            quickBooksID: "invoice-b",
+            lineItemSummary: "Second service visit",
+            amount: 200,
+            status: "unpaid"
+        )
+        context.insert(customer)
+        context.insert(firstInvoice)
+        context.insert(secondInvoice)
+        try context.save()
+
+        let remotePayment = try JSONDecoder().decode(
+            QuickBooksPayment.self,
+            from: Data(
+                #"{"Id":"payment-300","CustomerRef":{"value":"customer-split"},"TotalAmt":300,"Line":[{"Amount":100,"LinkedTxn":[{"TxnId":"invoice-a","TxnType":"Invoice"}]},{"Amount":200,"LinkedTxn":[{"TxnId":"invoice-b","TxnType":"Invoice"}]}]}"#.utf8
+            )
+        )
+
+        try QuickBooksLocalSync.importSnapshot(
+            customers: [],
+            items: [],
+            estimates: [],
+            invoices: [],
+            payments: [remotePayment],
+            vendors: [],
+            into: context
+        )
+
+        let imported = try context.fetch(FetchDescriptor<Payment>())
+        #expect(imported.count == 2)
+        #expect(imported.first { $0.invoice.id == firstInvoice.id }?.amount == 100)
+        #expect(imported.first { $0.invoice.id == secondInvoice.id }?.amount == 200)
+        #expect(Set(imported.compactMap(\.quickBooksID)) == ["payment-300"])
+        #expect(firstInvoice.quickBooksBalanceDue == 0)
+        #expect(secondInvoice.quickBooksBalanceDue == 0)
+        #expect(firstInvoice.status == "paid")
+        #expect(secondInvoice.status == "paid")
+    }
+
     @Test func invoicePaymentTermsProvideOneDeterministicOverdueBoundary() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
