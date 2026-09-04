@@ -4,6 +4,38 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
+## Build-2026090401 controlled online continuity
+
+The exact current signed Debug products completed an isolated CloudKit
+Development Mac Catalyst → physical 13-inch M5 iPad → Mac → iPad
+create/update/delete round trip. The Mac created one fixed noncustomer canary;
+the iPad observed it and changed it; the Mac observed the change and deleted
+it; and the iPad observed zero remaining matches. Every phase reported build
+`2026090401`, schema version `2`, the expected state and count, and a satisfied
+expectation within the bounded retry window. The remote canary was deleted and
+both devices were purged to zero local probe files. The exact signed Release
+was then restored to the iPad without deleting application data. A second
+read-only inspection on September 4 verified the retained store contains 154
+invoices with no missing or dangling customer relationship, reinstalled the
+same signed Release, and opened the Invoice route against that live store. The
+process remained foregrounded beyond 105 seconds and the device produced no
+current-build crash report; the newest retained Invoice crash remains the
+pre-fix build `2026090301` SwiftUI metadata-stack failure.
+
+The privacy-minimal live-store recheck is
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-04/physical-invoice-live-store-recheck-2026090401.json`
+(SHA-256
+`1b91dc082d88d175a6e3f19c8ad964953a49b6104511aad92ca4c4117e875111`).
+
+Privacy-minimal evidence is
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-04/ipad-mac-cloudkit-roundtrip-2026090401.json`
+(SHA-256
+`ba8def0fed99fbe3ebf834703de6b29239950b1dc094f88f45299833745b2812`).
+The signed Debug build results are retained beside it. This proves exact-source
+online Development continuity only. It does not prove the human-observed
+two-device offline same-record conflict sequence below and does not authorize
+or claim Production CloudKit promotion.
+
 ## Build-2026090201 offline-conflict acceptance procedure
 
 Build `1.0 (2026090111)` introduced the version-2 Debug-only acceptance probe

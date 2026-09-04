@@ -2559,10 +2559,16 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(salesPrice.exists)
         salesPrice.tap()
         salesPrice.typeText("100")
-        let saveItem = app.buttons["Save"]
+        let saveItem = app.navigationBars["Create Item"].buttons["Save"]
         XCTAssertTrue(saveItem.waitForExistence(timeout: 3))
-        XCTAssertTrue(waitForHittable(saveItem))
-        saveItem.tap()
+        XCTAssertTrue(saveItem.isEnabled)
+        XCTAssertFalse(saveItem.frame.isEmpty)
+        saveItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        if app.navigationBars["Create Item"].exists {
+            // iPad's decimal keyboard can consume the first toolbar tap solely
+            // to resign focus. The second tap activates the still-visible Save.
+            saveItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
 
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["UI Test Added Repair"].waitForExistence(timeout: 3))
@@ -5175,12 +5181,16 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["$189.00"].exists)
         approveItem.tap()
 
-        XCTAssertTrue(app.staticTexts["No field-created catalog items need review."].waitForExistence(timeout: 3))
+        let approvalMessage = app.staticTexts["QuickBooksActionMessage"]
+        XCTAssertTrue(approvalMessage.waitForExistence(timeout: 3))
+        XCTAssertTrue(approvalMessage.label.contains("Approved and linked HVAC Diagnostic Service"))
+        XCTAssertFalse(approveItem.exists)
         XCTAssertTrue(app.staticTexts["QuickBooksCatalogReconciliationQueue"].waitForExistence(timeout: 3))
-        XCTAssertTrue(
-            app.staticTexts["QBO QBO-UI-PRICEBOOK-REVIEW • 1 changed field"]
-                .waitForExistence(timeout: 3)
-        )
+        let comparison = app.staticTexts["QBO QBO-UI-PRICEBOOK-REVIEW • 1 changed field"]
+        for _ in 0..<4 where !comparison.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(comparison.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Sales price"].exists)
         XCTAssertTrue(app.staticTexts["$189.00"].exists)
         XCTAssertTrue(app.staticTexts["$239.00"].exists)
