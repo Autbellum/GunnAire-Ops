@@ -1433,7 +1433,9 @@ struct GunnAire_OpsTests {
         #expect(FieldPaymentHandoff.quickBooksTapToPayDetail.localizedCaseInsensitiveContains("QuickBooks Mobile"))
         #expect(FieldPaymentHandoff.quickBooksTapToPayDetail.localizedCaseInsensitiveContains("GoPayment"))
         #expect(FieldPaymentHandoff.quickBooksTapToPayDetail.localizedCaseInsensitiveContains("Tap to Pay on iPhone"))
-        #expect(FieldPaymentHandoff.quickBooksTapToPaySteps.count == 4)
+        #expect(FieldPaymentHandoff.quickBooksTapToPaySteps.count == 5)
+        #expect(FieldPaymentHandoff.quickBooksTapToPaySteps.first?.localizedCaseInsensitiveContains("owner or company admin") == true)
+        #expect(FieldPaymentHandoff.quickBooksTapToPaySteps.first?.localizedCaseInsensitiveContains("approved team members") == true)
         #expect(FieldPaymentHandoff.quickBooksTapToPaySteps.last?.localizedCaseInsensitiveContains("Tap to Pay on iPhone") == true)
         #expect(FieldPaymentHandoff.supportsOrigin(isMacCatalyst: true, isPad: false))
         #expect(FieldPaymentHandoff.supportsOrigin(isMacCatalyst: false, isPad: true))
@@ -20414,6 +20416,34 @@ struct GunnAire_OpsTests {
         #expect(throws: PricebookReviewPublicationError.self) {
             try PricebookReviewPublication.matchingRemoteItem(for: local, in: [matching, duplicate])
         }
+    }
+
+    @Test func quickBooksCatalogPublicationConfirmationNamesTheExactPotentialCreate() throws {
+        let itemID = try #require(UUID(uuidString: "A1000000-0000-4000-8000-000000000007"))
+        let item = Item(
+            id: itemID,
+            name: "HVAC Diagnostic Service",
+            itemType: .service,
+            unitPrice: 189,
+            sku: nil
+        )
+
+        let approval = QuickBooksCatalogPublicationConfirmation.make(for: item, intent: .approval)
+        let retry = QuickBooksCatalogPublicationConfirmation.make(for: item, intent: .retry)
+
+        #expect(approval.itemID == itemID)
+        #expect(approval.itemName == "HVAC Diagnostic Service")
+        #expect(approval.itemType == .service)
+        #expect(approval.sku == nil)
+        #expect(approval.unitPrice == 189)
+        #expect(approval.title == "Publish to QuickBooks?")
+        #expect(approval.actionTitle == "Check & Publish to QuickBooks")
+        #expect(approval.message.contains("HVAC Diagnostic Service • Service • No SKU"))
+        #expect(approval.message.contains("$189.00"))
+        #expect(approval.message.contains("checked first for one exact name/SKU match"))
+        #expect(approval.message.contains("this creates a new product or service"))
+        #expect(approval.message.hasSuffix("No invoice is created."))
+        #expect(approval.id != retry.id)
     }
 
     @Test func linkedFieldDraftApprovalStagesComparisonWithoutChoosingTheQuickBooksVersion() throws {

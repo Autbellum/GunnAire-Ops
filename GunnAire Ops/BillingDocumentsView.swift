@@ -1602,21 +1602,42 @@ GunnAire
         workspaceMode == .invoices && initialServiceCall == nil
     }
 
-    private var stackSafeInvoiceWorkspaceContent: AnyView {
+    /// Keep the read-mostly overview and the mutation-heavy builder in
+    /// separate view trees. SwiftUI otherwise resolves every sheet and dialog
+    /// attached to the builder while opening the Overview lane, even though
+    /// none of those presentations are visible. On physical iPad hardware the
+    /// combined metadata tree can overflow the main-thread stack.
+    private var stackSafeInvoiceOverviewContent: AnyView {
         AnyView(
             NavigationStack {
                 List {
                     AnyView(stackSafeInvoiceLanePickerSection)
-                    if invoiceWorkspaceLane == .overview {
-                        AnyView(stackSafeInvoiceSnapshotSection)
-                        AnyView(stackSafeGeneratedInvoiceDocumentSection)
-                        AnyView(invoiceActionQueues)
-                        AnyView(invoicesWorkspaceSection)
-                    } else {
-                        AnyView(builderDetailsWorkspaceSection)
+                    AnyView(stackSafeInvoiceSnapshotSection)
+                    AnyView(stackSafeGeneratedInvoiceDocumentSection)
+                    AnyView(invoiceActionQueues)
+                    AnyView(invoicesWorkspaceSection)
+                }
+                .navigationTitle(navigationTitle)
+                .toolbar {
+                    if showsDismissButton {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button(dismissButtonTitle) {
+                                dismiss()
+                            }
+                        }
                     }
                 }
-                .id(invoiceWorkspaceLane)
+            }
+        )
+    }
+
+    private var stackSafeInvoiceBuilderContent: AnyView {
+        AnyView(
+            NavigationStack {
+                List {
+                    AnyView(stackSafeInvoiceLanePickerSection)
+                    AnyView(builderDetailsWorkspaceSection)
+                }
                 .navigationTitle(navigationTitle)
                 .toolbar {
                     if showsDismissButton {
@@ -1695,12 +1716,12 @@ GunnAire
         }
     }
 
-    /// Erase each small modifier group before adding the next one. This keeps
-    /// sheet and dialog support available without recreating the deeply nested
-    /// metadata chain that caused the invoice-tab stack overflow.
-    private var stackSafeInvoiceWorkspace: AnyView {
+    /// The builder owns only the item-editing presentations it can open.
+    /// Type-erase after each modifier so no single generic chain becomes deep
+    /// enough to exhaust the runtime metadata stack.
+    private var stackSafeInvoiceBuilderWorkspace: AnyView {
         let itemSelection = AnyView(
-            stackSafeInvoiceWorkspaceContent
+            stackSafeInvoiceBuilderContent
                 .sheet(isPresented: $showingItemSelector) {
                     DocumentationItemSelectorView(
                         items: items,
@@ -1755,8 +1776,24 @@ GunnAire
                     .tint(Color.brandGold)
                 }
         )
-        let agreementReview = AnyView(
+        return AnyView(
             documentDiscount
+                .onAppear(perform: loadInitialContextIfNeeded)
+                .onChange(of: selectedCustomerID) { _, newValue in
+                    selectedCustomerDidChange(to: newValue)
+                }
+                .onChange(of: selectedItems) { _, selectedIDs in
+                    selectedItemsDidChange(to: selectedIDs)
+                }
+        )
+    }
+
+    /// The overview owns only presentations reachable from invoice rows and
+    /// billing queues. Excluding all item-builder sheets from this initial tab
+    /// render is the critical physical-device crash boundary.
+    private var stackSafeInvoiceOverviewWorkspace: AnyView {
+        let agreementReview = AnyView(
+            stackSafeInvoiceOverviewContent
                 .sheet(item: $agreementBillingCandidatePendingReview) { candidate in
                     if let agreement = maintenanceAgreement(for: candidate),
                        let billingItem = billingCatalogItem(for: candidate) {
@@ -1830,14 +1867,17 @@ GunnAire
         let loaded = AnyView(
             progressInvoice
                 .onAppear(perform: loadInitialContextIfNeeded)
-                .onChange(of: selectedCustomerID) { _, newValue in
-                    selectedCustomerDidChange(to: newValue)
-                }
-                .onChange(of: selectedItems) { _, selectedIDs in
-                    selectedItemsDidChange(to: selectedIDs)
-                }
         )
         return loaded
+    }
+
+    private var stackSafeInvoiceWorkspace: AnyView {
+        switch invoiceWorkspaceLane {
+        case .overview:
+            return stackSafeInvoiceOverviewWorkspace
+        case .newInvoice:
+            return stackSafeInvoiceBuilderWorkspace
+        }
     }
 
     @ViewBuilder

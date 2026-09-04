@@ -841,6 +841,11 @@ struct ContentView: View {
 /// physical iPad. Doing both at once can exhaust Swift's metadata-resolution
 /// stack before the first invoice row is presented.
 private struct InvoiceWorkspaceTransitionHost: View {
+    /// The production invoice store can hold hundreds of billing records and
+    /// related line items. Leave a complete render cycle between destinations
+    /// so the previous workspace is released before that graph is resolved.
+    private static let workspaceSettlementDelay = Duration.milliseconds(650)
+
     @State private var isReady = false
 
     var body: some View {
@@ -859,12 +864,16 @@ private struct InvoiceWorkspaceTransitionHost: View {
             guard !isReady else { return }
             await Task.yield()
             do {
-                try await Task.sleep(for: .milliseconds(200))
+                try await Task.sleep(for: Self.workspaceSettlementDelay)
             } catch {
                 return
             }
             guard !Task.isCancelled else { return }
-            isReady = true
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                isReady = true
+            }
         }
     }
 }

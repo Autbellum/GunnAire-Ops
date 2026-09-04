@@ -399,6 +399,77 @@ enum CompanyPricebookSyncDisposition: Equatable {
     }
 }
 
+enum QuickBooksCatalogPublicationConfirmationIntent: String, Equatable {
+    case approval
+    case retry
+}
+
+/// Captures the exact local catalog values that an administrator reviews before
+/// a workflow is allowed to create a new QuickBooks product or service. The
+/// publication path still checks QuickBooks first and links one unique match.
+struct QuickBooksCatalogPublicationConfirmation: Identifiable, Equatable {
+    let itemID: UUID
+    let itemName: String
+    let itemType: CatalogItemType
+    let sku: String?
+    let unitPrice: Double
+    let intent: QuickBooksCatalogPublicationConfirmationIntent
+
+    var id: String { "\(intent.rawValue)-\(itemID.uuidString)" }
+    var title: String { "Publish to QuickBooks?" }
+    var actionTitle: String { "Check & Publish to QuickBooks" }
+
+    var message: String {
+        let normalizedSKU = sku?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let skuLabel = normalizedSKU.flatMap { $0.isEmpty ? nil : $0 } ?? "No SKU"
+        let price = unitPrice.formatted(.currency(code: "USD"))
+        return "\(itemName) • \(itemType.rawValue) • \(skuLabel) • \(price). QuickBooks is checked first for one exact name/SKU match. If found, GunnAire links to it. If none exists, this creates a new product or service in the connected QuickBooks company. No invoice is created."
+    }
+
+    static func make(
+        for item: Item,
+        intent: QuickBooksCatalogPublicationConfirmationIntent
+    ) -> QuickBooksCatalogPublicationConfirmation {
+        QuickBooksCatalogPublicationConfirmation(
+            itemID: item.id,
+            itemName: item.name,
+            itemType: item.itemType,
+            sku: item.sku,
+            unitPrice: item.unitPrice,
+            intent: intent
+        )
+    }
+}
+
+private struct QuickBooksCatalogPublicationConfirmationModifier: ViewModifier {
+    @Binding var confirmation: QuickBooksCatalogPublicationConfirmation?
+    let onConfirm: () -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            confirmation?.title ?? "Publish to QuickBooks?",
+            isPresented: Binding(
+                get: { confirmation != nil },
+                set: { if !$0 { confirmation = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button(confirmation?.actionTitle ?? "Check & Publish to QuickBooks") {
+                onConfirm()
+            }
+            .accessibilityIdentifier("ConfirmQuickBooksCatalogPublication")
+            Button("Cancel", role: .cancel) {
+                confirmation = nil
+            }
+            .accessibilityIdentifier("CancelQuickBooksCatalogPublication")
+        } message: {
+            if let confirmation {
+                Text(confirmation.message)
+            }
+        }
+    }
+}
+
 /// Keeps the operational GunnAire pricebook browseable even when the provider
 /// is disconnected. Review drafts and archived records already have dedicated
 /// compact queues; this list is the active catalog used for new field work.
@@ -1102,6 +1173,7 @@ struct QuickBooksManagementView: View {
     @State private var activePricebookReviewID: UUID?
     @State private var activeCatalogPublicationID: UUID?
     @State private var activeCatalogReconciliationID: UUID?
+    @State private var catalogPublicationConfirmation: QuickBooksCatalogPublicationConfirmation?
     @State private var catalogMappingResolutionCandidateID: UUID?
     @State private var catalogItemBeingEdited: Item?
     @State private var paymentToRefund: Payment?
@@ -1306,6 +1378,14 @@ struct QuickBooksManagementView: View {
 
     private var quickBooksChargePayments: [Payment] {
         localPayments.filter { $0.quickBooksChargeID?.isEmpty == false }
+    }
+
+    private var quickBooksChargeCount: Int {
+        quickBooksChargePayments.lazy.filter { !$0.isRefund }.count
+    }
+
+    private var quickBooksRefundCount: Int {
+        quickBooksChargePayments.lazy.filter(\.isRefund).count
     }
 
     private var collectibleQuickBooksInvoices: [QuickBooksInvoice] {
@@ -1891,7 +1971,7 @@ struct QuickBooksManagementView: View {
                                         }
 
                                         Button(activeCatalogPublicationID == item.id ? "Retrying..." : "Retry Catalog Publication") {
-                                            retryCatalogPublication(item)
+                                            requestCatalogPublicationRetry(item)
                                         }
                                         .buttonStyle(.borderedProminent)
                                         .tint(Color.brandGold)
@@ -1900,6 +1980,11 @@ struct QuickBooksManagementView: View {
                                             !isAuthenticated ||
                                             activeCatalogPublicationID != nil ||
                                             activePricebookReviewID != nil
+                                        )
+                                        .accessibilityLabel(
+                                            activeCatalogPublicationID == item.id
+                                                ? "Retrying publication for \(item.name)"
+                                                : "Retry publication for \(item.name)"
                                         )
                                         .accessibilityIdentifier("RetryCatalogPublication-\(item.id.uuidString)")
                                     }
@@ -1910,8 +1995,8 @@ struct QuickBooksManagementView: View {
                                     "Review \(localCatalogPublicationQueue.count) approved \(localCatalogPublicationQueue.count == 1 ? "item" : "items")",
                                     systemImage: "shippingbox.and.arrow.backward"
                                 )
+                                .accessibilityIdentifier("QuickBooksCatalogPublicationDisclosure")
                             }
-                            .accessibilityIdentifier("QuickBooksCatalogPublicationDisclosure")
                         }
                     }
 
@@ -2674,13 +2759,13 @@ struct QuickBooksManagementView: View {
                         HStack {
                             Text("Connected local charges")
                             Spacer()
-                            Text("\(quickBooksChargePayments.filter { !$0.isRefund }.count)")
+                            Text("\(quickBooksChargeCount)")
                                 .foregroundColor(.secondary)
                         }
                         HStack {
                             Text("Recorded refunds")
                             Spacer()
-                            Text("\(quickBooksChargePayments.filter(\.isRefund).count)")
+                            Text("\(quickBooksRefundCount)")
                                 .foregroundColor(.secondary)
                         }
                         HStack {
@@ -3087,6 +3172,12 @@ struct QuickBooksManagementView: View {
                         Text("\(selectedCatalogMappingResolution.item.name) will remain linked to QBO \(selectedCatalogMappingResolution.conflict.quickBooksID). The other GunnAire records keep their prices and descriptions but must be reviewed before separate QuickBooks publication.")
                     }
                 }
+                .modifier(
+                    QuickBooksCatalogPublicationConfirmationModifier(
+                        confirmation: $catalogPublicationConfirmation,
+                        onConfirm: confirmCatalogPublication
+                    )
+                )
                 .onAppear {
                     if let pendingWorkspace = GunnAireAppIntentRouter.consumePendingQuickBooksWorkspace() {
                         selectedWorkspace = pendingWorkspace
@@ -3461,6 +3552,40 @@ struct QuickBooksManagementView: View {
         }
 
         publishApprovedCatalogItem(item)
+    }
+
+    private func requestPricebookApproval(_ item: Item) {
+        let isUnlinked = item.quickBooksID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty != false
+        guard isAuthenticated, isUnlinked else {
+            approvePricebookItem(item)
+            return
+        }
+        catalogPublicationConfirmation = .make(for: item, intent: .approval)
+    }
+
+    private func requestCatalogPublicationRetry(_ item: Item) {
+        guard isAuthenticated else {
+            retryCatalogPublication(item)
+            return
+        }
+        catalogPublicationConfirmation = .make(for: item, intent: .retry)
+    }
+
+    private func confirmCatalogPublication() {
+        guard let confirmation = catalogPublicationConfirmation else { return }
+        catalogPublicationConfirmation = nil
+        guard let item = localCatalogItems.first(where: { $0.id == confirmation.itemID }) else {
+            actionMessage = "That catalog item is no longer available. Refresh before publishing to QuickBooks."
+            return
+        }
+        switch confirmation.intent {
+        case .approval:
+            approvePricebookItem(item)
+        case .retry:
+            retryCatalogPublication(item)
+        }
     }
 
     private func refreshApprovedLinkedCatalogItem(_ item: Item) {
@@ -4516,7 +4641,7 @@ struct QuickBooksManagementView: View {
                 ? "Approving..."
                 : pricebookApprovalButtonTitle(for: item)
         ) {
-            approvePricebookItem(item)
+            requestPricebookApproval(item)
         }
         .buttonStyle(.borderedProminent)
         .tint(Color.brandGold)

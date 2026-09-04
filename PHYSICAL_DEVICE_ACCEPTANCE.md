@@ -4,6 +4,71 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
+The exact current-source iOS archive and universal Mac Catalyst Release for
+`1.0 (2026090412)` are retained under `/Users/gunnaire/Downloads/GunnAire Ops
+Releases/2026-09-04`. Both pass strict local signature and app/dSYM validation;
+the iOS UUID is `5A4F9978-F4DA-3E01-98B2-A17A08EBC7FF`, and the Mac UUIDs are
+`6E7875CC-70C6-37B1-9D6B-A98DDCCA6ECF` and
+`87B124A5-C15A-333A-ACB8-5A0896F8D4FF`. The complete current-source Mac
+Catalyst logic target passes **706/706**, zero failures or skips. Exact online
+preflight is **61 passed / 4 warnings / 1 failure**; the only failure is the
+undeployed reviewed backend `.18`, while fresh CloudKit exports and Distribution
+signing remain acceptance gates. These new artifacts do not change the physical
+iPad result below or authorize upload/deployment.
+
+## Build-2026090412 exact-final-source Invoice recheck
+
+The exact final `2026090412` source was built with automatic Apple Development
+signing and exercised against the retained application store on GunnAire's
+physical 13-inch M5 iPad running iPadOS 26.6.1. The test passes **1/1** in
+**136.703 seconds** with zero failures or skips. It opens Invoices from the
+normal signed-in application, completes two Overview/New Invoice round trips,
+three Payments/Invoices round trips, and a final 30-second foreground hold.
+The app remains alive throughout.
+
+The matching complete 13-inch M5 iPad Simulator interface run passes **111/111
+runnable tests**, zero failures, with this physical-only retained-store test
+intentionally skipped once. The final physical result is retained as
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-04/Invoice Tab
+Isolation 2026090412 Final Source Physical Retained Store.xcresult`; the full
+simulator result is `Full iPad UI Regression 2026090412.xcresult`. This is
+Development-signed validation and does not claim Distribution/TestFlight/App
+Store, Production CloudKit, provider, payment, or customer-communication
+acceptance. The exact optimized Release passes strict signature validation with
+matching app/dSYM UUID `D66E6C43-F5D1-3A3F-8E47-F3C49EE1D826` and binary
+SHA-256 `20fba8b707c78cb4d6e7d97d075a3f7ad50860157feba47f43211de64aa38b56`.
+It was installed over the retained app data, launched normally as PID 4641,
+and remained alive after the post-install check. The matching app, dSYM, and
+build result are retained beside the XCTest evidence. No invoice, payment,
+customer, or live QBO record was changed.
+
+## Build-2026090411 Invoice lane isolation recheck
+
+After a user-visible Invoice failure was reported against build `2026090410`,
+the connected iPad still showed a live app process and no new GunnAire operating-
+system crash report. Build `2026090411` therefore hardens both possible failure
+modes: the Overview lane and New Invoice lane now have separate SwiftUI trees,
+and the Overview no longer constructs the item selector, item creator, price
+adjustment, and document discount presentations during its first render.
+
+Three focused 13-inch M5 iPad Simulator journeys pass **3/3**, including repeated
+Payments-to-Invoices navigation and existing-invoice line-item editing. Two
+adjacent Overview-owned billing journeys also pass **2/2** for maintenance-
+agreement review and exact project-milestone invoicing. The expanded retained-
+store test then passed **1/1** on the physical 13-inch M5 iPad
+in **135.143 seconds**: two Overview/New Invoice round trips, three
+Payments/Invoices round trips, and a final 30-second foreground hold. The exact
+optimized Apple Development-signed Release was installed over the retained app
+data, launched directly into Invoices, remained live as PID 4553, and produced
+no current-build crash report. Strict signature validation passed; the app and
+dSYM UUID match (`7FBABA97-C574-3046-93F9-12FAB431CEB3`) and the app binary
+SHA-256 is `cb960ecd7c854eb47235a8f85073622d364938daed083ada83750ad35a161c21`.
+Evidence is retained in the September 4 release folder as `Invoice Tab Isolation
+2026090411 Simulator.xcresult`, `Invoice Tab Isolation 2026090411 Physical
+Retained Store.xcresult`, `Invoice Overview Billing Actions 2026090411
+Simulator.xcresult`, and the matching Release app/dSYM. No invoice, payment,
+provider setting, CloudKit schema, account, or production record was changed.
+
 ## Build-2026090405 Invoice sidebar recheck
 
 The retained physical-iPad crash was symbolicated to recursive SwiftUI generic

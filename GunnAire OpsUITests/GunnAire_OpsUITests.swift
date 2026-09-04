@@ -507,15 +507,39 @@ final class GunnAire_OpsUITests: XCTestCase {
             "Opening Invoices from the sidebar terminated or failed against the retained device store."
         )
 
-        let remainedForeground = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "state == %d", XCUIApplication.State.runningForeground.rawValue),
-            object: app
+        let lanePicker = app.segmentedControls["InvoiceWorkspaceLanePicker"]
+        XCTAssertTrue(lanePicker.waitForExistence(timeout: 3))
+        for _ in 0..<2 {
+            lanePicker.buttons["New Invoice"].tap()
+            XCTAssertTrue(
+                app.staticTexts["Invoice Details"].waitForExistence(timeout: 5),
+                "The isolated invoice builder must open against the retained device store."
+            )
+            lanePicker.buttons["Overview"].tap()
+            XCTAssertTrue(
+                app.staticTexts["Workspace Snapshot"].waitForExistence(timeout: 5),
+                "The lightweight invoice overview must be restored after leaving the builder."
+            )
+        }
+
+        for _ in 0..<3 {
+            revealSidebarDestination("Payments", in: app).tap()
+            XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 5))
+            revealSidebarDestination("Invoices", in: app).tap()
+            XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
+            XCTAssertTrue(app.segmentedControls["InvoiceWorkspaceLanePicker"].waitForExistence(timeout: 3))
+        }
+
+        let remainedForeground = expectation(
+            description: "Invoices remains foregrounded after retained-store deferred updates"
         )
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [remainedForeground], timeout: 30),
-            .completed,
-            "Invoices must remain foregrounded long enough to expose deferred view or relationship failures."
-        )
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+            if app.state == .runningForeground,
+               app.navigationBars["Invoices"].exists {
+                remainedForeground.fulfill()
+            }
+        }
+        wait(for: [remainedForeground], timeout: 35)
     }
 
     @MainActor
@@ -5452,6 +5476,52 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testUnlinkedPricebookApprovalRequiresExactQuickBooksPublicationConfirmation() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedPricebookReview",
+            "-uiTestForceQuickBooksConnected",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let approveItem = app.buttons["ApprovePricebookItem-\(catalogItemID)"]
+        for _ in 0..<8 where !approveItem.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(approveItem.waitForExistence(timeout: 3))
+        XCTAssertEqual(approveItem.label, "Approve & Publish")
+        approveItem.tap()
+
+        XCTAssertTrue(app.staticTexts["Publish to QuickBooks?"].waitForExistence(timeout: 3))
+        let details = app.staticTexts.matching(
+            NSPredicate(
+                format: "label CONTAINS[c] %@ AND label CONTAINS[c] %@ AND label CONTAINS[c] %@",
+                "HVAC Diagnostic Service",
+                "No SKU",
+                "No invoice is created"
+            )
+        ).firstMatch
+        XCTAssertTrue(details.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["ConfirmQuickBooksCatalogPublication"].exists)
+        // iPad presents confirmationDialog as a popover and dismisses it by
+        // tapping outside rather than exposing the iPhone-style Cancel row.
+        // Leave the dialog open so this test can never publish to QuickBooks.
+        XCTAssertTrue(approveItem.exists)
+        XCTAssertFalse(app.staticTexts["No field-created catalog items need review."].exists)
+    }
+
+    @MainActor
     func testAdministratorEditsCompanyPricebookOfflineAndStagesQuickBooksComparison() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -5586,7 +5656,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(waitForHittable(queuedItem))
         XCTAssertTrue(app.staticTexts["SKU OFF-CAP-45 • Service"].exists)
         XCTAssertTrue(app.staticTexts["Publication pending"].exists)
-        let retry = app.buttons["Retry Catalog Publication"]
+        let retry = app.buttons["Retry publication for Offline Taxable Capacitor"]
         XCTAssertTrue(retry.exists)
         XCTAssertFalse(retry.isEnabled)
     }
@@ -6050,7 +6120,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         let refresh = app.buttons["RefreshQuickBooksCatalogComparison"]
         XCTAssertTrue(refresh.exists)
         XCTAssertFalse(refresh.isEnabled)
-        XCTAssertFalse(app.buttons["Retry Catalog Publication"].exists)
+        let catalogPublicationRetries = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "RetryCatalogPublication-")
+        )
+        XCTAssertEqual(catalogPublicationRetries.count, 0)
     }
 
     @MainActor
@@ -6147,14 +6220,14 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(workspacePicker.buttons["Sales"].isSelected)
         XCTAssertTrue(app.staticTexts["Catalog Publication"].exists)
 
-        let catalogDisclosure = app.descendants(matching: .any)["QuickBooksCatalogPublicationDisclosure"]
+        let catalogDisclosure = app.buttons["QuickBooksCatalogPublicationDisclosure"]
         for _ in 0..<4 where !catalogDisclosure.exists {
             app.swipeUp()
         }
         XCTAssertTrue(catalogDisclosure.waitForExistence(timeout: 3))
         catalogDisclosure.tap()
 
-        let retryCatalogPublication = app.buttons["Retry Catalog Publication"]
+        let retryCatalogPublication = app.buttons["Retry publication for HVAC Diagnostic Service"]
         XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].waitForExistence(timeout: 3))
         XCTAssertTrue(retryCatalogPublication.exists)
         XCTAssertFalse(retryCatalogPublication.isEnabled)
@@ -6338,6 +6411,17 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         XCTAssertTrue(quickBooksAppHandoff.exists)
         XCTAssertTrue(goPaymentAppHandoff.exists)
+        let collectionSteps = app.buttons["Show collection steps"]
+        XCTAssertTrue(collectionSteps.exists)
+        collectionSteps.tap()
+        let firstCollectionStep = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS[c] %@", "owner or company admin")
+        ).firstMatch
+        for _ in 0..<3 where !firstCollectionStep.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(firstCollectionStep.exists)
+        XCTAssertTrue(firstCollectionStep.label.localizedCaseInsensitiveContains("approved team members"))
         let accountingInstruction = app.staticTexts["ContactlessAccountingVerificationInstruction"]
         for _ in 0..<3 where !accountingInstruction.exists {
             app.swipeUp()

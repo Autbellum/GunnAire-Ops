@@ -62,6 +62,7 @@ final class FieldPaymentHandoff: ObservableObject {
     static let requirementsDetail = "Handoff requires the nearby iPad or Mac and iPhone to use the same approved business Apple Account, with Wi-Fi, Bluetooth, and Handoff enabled."
     static let quickBooksTapToPayDetail = "For contactless payment, open the matching QuickBooks invoice in QuickBooks Mobile or GoPayment on the field iPhone. Intuit currently provides Tap to Pay on iPhone there, rather than as an embedded custom-app capture flow."
     static let quickBooksTapToPaySteps = [
+        "Before first use, a QuickBooks owner or company admin must enable Tap to Pay on iPhone in QuickBooks Mobile or GoPayment Settings. After setup, approved team members can collect.",
         "Open or install QuickBooks Mobile or GoPayment on this iPhone.",
         "Open Invoice payments from the app's Menu or Sales area.",
         "Find and select the invoice using the reference below.",
