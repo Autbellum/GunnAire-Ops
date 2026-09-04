@@ -845,7 +845,112 @@ struct ContentView: View {
 
 // ... rest of the file remains unchanged ...
 
-// MARK: - Service Call Detail View (unchanged except foregroundColor)
+private struct ServiceCallJobBriefView: View {
+    let customerName: String
+    let phone: String?
+    let email: String?
+    let technicianName: String?
+    let crewTechnicianNames: [String]
+    let scheduledDate: Date
+    let promisedArrivalWindowSummary: String?
+    let duration: TimeInterval
+    let statusDisplayName: String
+    let presenceDisplayName: String
+    let presenceSystemImage: String
+    let presenceIsEnRoute: Bool
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 185), spacing: 18, alignment: .topLeading)
+    ]
+
+    var body: some View {
+        GroupBox("Job Brief") {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                customerSummary
+                scheduleSummary
+                assignmentSummary
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityIdentifier("ServiceCallJobBrief")
+    }
+
+    private var customerSummary: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label("Customer", systemImage: "person.crop.circle")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(customerName)
+                .font(.headline)
+                .accessibilityLabel("Customer: \(customerName)")
+            if let phone = normalized(phone) {
+                Label(phone, systemImage: "phone")
+                    .font(.subheadline)
+                    .accessibilityLabel("Phone: \(phone)")
+            }
+            if let email = normalized(email) {
+                Label(email, systemImage: "envelope")
+                    .font(.subheadline)
+                    .accessibilityLabel("Email: \(email)")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var scheduleSummary: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label("Schedule", systemImage: "calendar")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(scheduledDate.formatted(date: .abbreviated, time: .shortened))
+                .font(.headline)
+                .accessibilityLabel("Scheduled work: \(scheduledDate.formatted(date: .abbreviated, time: .shortened))")
+            if let promisedArrivalWindowSummary = normalized(promisedArrivalWindowSummary) {
+                Text(promisedArrivalWindowSummary)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Customer arrival window: \(promisedArrivalWindowSummary)")
+            }
+            Text("\(Int(duration / 60)) minutes")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Duration: \(Int(duration / 60)) minutes")
+            Text(statusDisplayName)
+                .font(.subheadline)
+                .accessibilityLabel("Status: \(statusDisplayName)")
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var assignmentSummary: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label("Assignment", systemImage: "person.2")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(technicianName ?? "Unassigned")
+                .font(.headline)
+                .accessibilityLabel("Technician: \(technicianName ?? "Unassigned")")
+            if !crewTechnicianNames.isEmpty {
+                Text(crewTechnicianNames.joined(separator: ", "))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Crew: \(crewTechnicianNames.joined(separator: ", "))")
+            }
+            Label(presenceDisplayName, systemImage: presenceSystemImage)
+                .font(.subheadline)
+                .foregroundColor(presenceIsEnRoute ? .orange : .secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func normalized(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+// MARK: - Service Call Detail View
 
 struct ServiceCallDetailView: View {
     @Environment(\.openURL) private var openURL
@@ -2149,33 +2254,20 @@ GunnAire
                         .font(.largeTitle)
                         .foregroundColor(Color.brandGold)
 
-                    Group {
-                        Text("Customer: \(call.customer.name)")
-                        if let phone = call.customer.phone, !phone.isEmpty {
-                            Text("Phone: \(phone)")
-                        }
-                        if let email = call.customer.email, !email.isEmpty {
-                            Text("Email: \(email)")
-                        }
-                        if let tech = call.assignedTechnician {
-                            Text("Technician: \(tech.name)")
-                        } else {
-                            Text("Technician: Unassigned")
-                        }
-                        if !crewTechnicianNames.isEmpty {
-                            Text("Crew: \(crewTechnicianNames.joined(separator: ", "))")
-                        }
-                        Text("Scheduled work: \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))")
-                        if let promisedArrivalWindowSummary = call.promisedArrivalWindowSummary {
-                            Text("Customer arrival window: \(promisedArrivalWindowSummary)")
-                                .foregroundColor(.secondary)
-                        }
-                        Text("Duration: \(Int(call.duration / 60)) minutes")
-                        Text("Status: \(call.status.rawValue.capitalized)")
-                        Label(call.technicianJobPresence.displayName, systemImage: presenceSystemImage)
-                            .foregroundColor(call.technicianJobPresence == .enRoute ? .orange : .secondary)
-                    }
-                    .foregroundColor(.primary)
+                    ServiceCallJobBriefView(
+                        customerName: call.customer.name,
+                        phone: call.customer.phone,
+                        email: call.customer.email,
+                        technicianName: call.assignedTechnician?.name,
+                        crewTechnicianNames: crewTechnicianNames,
+                        scheduledDate: call.scheduledDate,
+                        promisedArrivalWindowSummary: call.promisedArrivalWindowSummary,
+                        duration: call.duration,
+                        statusDisplayName: call.status == .inProgress ? "In Progress" : call.status.rawValue.capitalized,
+                        presenceDisplayName: call.technicianJobPresence.displayName,
+                        presenceSystemImage: presenceSystemImage,
+                        presenceIsEnRoute: call.technicianJobPresence == .enRoute
+                    )
 
                     GroupBox("Job Workspace") {
                         VStack(alignment: .leading, spacing: 8) {

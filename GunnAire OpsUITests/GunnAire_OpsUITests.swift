@@ -2655,8 +2655,13 @@ final class GunnAire_OpsUITests: XCTestCase {
         createWorkOrder.tap()
 
         XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["ServiceCallJobBrief"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Customer: UI Test Collectible Customer"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Technician: Unassigned"].waitForExistence(timeout: 3))
+        let jobBriefEvidence = XCTAttachment(screenshot: app.screenshot())
+        jobBriefEvidence.name = "Compact Job Brief"
+        jobBriefEvidence.lifetime = .keepAlways
+        add(jobBriefEvidence)
         let workspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
         XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
         workspacePicker.buttons["Overview"].tap()
