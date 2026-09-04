@@ -1,5 +1,25 @@
 # CloudKit and field-payment release checklist
 
+## Production backend gate
+
+Reviewed backend `2026.09.03.18` is now exact-branch regression-clean. Safari
+dispatched GitHub **Backend regression #36** for commit
+`8b667e278eba9f149ba70d10e56c654668ade95f`; its Python 3.13 and
+production-aligned Python 3.14 jobs both passed. The same source passes Backend
+**71/71** and the five applicable Tools checks **5/5** locally. Read-only
+production probes confirm that deployed `2026.09.02.17` remains healthy, the
+Apple account-notification route rejects an empty envelope, and SiteGround's
+QuickBooks callback returns to `gunnaireops://oauth/qbo/callback`.
+
+This evidence does not promote `.18` to production. Review, merge, and Render
+deployment remain required before the app may claim the customer-portal
+estimate-approval contract is live. No pull request, deployment, provider
+credential, QBO record, or customer communication changed during this check.
+The retained record is
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-04/backend-production-readiness-2026090318.json`
+(SHA-256
+`9850756ad3d47ac62ec07d8c83b1228b95b727c5433428d01be490f59d048013`).
+
 ## CloudKit
 
 The app uses the private CloudKit database container
