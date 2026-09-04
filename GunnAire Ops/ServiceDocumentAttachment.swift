@@ -139,6 +139,47 @@ struct EquipmentAttachmentGroup: Identifiable {
     }
 }
 
+struct AttachmentMarkupCopyMetadata: Equatable {
+    let filename: String
+    let caption: String
+}
+
+enum AttachmentMarkupCopyPolicy {
+    static func metadata(
+        originalDisplayName: String,
+        originalCaption: String?,
+        modifiedContentsURL: URL
+    ) -> AttachmentMarkupCopyMetadata {
+        let originalFilename = userFacingFilename(originalDisplayName)
+        let originalURL = URL(fileURLWithPath: originalFilename)
+        let stem = originalURL.deletingPathExtension().lastPathComponent
+        let outputExtension = modifiedContentsURL.pathExtension.isEmpty
+            ? originalURL.pathExtension
+            : modifiedContentsURL.pathExtension
+        let filename = outputExtension.isEmpty
+            ? "\(stem)-annotated"
+            : "\(stem)-annotated.\(outputExtension.lowercased())"
+        let trimmedCaption = originalCaption?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let caption = [
+            "Annotated copy of \(originalFilename)",
+            trimmedCaption?.isEmpty == false ? trimmedCaption : nil
+        ]
+        .compactMap { $0 }
+        .joined(separator: " — ")
+        return AttachmentMarkupCopyMetadata(filename: filename, caption: caption)
+    }
+
+    static func userFacingFilename(_ storedDisplayName: String) -> String {
+        guard storedDisplayName.count > 37 else { return storedDisplayName }
+        let prefix = String(storedDisplayName.prefix(36))
+        let separatorIndex = storedDisplayName.index(storedDisplayName.startIndex, offsetBy: 36)
+        guard UUID(uuidString: prefix) != nil, storedDisplayName[separatorIndex] == "-" else {
+            return storedDisplayName
+        }
+        return String(storedDisplayName.dropFirst(37))
+    }
+}
+
 @Model
 final class ServiceDocumentAttachment {
     var id: UUID = UUID()

@@ -4,6 +4,32 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
+## Build-2026090404 photo markup and Invoice recheck
+
+Build `2026090404` adds native copy-preserving Markup for job image
+attachments. The annotated copy retains applicable customer, job, equipment,
+invoice, estimate, agreement, fleet, and expense lineage and enters the
+existing offline/company-storage/QBO attachment recovery path. The original
+file remains unchanged. Form-row button isolation also prevents Preview,
+Annotate, Share, and Remove from triggering together.
+
+Exact verification passes 705/705 Mac Catalyst logic tests and 5/5 critical
+13-inch M5 iPad Simulator journeys. The exact optimized Apple
+Development-signed Release was installed over the existing physical iPad app
+without deleting application data. Its forced Invoice route remained alive as
+PID 4170 beyond 152 seconds; the matching crash-log count remained 27 and no
+current-build report appeared. Strict signature verification passed, the app
+and dSYM share UUID `6423C30F-62CB-3B7A-B3F5-856C9D1EED23`, and the binary
+SHA-256 is
+`f2c7272e025037255f9a9afc1438aed6dfd3b7a10a547c8e11a1788f886d01f4`.
+
+Privacy-minimal evidence is
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-04/physical-invoice-and-photo-markup-recheck-2026090404.json`
+(SHA-256
+`721308a82cde7c207ae83567521070a4239918bf3eb155c7d96ff9874916b209`).
+This remains Development-signed evidence and does not claim App Store,
+Production CloudKit, provider, payment, or customer-communication acceptance.
+
 ## Build-2026090403 focused Invoice workspace
 
 Build `2026090403` retains the standalone Invoice root's stack-safe type

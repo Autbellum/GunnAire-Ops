@@ -12678,6 +12678,30 @@ struct GunnAire_OpsTests {
         #expect(ServiceDocumentAttachmentKind.serviceReport.isPhoto == false)
     }
 
+    @Test func attachmentMarkupCopyUsesFriendlyNameAndPreservesCaptionContext() async throws {
+        let storedName = "4B80C928-6E18-4E2B-B16C-F7EC10BB6888-control-board.png"
+
+        let metadata = AttachmentMarkupCopyPolicy.metadata(
+            originalDisplayName: storedName,
+            originalCaption: "Control-board wiring before repair",
+            modifiedContentsURL: URL(fileURLWithPath: "/tmp/quick-look-output.jpeg")
+        )
+
+        #expect(metadata.filename == "control-board-annotated.jpeg")
+        #expect(metadata.caption == "Annotated copy of control-board.png — Control-board wiring before repair")
+    }
+
+    @Test func attachmentMarkupCopyFallsBackToOriginalExtensionAndIgnoresBlankCaption() async throws {
+        let metadata = AttachmentMarkupCopyPolicy.metadata(
+            originalDisplayName: "diagnostic-photo.jpg",
+            originalCaption: "   ",
+            modifiedContentsURL: URL(fileURLWithPath: "/tmp/quick-look-output")
+        )
+
+        #expect(metadata.filename == "diagnostic-photo-annotated.jpg")
+        #expect(metadata.caption == "Annotated copy of diagnostic-photo.jpg")
+    }
+
     @Test func serviceReportAttachmentLinksToInvoiceWhenMissing() async throws {
         let customer = Customer(name: "Report Customer")
         let invoice = Invoice(customer: customer, amount: 250)

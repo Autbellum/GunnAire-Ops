@@ -129,6 +129,7 @@ struct BillingDocumentsView: View {
     @State private var attachmentSearchText = ""
     @State private var attachmentMessage: String?
     @State private var attachmentPreviewURL: URL?
+    @State private var attachmentPendingMarkup: ServiceDocumentAttachment?
     @State private var sharedJobDocuments: [BackendDocumentRecord] = []
     @State private var sharedJobDocumentsMessage: String?
     @State private var isLoadingSharedJobDocuments = false
@@ -1542,6 +1543,7 @@ GunnAire
             set: { isPresented in
                 if !isPresented {
                     attachmentPreviewURL = nil
+                    attachmentPendingMarkup = nil
                 }
             }
         )
@@ -2185,7 +2187,17 @@ GunnAire
             }
             .fullScreenCover(isPresented: isAttachmentPreviewPresented) {
                 if let attachmentPreviewURL {
-                    AttachmentPreviewScreen(url: attachmentPreviewURL)
+                    AttachmentPreviewScreen(
+                        url: attachmentPreviewURL,
+                        onSaveEditedCopy: attachmentPendingMarkup.map { original in
+                            { modifiedContentsURL in
+                                saveAnnotatedAttachmentCopy(
+                                    from: modifiedContentsURL,
+                                    original: original
+                                )
+                            }
+                        }
+                    )
                         .tint(Color.brandGold)
                 }
             }
@@ -6452,12 +6464,25 @@ GunnAire
                     } label: {
                         Label("Preview", systemImage: attachment.isImage ? "photo" : "doc.text.magnifyingglass")
                     }
+                    .frame(minHeight: 44)
+
+                    if attachment.isImage, allowsRemoval {
+                        Button {
+                            annotateJobAttachment(attachment)
+                        } label: {
+                            Label("Annotate", systemImage: "pencil.tip.crop.circle")
+                        }
+                        .frame(minHeight: 44)
+                        .accessibilityIdentifier("AnnotateAttachment-\(attachment.id)")
+                    }
 
                     ShareLink(item: attachment.localFileURL) {
                         Label("Share", systemImage: "square.and.arrow.up")
                     }
+                    .frame(minHeight: 44)
                 }
                 .font(.caption)
+                .buttonStyle(.borderless)
 
                 if allowsRemoval {
                     Button(role: .destructive) {
@@ -6466,6 +6491,8 @@ GunnAire
                         Label("Remove Attachment", systemImage: "trash")
                     }
                     .font(.caption)
+                    .frame(minHeight: 44)
+                    .buttonStyle(.borderless)
                 }
             }
         }
@@ -6477,7 +6504,83 @@ GunnAire
             attachmentMessage = "\(attachment.displayName) is no longer available on this device."
             return
         }
+        attachmentPendingMarkup = nil
         attachmentPreviewURL = url
+    }
+
+    private func annotateJobAttachment(_ attachment: ServiceDocumentAttachment) {
+        guard attachment.isImage else {
+            attachmentMessage = "Only image attachments can be annotated."
+            return
+        }
+        guard attachment.serviceCallID == activeServiceCall?.id else {
+            attachmentMessage = "Open the attachment's current job before annotating it."
+            return
+        }
+        let url = attachment.localFileURL
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            attachmentMessage = "\(attachment.displayName) is no longer available on this device."
+            return
+        }
+        attachmentPendingMarkup = attachment
+        attachmentPreviewURL = url
+    }
+
+    private func saveAnnotatedAttachmentCopy(
+        from modifiedContentsURL: URL,
+        original: ServiceDocumentAttachment
+    ) {
+        guard let call = activeServiceCall, original.serviceCallID == call.id else {
+            attachmentMessage = "The active job changed before the annotated copy could be saved."
+            return
+        }
+
+        var storedURL: URL?
+        do {
+            let data = try Data(contentsOf: modifiedContentsURL)
+            guard !data.isEmpty else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            let metadata = AttachmentMarkupCopyPolicy.metadata(
+                originalDisplayName: original.displayName,
+                originalCaption: original.caption,
+                modifiedContentsURL: modifiedContentsURL
+            )
+            let savedURL = try persistAttachmentData(data, originalFilename: metadata.filename)
+            storedURL = savedURL
+            let resolvedContentType = contentType(for: modifiedContentsURL)
+            let attachment = ServiceDocumentAttachment(
+                customer: original.customer ?? call.customer,
+                serviceCallID: call.id,
+                customerEquipmentID: original.customerEquipmentID,
+                invoiceID: original.invoiceID,
+                estimateID: original.estimateID,
+                maintenanceContractID: original.maintenanceContractID,
+                fleetVehicleID: original.fleetVehicleID,
+                fleetVehicleEventID: original.fleetVehicleEventID,
+                expenseClaimID: original.expenseClaimID,
+                kind: original.kind,
+                displayName: savedURL.lastPathComponent,
+                caption: metadata.caption,
+                localFilePath: savedURL.path,
+                contentType: resolvedContentType == "application/octet-stream"
+                    ? original.contentType
+                    : resolvedContentType,
+                fileSizeBytes: data.count
+            )
+            modelContext.insert(attachment)
+            applyAttachmentProgress(attachment, to: call)
+            try modelContext.save()
+            attachmentMessage = "Saved annotated copy. The original photo was preserved."
+            attachmentPreviewURL = nil
+            attachmentPendingMarkup = nil
+            syncAttachmentIfPossible(attachment, data: data)
+        } catch {
+            if let storedURL {
+                try? FileManager.default.removeItem(at: storedURL)
+            }
+            attachmentMessage = "Could not save annotated copy: \(error.localizedDescription)"
+        }
     }
 
     private func refreshSharedJobDocuments() async {
