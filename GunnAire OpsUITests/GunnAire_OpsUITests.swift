@@ -359,6 +359,45 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground)
     }
 
+    @MainActor
+    func testInvoiceSidebarTransitionRemainsStable() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures"
+        ]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+
+        XCTAssertTrue(
+            app.navigationBars["Command Center"].waitForExistence(timeout: 8),
+            "The authenticated fixture must begin in Command Center."
+        )
+
+        revealSidebarDestination("Invoices", in: app).tap()
+        XCTAssertTrue(
+            app.navigationBars["Invoices"].waitForExistence(timeout: 8),
+            "Tapping Invoices from the normal sidebar must not exhaust the SwiftUI view-construction stack."
+        )
+        XCTAssertTrue(app.segmentedControls["InvoiceWorkspaceLanePicker"].waitForExistence(timeout: 3))
+
+        revealSidebarDestination("Payments", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 5))
+
+        revealSidebarDestination("Invoices", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
+
+        let survivesDeferredUpdates = expectation(description: "Invoices remains foregrounded after deferred view updates")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+            if app.state == .runningForeground,
+               app.navigationBars["Invoices"].exists {
+                survivesDeferredUpdates.fulfill()
+            }
+        }
+        wait(for: [survivesDeferredUpdates], timeout: 20)
+    }
+
     /// Opt-in physical-device diagnostic that deliberately retains the installed
     /// production store and authentication state. Normal UI runs skip it so
     /// seeded fixtures remain deterministic.
