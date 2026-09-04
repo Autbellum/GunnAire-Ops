@@ -350,6 +350,43 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground)
     }
 
+    /// Opt-in physical-device diagnostic that deliberately retains the installed
+    /// production store and authentication state. Normal UI runs skip it so
+    /// seeded fixtures remain deterministic.
+    @MainActor
+    func testRetainedStoreInvoiceSidebarNavigationRemainsStable() throws {
+        guard ProcessInfo.processInfo.environment["GUNNAIRE_RUN_RETAINED_STORE_TEST"] == "1" else {
+            throw XCTSkip("Requires an explicitly backed-up physical-device store.")
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO"
+        ]
+        app.launch()
+
+        XCTAssertFalse(
+            app.staticTexts["Sign in with your approved GunnAire business account."].waitForExistence(timeout: 2),
+            "The retained-store diagnostic requires the device's existing authenticated session."
+        )
+
+        revealSidebarDestination("Invoices", in: app).tap()
+        XCTAssertTrue(
+            app.navigationBars["Invoices"].waitForExistence(timeout: 8),
+            "Opening Invoices from the sidebar terminated or failed against the retained device store."
+        )
+
+        let remainedForeground = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "state == %d", XCUIApplication.State.runningForeground.rawValue),
+            object: app
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [remainedForeground], timeout: 30),
+            .completed,
+            "Invoices must remain foregrounded long enough to expose deferred view or relationship failures."
+        )
+    }
+
     @MainActor
     func testReducedMotionSkipsTheSplashAndKeepsCoreNavigationAvailable() throws {
         let app = XCUIApplication()
