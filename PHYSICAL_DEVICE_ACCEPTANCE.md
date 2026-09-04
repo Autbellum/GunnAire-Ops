@@ -4,6 +4,35 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
+## Build-2026090402 Invoice crash correction
+
+The retained build-`2026090301` crash report confirms a main-thread stack-guard
+`EXC_BAD_ACCESS` while SwiftUI recursively constructs the generic Billing
+`NavigationStack`/`List` type. Build `2026090402` gives the standalone Invoice
+tab an invoice-only root and bounds sheet/dialog metadata with small `AnyView`
+groups; job Billing keeps its full workflow behind separate boundaries. A
+temporarily unresolved invoice-customer relationship is retained for CloudKit
+recovery but is not force-rendered as a row.
+
+The exact optimized Apple Development-signed Release was installed over the
+existing `com.gunnaire.businesssuite` app on the physical iPad Pro 13-inch
+(M5) without deleting application data. The Invoice route remained alive
+through an attached diagnostic and then under a second normal launch for more
+than 45 minutes. The device produced no September 4 GunnAire crash report; its
+newest retained application crash remains the pre-fix build `2026090301`
+report from September 3. The complete simulator regression passes every
+runnable logical test; the only skipped case is the explicitly gated
+retained-store physical automation, whose route was exercised separately on
+the real iPad because Xcode timed out enabling physical UI automation.
+
+Privacy-minimal evidence is
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-04/physical-invoice-stack-safe-recheck-2026090402.json`
+(SHA-256
+`d9ea09ae262ead8c2a3eddbe7d417eb053db65317c52d9cf00e0eb4362fce958`).
+No invoice, payment, provider, account, backend, customer communication, or
+production record was changed by this validation. This is development-signed
+device evidence, not App Store distribution acceptance.
+
 ## Build-2026090401 controlled online continuity
 
 The exact current signed Debug products completed an isolated CloudKit
