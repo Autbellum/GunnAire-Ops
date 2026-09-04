@@ -263,6 +263,31 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Message Body"].exists)
         XCTAssertFalse(app.staticTexts["Status"].exists)
 
+        let inboxEvidence = XCTAttachment(screenshot: app.screenshot())
+        inboxEvidence.name = "Simple Mail Inbox"
+        inboxEvidence.lifetime = .keepAlways
+        add(inboxEvidence)
+
+        app.buttons["MailComposeButton"].tap()
+        XCTAssertTrue(app.navigationBars["Compose"].waitForExistence(timeout: 3))
+        let composeTo = app.textFields["MailComposeTo"]
+        let composeBody = app.textFields["MailComposeBody"]
+        XCTAssertTrue(composeTo.exists)
+        XCTAssertTrue(app.textFields["MailComposeSubject"].exists)
+        XCTAssertTrue(composeBody.exists)
+        XCTAssertFalse(app.buttons["MailSendButton"].isEnabled)
+        composeTo.tap()
+        composeTo.typeText("customer@example.com")
+        composeBody.tap()
+        composeBody.typeText("Your appointment is confirmed.")
+        XCTAssertTrue(app.buttons["MailSendButton"].isEnabled)
+        let composeEvidence = XCTAttachment(screenshot: app.screenshot())
+        composeEvidence.name = "Simple Mail Compose"
+        composeEvidence.lifetime = .keepAlways
+        add(composeEvidence)
+        app.navigationBars["Compose"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 3))
+
         let message = app.descendants(matching: .any)["MailMessage-ui-mail-1"]
         XCTAssertTrue(message.waitForExistence(timeout: 3))
         message.tap()
@@ -279,6 +304,31 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] '<div>'")
         ).firstMatch.exists)
+
+        let messageEvidence = XCTAttachment(screenshot: app.screenshot())
+        messageEvidence.name = "Simple Mail Message"
+        messageEvidence.lifetime = .keepAlways
+        add(messageEvidence)
+
+        app.buttons["MailReplyButton"].tap()
+        XCTAssertTrue(app.navigationBars["Compose"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.textFields["MailComposeTo"].value as? String, "jordan@example.com")
+        XCTAssertEqual(app.textFields["MailComposeSubject"].value as? String, "Re: Service appointment confirmed")
+        app.navigationBars["Compose"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Mail"].waitForExistence(timeout: 3))
+
+        app.buttons["MailMoreActionsButton"].tap()
+        XCTAssertTrue(app.buttons["Reply All"].exists)
+        XCTAssertTrue(app.buttons["Forward"].exists)
+        app.buttons["Move to Trash"].tap()
+        XCTAssertTrue(app.staticTexts["Move this message to Trash?"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["You can recover it later from Gmail Trash."].exists)
+        let trashEvidence = XCTAttachment(screenshot: app.screenshot())
+        trashEvidence.name = "Simple Mail Trash Confirmation"
+        trashEvidence.lifetime = .keepAlways
+        add(trashEvidence)
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Mail"].exists)
     }
 
     @MainActor
