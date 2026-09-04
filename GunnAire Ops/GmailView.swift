@@ -760,12 +760,12 @@ private struct GmailMessageDetailView: View {
                 .accessibilityIdentifier("MailMoreActionsButton")
             }
         }
-        .confirmationDialog("Move this message to Trash?", isPresented: $showingDeleteConfirmation, titleVisibility: .visible) {
+        .alert("Move this message to Trash?", isPresented: $showingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
             Button("Move to Trash", role: .destructive) {
                 onDelete(activeMessage)
                 dismiss()
             }
-            Button("Cancel", role: .cancel) {}
         } message: {
             Text("You can recover it later from Gmail Trash.")
         }
