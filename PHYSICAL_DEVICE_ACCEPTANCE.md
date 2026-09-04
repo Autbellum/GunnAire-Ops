@@ -4,6 +4,33 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
+## Build-2026090403 focused Invoice workspace
+
+Build `2026090403` retains the standalone Invoice root's stack-safe type
+boundaries while splitting the long default page into two explicit lanes.
+**Overview** contains balances, billing and collections queues, and existing
+invoices. **New Invoice** contains customer and line-item creation and cannot
+change the document kind away from Invoice. The focused UI regression verifies
+both lane contents and process liveness; three adjacent billing journeys and
+all 703 Mac business-logic tests pass.
+
+The exact optimized Apple Development-signed Release was installed over the
+existing app on the physical 13-inch M5 iPad without deleting application
+data. The forced Invoice route remained alive as PID 4163 beyond 150 seconds,
+the matching crash-log count remained 27, and no current-build report appeared.
+The newest retained application crash remains pre-fix build `2026090301`.
+Strict signature verification passed; the app and dSYM share UUID
+`93A5162B-5661-3EE5-9B42-DB304DB73B06`, and the app binary SHA-256 is
+`54710b3707eb5e1acc133a52c0805870a06a81cfc38662a936f5bd2ebbc883e5`.
+
+Privacy-minimal evidence is
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-04/physical-invoice-focused-workspace-recheck-2026090403.json`
+(SHA-256
+`ebf5b9bc84f08a5cf3a0e4ba808fe6aa39e05d8da56dd4b97362b5f3b992ca4b`).
+No invoice, payment, provider, account, backend, customer communication, or
+production record was changed. This remains development-signed evidence, not
+App Store distribution acceptance.
+
 ## Build-2026090402 Invoice crash correction
 
 The retained build-`2026090301` crash report confirms a main-thread stack-guard

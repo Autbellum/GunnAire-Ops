@@ -48,6 +48,7 @@ struct BillingDocumentsView: View {
     }()
 
     @State private var selectedDocumentKind: BillingDocumentKind
+    @State private var invoiceWorkspaceLane: InvoiceWorkspaceLane = .overview
     @State private var selectedJobStage: JobDocumentationStage = .work
     @State private var selectedCustomerID: UUID?
     @State private var selectedServiceLocationID: UUID?
@@ -1598,11 +1599,15 @@ GunnAire
         AnyView(
             NavigationStack {
                 List {
-                    AnyView(stackSafeInvoiceSnapshotSection)
-                    AnyView(stackSafeGeneratedInvoiceDocumentSection)
-                    AnyView(invoiceActionQueues)
-                    AnyView(builderDetailsWorkspaceSection)
-                    AnyView(invoicesWorkspaceSection)
+                    AnyView(stackSafeInvoiceLanePickerSection)
+                    if invoiceWorkspaceLane == .overview {
+                        AnyView(stackSafeInvoiceSnapshotSection)
+                        AnyView(stackSafeGeneratedInvoiceDocumentSection)
+                        AnyView(invoiceActionQueues)
+                        AnyView(invoicesWorkspaceSection)
+                    } else {
+                        AnyView(builderDetailsWorkspaceSection)
+                    }
                 }
                 .navigationTitle(navigationTitle)
                 .toolbar {
@@ -1616,6 +1621,18 @@ GunnAire
                 }
             }
         )
+    }
+
+    private var stackSafeInvoiceLanePickerSection: some View {
+        Section {
+            Picker("Invoice workspace", selection: $invoiceWorkspaceLane) {
+                ForEach(InvoiceWorkspaceLane.allCases) { lane in
+                    Text(lane.rawValue).tag(lane)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("InvoiceWorkspaceLanePicker")
+        }
     }
 
     @ViewBuilder
@@ -3161,13 +3178,15 @@ GunnAire
     @ViewBuilder
     private var builderDetailsWorkspaceSection: some View {
                 if !isJobDocumentationMode {
-                Section("Builder Details") {
-                    Picker("Document", selection: $selectedDocumentKind) {
-                        ForEach(BillingDocumentKind.allCases) { kind in
-                            Text(kind.rawValue).tag(kind)
+                Section(workspaceMode == .invoices ? "Invoice Details" : "Builder Details") {
+                    if workspaceMode == .all {
+                        Picker("Document", selection: $selectedDocumentKind) {
+                            ForEach(BillingDocumentKind.allCases) { kind in
+                                Text(kind.rawValue).tag(kind)
+                            }
                         }
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
 
                     SearchableDropdownPicker(
                         title: "Customer",
@@ -11391,6 +11410,13 @@ private struct MaintenanceAgreementInvoiceReviewSheet: View {
 private enum BillingDocumentKind: String, CaseIterable, Identifiable {
     case estimate = "Estimate"
     case invoice = "Invoice"
+
+    var id: String { rawValue }
+}
+
+private enum InvoiceWorkspaceLane: String, CaseIterable, Identifiable {
+    case overview = "Overview"
+    case newInvoice = "New Invoice"
 
     var id: String { rawValue }
 }

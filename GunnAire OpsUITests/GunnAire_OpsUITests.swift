@@ -347,6 +347,15 @@ final class GunnAire_OpsUITests: XCTestCase {
             app.navigationBars["Invoices"].waitForExistence(timeout: 8),
             "The Invoices workspace must open without exhausting the SwiftUI view-construction stack."
         )
+        let lanePicker = app.segmentedControls["InvoiceWorkspaceLanePicker"]
+        XCTAssertTrue(lanePicker.waitForExistence(timeout: 3))
+        XCTAssertTrue(lanePicker.buttons["Overview"].isSelected)
+        XCTAssertTrue(app.staticTexts["Collections Queue"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["Invoice Details"].exists)
+
+        lanePicker.buttons["New Invoice"].tap()
+        XCTAssertTrue(app.staticTexts["Invoice Details"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["Collections Queue"].exists)
         XCTAssertEqual(app.state, .runningForeground)
     }
 
