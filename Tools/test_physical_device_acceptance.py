@@ -80,6 +80,45 @@ class PhysicalDeviceAcceptanceTests(unittest.TestCase):
         self.assertNotIn("PERSONAL-NAME", repr(summary))
         self.assertNotEqual(summary.device_ref, raw["identifier"])
 
+    def test_live_details_replace_a_stale_disconnected_device_listing(self) -> None:
+        identifier = "private-core-device-id"
+        stale = {
+            "identifier": identifier,
+            "deviceProperties": {
+                "osVersionNumber": "26.6.1",
+                "developerModeStatus": "enabled",
+                "ddiServicesAvailable": False,
+            },
+            "hardwareProperties": {
+                "deviceType": "iPad",
+                "marketingName": "iPad Pro 13-inch (M5)",
+            },
+            "connectionProperties": {
+                "pairingState": "paired",
+                "tunnelState": "disconnected",
+            },
+        }
+        current = copy.deepcopy(stale)
+        current["deviceProperties"]["ddiServicesAvailable"] = True
+        current["connectionProperties"]["tunnelState"] = "connected"
+
+        rows = acceptance.refresh_device_rows(
+            [stale],
+            lambda requested: current if requested == identifier else None,
+        )
+
+        self.assertEqual(rows, [current])
+        self.assertTrue(acceptance.summarize_device(rows[0]).is_available)
+
+    def test_device_details_parser_rejects_a_different_device(self) -> None:
+        payload = {"result": {"identifier": "unexpected-device"}}
+
+        with self.assertRaisesRegex(ValueError, "different device"):
+            acceptance.parse_device_details_payload(
+                payload,
+                expected_identifier="expected-device",
+            )
+
     def test_installed_app_parser_returns_only_the_expected_bundle_versions(self) -> None:
         payload = {
             "result": {

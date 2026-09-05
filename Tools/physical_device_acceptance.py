@@ -23,7 +23,7 @@ import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 try:
     from Tools import release_preflight
@@ -281,6 +281,74 @@ def parse_devicectl_payload(
     return summaries
 
 
+def parse_device_details_payload(
+    payload: dict[str, Any],
+    *,
+    expected_identifier: str,
+) -> dict[str, Any]:
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise ValueError("devicectl JSON result is not a device object")
+    if str(result.get("identifier", "")) != expected_identifier:
+        raise ValueError("devicectl details returned a different device")
+    return result
+
+
+def refresh_device_rows(
+    raw_devices: Iterable[dict[str, Any]],
+    detail_loader: Callable[[str], dict[str, Any] | None],
+) -> list[dict[str, Any]]:
+    """Prefer a live detail snapshot for paired devices.
+
+    `devicectl list devices` can report a stale disconnected tunnel immediately
+    before a normal information request establishes the local-network developer
+    connection. The detail request is read-only and provides the current
+    tunnel/DDI state used by the readiness gate.
+    """
+    refreshed: list[dict[str, Any]] = []
+    for raw in raw_devices:
+        identifier = str(raw.get("identifier", ""))
+        summary = summarize_device(raw)
+        if identifier and summary.pairing_state.lower() == "paired":
+            detailed = detail_loader(identifier)
+            if detailed is not None:
+                refreshed.append(detailed)
+                continue
+        refreshed.append(raw)
+    return refreshed
+
+
+def inspect_device_details(identifier: str) -> dict[str, Any] | None:
+    with tempfile.TemporaryDirectory(prefix="gunnaire-device-details-") as temp_dir:
+        output_path = Path(temp_dir) / "details.json"
+        process = run(
+            [
+                "xcrun",
+                "devicectl",
+                "device",
+                "info",
+                "details",
+                "--device",
+                identifier,
+                "--timeout",
+                "15",
+                "--json-output",
+                str(output_path),
+                "--quiet",
+            ]
+        )
+        if process.returncode != 0 or not output_path.is_file():
+            return None
+        try:
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+            return parse_device_details_payload(
+                payload,
+                expected_identifier=identifier,
+            )
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+
+
 def parse_installed_app_payload(
     payload: dict[str, Any],
     *,
@@ -359,17 +427,18 @@ def inspect_devices() -> tuple[list[DeviceSummary], str | None]:
             raw_devices = result.get("devices", []) if isinstance(result, dict) else []
             if not isinstance(raw_devices, list):
                 raise ValueError("devicectl JSON result.devices is not a list")
+            typed_devices = [raw for raw in raw_devices if isinstance(raw, dict)]
+            current_devices = refresh_device_rows(typed_devices, inspect_device_details)
             installed_apps: dict[str, tuple[str | None, str | None, bool]] = {}
-            for raw in raw_devices:
-                if not isinstance(raw, dict):
-                    continue
+            for raw in current_devices:
                 identifier = str(raw.get("identifier", ""))
                 if not identifier:
                     continue
                 summary = summarize_device(raw)
                 if summary.is_available:
                     installed_apps[identifier] = inspect_installed_app(identifier)
-            return parse_devicectl_payload(payload, installed_apps), None
+            current_payload = {"result": {"devices": current_devices}}
+            return parse_devicectl_payload(current_payload, installed_apps), None
         except (OSError, ValueError, json.JSONDecodeError) as error:
             return [], str(error)
 
