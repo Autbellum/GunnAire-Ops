@@ -79,6 +79,19 @@ pages. This is a capability benchmark, not a ranking and not a claim that a
 provider-owned payment, location, communications, financing, AI, or supplier
 service is live in GunnAire Ops.
 
+The six current 13-inch iPad release screens were also reviewed together at
+their production dimensions. Command Center keeps the five frequent actions
+and exception queue ahead of secondary intelligence; Schedule separates
+requests, calendar, and the selected-day job; Customer Systems separates
+locations, equipment, agreements, files, and history; Job Billing makes **Add
+Line Items** and **Create New Item** the direct actions; Field Collection uses
+one focused payment sheet; and QuickBooks groups publication, review, customer,
+and pricebook work into progressive sections. The review found no competing
+navigation system or new screen-level information-overload defect. Dynamic
+Type, VoiceOver naming, keyboard navigation, and transition stability remain
+covered by the implemented interface tests rather than inferred from these
+static images.
+
 | Suite | Current first-party emphasis | GunnAire evidence boundary |
 | --- | --- | --- |
 | [ServiceTitan](https://www.servicetitan.com/features) | Dispatch, mobile field work, estimates, inventory/procurement, equipment history, payroll/time, project billing, reporting, payments, and QuickBooks/accounting integrations. | The native service lifecycle, Week Board, equipment/system history, forms, time attestation, inventory/purchasing, progress billing, reporting, and idempotent QBO queues are implemented. GPS, automated routing, AI, and live provider acceptance remain gated. |
@@ -88,8 +101,8 @@ service is live in GunnAire Ops.
 | [Jobber](https://www.getjobber.com/features/) | Request-to-payment work orders, recurring scheduling, checklists/photos, client hub, quotes, invoicing, payments, communications, routing, notifications, job profitability, and QuickBooks Online. | The same operational chain is covered with type-aware forms/files, maintenance visits, role-scoped Find, conservative profitability, and QBO synchronization. Unattended messaging and customer mutations remain disabled pending consent/provider controls. |
 | [Workiz](https://www.workiz.com/features/) | Scheduling/dispatch, estimates/proposals, invoicing, inventory, online booking, mobile work, communications, reporting, route planning, QuickBooks, and newer AI assistance. | Core operational equivalents and reviewed provider handoffs exist. Automated scheduling/marketing, phone recording, AI call/dispatch, and live routing are intentionally not represented as active without approved policy, providers, retention, and human oversight. |
 | [Service Fusion](https://www.servicefusion.com/field-service-management-software) | Customer management, estimates, dispatch, offline technician work, work orders, invoices/payments, notifications, GPS/fleet, and QuickBooks. | Offline field capture/recovery, customer/jobs, billing, push boundary, fleet readiness, and QBO queues are implemented. APNs, production portal, payments, and telemetry require their documented external acceptance. |
-| [Simpro](https://www.simprogroup.com/features) | Quotes/projects, scheduling, mobile forms/assets/time, maintenance, inventory/procurement, job costing, payments, reporting, fleet, and accounting integrations. | GunnAire covers project milestones, asset/equipment history, maintenance, purchasing, serialized use, time review, gross-profit reporting, fleet readiness, and accounting handoff. Supplier catalogs, telematics, and payment providers remain gated. |
-| [ServiceM8](https://www.servicem8.com/us/feature-overview) | Apple-focused mobile/offline work, history, forms/PDFs, signatures, asset/QR workflows, time, booking, payments, customer communication, QuickBooks, and newer AI/phone tools. | iPad-first offline work, generated files, approvals, equipment labels, time, intake, Gmail/Messages drafts, and QBO item/invoice sync are implemented. Automated phone/AI, unattended customer sends, and direct card acceptance remain outside the approved boundary. |
+| [Simpro](https://www.simprogroup.com/features) | Quotes/projects, scheduling, mobile forms/assets/time, maintenance, inventory/procurement, job costing, payments including provider-backed Tap to Pay or terminals, reporting, fleet, and accounting integrations. | GunnAire covers project milestones, asset/equipment history, maintenance, purchasing, serialized use, time review, gross-profit reporting, fleet readiness, and accounting handoff. Supplier catalogs, telematics, and direct payment-provider acceptance remain gated. |
+| [ServiceM8](https://www.servicem8.com/us/feature-overview) | Apple-focused mobile/offline work, history, forms/PDFs, signatures, asset/QR workflows, time, booking, payments including Tap to Pay on iPhone, customer communication, QuickBooks, and newer AI/phone tools. | iPad-first offline work, generated files, approvals, equipment labels, time, intake, Gmail/Messages drafts, and QBO item/invoice sync are implemented. Automated phone/AI, unattended customer sends, and embedded card acceptance remain outside the approved boundary. |
 | [Commusoft](https://www.commusoft.us/) | Customer/job management, scheduling and dispatch, estimates, forms, invoicing, service agreements, inventory, communications, customer access, and reporting. | GunnAire keeps the same lifecycle inside role-scoped customer, job, Billing, and History workspaces, with type-aware files, equipment continuity, agreements, purchasing, communications, portal handoff, and reporting. Production portal, messaging, payment, and provider acceptance remain gated. |
 
 The cross-check does not expose a new provider-independent core workflow gap.
@@ -267,11 +280,11 @@ provider-owned payment, location, financing, or supplier service.
 - Jobber: [job costing](https://www.getjobber.com/features/job-costing-software/) and [products and services list](https://help.getjobber.com/en/articles/products-services-list/).
 - Workiz: [feature catalog](https://www.workiz.com/features/), [client portal](https://www.workiz.com/features/client-portal/), and [invoicing](https://www.workiz.com/features/invoicing/).
 - Service Fusion: [field-service platform](https://www.servicefusion.com/) and [HVAC workflow](https://www.servicefusion.com/hvac-software).
-- Simpro: [field mobile app](https://www.simprogroup.com/features/field-service-mobile-app) and [field-service platform](https://www.simprogroup.com/solutions/field-service-management-software).
+- Simpro: [field mobile app](https://www.simprogroup.com/features/field-service-mobile-app), [field-service platform](https://www.simprogroup.com/solutions/field-service-management-software), and [field payments including Tap to Pay](https://www.simprogroup.com/features/payments).
 - ServiceM8: [feature overview](https://www.servicem8.com/us/feature-overview) and [Apple-first field-service platform](https://www.servicem8.com/us/).
 - Commusoft: [field-service management platform](https://www.commusoft.us/).
 - BuildOps: [service management suite](https://buildops.com/platform/service-management-suite) and [commercial HVAC platform](https://buildops.com/industries/hvac-software).
-- Intuit: [Tap to Pay in QuickBooks Mobile or GoPayment](https://quickbooks.intuit.com/learn-support/en-us/help-article/receive-payments/use-tap-pay-quickbooks-gopayment-quickbooks-mobile/L38jd9HdC_US_en_US).
+- Intuit: [QuickBooks Mobile and GoPayment in-person payments](https://quickbooks.intuit.com/payments/in-person-payments/), including Tap to Pay on iPhone, employee-scoped GoPayment access, and QuickBooks synchronization.
 - Apple: [Tap to Pay on iPhone integration](https://developer.apple.com/tap-to-pay/), [ProximityReader framework](https://developer.apple.com/documentation/proximityreader), [managed-entitlement setup](https://developer.apple.com/documentation/proximityreader/setting-up-the-entitlement-for-tap-to-pay-on-iphone), and [supported U.S. PSPs](https://developer.apple.com/tap-to-pay/regions/). These primary sources confirm that an embedded flow requires a supported PSP, its certified terminal configuration/token service, an Account Holder entitlement request, ProximityReader or the PSP SDK, and separate distribution entitlement approval before TestFlight/App Store use.
 - Intuit: [QuickBooks Online Item identity and concurrency fields](https://static.developer.intuit.com/sdkdocs/qbv3doc/ippdotnetdevkitv3/html/3852ce5c-a9f8-cbf1-a857-e63270bf91bd.htm).
 - ServiceTrade: [commercial HVAC platform](https://servicetrade.com/industries/mechanical-commercial-hvac/) and [platform overview](https://servicetrade.com/platform/).
