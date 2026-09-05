@@ -1658,8 +1658,10 @@ final class GunnAire_OpsUITests: XCTestCase {
             return false
         }
 
-        XCTAssertTrue(reveal(app.staticTexts["Shared Server Readiness"]))
-        XCTAssertTrue(app.buttons["BackendReadinessRefreshButton"].exists)
+        XCTAssertTrue(reveal(app.staticTexts["Supplier Connections"]))
+        XCTAssertTrue(app.buttons["SupplierConnectionsRefreshButton"].exists)
+        XCTAssertTrue(reveal(app.staticTexts["Shared Server Readiness"], maximumSwipes: 2))
+        XCTAssertTrue(reveal(app.buttons["BackendReadinessRefreshButton"], maximumSwipes: 1))
         XCTAssertTrue(reveal(app.staticTexts["Customer Portal"], maximumSwipes: 2))
         XCTAssertTrue(reveal(app.staticTexts["Shared Server Activity"], maximumSwipes: 2))
     }

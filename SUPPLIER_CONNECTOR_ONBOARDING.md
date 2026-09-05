@@ -1,6 +1,6 @@
 # Supplier connector onboarding
 
-Last reviewed: 2026-09-02
+Last reviewed: 2026-09-05
 
 ## Current production-safe status
 
@@ -17,6 +17,7 @@ logs, acknowledgements, or screenshots.
 | --- | --- | --- |
 | Johnstone Supply DirectConnect | Johnstone says consistently formatted data transmissions or file attachments can be converted to orders and directs contractors to their Johnstone account representative. | Commercial onboarding required; no public self-service API specification was found. |
 | Johnstone Supply Punch-out | Johnstone describes a customer-specific catalog using standard protocols such as cXML, hosted by Johnstone with account pricing and real-time availability, and directs contractors to their account representative. | Commercial onboarding and customer-specific cXML configuration required. |
+| Johnstone Supply ServiceTitan P2P | Johnstone describes an end-to-end ServiceTitan workflow for contractor-specific product/pricing, purchase orders, invoices, accounts-payable reconciliation, and electronic payments. | Published for ServiceTitan rather than as a direct GunnAire API; do not represent it as a GunnAire connector. |
 | Lennox procurement | Lennox identifies ServiceTitan as its preferred and exclusive field-service-management partner. Its FAQ says catalog access is available through ServiceTitan, full procurement is waitlisted, and a ServiceTitan account is required. | The published path cannot be represented as a direct GunnAire connector. Separate written Lennox authorization and technical specifications are required before adapter work starts. |
 
 Official sources:
