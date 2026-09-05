@@ -14,18 +14,19 @@ import CloudKit
 
 // MARK: - SidebarItem moved to SidebarItem.swift
 
-/// Keeps repeatable App Store assets free of a signed-in person's identity
-/// without changing the account context shown during normal app use.
+/// Keeps the compact sidebar useful without exposing a staff member's account
+/// address in the interface or in screenshots. Settings remains the explicit
+/// place to review the connected identity.
 struct AppStoreScreenshotPrivacyPolicy: Equatable, Sendable {
     static let fixtureArgument = "-appStoreScreenshotFixtures"
 
     static func sidebarIdentity(
         email: String?,
-        processArguments: [String]
+        role: AppUserRole?
     ) -> String? {
-        guard !processArguments.contains(fixtureArgument) else { return nil }
         let normalized = email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return normalized.isEmpty ? "Signed in" : normalized
+        guard !normalized.isEmpty, let role else { return nil }
+        return role == .admin ? "Administrator" : role.rawValue
     }
 }
 
@@ -139,10 +140,14 @@ struct ContentView: View {
         AppIdentity.currentEmail
     }
 
+    private var currentUserRole: AppUserRole? {
+        AppAccess.activeRole(email: currentUserEmail, users: users)
+    }
+
     private var sidebarAccountIdentity: String? {
         AppStoreScreenshotPrivacyPolicy.sidebarIdentity(
             email: currentUserEmail,
-            processArguments: ProcessInfo.processInfo.arguments
+            role: currentUserRole
         )
     }
 
@@ -157,11 +162,11 @@ struct ContentView: View {
     }
 
     private var isAdminUser: Bool {
-        AppAccess.isAdmin(email: currentUserEmail, users: users)
+        currentUserRole == .admin
     }
 
     private var isFieldTechnician: Bool {
-        AppAccess.activeRole(email: currentUserEmail, users: users) == .fieldTechnician
+        currentUserRole == .fieldTechnician
     }
 
     private var fieldCollectionPromptPollingKey: String? {
@@ -331,11 +336,6 @@ struct ContentView: View {
                         Label("Account setup required", systemImage: "person.badge.key")
                             .font(.footnote)
                             .foregroundColor(.orange)
-                    }
-                    if isAdminUser {
-                        Label("Administrator", systemImage: "key.fill")
-                            .font(.footnote)
-                            .foregroundColor(Color.brandGold)
                     }
                 }
             }

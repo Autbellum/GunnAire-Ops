@@ -705,26 +705,30 @@ struct GunnAire_OpsTests {
         #expect(atThreshold.summary?.contains("1 open follow-up, 1 overdue") == true)
     }
 
-    @Test func appStoreScreenshotPrivacyHidesOnlyTheFixtureAccountIdentity() {
-        let fixtureArguments = ["GunnAire Ops", AppStoreScreenshotPrivacyPolicy.fixtureArgument]
-
+    @Test func sidebarAccountIdentityShowsOnlyTheAuthorizedRole() {
         #expect(
             AppStoreScreenshotPrivacyPolicy.sidebarIdentity(
                 email: "owner@example.com",
-                processArguments: fixtureArguments
-            ) == nil
+                role: .admin
+            ) == "Administrator"
         )
         #expect(
             AppStoreScreenshotPrivacyPolicy.sidebarIdentity(
                 email: " owner@example.com ",
-                processArguments: ["GunnAire Ops"]
-            ) == "owner@example.com"
+                role: .fieldTechnician
+            ) == "Field Technician"
         )
         #expect(
             AppStoreScreenshotPrivacyPolicy.sidebarIdentity(
                 email: "  ",
-                processArguments: ["GunnAire Ops"]
-            ) == "Signed in"
+                role: .dispatcher
+            ) == nil
+        )
+        #expect(
+            AppStoreScreenshotPrivacyPolicy.sidebarIdentity(
+                email: "owner@example.com",
+                role: nil
+            ) == nil
         )
     }
 
@@ -8169,6 +8173,74 @@ struct GunnAire_OpsTests {
             email: "unknown-find@gunnaire.com",
             users: users
         ) == .denied)
+    }
+
+    @Test func commandCenterQueryBoundarySkipsTemporarilyUnresolvedCloudKitRelationships() {
+        let admin = AppUser(email: "admin-hydration@gunnaire.com", role: .admin)
+        let customer = Customer(name: "Hydration Boundary Customer")
+        let technician = Technician(name: "Hydration Tech", contactInfo: "hydration-tech@gunnaire.com")
+        let call = ServiceCall(
+            type: .service,
+            scheduledDate: Date(),
+            assignedTechnician: technician,
+            customer: customer
+        )
+        let estimate = Estimate(customer: customer, amount: 325)
+        let invoice = Invoice(customer: customer, amount: 325)
+        let payment = Payment(invoice: invoice, amount: 100)
+        let contract = RecurringMaintenanceContract(
+            customer: customer,
+            schedulePattern: "every 6 months",
+            nextDate: Date()
+        )
+        let communication = CustomerCommunication(
+            customer: customer,
+            recipient: "customer@example.com",
+            subject: "Hydration boundary",
+            deliveryStatus: "queued"
+        )
+
+        call.customer = nil
+        estimate.customer = nil
+        invoice.customer = nil
+        payment.invoice = nil
+        contract.customer = nil
+        communication.customer = nil
+
+        #expect(OperationsAccessPolicy.visibleServiceCallIDs(
+            email: admin.email,
+            users: [admin],
+            serviceCalls: [call],
+            technicians: [technician]
+        ).isEmpty)
+        #expect(OperationsAccessPolicy.visibleEstimateIDs(
+            email: admin.email,
+            users: [admin],
+            estimates: [estimate]
+        ).isEmpty)
+        #expect(OperationsAccessPolicy.visibleInvoiceIDs(
+            email: admin.email,
+            users: [admin],
+            serviceCalls: [call],
+            invoices: [invoice],
+            technicians: [technician]
+        ).isEmpty)
+        #expect(OperationsAccessPolicy.visiblePaymentIDs(
+            email: admin.email,
+            users: [admin],
+            serviceCalls: [call],
+            invoices: [invoice],
+            payments: [payment],
+            technicians: [technician]
+        ).isEmpty)
+        #expect(OperationsAccessPolicy.visibleContractIDs(
+            customerIDs: [customer.id],
+            contracts: [contract]
+        ).isEmpty)
+        #expect(OperationsAccessPolicy.visibleCommunicationIDs(
+            customerIDs: [customer.id],
+            communications: [communication]
+        ).isEmpty)
     }
 
     @Test func adminPriceAdjustmentRequiresReasonAndPersistsImmutableAuditEvidence() throws {

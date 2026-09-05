@@ -4,6 +4,38 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
+## Build-2026090416 Command Center CloudKit-hydration recheck
+
+The exact Apple Development-signed `1.0 (2026090416)` Release was installed over
+the retained store on GunnAire's physical 13-inch M5 iPad. Its Command Center
+uses value-only queue snapshots and excludes temporarily unresolved SwiftData
+relationships while CloudKit hydrates, superseding the physical
+`2026090413`–`2026090415` crashes. Three independent launches remained alive for
+75, 20, and 20 seconds and created no new GunnAire crash report. The retained
+database UUID remained `17B8CB0D-EBE8-499F-9400-217DFDB23477`.
+
+The matching app and dSYM share UUID
+`7AF08EA6-00B1-31EA-8C78-C5F06172B758`; the app binary SHA-256 is
+`949d9b661f89dfd19aa722a5c0f5e7f6d51785a573c14a3c4dfcb36f6df9e89d`.
+The embedded entitlements retain Sign in with Apple, CloudKit
+`iCloud.com.gunnaire.businesssuite`, `applinks:gunnaire.com`, and development
+APNs. Exact current-source simulator acceptance passes **707/707** logic tests
+and **112/112 runnable** UI tests with one intentional physical-only skip (113
+total, zero failures). The UI result also includes all four successful launch
+variants, the simple Inbox/Compose/read/reply/forward/delete Mail contract,
+role-only sidebar identity with no email address, and Invoice/Payments crash
+regressions. Evidence is retained under `/Users/gunnaire/Downloads/GunnAire Ops
+Releases/2026-09-04` as the `2026090416` physical Release app/dSYM/build result,
+three device-launch JSON files, complete logic/UI results, and focused privacy,
+stability, iPhone, and authorization results.
+
+This proves retained-data install/launch stability for the current Development-
+signed candidate. It does not claim Distribution/TestFlight/App Store,
+Production CloudKit, backend `.18`, live QuickBooks, supplier, payment, or
+customer-communication acceptance. Production CloudKit remains v15 while the
+additive v23 contract remains Development-only; the Apple **Deploy** action was
+not pressed and no production mutation occurred.
+
 The exact current-source iOS archive and universal Mac Catalyst Release for
 `1.0 (2026090412)` are retained under `/Users/gunnaire/Downloads/GunnAire Ops
 Releases/2026-09-04`. Both pass strict local signature and app/dSYM validation;

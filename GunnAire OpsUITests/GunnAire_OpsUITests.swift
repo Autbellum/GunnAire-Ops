@@ -232,7 +232,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["QuickBooks Management"].exists)
         let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
         XCTAssertTrue(accountIdentity.exists)
-        XCTAssertTrue(accountIdentity.label.contains("@"))
+        XCTAssertEqual(accountIdentity.label, "Administrator")
+        XCTAssertFalse(accountIdentity.label.contains("@"))
 
         revealSidebarDestination("Schedule & Jobs", in: app).tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
@@ -1136,7 +1137,9 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Expense Claim"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Reimbursed"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["CHECK-UI-1042"].exists)
-        XCTAssertFalse(app.descendants(matching: .any)["SidebarAccountIdentity"].exists)
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        XCTAssertTrue(accountIdentity.exists)
+        XCTAssertEqual(accountIdentity.label, "Administrator")
         XCTAssertFalse(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
         ).firstMatch.exists)
@@ -1276,7 +1279,9 @@ final class GunnAire_OpsUITests: XCTestCase {
             NSPredicate(format: "label BEGINSWITH 'Signed '")
         ).firstMatch.waitForExistence(timeout: 3))
         XCTAssertFalse(signSnapshot.isEnabled)
-        XCTAssertFalse(app.descendants(matching: .any)["SidebarAccountIdentity"].exists)
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        XCTAssertTrue(accountIdentity.exists)
+        XCTAssertEqual(accountIdentity.label, "Field Technician")
         XCTAssertFalse(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
         ).firstMatch.exists)
@@ -1943,6 +1948,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] 'does not use live traffic'")
         ).firstMatch.exists)
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        if accountIdentity.exists {
+            XCTAssertEqual(accountIdentity.label, "Field Technician")
+            XCTAssertFalse(accountIdentity.label.contains("@"))
+        }
+        XCTAssertFalse(app.staticTexts["technician-ui-test@gunnaire.com"].exists)
         let handoffScreenshot = XCTAttachment(screenshot: app.screenshot())
         handoffScreenshot.name = "En Route Handoff – iPhone Portrait"
         handoffScreenshot.lifetime = .keepAlways
@@ -3165,7 +3176,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(authorize.isEnabled)
         authorize.tap()
 
-        XCTAssertFalse(app.navigationBars["Discount or Adjust"].waitForExistence(timeout: 1))
+        XCTAssertTrue(
+            app.navigationBars["Discount or Adjust"].waitForNonExistence(timeout: 5),
+            "The price-adjustment sheet did not finish dismissing after authorization"
+        )
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         XCTAssertEqual(adjustPrice.label, "Edit Adjustment")
         XCTAssertTrue(
@@ -4207,8 +4221,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Optional marketing follow-up. It opens as a draft and is recorded only after staff sends it."].exists)
 
         // The evidence intentionally stops before launching Mail or Gmail.
-        // Screenshot fixtures also suppress the signed-in account identity.
-        XCTAssertFalse(app.descendants(matching: .any)["SidebarAccountIdentity"].exists)
+        // Screenshot fixtures retain the useful role while suppressing the
+        // signed-in account address.
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        XCTAssertTrue(accountIdentity.exists)
+        XCTAssertEqual(accountIdentity.label, "Administrator")
         XCTAssertFalse(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
         ).firstMatch.exists)
@@ -4305,7 +4322,9 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["CurrentCustomerWorkSummary"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["1 retained summary revision"].exists)
-        XCTAssertFalse(app.descendants(matching: .any)["SidebarAccountIdentity"].exists)
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        XCTAssertTrue(accountIdentity.exists)
+        XCTAssertEqual(accountIdentity.label, "Administrator")
         XCTAssertFalse(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
         ).firstMatch.exists)
@@ -6847,9 +6866,16 @@ final class GunnAire_OpsUITests: XCTestCase {
         )
         afterLaunch(app)
 
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        XCTAssertTrue(accountIdentity.exists)
+        XCTAssertEqual(
+            accountIdentity.label,
+            "Administrator",
+            "App Store screenshot \(name) did not retain the role-only account context"
+        )
         XCTAssertFalse(
-            app.descendants(matching: .any)["SidebarAccountIdentity"].exists,
-            "App Store screenshot \(name) exposed the signed-in account identity"
+            accountIdentity.label.contains("@"),
+            "App Store screenshot \(name) exposed an account address"
         )
         waitForSystemBannerToClear(beforeCapturing: name)
 
