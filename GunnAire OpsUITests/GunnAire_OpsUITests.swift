@@ -2638,6 +2638,16 @@ final class GunnAire_OpsUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
         let confirmation = app.switches["Customer reviewed the scope, total price, and terms"]
         confirmation.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        let initialConfirmationSelected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == '1'"),
+            object: confirmation
+        )
+        if XCTWaiter.wait(for: [initialConfirmationSelected], timeout: 2) != .completed {
+            // Simulator text-entry focus can occasionally consume the first
+            // synthesized switch event even after Escape. Retry semantically
+            // only while the switch is still off.
+            confirmation.tap()
+        }
         let confirmationSelected = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value == '1'"),
             object: confirmation
@@ -4553,6 +4563,63 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(restoredWorkspacePicker.buttons["History"].isSelected)
         XCTAssertTrue(app.staticTexts["Recent Jobs"].exists)
         XCTAssertFalse(app.staticTexts["Documents & Photos"].exists)
+    }
+
+    @MainActor
+    func testCustomerAccountStatementGeneratesFromTheExistingFilesWorkspace() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        revealSidebarDestination("Customers", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
+
+        let customerRecord = app.buttons["OpenCustomerRecord-\(screenshotCustomerID)"]
+        for _ in 0..<5 where !customerRecord.exists || !customerRecord.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(customerRecord.waitForExistence(timeout: 3))
+        customerRecord.tap()
+        XCTAssertTrue(app.navigationBars["Edit Customer"].waitForExistence(timeout: 3))
+
+        let workspacePicker = app.segmentedControls["CustomerProfileWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Files"].tap()
+        XCTAssertTrue(app.staticTexts["Account Statement"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["$189.00"].exists)
+        XCTAssertTrue(app.buttons["EmailCustomerAccountStatement"].exists)
+
+        let generate = app.buttons["GenerateCustomerAccountStatement"]
+        let customerForm = app.collectionViews.firstMatch
+        for _ in 0..<5 where !generate.exists || !generate.isHittable {
+            customerForm.swipeUp()
+        }
+        XCTAssertTrue(generate.waitForExistence(timeout: 3))
+        XCTAssertTrue(generate.isHittable)
+        generate.tap()
+
+        let previewNavigation = app.navigationBars.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@ OR label BEGINSWITH %@", "GunnAire-Account-Statement-", "GunnAire-Account-Statement-")
+        ).firstMatch
+        XCTAssertTrue(previewNavigation.waitForExistence(timeout: 8))
+        let done = previewNavigation.buttons["Done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 3))
+        done.tap()
+
+        XCTAssertTrue(app.navigationBars["Edit Customer"].waitForExistence(timeout: 5))
+        let generatedStatements = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Account Statements (1)")
+        ).firstMatch
+        for _ in 0..<5 where !generatedStatements.exists {
+            customerForm.swipeUp()
+        }
+        XCTAssertTrue(generatedStatements.waitForExistence(timeout: 3))
     }
 
     @MainActor

@@ -317,7 +317,11 @@ final class ServiceDocumentAttachment {
     }
 
     var isFinancialCustomerProfileAttachment: Bool {
-        kind.isFinancialCustomerProfileAttachment
+        kind.isFinancialCustomerProfileAttachment || isGeneratedAccountStatement
+    }
+
+    var isGeneratedAccountStatement: Bool {
+        kind == .customerDocument && displayName.hasPrefix("GunnAire-Account-Statement-")
     }
 
     var canLinkToInvoiceReport: Bool {

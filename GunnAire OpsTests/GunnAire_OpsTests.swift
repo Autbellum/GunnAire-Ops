@@ -28168,4 +28168,235 @@ struct GunnAire_OpsTests {
         ))
     }
 
+    @Test func accountStatementUsesAuthoritativeBalancesAndAgesOnlyOpenCustomerInvoices() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let asOf = try #require(calendar.date(from: DateComponents(year: 2026, month: 9, day: 5)))
+        let customer = Customer(name: "Statement Customer")
+        let otherCustomer = Customer(name: "Other Customer")
+
+        func date(daysBeforeStatement: Int) throws -> Date {
+            try #require(calendar.date(byAdding: .day, value: -daysBeforeStatement, to: asOf))
+        }
+
+        let current = Invoice(
+            customer: customer,
+            amount: 100,
+            dueDate: try #require(calendar.date(byAdding: .day, value: 5, to: asOf)),
+            createdAt: try date(daysBeforeStatement: 5)
+        )
+        let tenDays = Invoice(
+            customer: customer,
+            amount: 500,
+            dueDate: try date(daysBeforeStatement: 10),
+            createdAt: try date(daysBeforeStatement: 40)
+        )
+        let fortyFiveDays = Invoice(
+            customer: customer,
+            quickBooksID: "QBO-STATEMENT-45",
+            quickBooksBalanceDue: 275,
+            quickBooksLastSyncedAt: try date(daysBeforeStatement: 1),
+            amount: 1_000,
+            dueDate: try date(daysBeforeStatement: 45),
+            createdAt: try date(daysBeforeStatement: 75)
+        )
+        let seventyFiveDays = Invoice(
+            customer: customer,
+            amount: 400,
+            dueDate: try date(daysBeforeStatement: 75),
+            createdAt: try date(daysBeforeStatement: 105)
+        )
+        let oneHundredTwentyDays = Invoice(
+            customer: customer,
+            amount: 200,
+            dueDate: try date(daysBeforeStatement: 120),
+            createdAt: try date(daysBeforeStatement: 150)
+        )
+        let paid = Invoice(
+            customer: customer,
+            amount: 125,
+            dueDate: try date(daysBeforeStatement: 20),
+            createdAt: try date(daysBeforeStatement: 50)
+        )
+        let unrelated = Invoice(
+            customer: otherCustomer,
+            amount: 999,
+            dueDate: try date(daysBeforeStatement: 200),
+            createdAt: try date(daysBeforeStatement: 230)
+        )
+        let partialPayment = Payment(
+            invoice: tenDays,
+            amount: 200,
+            date: try date(daysBeforeStatement: 9),
+            method: "card"
+        )
+        let partialRefund = Payment(
+            invoice: tenDays,
+            amount: 50,
+            date: try date(daysBeforeStatement: 8),
+            method: "card",
+            isRefund: true,
+            refundedPaymentID: partialPayment.id
+        )
+        let staleLocalQuickBooksPayment = Payment(
+            invoice: fortyFiveDays,
+            amount: 900,
+            date: try date(daysBeforeStatement: 2),
+            method: "ach"
+        )
+        let fullPayment = Payment(invoice: paid, amount: 125, date: asOf, method: "check")
+
+        let snapshot = CustomerDocumentExporter.accountStatementSnapshot(
+            for: customer,
+            invoices: [current, tenDays, fortyFiveDays, seventyFiveDays, oneHundredTwentyDays, paid, unrelated],
+            payments: [partialPayment, partialRefund, staleLocalQuickBooksPayment, fullPayment],
+            asOf: asOf,
+            calendar: calendar
+        )
+
+        #expect(snapshot.openInvoiceCount == 5)
+        #expect(abs(snapshot.totalBalance - 1_325) < 0.001)
+        #expect(abs(snapshot.balance(in: .current) - 100) < 0.001)
+        #expect(abs(snapshot.balance(in: .days1To30) - 350) < 0.001)
+        #expect(abs(snapshot.balance(in: .days31To60) - 275) < 0.001)
+        #expect(abs(snapshot.balance(in: .days61To90) - 400) < 0.001)
+        #expect(abs(snapshot.balance(in: .days91Plus) - 200) < 0.001)
+        let orderedInvoiceIDs = snapshot.entries.map { $0.invoiceID }
+        let expectedInvoiceIDs: [UUID] = [
+            oneHundredTwentyDays.id,
+            seventyFiveDays.id,
+            fortyFiveDays.id,
+            tenDays.id,
+            current.id
+        ]
+        #expect(orderedInvoiceIDs == expectedInvoiceIDs)
+        let quickBooksEntry = try #require(snapshot.entries.first { $0.invoiceID == fortyFiveDays.id })
+        #expect(quickBooksEntry.usesQuickBooksBalance)
+        #expect(abs(quickBooksEntry.balanceDue - 275) < 0.001)
+        let partiallyPaidEntry = try #require(snapshot.entries.first { $0.invoiceID == tenDays.id })
+        #expect(abs(partiallyPaidEntry.netRecordedPayments - 150) < 0.001)
+        #expect(partiallyPaidEntry.paymentActivity.map(\.isRefund) == [false, true])
+    }
+
+    @Test func accountStatementPdfContainsCustomerReadableSummaryAndPaymentActivity() throws {
+        let customer = Customer(
+            name: "PDF Statement Customer",
+            email: "customer@example.com",
+            address: "101 Comfort Lane"
+        )
+        let asOf = Date(timeIntervalSince1970: 1_788_566_400)
+        let invoice = Invoice(
+            siteAddress: "202 Service Street",
+            customer: customer,
+            workType: .repair,
+            amount: 500,
+            dueDate: asOf.addingTimeInterval(-10 * 86_400),
+            createdAt: asOf.addingTimeInterval(-40 * 86_400)
+        )
+        let payment = Payment(
+            invoice: invoice,
+            amount: 150,
+            date: asOf.addingTimeInterval(-5 * 86_400),
+            method: "check"
+        )
+
+        let url = try CustomerDocumentExporter.exportAccountStatement(
+            customer: customer,
+            invoices: [invoice],
+            payments: [payment],
+            asOf: asOf
+        )
+        let text = try #require(PDFDocument(url: url)?.string)
+
+        #expect(url.lastPathComponent.hasPrefix("GunnAire-Account-Statement-PDF-Statement-Customer-"))
+        #expect(text.contains("Account Statement"))
+        #expect(text.contains("PDF Statement Customer"))
+        #expect(text.contains("Total Balance Due"))
+        #expect(text.contains("$350.00"))
+        #expect(text.contains("Payment"))
+        #expect(text.contains("$150.00 via Check"))
+    }
+
+    @Test func accountStatementMailContextFailsClosedForAnotherCustomerOrMissingInvoices() {
+        let customer = Customer(name: "Statement Mail Customer")
+        let otherCustomer = Customer(name: "Other Statement Customer")
+        let invoice = Invoice(customer: customer, amount: 250)
+
+        #expect(CustomerCommunicationWorkflow.contextIsValid(
+            workflow: .accountStatement,
+            customerID: customer.id,
+            serviceCallID: nil,
+            invoiceID: nil,
+            estimateID: nil,
+            maintenanceContractID: nil,
+            estimates: [],
+            invoices: [invoice],
+            serviceCalls: [],
+            recurringContracts: []
+        ))
+        #expect(!CustomerCommunicationWorkflow.contextIsValid(
+            workflow: .accountStatement,
+            customerID: otherCustomer.id,
+            serviceCallID: nil,
+            invoiceID: nil,
+            estimateID: nil,
+            maintenanceContractID: nil,
+            estimates: [],
+            invoices: [invoice],
+            serviceCalls: [],
+            recurringContracts: []
+        ))
+        #expect(!CustomerCommunicationWorkflow.contextIsValid(
+            workflow: .accountStatement,
+            customerID: customer.id,
+            serviceCallID: nil,
+            invoiceID: nil,
+            estimateID: nil,
+            maintenanceContractID: nil,
+            estimates: [],
+            invoices: [],
+            serviceCalls: [],
+            recurringContracts: []
+        ))
+        #expect(GunnAireMailWorkflow.accountStatement.displayName == "Account statement")
+        #expect(GunnAireMailWorkflow.accountStatement.templateVersion == "accountStatement-v1")
+    }
+
+    @Test func accountStatementFilesRemainHiddenFromRolesWithoutFinancialAccess() {
+        let customer = Customer(name: "Statement File Customer")
+        let statement = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .customerDocument,
+            displayName: "GunnAire-Account-Statement-Statement-File-Customer-2026-09-05-ABC123.pdf",
+            localFilePath: "/tmp/statement.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 100
+        )
+        let ordinaryFile = ServiceDocumentAttachment(
+            customer: customer,
+            serviceCallID: nil,
+            kind: .customerDocument,
+            displayName: "customer-note.pdf",
+            localFilePath: "/tmp/customer-note.pdf",
+            contentType: "application/pdf",
+            fileSizeBytes: 50
+        )
+
+        #expect(statement.isGeneratedAccountStatement)
+        #expect(statement.isFinancialCustomerProfileAttachment)
+        let restrictedFiles = ServiceDocumentAttachment.visibleCustomerProfileAttachments(
+            in: [statement, ordinaryFile],
+            canViewFinancials: false
+        )
+        let financialFiles = ServiceDocumentAttachment.visibleCustomerProfileAttachments(
+            in: [statement, ordinaryFile],
+            canViewFinancials: true
+        )
+        #expect(restrictedFiles.count == 1)
+        #expect(restrictedFiles.first?.id == ordinaryFile.id)
+        #expect(financialFiles.count == 2)
+        #expect(financialFiles.map(\.id).contains(statement.id))
+    }
+
 }

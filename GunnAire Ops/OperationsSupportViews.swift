@@ -2762,7 +2762,13 @@ private struct CustomerEditorView: View {
 
     private var generalCustomerAttachments: [ServiceDocumentAttachment] {
         customerLevelFilteredAttachments.filter { attachment in
-            attachment.kind.customerProfileGroupTitle == "Customer Files"
+            attachment.kind.customerProfileGroupTitle == "Customer Files" && !attachment.isGeneratedAccountStatement
+        }
+    }
+
+    private var accountStatementAttachments: [ServiceDocumentAttachment] {
+        customerLevelFilteredAttachments.filter {
+            $0.isGeneratedAccountStatement
         }
     }
 
@@ -2864,6 +2870,14 @@ private struct CustomerEditorView: View {
         }
     }
 
+    private var customerAccountStatementSnapshot: CustomerAccountStatementSnapshot {
+        CustomerDocumentExporter.accountStatementSnapshot(
+            for: customer,
+            invoices: invoices,
+            payments: payments
+        )
+    }
+
     private var customerSnapshot: CustomerIntelligenceSnapshot {
         CustomerIntelligence.snapshot(
             for: customer,
@@ -2907,6 +2921,35 @@ private struct CustomerEditorView: View {
 
     private var canSyncCustomerRecords: Bool {
         AppAccess.canSyncCustomerRecordsWithAccounting(email: currentEmail, users: users)
+    }
+
+    private var accountStatementPreviewButton: some View {
+        Button {
+            generateCustomerAccountStatement(emailAfterGeneration: false)
+        } label: {
+            Label("Generate & Preview", systemImage: "doc.text.magnifyingglass")
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(Color.brandGold)
+        .foregroundStyle(Color.primaryBlack)
+        .accessibilityIdentifier("GenerateCustomerAccountStatement")
+    }
+
+    private var accountStatementEmailButton: some View {
+        Button {
+            generateCustomerAccountStatement(emailAfterGeneration: true)
+        } label: {
+            Label("Email Statement", systemImage: "envelope")
+        }
+        .buttonStyle(.bordered)
+        .disabled(!canEmailCustomerAccountStatement)
+        .accessibilityIdentifier("EmailCustomerAccountStatement")
+    }
+
+    private var canEmailCustomerAccountStatement: Bool {
+        customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
+            customer.allowsTransactionalEmail &&
+            invoices.contains { $0.customer.id == customer.id }
     }
 
     private var activeCustomerOperationalAlerts: [CustomerOperationalAlert] {
@@ -3413,6 +3456,53 @@ private struct CustomerEditorView: View {
                 }
 
                 if selectedWorkspace == .files {
+                if canViewFinancials {
+                Section("Account Statement") {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(customerAccountStatementSnapshot.totalBalance.formatted(.currency(code: "USD")))
+                                .font(.title3.weight(.semibold))
+                            Text("\(customerAccountStatementSnapshot.openInvoiceCount) open invoice\(customerAccountStatementSnapshot.openInvoiceCount == 1 ? "" : "s")")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "doc.text")
+                            .foregroundStyle(Color.brandGold)
+                            .accessibilityHidden(true)
+                    }
+
+                    Text(customerAccountStatementSnapshot.agingSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Text("Creates a customer-ready PDF using the latest QuickBooks balance for linked invoices and recorded payment activity for local invoices.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    ViewThatFits(in: .horizontal) {
+                        HStack {
+                            accountStatementPreviewButton
+                            accountStatementEmailButton
+                        }
+                        VStack(alignment: .leading, spacing: 8) {
+                            accountStatementPreviewButton
+                            accountStatementEmailButton
+                        }
+                    }
+
+                    if customer.email?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                        Label("Add a customer email before emailing the statement.", systemImage: "exclamationmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    } else if !customer.allowsTransactionalEmail {
+                        Label("Service and billing email is disabled in Contact Preferences.", systemImage: "envelope.badge.shield.half.filled")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                }
+
                 Section("Documents & Photos") {
                     if canEditCustomerRecords {
                     Picker("Attachment Type", selection: $customerAttachmentKind) {
@@ -3480,6 +3570,7 @@ private struct CustomerEditorView: View {
                             customerEquipmentAttachmentHistory()
                             customerAttachmentGroup("Service Reports", attachments: generatedServiceReportAttachments)
                             if canViewFinancials {
+                                customerAttachmentGroup("Account Statements", attachments: accountStatementAttachments)
                                 customerAttachmentGroup("Maintenance Agreements", attachments: maintenanceAgreementDocumentAttachments)
                                 customerAttachmentGroup("Estimate Documents", attachments: estimateDocumentAttachments)
                                 customerAttachmentGroup("Invoice Documents", attachments: invoiceDocumentAttachments)
@@ -4882,6 +4973,78 @@ private struct CustomerEditorView: View {
             syncCustomerAttachmentIfPossible(attachment, data: data)
         } catch {
             customerAttachmentMessage = "Attachment save failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func generateCustomerAccountStatement(emailAfterGeneration: Bool) {
+        guard canViewFinancials else {
+            customerAttachmentMessage = "This account cannot create customer financial documents."
+            return
+        }
+
+        do {
+            let url = try CustomerDocumentExporter.exportAccountStatement(
+                customer: customer,
+                invoices: invoices,
+                payments: payments
+            )
+            let data = try Data(contentsOf: url)
+            let statementDate = Date().formatted(date: .abbreviated, time: .omitted)
+            let attachment = ServiceDocumentAttachment(
+                customer: customer,
+                serviceCallID: nil,
+                kind: .customerDocument,
+                displayName: url.lastPathComponent,
+                caption: "Customer account statement as of \(statementDate)",
+                localFilePath: url.path,
+                contentType: "application/pdf",
+                fileSizeBytes: data.count,
+                sharedCompanySyncStatus: GunnAireBackendService.isConfigured ? "needs_attention" : nil,
+                sharedCompanySyncDetail: GunnAireBackendService.isConfigured
+                    ? "Waiting for shared company storage upload."
+                    : "Shared company storage is not configured for this build."
+            )
+            modelContext.insert(attachment)
+            try modelContext.save()
+            syncCustomerAttachmentIfPossible(attachment, data: data)
+
+            if emailAfterGeneration {
+                guard let recipient = customer.email?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !recipient.isEmpty else {
+                    customerAttachmentMessage = "Statement saved. Add a customer email before emailing it."
+                    customerAttachmentPreviewURL = url
+                    return
+                }
+                guard customer.allowsTransactionalEmail else {
+                    customerAttachmentMessage = "Statement saved. Service and billing email is disabled in Contact Preferences."
+                    customerAttachmentPreviewURL = url
+                    return
+                }
+                let balance = customerAccountStatementSnapshot.totalBalance.formatted(.currency(code: "USD"))
+                GunnAireAppIntentRouter.storeMailDraftRoute(
+                    to: recipient,
+                    subject: "GunnAire account statement - \(customer.name)",
+                    body: """
+                    Hello \(customer.name),
+
+                    Attached is your GunnAire account statement showing a current balance of \(balance).
+
+                    Please reply with any questions.
+
+                    Thank you,
+                    GunnAire
+                    """,
+                    attachmentPaths: [url.path],
+                    customerID: customer.id,
+                    workflow: .accountStatement
+                )
+                dismiss()
+            } else {
+                customerAttachmentPreviewURL = url
+                customerAttachmentMessage = "Generated and saved the current account statement."
+            }
+        } catch {
+            customerAttachmentMessage = "Account statement could not be generated: \(error.localizedDescription)"
         }
     }
 

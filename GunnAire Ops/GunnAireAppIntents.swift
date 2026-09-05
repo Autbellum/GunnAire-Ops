@@ -226,6 +226,7 @@ enum GunnAireMailWorkflow: String, Codable, Sendable {
     case postJobReview
     case receipt
     case customerDocument
+    case accountStatement
 
     var displayName: String {
         switch self {
@@ -242,6 +243,7 @@ enum GunnAireMailWorkflow: String, Codable, Sendable {
         case .postJobReview: "Review request"
         case .receipt: "Payment receipt"
         case .customerDocument: "Customer document"
+        case .accountStatement: "Account statement"
         }
     }
 

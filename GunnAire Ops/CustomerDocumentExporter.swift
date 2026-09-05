@@ -15,6 +15,69 @@ enum CustomerDocumentExportError: LocalizedError {
     }
 }
 
+enum CustomerAccountStatementAgingBucket: String, CaseIterable, Equatable {
+    case current
+    case days1To30
+    case days31To60
+    case days61To90
+    case days91Plus
+
+    var displayName: String {
+        switch self {
+        case .current: "Current"
+        case .days1To30: "1–30 days"
+        case .days31To60: "31–60 days"
+        case .days61To90: "61–90 days"
+        case .days91Plus: "91+ days"
+        }
+    }
+}
+
+struct CustomerAccountStatementPaymentEntry: Equatable {
+    let date: Date
+    let amount: Double
+    let isRefund: Bool
+    let method: String
+}
+
+struct CustomerAccountStatementInvoiceEntry: Equatable {
+    let invoiceID: UUID
+    let reference: String
+    let quickBooksReference: String?
+    let quickBooksBalanceUpdatedAt: Date?
+    let issuedAt: Date
+    let dueAt: Date
+    let workType: InvoiceWorkType
+    let serviceAddress: String?
+    let invoiceTotal: Double
+    let balanceDue: Double
+    let netRecordedPayments: Double
+    let dueStatus: String
+    let daysPastDue: Int
+    let agingBucket: CustomerAccountStatementAgingBucket
+    let paymentActivity: [CustomerAccountStatementPaymentEntry]
+    let usesQuickBooksBalance: Bool
+}
+
+struct CustomerAccountStatementSnapshot: Equatable {
+    let customerID: UUID
+    let asOf: Date
+    let entries: [CustomerAccountStatementInvoiceEntry]
+
+    var openInvoiceCount: Int { entries.count }
+    var totalBalance: Double { entries.reduce(0) { $0 + $1.balanceDue } }
+
+    func balance(in bucket: CustomerAccountStatementAgingBucket) -> Double {
+        entries.filter { $0.agingBucket == bucket }.reduce(0) { $0 + $1.balanceDue }
+    }
+
+    var agingSummary: String {
+        CustomerAccountStatementAgingBucket.allCases
+            .map { "\($0.displayName): \(balance(in: $0).formatted(.currency(code: "USD")))" }
+            .joined(separator: " • ")
+    }
+}
+
 enum CustomerDocumentExporter {
     static func customerEmailAttachmentURLs(
         primaryDocumentURL: URL,
@@ -342,6 +405,172 @@ enum CustomerDocumentExporter {
             attachments: attachments,
             equipmentProfiles: equipmentProfiles,
             serviceCalls: serviceCalls
+        )
+    }
+
+    @MainActor
+    static func accountStatementSnapshot(
+        for customer: Customer,
+        invoices: [Invoice],
+        payments: [Payment],
+        asOf: Date = Date(),
+        calendar: Calendar = .current
+    ) -> CustomerAccountStatementSnapshot {
+        let statementDate = calendar.startOfDay(for: asOf)
+        let entries = Invoice.displayDeduplicated(invoices)
+            .filter { $0.customer?.id == customer.id }
+            .compactMap { invoice -> CustomerAccountStatementInvoiceEntry? in
+                let invoicePayments = payments.filter { $0.invoice?.id == invoice.id }
+                let balance = Invoice.outstandingBalance(for: invoice, payments: invoicePayments)
+                guard balance > 0.009 else { return nil }
+
+                let dueDate = invoice.effectiveDueDate(calendar: calendar)
+                let rawDaysPastDue = calendar.dateComponents(
+                    [.day],
+                    from: dueDate,
+                    to: statementDate
+                ).day ?? 0
+                let daysPastDue = max(rawDaysPastDue, 0)
+                let agingBucket: CustomerAccountStatementAgingBucket
+                switch daysPastDue {
+                case 0:
+                    agingBucket = .current
+                case 1...30:
+                    agingBucket = .days1To30
+                case 31...60:
+                    agingBucket = .days31To60
+                case 61...90:
+                    agingBucket = .days61To90
+                default:
+                    agingBucket = .days91Plus
+                }
+
+                let paymentActivity = invoicePayments
+                    .sorted { lhs, rhs in
+                        if lhs.date == rhs.date { return lhs.id.uuidString < rhs.id.uuidString }
+                        return lhs.date < rhs.date
+                    }
+                    .map {
+                        CustomerAccountStatementPaymentEntry(
+                            date: $0.date,
+                            amount: $0.amount,
+                            isRefund: $0.isRefund,
+                            method: $0.methodSummary
+                        )
+                    }
+                let netRecordedPayments = invoicePayments.reduce(0) { total, payment in
+                    total + (payment.isRefund ? -payment.amount : payment.amount)
+                }
+                let quickBooksReference = normalizedValue(invoice.quickBooksID)
+                let reference = String(invoice.id.uuidString.prefix(8)).uppercased()
+
+                return CustomerAccountStatementInvoiceEntry(
+                    invoiceID: invoice.id,
+                    reference: reference,
+                    quickBooksReference: quickBooksReference,
+                    quickBooksBalanceUpdatedAt: invoice.quickBooksLastSyncedAt,
+                    issuedAt: invoice.createdAt,
+                    dueAt: dueDate,
+                    workType: invoice.workType,
+                    serviceAddress: normalizedValue(invoice.siteAddress),
+                    invoiceTotal: invoice.amount,
+                    balanceDue: balance,
+                    netRecordedPayments: netRecordedPayments,
+                    dueStatus: Invoice.dueStatusDetail(
+                        for: invoice,
+                        payments: invoicePayments,
+                        now: asOf,
+                        calendar: calendar
+                    ),
+                    daysPastDue: daysPastDue,
+                    agingBucket: agingBucket,
+                    paymentActivity: paymentActivity,
+                    usesQuickBooksBalance: quickBooksReference != nil && invoice.quickBooksBalanceDue != nil
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.dueAt != rhs.dueAt { return lhs.dueAt < rhs.dueAt }
+                if lhs.issuedAt != rhs.issuedAt { return lhs.issuedAt < rhs.issuedAt }
+                return lhs.invoiceID.uuidString < rhs.invoiceID.uuidString
+            }
+
+        return CustomerAccountStatementSnapshot(
+            customerID: customer.id,
+            asOf: statementDate,
+            entries: entries
+        )
+    }
+
+    @MainActor
+    static func exportAccountStatement(
+        customer: Customer,
+        invoices: [Invoice],
+        payments: [Payment],
+        asOf: Date = Date(),
+        calendar: Calendar = .current
+    ) throws -> URL {
+        let snapshot = accountStatementSnapshot(
+            for: customer,
+            invoices: invoices,
+            payments: payments,
+            asOf: asOf,
+            calendar: calendar
+        )
+        var summaryRows = [
+            row("Statement Date", formattedDate(snapshot.asOf)),
+            row("Open Invoices", String(snapshot.openInvoiceCount)),
+            row("Current", currency(snapshot.balance(in: .current))),
+            row("1–30 Days", currency(snapshot.balance(in: .days1To30))),
+            row("31–60 Days", currency(snapshot.balance(in: .days31To60))),
+            row("61–90 Days", currency(snapshot.balance(in: .days61To90))),
+            row("91+ Days", currency(snapshot.balance(in: .days91Plus))),
+            row("Total Balance Due", currency(snapshot.totalBalance))
+        ]
+        if snapshot.entries.isEmpty {
+            summaryRows.append(row("Account Status", "No open invoice balance as of this statement date."))
+        } else {
+            summaryRows.append(row(
+                "Balance Source",
+                "The latest connected accounting balance is used for synced invoices. Other balances reflect invoice totals less recorded payments and refunds."
+            ))
+        }
+
+        var sections = [DocumentSection(title: "Account Summary", rows: summaryRows)]
+        sections.append(contentsOf: snapshot.entries.map { entry in
+            let activityRows = entry.paymentActivity.map { payment in
+                row(
+                    payment.isRefund ? "Refund" : "Payment",
+                    "\(formattedDate(payment.date)) — \(currency(payment.amount)) via \(payment.method)"
+                )
+            }
+            return DocumentSection(
+                title: "Invoice \(entry.reference)",
+                rows: [
+                    row("Issued", formattedDate(entry.issuedAt)),
+                    row("Due", formattedDate(entry.dueAt)),
+                    row("Status", entry.dueStatus),
+                    row("Aging", entry.agingBucket.displayName),
+                    row("Work Type", entry.workType.displayName),
+                    row("Service Address", entry.serviceAddress),
+                    row("Invoice Total", currency(entry.invoiceTotal)),
+                    row("App-recorded Payments", currency(entry.netRecordedPayments)),
+                    row("Balance Due", currency(entry.balanceDue)),
+                    row("Balance Updated", entry.quickBooksBalanceUpdatedAt.map(formattedDateTime)),
+                    row("Payment Activity", entry.paymentActivity.isEmpty ? "No payment activity recorded." : nil)
+                ] + activityRows
+            )
+        })
+
+        let fileName = makeFileName(
+            prefix: "GunnAire-Account-Statement",
+            customerName: customer.name,
+            descriptor: "\(formattedStatementFileDate(snapshot.asOf))-\(String(UUID().uuidString.prefix(8)).uppercased())"
+        )
+        return try renderPDF(
+            title: "Account Statement",
+            customer: customer,
+            sections: sections,
+            fileName: fileName
         )
     }
 
@@ -1773,9 +2002,19 @@ enum CustomerDocumentExporter {
         date.formatted(date: .abbreviated, time: .shortened)
     }
 
+    private static func formattedStatementFileDate(_ date: Date) -> String {
+        statementFileDateFormatter.string(from: date)
+    }
+
     private static let fileDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd-HHmm"
+        return formatter
+    }()
+
+    private static let statementFileDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
         return formatter
     }()
 }
