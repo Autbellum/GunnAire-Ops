@@ -4,6 +4,34 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
+## Build-2026090417 M5 retained-data acceptance
+
+The exact Apple Development-signed `1.0 (2026090417)` Release was installed
+over `2026090416` on the paired physical 13-inch M5 iPad without removing the
+application. CoreDevice reported the same application database UUID before and
+after installation, proving that the retained application store was preserved.
+The installed bundle then completed three terminate-and-launch cycles and
+remained live for minimum observation periods of 75, 20, and 20 seconds. The
+device's recursive crash-log inventory contains no current-build report; its
+newest existing GunnAire report predates this installation.
+
+The retained app and dSYM share UUID
+`B09850A5-8B43-33EC-9FE2-08767D8809D5`; the arm64 app binary SHA-256 is
+`6834489e1c0ed2d58b996aec537b2455a744a1e2ee41f51e976f3a063e564fd2`.
+Strict signature verification passed, and the embedded development entitlements
+retain Sign in with Apple, CloudKit `iCloud.com.gunnaire.businesssuite`,
+Associated Domains `applinks:gunnaire.com`, and development APNs. The physical
+build result reports zero errors, warnings, or analyzer warnings on iPadOS
+26.6.1. Privacy-minimal evidence is
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-04/physical-m5-retained-launch-2026090417.json`
+(SHA-256
+`0312e41822f022cef202286bd1a44b64ddf5b18d07144845e2a4a213cde71b99`).
+
+This closes exact-current-build retained-data installation and launch stability
+on the primary M5 iPad. It does not claim a manual two-device Handoff, live
+payment/QBO transaction, Production CloudKit promotion, Distribution/TestFlight,
+or App Store acceptance.
+
 ## Build-2026090416 Command Center CloudKit-hydration recheck
 
 The exact Apple Development-signed `1.0 (2026090416)` Release was installed over
