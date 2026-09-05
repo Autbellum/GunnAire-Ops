@@ -29,13 +29,24 @@ open invoice, choose Charge, then choose Tap to Pay. References:
 - https://quickbooks.intuit.com/learn-support/en-us/help-article/receive-payments/use-tap-pay-quickbooks-gopayment-quickbooks-mobile/L38jd9HdC_US_en_US
 
 Exact-source verification passes **712/712** logic tests on the 13-inch M5 iPad
-Simulator and **712/712** on Mac Catalyst. Thirteen focused iPad interface
-journeys pass with zero failures: iPad origin controls, iPhone task opening,
-expired and deferred CloudKit recovery, QuickBooks accounting verification,
-technician-created invoice items, secure unauthenticated launch, simple Mail,
-both Invoice crash guards, existing-invoice editing, and the compact CloudKit
-warning. Optimized iOS and universal arm64/x86_64 Mac Catalyst Release builds
-succeed. The Apple Development-signed iOS archive preserves Sign in with Apple,
+Simulator and **712/712** on Mac Catalyst. The clean serial run of the complete
+main M5 iPad interface class passes **112/113 tests**, with one intentional
+physical-device-only skip and zero failures; the separate launch class passes
+all **4/4** light/dark portrait/landscape executions. The complete run includes
+iPad origin controls, iPhone task opening, expired and deferred CloudKit
+recovery, QuickBooks accounting verification, technician-created invoice items,
+secure unauthenticated launch, simple Mail, both Invoice crash guards,
+existing-invoice editing, and the compact CloudKit warning. The authoritative
+result bundles are
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/GunnAire Ops 1.0 (2026090503 Full Serial M5 iPad UI).xcresult`
+and
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/GunnAire Ops 1.0 (2026090503 Launch M5 iPad UI).xcresult`.
+An earlier parallel attempt is not acceptance evidence: cloned simulators filled
+the host disk and stopped SpringBoard before completion. Only generated test
+devices, result data, and DerivedData were removed; the serial single-device run
+then completed without an app crash or failed assertion. Optimized iOS and
+universal arm64/x86_64 Mac Catalyst Release builds succeed. The Apple
+Development-signed iOS archive preserves Sign in with Apple,
 CloudKit `iCloud.com.gunnaire.businesssuite`, Associated Domains, Handoff, and
 development APNs; its arm64 UUID is
 `5D4406D4-E36C-36DE-9519-D77922FAB412` and binary SHA-256 is
