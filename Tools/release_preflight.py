@@ -15,10 +15,12 @@ import json
 import os
 import plistlib
 import re
+import struct
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -33,10 +35,39 @@ EXPECTED_BACKEND_URL = "https://gunnaire-api.onrender.com"
 EXPECTED_QBO_REDIRECT = "https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback"
 EXPECTED_QBO_CALLBACK_SCHEME = "gunnaireops"
 EXPECTED_APP_STORE_METADATA_PATH = Path("AppStoreAssets") / "AppStoreSubmission.json"
+EXPECTED_APP_STORE_SCREENSHOT_MANIFEST_PATH = (
+    Path("AppStoreAssets") / "ScreenshotManifest.json"
+)
 EXPECTED_APP_STORE_LOCALE = "en-US"
 EXPECTED_APP_STORE_PRIVACY_PURPOSE = (
     "NSPrivacyCollectedDataTypePurposeAppFunctionality"
 )
+EXPECTED_APP_STORE_SCREENSHOT_SETS = {
+    "iPad-13-inch": {
+        "width": 2064,
+        "height": 2752,
+        "filenames": (
+            "01-command-center.png",
+            "02-schedule.png",
+            "03-customer-systems.png",
+            "04-job-billing.png",
+            "05-field-collection.png",
+            "06-quickbooks-sales.png",
+        ),
+    },
+    "iPhone-6.9-inch": {
+        "width": 1320,
+        "height": 2868,
+        "filenames": (
+            "01-command-center.png",
+            "02-schedule.png",
+            "03-customer-systems.png",
+            "04-job-billing.png",
+            "05-field-collection.png",
+            "06-quickbooks-sales.png",
+        ),
+    },
+}
 EXPECTED_CLOUDKIT_V13_ADDITIONS = {
     "CD_Estimate": {
         "CD_salesTaxAmount": ("DOUBLE", "QUERYABLE", "SORTABLE"),
@@ -788,6 +819,223 @@ def check_app_store_metadata(root: Path, results: Results) -> None:
     )
 
 
+def png_dimensions_and_alpha(path: Path) -> tuple[int, int, bool]:
+    """Return PNG dimensions and whether the encoded image can contain transparency."""
+    signature = b"\x89PNG\r\n\x1a\n"
+    with path.open("rb") as stream:
+        if stream.read(len(signature)) != signature:
+            raise ValueError(f"{path} is not a PNG file")
+
+        width = height = color_type = None
+        has_transparency_chunk = False
+        saw_idat = False
+        saw_iend = False
+        chunk_index = 0
+        while not saw_iend:
+            header = stream.read(8)
+            if len(header) != 8:
+                raise ValueError(f"{path} has a truncated PNG chunk header")
+            length, chunk_type = struct.unpack(">I4s", header)
+            if length > 256 * 1024 * 1024:
+                raise ValueError(f"{path} contains an unreasonably large PNG chunk")
+            chunk_data = stream.read(length)
+            encoded_crc = stream.read(4)
+            if len(chunk_data) != length or len(encoded_crc) != 4:
+                raise ValueError(f"{path} has a truncated PNG chunk")
+            expected_crc = zlib.crc32(chunk_type)
+            expected_crc = zlib.crc32(chunk_data, expected_crc) & 0xFFFFFFFF
+            if struct.unpack(">I", encoded_crc)[0] != expected_crc:
+                raise ValueError(f"{path} has an invalid PNG chunk checksum")
+
+            if chunk_index == 0 and chunk_type != b"IHDR":
+                raise ValueError(f"{path} does not begin with a PNG IHDR chunk")
+            if chunk_type == b"IHDR":
+                if chunk_index != 0 or length != 13 or width is not None:
+                    raise ValueError(f"{path} has an invalid PNG IHDR chunk")
+                width, height, _, color_type, _, _, _ = struct.unpack(
+                    ">IIBBBBB", chunk_data
+                )
+                if width < 1 or height < 1 or color_type not in {0, 2, 3, 4, 6}:
+                    raise ValueError(f"{path} has unsupported PNG image metadata")
+            elif chunk_type == b"tRNS":
+                has_transparency_chunk = True
+            elif chunk_type == b"IDAT":
+                saw_idat = True
+            elif chunk_type == b"IEND":
+                if length != 0:
+                    raise ValueError(f"{path} has an invalid PNG IEND chunk")
+                saw_iend = True
+            chunk_index += 1
+
+        if stream.read(1):
+            raise ValueError(f"{path} contains data after the PNG IEND chunk")
+        if width is None or height is None or color_type is None or not saw_idat:
+            raise ValueError(f"{path} is missing required PNG chunks")
+        return width, height, color_type in {4, 6} or has_transparency_chunk
+
+
+def check_app_store_screenshots(
+    root: Path,
+    marketing_version: str,
+    build_version: str,
+    results: Results,
+) -> None:
+    manifest_path = root / EXPECTED_APP_STORE_SCREENSHOT_MANIFEST_PATH
+    try:
+        manifest = load_json_object(manifest_path)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        results.fail(f"App Store screenshot manifest inspection failed: {error}")
+        return
+
+    contract_errors: list[str] = []
+    if manifest.get("schemaVersion") != 1:
+        contract_errors.append("schemaVersion must be 1")
+    if manifest.get("sourceVersion") != marketing_version:
+        contract_errors.append(
+            f"sourceVersion must be {marketing_version!r}"
+        )
+    if manifest.get("sourceBuild") != build_version:
+        contract_errors.append(f"sourceBuild must be {build_version!r}")
+    reviewed_at = manifest.get("reviewedAt")
+    try:
+        parsed_reviewed_at = datetime.strptime(str(reviewed_at), "%Y-%m-%d")
+    except ValueError:
+        parsed_reviewed_at = None
+    if (
+        parsed_reviewed_at is None
+        or parsed_reviewed_at.strftime("%Y-%m-%d") != reviewed_at
+    ):
+        contract_errors.append("reviewedAt must use YYYY-MM-DD")
+
+    expected_set_names = set(EXPECTED_APP_STORE_SCREENSHOT_SETS)
+    capture_evidence = manifest.get("captureEvidence")
+    if not isinstance(capture_evidence, dict) or set(capture_evidence) != expected_set_names:
+        contract_errors.append("captureEvidence must identify both expected device sets")
+    else:
+        for set_name, evidence_name in capture_evidence.items():
+            if (
+                not isinstance(evidence_name, str)
+                or not evidence_name.endswith(".xcresult")
+                or Path(evidence_name).name != evidence_name
+                or build_version not in evidence_name
+            ):
+                contract_errors.append(
+                    f"captureEvidence.{set_name} must be a non-path xcresult name for build {build_version}"
+                )
+
+    screenshot_sets = manifest.get("sets")
+    if not isinstance(screenshot_sets, dict) or set(screenshot_sets) != expected_set_names:
+        contract_errors.append("sets must exactly identify the expected device sets")
+        screenshot_sets = {}
+
+    results.require(
+        not contract_errors,
+        f"App Store screenshot manifest matches source version {marketing_version} ({build_version})",
+        "App Store screenshot manifest is stale or malformed: "
+        + "; ".join(contract_errors),
+    )
+
+    asset_errors: list[str] = []
+    screenshots_root = root / "AppStoreAssets" / "Screenshots"
+    if screenshots_root.is_dir():
+        actual_set_names = {
+            path.name for path in screenshots_root.iterdir() if path.is_dir()
+        }
+        if actual_set_names != expected_set_names:
+            asset_errors.append(
+                "screenshot directories differ: "
+                f"unexpected={sorted(actual_set_names - expected_set_names)}, "
+                f"missing={sorted(expected_set_names - actual_set_names)}"
+            )
+    else:
+        asset_errors.append("AppStoreAssets/Screenshots is missing")
+
+    for set_name, expected in EXPECTED_APP_STORE_SCREENSHOT_SETS.items():
+        set_contract = screenshot_sets.get(set_name)
+        if not isinstance(set_contract, dict):
+            asset_errors.append(f"{set_name} manifest entry is missing")
+            continue
+        if (
+            set_contract.get("width") != expected["width"]
+            or set_contract.get("height") != expected["height"]
+        ):
+            asset_errors.append(
+                f"{set_name} manifest dimensions must be "
+                f"{expected['width']}x{expected['height']}"
+            )
+
+        file_rows = set_contract.get("files")
+        if not isinstance(file_rows, list):
+            asset_errors.append(f"{set_name}.files must be an array")
+            continue
+        hashes: dict[str, str] = {}
+        malformed_rows = False
+        for row in file_rows:
+            if not isinstance(row, dict):
+                malformed_rows = True
+                continue
+            name = row.get("name")
+            digest = row.get("sha256")
+            if (
+                not isinstance(name, str)
+                or Path(name).name != name
+                or not re.fullmatch(r"[0-9a-f]{64}", str(digest or ""))
+                or name in hashes
+            ):
+                malformed_rows = True
+                continue
+            hashes[name] = str(digest)
+        if malformed_rows:
+            asset_errors.append(f"{set_name} contains malformed or duplicate file rows")
+
+        expected_names = set(expected["filenames"])
+        if set(hashes) != expected_names:
+            asset_errors.append(
+                f"{set_name} manifest files differ: "
+                f"unexpected={sorted(set(hashes) - expected_names)}, "
+                f"missing={sorted(expected_names - set(hashes))}"
+            )
+
+        set_directory = screenshots_root / set_name
+        actual_names = (
+            {path.name for path in set_directory.glob("*.png") if path.is_file()}
+            if set_directory.is_dir()
+            else set()
+        )
+        if actual_names != expected_names:
+            asset_errors.append(
+                f"{set_name} PNG files differ: "
+                f"unexpected={sorted(actual_names - expected_names)}, "
+                f"missing={sorted(expected_names - actual_names)}"
+            )
+
+        for filename in expected["filenames"]:
+            screenshot_path = set_directory / filename
+            if not screenshot_path.is_file():
+                continue
+            recorded_digest = hashes.get(filename)
+            if recorded_digest and sha256(screenshot_path) != recorded_digest:
+                asset_errors.append(f"{set_name}/{filename} does not match its audited hash")
+            try:
+                width, height, has_alpha = png_dimensions_and_alpha(screenshot_path)
+            except (OSError, ValueError, struct.error) as error:
+                asset_errors.append(f"{set_name}/{filename} is invalid: {error}")
+                continue
+            if (width, height) != (expected["width"], expected["height"]):
+                asset_errors.append(
+                    f"{set_name}/{filename} is {width}x{height}, expected "
+                    f"{expected['width']}x{expected['height']}"
+                )
+            if has_alpha:
+                asset_errors.append(f"{set_name}/{filename} contains transparency")
+
+    results.require(
+        not asset_errors,
+        "App Store screenshot assets match the audited 13-inch iPad and 6.9-inch iPhone sets",
+        "App Store screenshot asset validation failed: " + "; ".join(asset_errors),
+    )
+
+
 def configured_url_schemes(info: dict[str, Any]) -> set[str]:
     schemes: set[str] = set()
     for url_type in info.get("CFBundleURLTypes", []):
@@ -994,6 +1242,7 @@ def check_source(root: Path, results: Results) -> tuple[str, str, str]:
         results.fail(f"Source entitlement inspection failed: {error}")
 
     check_app_store_metadata(root, results)
+    check_app_store_screenshots(root, marketing_version, build_version, results)
 
     return marketing_version, build_version, backend_version
 

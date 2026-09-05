@@ -3,8 +3,10 @@ import copy
 import io
 import json
 import plistlib
+import struct
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -211,6 +213,144 @@ class AppStoreMetadataPreflightTests(unittest.TestCase):
         results = self.check(contract)
 
         self.assertTrue(any("credentials" in failure.lower() for failure in results.failures))
+
+
+class AppStoreScreenshotPreflightTests(unittest.TestCase):
+    @staticmethod
+    def png_chunk(chunk_type: bytes, data: bytes) -> bytes:
+        checksum = zlib.crc32(chunk_type)
+        checksum = zlib.crc32(data, checksum) & 0xFFFFFFFF
+        return (
+            struct.pack(">I", len(data))
+            + chunk_type
+            + data
+            + struct.pack(">I", checksum)
+        )
+
+    def write_png(
+        self,
+        path: Path,
+        width: int,
+        height: int,
+        *,
+        color_type: int = 2,
+    ) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ihdr = struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0)
+        path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            + self.png_chunk(b"IHDR", ihdr)
+            + self.png_chunk(b"IDAT", zlib.compress(b"synthetic fixture"))
+            + self.png_chunk(b"IEND", b"")
+        )
+
+    def check(self, mutate=None) -> release_preflight.Results:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = {
+                "schemaVersion": 1,
+                "sourceVersion": "1.0",
+                "sourceBuild": "2026090501",
+                "reviewedAt": "2026-09-05",
+                "captureEvidence": {
+                    set_name: f"{set_name} 2026090501.xcresult"
+                    for set_name in release_preflight.EXPECTED_APP_STORE_SCREENSHOT_SETS
+                },
+                "sets": {},
+            }
+            for set_name, expected in (
+                release_preflight.EXPECTED_APP_STORE_SCREENSHOT_SETS.items()
+            ):
+                rows = []
+                for filename in expected["filenames"]:
+                    path = root / "AppStoreAssets" / "Screenshots" / set_name / filename
+                    self.write_png(path, expected["width"], expected["height"])
+                    rows.append(
+                        {"name": filename, "sha256": release_preflight.sha256(path)}
+                    )
+                manifest["sets"][set_name] = {
+                    "width": expected["width"],
+                    "height": expected["height"],
+                    "files": rows,
+                }
+
+            if mutate is not None:
+                mutate(root, manifest)
+            manifest_path = root / release_preflight.EXPECTED_APP_STORE_SCREENSHOT_MANIFEST_PATH
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            results = release_preflight.Results()
+            with contextlib.redirect_stdout(io.StringIO()):
+                release_preflight.check_app_store_screenshots(
+                    root,
+                    "1.0",
+                    "2026090501",
+                    results,
+                )
+            return results
+
+    def test_exact_current_screenshot_set_is_accepted(self) -> None:
+        results = self.check()
+
+        self.assertEqual(results.failures, [])
+        self.assertEqual(results.warnings, 0)
+
+    def test_stale_source_build_is_rejected(self) -> None:
+        results = self.check(
+            lambda _root, manifest: manifest.update(sourceBuild="2026090401")
+        )
+
+        self.assertTrue(any("stale" in failure.lower() for failure in results.failures))
+
+    def test_hash_drift_is_rejected(self) -> None:
+        def mutate(_root: Path, manifest: dict) -> None:
+            manifest["sets"]["iPad-13-inch"]["files"][0]["sha256"] = "0" * 64
+
+        results = self.check(mutate)
+
+        self.assertTrue(any("audited hash" in failure.lower() for failure in results.failures))
+
+    def test_alpha_image_is_rejected_even_when_hash_is_current(self) -> None:
+        def mutate(root: Path, manifest: dict) -> None:
+            set_name = "iPhone-6.9-inch"
+            row = manifest["sets"][set_name]["files"][0]
+            path = root / "AppStoreAssets" / "Screenshots" / set_name / row["name"]
+            expected = release_preflight.EXPECTED_APP_STORE_SCREENSHOT_SETS[set_name]
+            self.write_png(path, expected["width"], expected["height"], color_type=6)
+            row["sha256"] = release_preflight.sha256(path)
+
+        results = self.check(mutate)
+
+        self.assertTrue(any("transparency" in failure.lower() for failure in results.failures))
+
+    def test_wrong_dimensions_are_rejected_even_when_hash_is_current(self) -> None:
+        def mutate(root: Path, manifest: dict) -> None:
+            set_name = "iPad-13-inch"
+            row = manifest["sets"][set_name]["files"][1]
+            path = root / "AppStoreAssets" / "Screenshots" / set_name / row["name"]
+            expected = release_preflight.EXPECTED_APP_STORE_SCREENSHOT_SETS[set_name]
+            self.write_png(path, expected["width"] - 1, expected["height"])
+            row["sha256"] = release_preflight.sha256(path)
+
+        results = self.check(mutate)
+
+        self.assertTrue(any("expected" in failure.lower() for failure in results.failures))
+
+    def test_unexpected_png_is_rejected(self) -> None:
+        def mutate(root: Path, _manifest: dict) -> None:
+            path = (
+                root
+                / "AppStoreAssets"
+                / "Screenshots"
+                / "iPad-13-inch"
+                / "07-unreviewed.png"
+            )
+            self.write_png(path, 2064, 2752)
+
+        results = self.check(mutate)
+
+        self.assertTrue(any("unexpected" in failure.lower() for failure in results.failures))
 
 
 if __name__ == "__main__":

@@ -64,6 +64,13 @@ The order is intentional:
 5. Field payment collection
 6. QuickBooks invoice publication
 
+`ScreenshotManifest.json` binds these exact twelve files to the reviewed app
+version and build, the retained capture-result names, required dimensions, and
+SHA-256 digests. Local release preflight fails if the source build changes,
+an image is replaced, a PNG is added or removed, the dimensions drift, or an
+alpha/transparency channel appears. This prevents an older screenshot set from
+silently passing release preparation after the app interface changes.
+
 ## Current-source verification
 
 The retained screenshot set was regenerated and inspected at full production
@@ -75,8 +82,8 @@ Schedule capture now shows the current concise closeout cue
 (`2/14 complete • Next: Complete technical report`) and direct **Closeout**
 action. No clipping, exposed account email, raw provider detail, keyboard,
 alert, spinner, notification banner, or new overload/navigation defect was
-found. The metadata/privacy contract was also revalidated against the current
-source manifest by the release preflight.
+found. The metadata/privacy and screenshot-integrity contracts were also
+revalidated against the current source by the release preflight.
 
 The iPad workflow passed **1/1** on an iPad Pro 13-inch (M5) simulator with
 iOS 26.5, and the size-class-safe iPhone workflow passed **1/1** on an iPhone
@@ -130,7 +137,10 @@ xcrun xcresulttool export attachments \
 ```
 
 Use each export's `manifest.json` to map the generated UUID filename to the
-suggested screenshot name. Do not assume attachment enumeration order.
+suggested screenshot name. Do not assume attachment enumeration order. After
+visual review, update `ScreenshotManifest.json` with the current source version,
+build, evidence names, dimensions, and exact SHA-256 digest of every retained
+PNG; run the release preflight before accepting the replacement set.
 
 ## Required visual QA
 
