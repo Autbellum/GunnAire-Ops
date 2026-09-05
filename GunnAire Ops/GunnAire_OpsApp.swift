@@ -535,6 +535,7 @@ private enum GunnAireUITestFixtures {
             item.id == servicePackageItemID ||
             item.id == archivedCatalogItemID ||
             item.name == "UI Test Added Repair" ||
+            item.name == "Invoice Workspace Added Part" ||
             item.name == "Offline Taxable Capacitor" ||
             item.name.hasPrefix("Scoped Draft ") {
             context.delete(item)

@@ -445,11 +445,17 @@ final class GunnAire_OpsUITests: XCTestCase {
         let lanePicker = app.segmentedControls["InvoiceWorkspaceLanePicker"]
         XCTAssertTrue(lanePicker.buttons["New Invoice"].isSelected)
         XCTAssertTrue(app.descendants(matching: .any)["ExistingInvoiceEditContext"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Update Invoice"].exists)
+        let existingInvoicePrimaryAction = app.buttons["Update Invoice"]
+        for _ in 0..<8 where !existingInvoicePrimaryAction.exists || !existingInvoicePrimaryAction.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(existingInvoicePrimaryAction.waitForExistence(timeout: 3))
+        XCTAssertTrue(existingInvoicePrimaryAction.isHittable)
+        XCTAssertTrue(existingInvoicePrimaryAction.isEnabled)
 
         let createNewItem = app.buttons["Create New Item"]
         for _ in 0..<6 where !createNewItem.exists || !createNewItem.isHittable {
-            app.swipeUp()
+            app.swipeDown()
         }
         XCTAssertTrue(createNewItem.waitForExistence(timeout: 3))
         createNewItem.tap()

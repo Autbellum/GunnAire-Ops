@@ -342,6 +342,18 @@ struct BillingDocumentsView: View {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    /// SwiftData query updates can arrive one render after a newly created item
+    /// has already been selected. Keep that document-scoped item available to
+    /// the selector immediately so a technician can remove and re-add it
+    /// without waiting for the query refresh.
+    private var itemSelectionItems: [Item] {
+        var availableByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+        for item in newlyCreatedLineItems.values {
+            availableByID[item.id] = item
+        }
+        return Array(availableByID.values)
+    }
+
     private var documentEquipmentProfiles: [CustomerEquipment] {
         guard let customerID = contextCustomer?.id else { return [] }
         return equipmentProfiles
@@ -1724,7 +1736,7 @@ GunnAire
             stackSafeInvoiceBuilderContent
                 .sheet(isPresented: $showingItemSelector) {
                     DocumentationItemSelectorView(
-                        items: items,
+                        items: itemSelectionItems,
                         selectedItems: selectedItems,
                         selectedItemizedAssemblyIDs: Set(selectedItemizedAssemblyMemberships.keys),
                         documentScopedReviewItemIDs: documentScopedReviewItemIDs,
@@ -2044,7 +2056,7 @@ GunnAire
             }
             .sheet(isPresented: $showingItemSelector) {
                 DocumentationItemSelectorView(
-                    items: items,
+                    items: itemSelectionItems,
                     selectedItems: selectedItems,
                     selectedItemizedAssemblyIDs: Set(selectedItemizedAssemblyMemberships.keys),
                     documentScopedReviewItemIDs: documentScopedReviewItemIDs,
