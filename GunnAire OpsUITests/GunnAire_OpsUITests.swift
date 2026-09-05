@@ -779,6 +779,27 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["OK"].exists)
     }
 
+    @MainActor
+    func testNonAdminEmptyCloudReplicaBlocksShadowCompanyDataEntry() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedEmptyCompanyWorkspace"
+        ]
+        app.launch()
+
+        let gateTitle = app.staticTexts["Company workspace not loaded"]
+        XCTAssertTrue(gateTitle.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] 'approved business iCloud account'")
+        ).firstMatch.exists)
+        XCTAssertTrue(app.buttons["Check Again"].exists)
+        XCTAssertTrue(app.buttons["Review Status"].exists)
+        XCTAssertFalse(app.navigationBars["Invoices"].exists)
+    }
+
     /// The iPad workspace intentionally has a small, role-aware sidebar rather
     /// than putting every workflow in the Command Center. This smoke test
     /// verifies that the primary administrative destinations remain reachable

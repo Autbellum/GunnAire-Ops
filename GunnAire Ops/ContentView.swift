@@ -124,6 +124,8 @@ struct ContentView: View {
     @State private var isRetryingCustomerCommunicationUploads = false
     @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness?
     @State private var showingCloudKitContinuityDetails = false
+    @State private var didInspectCompanyOperationalRecords = false
+    @State private var hasCompanyOperationalRecords = false
     
     // Authentication states
     @State private var isQuickBooksAuthenticated = false
@@ -153,12 +155,36 @@ struct ContentView: View {
 
     @MainActor
     private var cloudKitContinuityNotice: CloudKitContinuityNotice? {
-        cloudKitReadiness.flatMap {
+        if let workspaceNotice = OperationalDataContinuity.workspaceNotice(
+            for: operationalWorkspaceAccess,
+            cloudKitReadiness: cloudKitReadiness
+        ) {
+            return workspaceNotice
+        }
+        return cloudKitReadiness.flatMap {
             OperationalDataContinuity.cloudKitNotice(
                 for: $0,
                 mirroringState: cloudKitEventMonitor.state
             )
         }
+    }
+
+    private var operationalWorkspaceAccess: OperationalWorkspaceAccess {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("-uiTestSeedEmptyCompanyWorkspace") {
+            return .emptyReplica
+        }
+        if arguments.contains("-disableCloudKitForTesting") {
+            return .ready
+        }
+        #endif
+
+        return OperationalDataContinuity.workspaceAccess(
+            role: currentUserRole,
+            didInspectLocalRecords: didInspectCompanyOperationalRecords,
+            hasLocalCompanyRecords: hasCompanyOperationalRecords
+        )
     }
 
     private var isAdminUser: Bool {
@@ -239,6 +265,41 @@ struct ContentView: View {
                     description: Text("Your signed-in business account has not been assigned an active role. Ask an administrator to activate your access, then reopen GunnAire Ops.")
                 )
             )
+        }
+
+        switch operationalWorkspaceAccess {
+        case .checking:
+            return AnyView(
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("Checking company workspace…")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityIdentifier("CompanyWorkspaceAccessCheck")
+            )
+        case .emptyReplica:
+            return AnyView(
+                ContentUnavailableView {
+                    Label("Company workspace not loaded", systemImage: "person.icloud")
+                } description: {
+                    Text("This staff login has no company records on this device. Confirm the approved business iCloud account before entering work.")
+                } actions: {
+                    Button("Check Again") {
+                        Task {
+                            await refreshOperationalContinuityState()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Review Status") {
+                        showingSettings = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .accessibilityIdentifier("CompanyWorkspaceAccessGate")
+            )
+        case .ready:
+            break
         }
 
         guard let selectedSidebarItem,
@@ -387,6 +448,7 @@ struct ContentView: View {
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
             ensurePrimaryAdminExists()
+            refreshCompanyOperationalRecordState()
             collapseCloudKitUserDuplicatesIfNeeded()
             cleanupCalendarCreatedCustomersIfNeeded()
             refreshGoogleAccountIdentityIfNeeded()
@@ -420,8 +482,11 @@ struct ContentView: View {
             }
         }
         .task {
-            await refreshCloudKitContinuityReadiness()
+            await refreshOperationalContinuityState()
             await StaffPushNotificationManager.shared.activateForCurrentSessionIfNeeded()
+        }
+        .onChange(of: cloudKitEventMonitor.state) { _, _ in
+            refreshCompanyOperationalRecordState()
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView(
@@ -492,7 +557,7 @@ struct ContentView: View {
             applyPendingAppRouteIfNeeded()
             Task {
                 await refreshAppWideFieldCollectionPrompt()
-                await refreshCloudKitContinuityReadiness()
+                await refreshOperationalContinuityState()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .quickBooksAuthenticationDidChange)) { _ in
@@ -546,6 +611,46 @@ struct ContentView: View {
         #endif
 
         cloudKitReadiness = await GunnAireCloudKit.accountReadiness()
+    }
+
+    @MainActor
+    private func refreshOperationalContinuityState() async {
+        refreshCompanyOperationalRecordState()
+        await refreshCloudKitContinuityReadiness()
+        refreshCompanyOperationalRecordState()
+    }
+
+    @MainActor
+    private func refreshCompanyOperationalRecordState() {
+        func containsRecord<Model: PersistentModel>(_: Model.Type) -> Bool {
+            let count = (try? modelContext.fetchCount(FetchDescriptor<Model>())) ?? 0
+            return count > 0
+        }
+
+        // AppUser and Technician are intentionally excluded because business
+        // authentication can create them before the private CloudKit store has
+        // received any actual company operations. Starter form templates are
+        // also created locally on first launch and therefore prove nothing
+        // about the selected iCloud replica.
+        hasCompanyOperationalRecords =
+            containsRecord(Customer.self) ||
+            containsRecord(CustomerServiceLocation.self) ||
+            containsRecord(CustomerEquipment.self) ||
+            containsRecord(ServiceCall.self) ||
+            containsRecord(Estimate.self) ||
+            containsRecord(Invoice.self) ||
+            containsRecord(Payment.self) ||
+            containsRecord(TimeEntry.self) ||
+            containsRecord(Item.self) ||
+            containsRecord(Vendor.self) ||
+            containsRecord(PurchaseOrder.self) ||
+            containsRecord(InventoryMovement.self) ||
+            containsRecord(RecurringMaintenanceContract.self) ||
+            containsRecord(FieldFormResponse.self) ||
+            containsRecord(FleetVehicle.self) ||
+            containsRecord(FieldExpenseClaim.self) ||
+            containsRecord(BusinessTask.self)
+        didInspectCompanyOperationalRecords = true
     }
 
     @ViewBuilder

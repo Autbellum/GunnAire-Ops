@@ -1075,6 +1075,52 @@ struct GunnAire_OpsTests {
         #expect(unknown.statusDetail.localizedCaseInsensitiveContains("could not verify"))
     }
 
+    @Test func nonAdminCannotCreateAnIsolatedCompanyWorkspaceOnAnEmptyCloudReplica() throws {
+        #expect(
+            OperationalDataContinuity.workspaceAccess(
+                role: .fieldTechnician,
+                didInspectLocalRecords: false,
+                hasLocalCompanyRecords: false
+            ) == .checking
+        )
+
+        let emptyReplica = OperationalDataContinuity.workspaceAccess(
+            role: .dispatcher,
+            didInspectLocalRecords: true,
+            hasLocalCompanyRecords: false
+        )
+        #expect(emptyReplica == .emptyReplica)
+        #expect(!emptyReplica.allowsOperationalWork)
+
+        let notice = try #require(
+            OperationalDataContinuity.workspaceNotice(
+                for: emptyReplica,
+                cloudKitReadiness: .available
+            )
+        )
+        #expect(notice.title == "Company workspace not loaded")
+        #expect(notice.statusDetail.localizedCaseInsensitiveContains("no GunnAire customers"))
+        #expect(notice.recoveryDetail.localizedCaseInsensitiveContains("same approved business iCloud account"))
+    }
+
+    @Test func existingOfflineReplicaRemainsUsableAndAdminCanBootstrapTheCompany() {
+        let offlineStaff = OperationalDataContinuity.workspaceAccess(
+            role: .fieldTechnician,
+            didInspectLocalRecords: true,
+            hasLocalCompanyRecords: true
+        )
+        #expect(offlineStaff == .ready)
+        #expect(offlineStaff.allowsOperationalWork)
+
+        let firstAdmin = OperationalDataContinuity.workspaceAccess(
+            role: .admin,
+            didInspectLocalRecords: true,
+            hasLocalCompanyRecords: false
+        )
+        #expect(firstAdmin == .ready)
+        #expect(firstAdmin.allowsOperationalWork)
+    }
+
     @Test func cloudKitMirroringFailureRemainsVisibleUntilThatOperationSucceeds() throws {
         let start = Date(timeIntervalSince1970: 1_778_000_000)
         var state = CloudKitMirroringState()

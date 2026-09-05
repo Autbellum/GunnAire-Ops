@@ -108,6 +108,18 @@ The app uses the private CloudKit database container
 `iCloud.com.gunnaire.businesssuite` for its SwiftData store. Apple configuration
 and schema status below is current as of 2026-09-04.
 
+Private means per iCloud user. The supported production topology is company-owned
+iPad, Mac, and any operational iPhone signed into the same approved managed
+business iCloud account, while each employee uses an individual GunnAire Ops
+business login for role and tenant authorization. Distinct personal iCloud
+accounts do not share this SwiftData store. Build `2026090504` blocks a
+non-administrator from entering work when the inspected replica is empty, but
+that guard is not exact Apple-ID attestation and cannot detect a wrong private
+database that already contains operational-looking records. Supporting separate
+Apple IDs requires a tenant-scoped backend authority or an explicitly designed
+CloudKit sharing system; SwiftData's current automatic private-database setup
+does not provide that topology.
+
 ### Current capability and schema status
 
 - A refreshed authenticated Apple Developer inspection confirms the explicit
@@ -417,13 +429,21 @@ Historical deployment evidence follows:
    fields plus this one invoice due-date field, with no deletion or security-role
    change. Then complete a signed two-device invoice merge and QBO due-date
    round trip.
-10. Sign the company iPad and Mac into the same approved business iCloud account
-   and sign every staff member into GunnAire Ops with their own business login.
-11. Verify offline edits made on each physical device merge after reconnection before
+10. Sign every operational company iPad, Mac, and iPhone into the same approved
+   managed business iCloud account, then sign each staff member into GunnAire Ops
+   with their own role-bearing business login. Distinct personal iCloud accounts
+   are not supported for the operational SwiftData graph.
+11. Have an administrator create a privacy-safe acceptance canary on that account;
+   verify a fresh non-administrator company device imports it and can work, then
+   verify a wrong or empty iCloud replica shows **Company workspace not loaded**
+   and prevents data entry. The app guard cannot attest the exact Apple ID or
+   detect a wrong private database that already has operational-looking records.
+12. Verify offline edits made on each physical device merge after reconnection before
    relying on CloudKit for live dispatch.
 
-The CloudKit private database keeps the company-owned iPad and Mac in sync. It
-does not replace server-side business authorization, and it should not be used
+The CloudKit private database keeps company-owned devices using that same
+iCloud account in sync. It does not replace server-side business authorization,
+and it should not be used
 as a multi-employee permission system.
 
 The SwiftData schema uses optional CloudKit relationships with explicit
