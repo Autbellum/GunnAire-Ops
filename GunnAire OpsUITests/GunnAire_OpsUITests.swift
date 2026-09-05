@@ -6372,11 +6372,20 @@ final class GunnAire_OpsUITests: XCTestCase {
         sendToFieldIPhone.tap()
 
         app.swipeDown()
-        let handoffStatus = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS %@", "Payment handoff is ready")
-        ).firstMatch
+        let handoffStatus = app.descendants(matching: .any)["ActiveFieldPaymentHandoffStatus"]
         XCTAssertTrue(handoffStatus.waitForExistence(timeout: 5))
-        XCTAssertTrue(handoffStatus.label.contains("Tap to Pay on iPhone"))
+        XCTAssertTrue(handoffStatus.label.contains("Ready for nearby iPhone"))
+
+        let requirementsDetail = "Handoff requires the nearby iPad or Mac and iPhone to use the same approved business Apple Account, with Wi-Fi, Bluetooth, and Handoff enabled."
+        let handoffHelp = app.buttons["ActiveFieldPaymentHandoffHelp"]
+        XCTAssertTrue(handoffHelp.exists)
+        XCTAssertTrue(handoffHelp.label.contains("Handoff help"))
+        let requirementsText = app.staticTexts.matching(
+            NSPredicate(format: "label == %@", requirementsDetail)
+        ).firstMatch
+        XCTAssertFalse(requirementsText.exists)
+        handoffHelp.tap()
+        XCTAssertTrue(requirementsText.waitForExistence(timeout: 3))
 
         let stopFieldHandoff = app.buttons["Stop Field Handoff"]
         XCTAssertTrue(stopFieldHandoff.waitForExistence(timeout: 3))
@@ -6422,9 +6431,8 @@ final class GunnAire_OpsUITests: XCTestCase {
         let quickBooksInvoiceID = app.descendants(matching: .any)["ContactlessQuickBooksInvoiceID"]
         XCTAssertTrue(quickBooksInvoiceID.exists)
         XCTAssertTrue(quickBooksInvoiceID.label.contains("QBO-UI-INVOICE-189"))
-        XCTAssertTrue(app.buttons["Copy QuickBooks Invoice ID"].exists)
-        let quickBooksAppHandoff = app.descendants(matching: .any)["Open or Install QuickBooks Mobile"]
-        let goPaymentAppHandoff = app.descendants(matching: .any)["Open or Install GoPayment"]
+        let quickBooksAppHandoff = app.buttons["Copy Invoice ID & Open QuickBooks"]
+        let goPaymentAppHandoff = app.buttons["Copy Invoice ID & Open GoPayment"]
         for _ in 0..<3 where !quickBooksAppHandoff.exists || !goPaymentAppHandoff.exists {
             app.swipeUp()
         }

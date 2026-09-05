@@ -42,6 +42,7 @@ struct PaymentsAndReceiptsView: View {
     @State private var refundNotes = ""
     @State private var tapToPayMessage = ""
     @State private var fieldHandoffMessage = ""
+    @State private var isShowingFieldHandoffHelp = false
     @State private var actionMessage = ""
     @State private var backendUploadMessage = ""
     @State private var sharedPaymentCollections: [BackendPaymentCollectionRecord] = []
@@ -231,8 +232,28 @@ struct PaymentsAndReceiptsView: View {
                                     .foregroundStyle(fieldHandoffMessage.localizedCaseInsensitiveContains("could not") ? .red : .secondary)
                             }
                             if fieldPaymentHandoff.activeInvoiceID != nil {
+                                Label("Ready for nearby iPhone", systemImage: "iphone.and.arrow.forward")
+                                    .foregroundStyle(Color.green)
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityIdentifier("ActiveFieldPaymentHandoffStatus")
+
+                                Text("Open GunnAire Ops from Handoff within 30 minutes. This invoice's contactless collection guide opens automatically.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+
+                                DisclosureGroup(
+                                    "Handoff help",
+                                    isExpanded: $isShowingFieldHandoffHelp
+                                ) {
+                                    Text(FieldPaymentHandoff.requirementsDetail)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .accessibilityIdentifier("ActiveFieldPaymentHandoffHelp")
+
                                 Button("Stop Field Handoff", role: .cancel) {
                                     fieldPaymentHandoff.end()
+                                    isShowingFieldHandoffHelp = false
                                     fieldHandoffMessage = "Payment handoff stopped. Send the invoice again if it still needs field collection."
                                 }
                                 .buttonStyle(.bordered)
@@ -374,8 +395,9 @@ struct PaymentsAndReceiptsView: View {
                                                     invoiceID: entry.invoice.id,
                                                     amount: entry.balanceDue
                                                 )
+                                                isShowingFieldHandoffHelp = false
                                                 fieldHandoffMessage = didStart
-                                                    ? "Payment handoff is ready for \(Int(FieldPaymentHandoff.validityDuration / 60)) minutes. Open GunnAire Ops from Handoff on the nearby company iPhone to collect this invoice. \(FieldPaymentHandoff.quickBooksTapToPayDetail) \(FieldPaymentHandoff.requirementsDetail)"
+                                                    ? ""
                                                     : "Payment handoff could not start on this device."
                                             }
                                             .buttonStyle(.bordered)
@@ -993,25 +1015,32 @@ struct PaymentsAndReceiptsView: View {
                         Section("QuickBooks Invoice") {
                             LabeledContent("Invoice ID", value: quickBooksReference)
                                 .accessibilityIdentifier("ContactlessQuickBooksInvoiceID")
-
-                            Button {
-                                UIPasteboard.general.string = quickBooksReference
-                                contactlessGuideMessage = "QuickBooks invoice ID copied."
-                            } label: {
-                                Label("Copy QuickBooks Invoice ID", systemImage: "doc.on.doc")
-                            }
                         }
 
                         Section("Use Tap to Pay on iPhone in QuickBooks") {
-                            Link(destination: FieldPaymentHandoff.quickBooksMobileAppStoreURL) {
-                                Label("Open or Install QuickBooks Mobile", systemImage: "arrow.up.forward.app")
+                            Button {
+                                openQuickBooksPaymentApp(
+                                    url: FieldPaymentHandoff.quickBooksMobileAppStoreURL,
+                                    invoiceReference: quickBooksReference,
+                                    appName: "QuickBooks"
+                                )
+                            } label: {
+                                Label("Copy Invoice ID & Open QuickBooks", systemImage: "arrow.up.forward.app")
                             }
-                            .accessibilityIdentifier("OpenQuickBooksMobileApp")
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("CopyInvoiceIDAndOpenQuickBooks")
 
-                            Link(destination: FieldPaymentHandoff.goPaymentAppStoreURL) {
-                                Label("Open or Install GoPayment", systemImage: "arrow.up.forward.app")
+                            Button {
+                                openQuickBooksPaymentApp(
+                                    url: FieldPaymentHandoff.goPaymentAppStoreURL,
+                                    invoiceReference: quickBooksReference,
+                                    appName: "GoPayment"
+                                )
+                            } label: {
+                                Label("Copy Invoice ID & Open GoPayment", systemImage: "arrow.up.forward.app")
                             }
-                            .accessibilityIdentifier("OpenGoPaymentApp")
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("CopyInvoiceIDAndOpenGoPayment")
 
                             DisclosureGroup(
                                 "Show collection steps",
@@ -1124,6 +1153,16 @@ struct PaymentsAndReceiptsView: View {
             await Task.yield()
             showingRecordPaymentSheet = true
         }
+    }
+
+    private func openQuickBooksPaymentApp(
+        url: URL,
+        invoiceReference: String,
+        appName: String
+    ) {
+        UIPasteboard.general.string = invoiceReference
+        contactlessGuideMessage = "Invoice ID copied. In \(appName), choose Receive payment, find this invoice, then choose Charge and Tap to Pay."
+        openURL(url)
     }
 
     private func openQuickBooksConnectionFromContactlessGuide() {

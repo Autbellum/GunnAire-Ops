@@ -391,6 +391,21 @@ Backend source `2026.08.30.16` is deployed and passes the 70-test suite. Native 
 
 ## Field iPhone payment handoff
 
+Build `1.0 (2026090417)` keeps this lifecycle intact while simplifying both
+ends of the handoff. The iPad/Mac origin now presents a compact readiness state,
+one next-step sentence, optional setup help, and persistent cancellation. The
+iPhone guide combines copying the verified QBO invoice identifier with opening
+the official QuickBooks or GoPayment app page, so the field user does not have
+to copy and launch separately. It still cannot present those actions for an
+unpublished invoice or infer payment success from opening another app.
+Current-source verification passes **707/707** logic tests, **2/2** redesigned
+origin/receiver journeys, and **4/4** adjacent publication, deferred-CloudKit,
+expiration, and QBO-verification journeys on the 13-inch M5 iPad Simulator.
+Optimized universal iPad Simulator and Mac Catalyst Release builds also pass;
+the Mac result retains only the known optional host Metal-toolchain path
+warning. No schema, capability, account, provider, payment, invoice, or
+production state changed.
+
 The Payments workspace can hand an unpaid invoice from the iPad or Mac to the
 company iPhone with Apple Handoff. The handoff contains only an invoice
 identifier; the receiving device resolves the current balance from its
@@ -406,9 +421,9 @@ iPhone reapplies the field user's current role, invoice visibility,
 assigned-job, and unpaid-balance restrictions. A QBO-linked invoice shows the
 freshly resolved balance, its copyable provider identifier, and documented
 QuickBooks Mobile/GoPayment navigation without inventing an unsupported deep
-link. It also exposes static HTTPS actions to Intuit's official QuickBooks
-Mobile and GoPayment App Store records so staff can open or install the supported
-payment app without sending invoice or customer data to that URL. An unpublished
+link. Its combined copy-and-open actions copy the verified QBO invoice identifier
+locally before opening Intuit's official QuickBooks Mobile or GoPayment App Store
+record, so no invoice or customer data is sent to that URL. An unpublished
 invoice hides those unusable QuickBooks steps, explains
 the publication dependency, and offers a direct verified cash/check/other
 payment fallback; a local UUID is never presented as a QuickBooks reference.
