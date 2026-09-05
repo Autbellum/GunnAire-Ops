@@ -1,5 +1,53 @@
 # CloudKit and field-payment release checklist
 
+## Current verified increment — build `1.0 (2026090503)`
+
+The Handoff continuation listener now lives at the application boundary instead
+of only inside the authenticated workspace. A receiving iPhone can therefore
+accept the activity while GunnAire Ops is signed out, retain only the expiring
+local invoice UUID, and resume after business-account authentication. Customer,
+invoice, and payment details remain unavailable until the existing role,
+technician-assignment, CloudKit relationship, QBO-publication, open-balance, and
+expiration checks succeed. Invalid, unrelated, and expired activities are
+discarded without leaving a pending route.
+
+Current official Apple guidance confirms that `NSUserActivity` is the supported
+Handoff mechanism and that its `requiredUserInfoKeys` should contain the minimum
+state needed to restore a task. GunnAire continues to declare
+`com.gunnaire.businesssuite.field-payment-handoff` in `NSUserActivityTypes` and
+uses a 30-minute `expirationDate`. Apple also confirms that embedded Tap to Pay
+on iPhone requires a supported payment service provider, certified terminal
+configuration, and Apple's managed
+`com.apple.developer.proximity-reader.payment.acceptance` entitlement. Intuit's
+current supported GunnAire path remains QuickBooks Mobile or GoPayment on an
+iPhone XS or newer: enable Tap to Pay in the Intuit app, select the published
+open invoice, choose Charge, then choose Tap to Pay. References:
+
+- https://developer.apple.com/documentation/foundation/implementing-handoff-in-your-app
+- https://developer.apple.com/documentation/proximityreader/setting-up-the-entitlement-for-tap-to-pay-on-iphone
+- https://developer.apple.com/tap-to-pay/
+- https://quickbooks.intuit.com/learn-support/en-us/help-article/receive-payments/use-tap-pay-quickbooks-gopayment-quickbooks-mobile/L38jd9HdC_US_en_US
+
+Exact-source verification passes **712/712** logic tests on the 13-inch M5 iPad
+Simulator and **712/712** on Mac Catalyst. Thirteen focused iPad interface
+journeys pass with zero failures: iPad origin controls, iPhone task opening,
+expired and deferred CloudKit recovery, QuickBooks accounting verification,
+technician-created invoice items, secure unauthenticated launch, simple Mail,
+both Invoice crash guards, existing-invoice editing, and the compact CloudKit
+warning. Optimized iOS and universal arm64/x86_64 Mac Catalyst Release builds
+succeed. The Apple Development-signed iOS archive preserves Sign in with Apple,
+CloudKit `iCloud.com.gunnaire.businesssuite`, Associated Domains, Handoff, and
+development APNs; its arm64 UUID is
+`5D4406D4-E36C-36DE-9519-D77922FAB412` and binary SHA-256 is
+`3657e95495ab0ec9c48a1fa70dae062d25a7feca0435b4bc5be008a1270d7983`.
+The exact build is installed over retained data and running on the paired
+13-inch M5 iPad as build `2026090503`.
+
+Embedded card reading remains an external provider/entitlement gate. This
+increment performed no charge, refund, QBO write, provider setting change,
+Production CloudKit promotion, backend deployment, customer communication, or
+Apple portal mutation.
+
 ## Production backend gate
 
 Reviewed backend `2026.09.03.18` is now exact-branch regression-clean. Safari

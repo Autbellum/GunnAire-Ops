@@ -29,7 +29,7 @@ Safari verification on 2026-08-31 found the live App Accessibility page at
 “Get Started,” with no support claim published. Apple requires a claimed
 accessibility feature to work across every common task—including first launch,
 sign-in, purchases, and settings—and evaluates claims per device type. Build
-`2026090502` retains the app-side Reduce Motion boundary and Debug-only
+`2026090503` retains the app-side Reduce Motion boundary and Debug-only
 largest-Dynamic-Type fixture. The complete iPad UI target passes **113/114**
 logical tests with **116/117** device executions, one intentional physical-only
 skip, and zero failures, including all 13 Administrator workspaces at maximum
@@ -74,7 +74,7 @@ silently passing release preparation after the app interface changes.
 ## Current-source verification
 
 The retained screenshot set was regenerated and inspected at full production
-dimensions on 2026-09-05 from current build `1.0 (2026090502)`. All twelve
+dimensions on 2026-09-05 from current build `1.0 (2026090503)`. All twelve
 iPad and iPhone captures retain a clear hierarchy, complete content,
 progressive disclosure, and natural Command Center, schedule, customer-system,
 job-billing, field-collection, and QuickBooks transitions. The 13-inch iPad
@@ -88,9 +88,9 @@ revalidated against the current source by the release preflight.
 The iPad workflow passed **1/1** on an iPad Pro 13-inch (M5) simulator with
 iOS 26.5, and the size-class-safe iPhone workflow passed **1/1** on an iPhone
 17 Pro Max simulator with iOS 26.5. Evidence is retained at
-`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/GunnAire Ops 1.0 (2026090502 Current iPad App Store Screenshots).xcresult`
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/GunnAire Ops 1.0 (2026090503 Current iPad App Store Screenshots).xcresult`
 and
-`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/GunnAire Ops 1.0 (2026090502 Current iPhone App Store Screenshots).xcresult`.
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/GunnAire Ops 1.0 (2026090503 Current iPhone App Store Screenshots).xcresult`.
 The exported attachments were mapped by their manifests and inspected. The
 iPad Schedule image was reacquired from the same current build after its
 split-view animation and fixture loading settled; that reviewed opaque PNG is

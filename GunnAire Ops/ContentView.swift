@@ -507,16 +507,6 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
             applyPendingAppRouteIfNeeded()
         }
-        .onContinueUserActivity(FieldPaymentHandoff.activityType) { activity in
-            let now = Date()
-            guard let invoiceID = FieldPaymentHandoff.invoiceID(from: activity, now: now) else { return }
-            GunnAireAppIntentRouter.storePaymentCollectionRoute(
-                invoiceID,
-                prefersContactlessGuide: true,
-                expiresAt: activity.expirationDate
-            )
-            applyPendingAppRouteIfNeeded()
-        }
         .focusedSceneValue(
             \.gunnaireNavigationCommandContext,
             GunnAireNavigationCommandContext(

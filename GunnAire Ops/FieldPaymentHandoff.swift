@@ -149,6 +149,27 @@ final class FieldPaymentHandoff: ObservableObject {
         return UUID(uuidString: rawID)
     }
 
+    /// Stores a valid continuation at the application boundary so an iPhone
+    /// can receive Handoff before the technician has signed in. The payload is
+    /// still limited to an expiring local invoice identifier; `ContentView`
+    /// re-resolves the invoice and enforces the signed-in user's assignment and
+    /// role before it presents any customer or collection details.
+    @discardableResult
+    static func storeContinuationRoute(
+        from activity: NSUserActivity,
+        now: Date = Date()
+    ) -> Bool {
+        guard let invoiceID = invoiceID(from: activity, now: now) else {
+            return false
+        }
+        GunnAireAppIntentRouter.storePaymentCollectionRoute(
+            invoiceID,
+            prefersContactlessGuide: true,
+            expiresAt: activity.expirationDate
+        )
+        return true
+    }
+
     static func invoiceReference(quickBooksID: String?, localID: UUID) -> String {
         let normalizedQuickBooksID = quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return normalizedQuickBooksID.isEmpty

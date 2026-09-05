@@ -120,6 +120,13 @@ struct AppRootView: View {
         .task {
             await validatePersistedAuthenticationIfNeeded()
         }
+        .onContinueUserActivity(FieldPaymentHandoff.activityType) { activity in
+            // Capture the minimal, expiring route even when the receiving
+            // iPhone is signed out. The authenticated workspace consumes it
+            // after business-account authorization and applies its role and
+            // assignment checks before showing the invoice.
+            FieldPaymentHandoff.storeContinuationRoute(from: activity)
+        }
         .onReceive(
             NotificationCenter.default.publisher(
                 for: ASAuthorizationAppleIDProvider.credentialRevokedNotification

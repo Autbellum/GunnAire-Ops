@@ -1478,6 +1478,35 @@ struct GunnAire_OpsTests {
         #expect(FieldPaymentHandoff.invoiceID(from: activityWithoutExpiration, now: issuedAt) == nil)
     }
 
+    @MainActor
+    @Test func fieldPaymentHandoffSurvivesAuthenticationBoundaryWithoutBypassingAuthorization() {
+        GunnAireAppIntentRouter.discardAllPendingPayloads()
+        defer { GunnAireAppIntentRouter.discardAllPendingPayloads() }
+
+        let invoiceID = UUID()
+        let issuedAt = Date(timeIntervalSinceReferenceDate: 910_000)
+        let activity = FieldPaymentHandoff.makeActivity(invoiceID: invoiceID, now: issuedAt)
+
+        #expect(FieldPaymentHandoff.storeContinuationRoute(from: activity, now: issuedAt))
+        #expect(GunnAireAppIntentRouter.consumePendingRoute() == .payments)
+
+        let route = GunnAireAppIntentRouter.consumePendingPaymentCollectionRoute(now: issuedAt)
+        #expect(route?.invoiceID == invoiceID)
+        #expect(route?.prefersContactlessGuide == true)
+        #expect(route?.expiresAt == activity.expirationDate)
+
+        let expiredAt = issuedAt.addingTimeInterval(FieldPaymentHandoff.validityDuration)
+        #expect(!FieldPaymentHandoff.storeContinuationRoute(from: activity, now: expiredAt))
+        #expect(GunnAireAppIntentRouter.consumePendingRoute() == nil)
+        #expect(GunnAireAppIntentRouter.consumePendingPaymentCollectionRoute(now: expiredAt) == nil)
+
+        let unrelatedActivity = NSUserActivity(activityType: "com.gunnaire.businesssuite.unrelated")
+        unrelatedActivity.userInfo = ["invoiceID": invoiceID.uuidString]
+        unrelatedActivity.expirationDate = issuedAt.addingTimeInterval(60)
+        #expect(!FieldPaymentHandoff.storeContinuationRoute(from: unrelatedActivity, now: issuedAt))
+        #expect(GunnAireAppIntentRouter.consumePendingRoute() == nil)
+    }
+
     @Test func fieldPaymentVerificationRequiresAnAuthoritativeBalanceChange() {
         let settled = FieldPaymentVerificationOutcome.resolve(
             previousBalance: 189,
