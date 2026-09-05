@@ -54,6 +54,19 @@ development APNs; its arm64 UUID is
 The exact build is installed over retained data and running on the paired
 13-inch M5 iPad as build `2026090503`.
 
+The exact build and retained CloudKit exports now pass **70 release-preflight
+checks**, with four expected warnings and zero failures. The new fail-closed
+promotion manifest independently records 33 Development record types versus 24
+Production types, nine additive record types, and 335 additive fields. It finds
+zero changed or removed fields, zero existing record-metadata changes, and zero
+security-grant changes. The complete release-tool suite passes **37/37**. The
+manifest is
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/cloudkit-production-promotion-manifest-v23.json`
+(SHA-256
+`3adef38006d8272ce5f8f0d27c9cc97d60dc027ada5b7169487e23ac46f7e377`).
+This is export evidence only; it does not authorize or perform Production
+promotion.
+
 Embedded card reading remains an external provider/entitlement gate. This
 increment performed no charge, refund, QBO write, provider setting change,
 Production CloudKit promotion, backend deployment, customer communication, or
@@ -240,9 +253,11 @@ and schema status below is current as of 2026-09-04.
   the approved nine additive record types and 335 additive fields across 26
   affected record types. No existing Production field, system field, or security
   grant is removed or changed, and every added record uses the approved system
-  fields and default private-database grants. Exact current verification passes
-  **706/706** iPad logic tests, **3/3** focused bootstrap/cleanup tests,
-  **23/23** release-tool tests, and **71/71** backend `.18` tests. Read-only
+  fields and default private-database grants. Exact build-`2026090503` export
+  verification passes **70/4/0**, and the complete release-tool suite passes
+  **37/37** including six dedicated promotion-manifest regressions. The app
+  remains green at **712/712** iPad and **712/712** Mac Catalyst logic tests,
+  and backend `.18` remains **71/71**. Read-only
   online preflight is **70 passed / 3 expected warnings / 1 failure**; CloudKit,
   Apple notification routing, and the QBO callback pass, and the only failure is
   that Render still serves healthy backend `.17` instead of reviewed `.18`.
@@ -256,6 +271,19 @@ and schema status below is current as of 2026-09-04.
   iPad/Mac/iPhone role, offline, conflict, and reconnect acceptance before
   deploying the reviewed v23 schema. After promotion, export Production again
   and require exact Development/Production parity before business use.
+- Generate the review artifact from retained exports before and after any
+  authorized promotion:
+
+  ```sh
+  python3 Tools/cloudkit_promotion_manifest.py \
+    --development /path/to/cloudkit-development.ckdb \
+    --production /path/to/cloudkit-production.ckdb \
+    --output /path/to/cloudkit-production-promotion-manifest.json
+  ```
+
+  Exit status `0` requires the exact cumulative v23 schema and an additive-only
+  delta. A changed/removed field, partial v23 family, unapproved record type,
+  system-field change, or security-grant change exits nonzero.
 
 Historical deployment evidence follows:
 
