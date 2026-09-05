@@ -29,10 +29,11 @@ Safari verification on 2026-08-31 found the live App Accessibility page at
 “Get Started,” with no support claim published. Apple requires a claimed
 accessibility feature to work across every common task—including first launch,
 sign-in, purchases, and settings—and evaluates claims per device type. Build
-`2026083104` retains the app-side Reduce Motion boundary and adds a Debug-only
-largest-Dynamic-Type fixture. The complete iPad UI target passes **94/94**
-logical tests with **97/97** device executions, including all 13 Administrator
-workspaces at maximum accessibility text size without shrinking text. Do not
+`2026090501` retains the app-side Reduce Motion boundary and Debug-only
+largest-Dynamic-Type fixture. The complete iPad UI target passes **112/113**
+logical tests with **115/116** device executions, one intentional physical-only
+skip, and zero failures, including all 13 Administrator workspaces at maximum
+accessibility text size without shrinking text. Do not
 publish Reduce Motion or any other accessibility feature until the signed iPad,
 iPhone, and Mac acceptance record proves the complete applicable task set.
 
@@ -50,7 +51,7 @@ capture production customer records for App Store assets.
 - `Screenshots/iPhone-6.9-inch`: six 1320 x 2868 portrait PNG files.
 
 Every checked-in PNG has no alpha channel. These sizes are accepted by Apple's
-13-inch iPad and 6.9-inch iPhone screenshot slots as of 2026-08-31. Reconfirm
+13-inch iPad and 6.9-inch iPhone screenshot slots as of 2026-09-05. Reconfirm
 the current requirements before a later release:
 https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications
 
@@ -65,33 +66,36 @@ The order is intentional:
 
 ## Current-source verification
 
-The retained screenshot set was re-inspected at full production dimensions on
-2026-09-05 against current build `1.0 (2026090417)`. All six 13-inch iPad
-captures retain a clear information hierarchy, complete content, progressive
-disclosure, and natural Command Center, schedule, customer-system, job-billing,
-field-collection, and QuickBooks transitions. No clipping, exposed account
-email, raw provider detail, keyboard, alert, spinner, notification banner, or
-new overload/navigation defect was found. The metadata/privacy contract was
-also revalidated against the current source manifest by the release preflight.
+The retained screenshot set was regenerated and inspected at full production
+dimensions on 2026-09-05 from current build `1.0 (2026090501)`. All twelve
+iPad and iPhone captures retain a clear hierarchy, complete content,
+progressive disclosure, and natural Command Center, schedule, customer-system,
+job-billing, field-collection, and QuickBooks transitions. The 13-inch iPad
+Schedule capture now shows the current concise closeout cue
+(`2/14 complete • Next: Complete technical report`) and direct **Closeout**
+action. No clipping, exposed account email, raw provider detail, keyboard,
+alert, spinner, notification banner, or new overload/navigation defect was
+found. The metadata/privacy contract was also revalidated against the current
+source manifest by the release preflight.
 
-The current iPad captures were exported from the complete sequential UI result
-that passed 104/104 logical tests with 107/107 device executions on 2026-09-02
-using an iPad Pro 13-inch (M5) simulator with iOS 26.5. The current iPhone
-capture workflow passed 1/1 the same day on an iPhone 17 Pro Max simulator with
-iOS 26.5. Evidence is retained at
-`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-02/GunnAire Ops 1.0 (2026090204 iPad UI Broad 104 Pass).xcresult`
+The iPad workflow passed **1/1** on an iPad Pro 13-inch (M5) simulator with
+iOS 26.5, and the size-class-safe iPhone workflow passed **1/1** on an iPhone
+17 Pro Max simulator with iOS 26.5. Evidence is retained at
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/GunnAire Ops 1.0 (2026090501 Current iPad App Store Screenshots).xcresult`
 and
-`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-02/GunnAire Ops 1.0 (2026090204 iPhone App Store Screenshots).xcresult`.
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/GunnAire Ops 1.0 (2026090501 Current iPhone App Store Screenshots Mirror).xcresult`.
 The twelve exported attachments were mapped by their manifests, visually
-inspected, and mechanically verified for the expected dimensions and an opaque
-RGB pixel format before replacing this retained set. None exposes the signed-in
-account email or sidebar identity, and none contains a keyboard, alert, spinner,
-or notification banner.
+inspected, and mechanically verified at 2064 x 2752 or 1320 x 2868 with no
+alpha channel before replacing this retained set. None exposes a signed-in
+account email, and none contains a keyboard, alert, spinner, or notification
+banner.
 
-The capture contract verifies that the deterministic fixtures never expose the
-signed-in sidebar identity. Customer Systems must show the compact Edit, QR,
-and More actions while lifecycle and delete actions remain hidden in the closed
-menu. Immediately before each attachment, the test also waits for any
+The capture contract verifies that the deterministic fixtures never expose a
+GunnAire account address. When the sidebar is visible, it also requires the
+role-only `Administrator` footer; the compact iPhone layout correctly keeps its
+collapsed sidebar out of the screenshot. Customer Systems must show the compact
+Edit, QR, and More actions while lifecycle and delete actions remain hidden in
+the closed menu. Immediately before each attachment, the test also waits for any
 SpringBoard notification banner to disappear and fails instead of retaining an
 obscured image. The UI-test process sets an intentionally unsupported backend
 authentication mode for deterministic capture only. That keeps the backend

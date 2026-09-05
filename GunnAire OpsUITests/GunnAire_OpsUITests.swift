@@ -6953,15 +6953,22 @@ final class GunnAire_OpsUITests: XCTestCase {
         afterLaunch(app)
 
         let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
-        XCTAssertTrue(accountIdentity.exists)
-        XCTAssertEqual(
-            accountIdentity.label,
-            "Administrator",
-            "App Store screenshot \(name) did not retain the role-only account context"
-        )
+        if accountIdentity.exists {
+            XCTAssertEqual(
+                accountIdentity.label,
+                "Administrator",
+                "App Store screenshot \(name) did not retain the role-only account context"
+            )
+            XCTAssertFalse(
+                accountIdentity.label.contains("@"),
+                "App Store screenshot \(name) exposed an account address"
+            )
+        }
         XCTAssertFalse(
-            accountIdentity.label.contains("@"),
-            "App Store screenshot \(name) exposed an account address"
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
+            ).firstMatch.exists,
+            "App Store screenshot \(name) exposed a GunnAire account address"
         )
         waitForSystemBannerToClear(beforeCapturing: name)
 
