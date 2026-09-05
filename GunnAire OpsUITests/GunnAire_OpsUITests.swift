@@ -7039,6 +7039,8 @@ final class GunnAire_OpsUITests: XCTestCase {
             "App window did not finish rotating for screenshot \(name)"
         )
         afterLaunch(app)
+        refreshPersistentSidebarIfNeeded(app, screenshotName: name)
+        waitForAppStoreScreenshotSurfaceToSettle(app, screenshotName: name)
 
         let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
         if accountIdentity.exists {
@@ -7065,6 +7067,65 @@ final class GunnAire_OpsUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         app.terminate()
+    }
+
+    @MainActor
+    private func refreshPersistentSidebarIfNeeded(
+        _ app: XCUIApplication,
+        screenshotName: String
+    ) {
+        // On iPad, a rapid fixture relaunch can occasionally leave the
+        // system-owned split-view column in an intermediate clipping mask
+        // even though the requested route is ready. Close and reopen the
+        // persistent sidebar through its native control so every retained
+        // image reflects the normal settled layout.
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        guard accountIdentity.exists, accountIdentity.isHittable else { return }
+
+        let sidebarButton = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "sidebar")
+        ).firstMatch
+        guard sidebarButton.waitForExistence(timeout: 2) else { return }
+        sidebarButton.tap()
+
+        let reopenedSidebarButton = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "sidebar")
+        ).firstMatch
+        XCTAssertTrue(reopenedSidebarButton.waitForExistence(timeout: 2))
+        reopenedSidebarButton.tap()
+        XCTAssertTrue(
+            accountIdentity.waitForExistence(timeout: 3) && accountIdentity.isHittable,
+            "Persistent iPad sidebar did not reopen for \(screenshotName)"
+        )
+    }
+
+    @MainActor
+    private func waitForAppStoreScreenshotSurfaceToSettle(
+        _ app: XCUIApplication,
+        screenshotName: String
+    ) {
+        // Route restoration and split-view disclosure can report the expected
+        // navigation bar before their visual transition has completed. Wait
+        // through a short stable window so retained App Store evidence cannot
+        // capture clipped sidebar labels or a partially shifted phone route.
+        // The iOS simulator can finish the app's transition while SpringBoard
+        // is still repositioning the status bar after a rapid terminate/launch
+        // cycle. Four seconds consistently spans both surfaces.
+        let readyAt = Date().addingTimeInterval(4)
+        let window = app.windows.firstMatch
+        let settled = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                Date() >= readyAt &&
+                    window.exists &&
+                    window.frame.height > window.frame.width
+            },
+            object: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [settled], timeout: 6),
+            .completed,
+            "App Store screenshot surface did not settle for \(screenshotName)"
+        )
     }
 
     @MainActor

@@ -1,6 +1,37 @@
 # CloudKit and field-payment release checklist
 
-## Current verified increment — build `1.0 (2026090503)`
+## Current verified increment — build `1.0 (2026090504)`
+
+The exact current Apple Development-signed archive is installed on the physical
+iPad Pro 13-inch (M5), launches normally, and remained live for more than one
+minute. The exact universal Mac Catalyst app also passed normal launch and the
+same observation window before normal termination. Privacy-minimal persistent
+history shows completed CloudKit setup, import, and export events with zero
+failures or still-running events on each platform. The evidence record is
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/current-signed-cloudkit-launch-2026090504.json`
+(SHA-256
+`58a2a3ec050701a4e2f60584783842d936d1804133277aa0649220ac183118bf`).
+No normal application store, customer/accounting field, account identifier, or
+device identifier is retained in that record.
+
+This closes exact signed launch and CloudKit event completion on the available
+M5 iPad and Mac. It does not claim a controlled same-record round trip,
+cross-device field equality, offline-conflict recovery, Production schema
+promotion, or physical-iPhone Handoff/Tap-to-Pay acceptance. Apple Distribution
+signing, the physical iPhone, Production promotion, backend review/deployment,
+approved QBO and Google production acceptance, supplier onboarding, and any
+embedded-payment PSP/entitlement remain external gates.
+
+The current screenshot workflows pass **1/1** on both the iPad Pro 13-inch
+(M5) and iPhone 17 Pro Max simulators. All twelve selected current-build PNGs
+were visually reviewed, contain no account email, are opaque, and match the
+required dimensions. The clean iPad Schedule image is a passing same-source
+reacquisition after native split-view stabilization. The full release-tool
+suite passes **37/37**, and exact local signed-artifact, screenshot, privacy,
+configuration, and v23-Development/v15-Production schema preflight is
+**70 passed / 4 expected warnings / 0 failures**.
+
+### Prior Handoff increment — build `1.0 (2026090503)`
 
 The Handoff continuation listener now lives at the application boundary instead
 of only inside the authenticated workspace. A receiving iPhone can therefore

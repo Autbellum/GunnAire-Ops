@@ -21,6 +21,15 @@ struct GunnAire_OpsApp: App {
     @StateObject private var cloudKitEventMonitor: GunnAireCloudKitEventMonitor
 
     init() {
+        #if DEBUG
+        // Retained App Store screenshots must represent a complete frame, not
+        // an in-flight route, split-view, tab, or sheet transition. This flag
+        // is supplied only by the isolated screenshot fixture process.
+        if ProcessInfo.processInfo.arguments.contains(AppStoreScreenshotPrivacyPolicy.fixtureArgument) {
+            UIView.setAnimationsEnabled(false)
+        }
+        #endif
+
         let cloudKitEventMonitor = GunnAireCloudKitEventMonitor()
         _cloudKitEventMonitor = StateObject(wrappedValue: cloudKitEventMonitor)
         self.startupState = Self.buildStartupState()

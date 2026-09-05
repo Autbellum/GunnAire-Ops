@@ -913,6 +913,28 @@ struct ContentView: View {
     private func applyPendingAppRouteIfNeeded() {
         guard let route = pendingAppRoute else { return }
         let targetItem = route.sidebarItem
+
+        #if DEBUG
+        // App Store capture launches directly into a requested fixture route.
+        // Present that initial route atomically: an animated split-view change
+        // can leave the system status bar or persistent iPad sidebar between
+        // frames even after the destination navigation bar already exists.
+        if ProcessInfo.processInfo.arguments.contains(AppStoreScreenshotPrivacyPolicy.fixtureArgument) {
+            if visibleSidebarItems.contains(targetItem) {
+                selectedSidebarItem = targetItem
+            } else {
+                GunnAireAppIntentRouter.discardPendingPayload(for: route)
+                selectedSidebarItem = SidebarNavigationPolicy.resolvedSelection(
+                    nil,
+                    visibleItems: visibleSidebarItems
+                )
+                restrictedRouteTitle = targetItem.rawValue
+            }
+            columnVisibility = prefersPersistentSidebar ? .doubleColumn : .detailOnly
+            return
+        }
+        #endif
+
         withAnimation(GunnAireAccessibilityMotionPolicy.easeInOut(duration: 0.2, reduceMotion: reduceMotion)) {
             if visibleSidebarItems.contains(targetItem) {
                 selectedSidebarItem = targetItem
