@@ -28257,7 +28257,7 @@ struct GunnAire_OpsTests {
         let current = Invoice(
             customer: customer,
             amount: 100,
-            dueDate: try #require(calendar.date(byAdding: .day, value: 5, to: asOf)),
+            dueDate: calendar.date(byAdding: .day, value: 5, to: asOf),
             createdAt: try date(daysBeforeStatement: 5)
         )
         let tenDays = Invoice(
