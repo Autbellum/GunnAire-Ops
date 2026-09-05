@@ -70,14 +70,24 @@ production probes confirm that deployed `2026.09.02.17` remains healthy, the
 Apple account-notification route rejects an empty envelope, and SiteGround's
 QuickBooks callback returns to `gunnaireops://oauth/qbo/callback`.
 
+The 2026-09-05 Render pre-deployment inspection also confirms that the live
+SQLite file is present and passes `PRAGMA quick_check`. A manifest-verified
+backup marker exists from `2026-09-04T15:57:54.482894+00:00` for the database
+and two document artifacts, and Render exposes a newer daily provider snapshot
+plus prior-code rollback. Neither item proves that a separate encrypted copy is
+held off-host, and no timed restore drill has been completed. Candidate `.18`
+adds eleven nullable customer-portal columns without deleting tables, columns,
+or rows, so routine code rollback must leave those columns intact rather than
+restoring production data.
+
 This evidence does not promote `.18` to production. Review, merge, and Render
 deployment remain required before the app may claim the customer-portal
 estimate-approval contract is live. No pull request, deployment, provider
 credential, QBO record, or customer communication changed during this check.
 The retained record is
-`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-04/backend-production-readiness-2026090318.json`
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/backend-deployment-preflight-2026090503.json`
 (SHA-256
-`9850756ad3d47ac62ec07d8c83b1228b95b727c5433428d01be490f59d048013`).
+`463fdd8bdb5ae17da363a213854e8c059205655b027b3af303c05c4d855865d0`).
 
 ## CloudKit
 

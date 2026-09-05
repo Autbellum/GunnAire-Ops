@@ -1,6 +1,6 @@
 # GunnAire backend operations runbook
 
-Last verified: 2026-08-31
+Last verified: 2026-09-05
 
 This runbook covers the shared GunnAire service at
 `https://gunnaire-api.onrender.com`. It does not authorize accounting changes,
@@ -15,6 +15,29 @@ credential rotation, production restores, or customer communications.
   automated off-host backup schedule is configured and observed.
 - Proposed recovery time objective: 4 hours. This is not proven until a timed
   restore drill is completed by the deployment owner.
+
+## 2026-09-05 production pre-deployment reconciliation
+
+- Production is healthy on `2026.09.02.17`; reviewed candidate
+  `2026.09.03.18` remains undeployed.
+- The production SQLite file is present and `PRAGMA quick_check` returns `ok`.
+- `/var/data/backup_status.json` records a manifest-verified backup at
+  `2026-09-04T15:57:54.482894+00:00`: database 229,376 bytes, two document
+  artifacts, and 272,103 total bytes. Only the first 12 characters of its
+  artifact ID (`70b8b21eef4f`) were retained in release evidence.
+- Render also shows a daily provider snapshot from 2026-09-04, seven-day
+  snapshot retention, and prior-code deployment rollback.
+- The backup marker proves local verification, not off-host custody. No
+  independent encrypted off-host copy or completed restore drill has yet been
+  demonstrated, so the proposed RPO/RTO remain unapproved.
+- Candidate `.18` adds eleven nullable columns to `customer_portal_links`; it
+  does not delete a table, column, or existing row. If code rollback is needed,
+  leave those additive columns in place. Database restore is not part of a
+  routine rollback for this candidate.
+- Exact evidence is
+  `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/backend-deployment-preflight-2026090503.json`
+  (SHA-256
+  `463fdd8bdb5ae17da363a213854e8c059205655b027b3af303c05c4d855865d0`).
 
 ## Release verification
 
@@ -54,9 +77,10 @@ credential rotation, production restores, or customer communications.
    python3 -m unittest discover -s Tools -p 'test_*.py' -v
    ```
 
-   Source `2026.08.30.16` has 70 expected tests. A different count requires
-   review before deployment even when the discovered subset is green. Tools has
-   11 expected CloudKit/release/acceptance tests. Both suites must pass in the
+   Source `2026.09.03.18` has 71 expected backend tests. A different count
+   requires review before deployment even when the discovered subset is green.
+   The 2026-09-05 exact-branch preflight also ran the five applicable Tools
+   checks. Both suites must pass in the
    **Backend regression** GitHub workflow on Python 3.13 and the
    production-aligned Python 3.14 job. The established status-check names remain
    unchanged even though each job now runs both suites. The workflow has
@@ -68,7 +92,8 @@ credential rotation, production restores, or customer communications.
    Confirm a recent verified off-host backup exists before a release that adds
    database tables. The `.12` Apple identity tables, `.13` supplier-attempt
    table/indexes, and `.15` Accounts Payable configuration columns are additive;
-   rolling code back does not require deleting them or restoring the database.
+   `.18` adds eleven nullable customer-portal columns. Rolling code back does
+   not require deleting them or restoring the database.
 5. Do not push release source directly to `main`. The repository's secret-free
    **Backend regression / Python 3.13** and **Backend regression / Python
    3.14** checks have unfiltered pull-request and push-to-`main` triggers.
@@ -89,7 +114,7 @@ credential rotation, production restores, or customer communications.
    part of a routine code deploy.
 6. After the authorized deployment, rerun the same preflight with `--online`.
    Confirm `/health` returns HTTP 200 and exact `serviceVersion`
-   `2026.08.30.16`.
+   `2026.09.03.18`.
 7. Confirm the new public Apple route is present without fabricating an Apple
    event or storing data:
 
