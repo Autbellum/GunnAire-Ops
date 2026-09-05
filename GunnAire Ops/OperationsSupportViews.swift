@@ -3144,9 +3144,10 @@ private struct CustomerEditorView: View {
                     Toggle("Allow service text messages", isOn: $allowsServiceText)
                     Toggle("Allow marketing email", isOn: $allowsMarketing)
 
-                    Text("Service and billing email covers appointment, estimate, invoice, and report delivery. Marketing is optional and never implied by service consent. Text preference is stored for a future consent-aware provider; this app does not send texts yet.")
+                    Text("Service and billing email covers appointments, estimates, invoices, and reports. Service texts open as staff-reviewed Apple Messages drafts on a configured iPhone or iPad. Marketing email is separate and optional. Automated SMS requires an approved provider and separate consent.")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .accessibilityIdentifier("CustomerCommunicationConsentGuidance")
                 }
                 .disabled(!canEditCustomerRecords)
                 if canViewFinancials, let quickBooksID = customer.quickBooksID, !quickBooksID.isEmpty {

@@ -4519,6 +4519,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(workspacePicker.buttons["Overview"].isSelected)
         XCTAssertTrue(app.staticTexts["Profile Photo"].exists)
         XCTAssertTrue(app.staticTexts["Maintain contact and consent details, review account health, and resolve open balances."].exists)
+        let communicationGuidance = app.staticTexts["CustomerCommunicationConsentGuidance"]
+        XCTAssertTrue(communicationGuidance.exists)
+        XCTAssertTrue(communicationGuidance.label.contains("staff-reviewed Apple Messages drafts"))
+        XCTAssertTrue(communicationGuidance.label.contains("Automated SMS requires an approved provider and separate consent"))
+        XCTAssertFalse(communicationGuidance.label.contains("this app does not send texts yet"))
         XCTAssertFalse(app.staticTexts["Equipment Profiles"].exists)
 
         workspacePicker.buttons["Systems"].tap()
