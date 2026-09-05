@@ -35,6 +35,7 @@ struct BillingDocumentsView: View {
     @AppStorage("requireWorkPerformedLogForCloseout") private var requireWorkPerformedLogForCloseout = true
 
     private let initialServiceCall: ServiceCall?
+    private let initialJobStage: JobDocumentationStage?
     private let openCloseoutOnAppear: Bool
     private let openTapToPayOnAppear: Bool
     private let showsDismissButton: Bool
@@ -142,12 +143,14 @@ struct BillingDocumentsView: View {
     init(
         initialServiceCall: ServiceCall? = nil,
         workspaceMode: BillingWorkspaceMode = .all,
+        initialJobStage: JobDocumentationStage? = nil,
         openCloseoutOnAppear: Bool = false,
         openTapToPayOnAppear: Bool = false,
         showsDismissButton: Bool = false,
         dismissButtonTitle: String = "Minimize"
     ) {
         self.initialServiceCall = initialServiceCall
+        self.initialJobStage = initialJobStage
         self.openCloseoutOnAppear = openCloseoutOnAppear
         self.openTapToPayOnAppear = openTapToPayOnAppear
         self.showsDismissButton = showsDismissButton
@@ -2369,7 +2372,7 @@ GunnAire
             if !didLoadLinkedDocumentContext {
                 loadLinkedDocumentContextIfNeeded()
             }
-            selectedJobStage = JobDocumentationStage.recommended(
+            selectedJobStage = initialJobStage ?? JobDocumentationStage.recommended(
                 for: call.status,
                 hasInvoice: currentJobInvoice != nil,
                 invoiceIsPaid: currentJobInvoice.map(isInvoicePaid) ?? false

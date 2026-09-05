@@ -11215,6 +11215,7 @@ struct GunnAire_OpsTests {
             label: "Complete technical report",
             destination: .work
         ))
+        #expect(work.compactNextActionSummary == "0/2 complete • Next: Complete technical report")
 
         let files = JobCloseoutReadiness(
             requiredItems: ["Before photo captured"],
@@ -11254,6 +11255,7 @@ struct GunnAire_OpsTests {
         let ready = JobCloseoutReadiness(requiredItems: ["Work completed"], missingItems: [])
         #expect(ready.nextAction == nil)
         #expect(ready.missingActionSummary() == "Ready for closeout")
+        #expect(ready.compactNextActionSummary == "Ready for closeout")
     }
 
     @Test func jobCloseoutBlocksOnlyAnOpenTimerLinkedToTheSameJob() {

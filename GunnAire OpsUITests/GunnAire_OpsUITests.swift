@@ -2319,7 +2319,7 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    func testJobDocumentationOpensAtTheRecommendedBillingStage() throws {
+    func testScheduleCloseoutHandoffKeepsBillingOneTapAway() throws {
         let app = XCUIApplication()
         app.launchArguments = [
             "-enableSplashVideo", "NO",
@@ -2344,9 +2344,13 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
         XCTAssertTrue(stagePicker.exists)
-        XCTAssertTrue(stagePicker.buttons["Billing"].isSelected)
-        XCTAssertTrue(app.staticTexts["Documentation Builder"].exists)
+        XCTAssertTrue(stagePicker.buttons["Closeout"].isSelected)
+        XCTAssertFalse(app.staticTexts["Documentation Builder"].exists)
         XCTAssertFalse(app.staticTexts["Technical Service Report"].exists)
+
+        stagePicker.buttons["Billing"].tap()
+        XCTAssertTrue(stagePicker.buttons["Billing"].isSelected)
+        XCTAssertTrue(app.staticTexts["Documentation Builder"].waitForExistence(timeout: 3))
 
         let paymentTerms = app.descendants(matching: .any)["InvoicePaymentTerms"]
         for _ in 0..<6 where !paymentTerms.exists || !paymentTerms.isHittable {
@@ -2466,12 +2470,19 @@ final class GunnAire_OpsUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(documentation.waitForExistence(timeout: 3))
+        XCTAssertEqual(documentation.label, "Closeout")
+
+        let scheduleEvidence = XCTAttachment(screenshot: app.screenshot())
+        scheduleEvidence.name = "Schedule next closeout action without blocker overload"
+        scheduleEvidence.lifetime = .keepAlways
+        add(scheduleEvidence)
+
         documentation.tap()
 
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
         XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
-        stagePicker.buttons["Closeout"].tap()
+        XCTAssertTrue(stagePicker.buttons["Closeout"].isSelected)
 
         let nextAction = app.buttons["JobCloseoutNextAction"]
         XCTAssertTrue(nextAction.waitForExistence(timeout: 3))
@@ -2601,6 +2612,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(documentation.waitForExistence(timeout: 3))
         documentation.tap()
 
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        stagePicker.buttons["Billing"].tap()
+
         let approval = app.buttons["Record Customer Approval"]
         for _ in 0..<10 {
             if approval.exists && approval.isHittable { break }
@@ -2623,7 +2638,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
         let confirmation = app.switches["Customer reviewed the scope, total price, and terms"]
         confirmation.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        XCTAssertEqual(confirmation.value as? String, "1")
+        let confirmationSelected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == '1'"),
+            object: confirmation
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [confirmationSelected], timeout: 3), .completed)
         let approveButton = app.buttons["Approve"]
         let enabled = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "enabled == true"),
@@ -2710,6 +2729,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         XCTAssertTrue(documentation.waitForExistence(timeout: 3))
         documentation.tap()
+
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        stagePicker.buttons["Billing"].tap()
 
         let moreActions = app.buttons["EstimateMoreActions"]
         for _ in 0..<10 {
@@ -3169,20 +3192,47 @@ final class GunnAire_OpsUITests: XCTestCase {
         adjustPrice.tap()
 
         XCTAssertTrue(app.navigationBars["Discount or Adjust"].waitForExistence(timeout: 3))
+        let expectedReason = "Approved service-plan price"
         let reason = app.textFields["PriceAdjustmentReason"]
         XCTAssertTrue(reason.waitForExistence(timeout: 3))
         reason.tap()
-        reason.typeText("Approved service-plan price")
+        reason.typeText(expectedReason)
+        let completeReason = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", expectedReason),
+            object: reason
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [completeReason], timeout: 5), .completed)
+        if app.keyboards.firstMatch.exists {
+            app.typeKey(.escape, modifierFlags: [])
+        }
 
         let unitPrice = app.textFields["PriceAdjustmentUnitPrice"]
         XCTAssertTrue(unitPrice.waitForExistence(timeout: 3))
         unitPrice.tap()
         let currentPriceText = unitPrice.value as? String ?? "189.00"
-        unitPrice.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: currentPriceText.count))
+        unitPrice.typeText(
+            String(
+                repeating: XCUIKeyboardKey.delete.rawValue,
+                count: max(currentPriceText.count, 1)
+            )
+        )
         unitPrice.typeText("175")
+
         let authorize = app.buttons["Authorize Price"]
-        XCTAssertTrue(authorize.isEnabled)
-        authorize.tap()
+        let authorizeEnabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"),
+            object: authorize
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [authorizeEnabled], timeout: 3), .completed)
+        authorize.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        if !app.navigationBars["Discount or Adjust"].waitForNonExistence(timeout: 1) {
+            let authorizeAfterKeyboardDismissal = app.buttons["Authorize Price"]
+            XCTAssertTrue(authorizeAfterKeyboardDismissal.waitForExistence(timeout: 3))
+            XCTAssertTrue(authorizeAfterKeyboardDismissal.isEnabled)
+            authorizeAfterKeyboardDismissal
+                .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .tap()
+        }
 
         XCTAssertTrue(
             app.navigationBars["Discount or Adjust"].waitForNonExistence(timeout: 5),
@@ -3240,11 +3290,6 @@ final class GunnAire_OpsUITests: XCTestCase {
         discountAction.tap()
 
         XCTAssertTrue(app.navigationBars["Add Discount"].waitForExistence(timeout: 3))
-        let discountValue = app.textFields["DocumentDiscountValue"]
-        XCTAssertTrue(discountValue.waitForExistence(timeout: 3))
-        discountValue.tap()
-        discountValue.typeText("10")
-
         let reason = app.textFields["DocumentDiscountReason"]
         XCTAssertTrue(reason.waitForExistence(timeout: 3))
         let expectedReason = "Plan"
@@ -3263,13 +3308,34 @@ final class GunnAire_OpsUITests: XCTestCase {
             app.typeKey(.escape, modifierFlags: [])
         }
 
+        let discountValue = app.textFields["DocumentDiscountValue"]
+        XCTAssertTrue(discountValue.waitForExistence(timeout: 3))
+        discountValue.tap()
+        discountValue.typeText("10")
+
         let authorize = app.buttons["AuthorizeDocumentDiscount"]
         XCTAssertTrue(authorize.waitForExistence(timeout: 3))
         XCTAssertTrue(authorize.isEnabled)
-        authorize.tap()
+        authorize.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
+        // On iPadOS, the first navigation-bar tap can be consumed while the
+        // decimal keyboard resigns focus. Retry only when the sheet remains,
+        // then continue to require the actual authorization result below.
+        if !app.navigationBars["Add Discount"].waitForNonExistence(timeout: 1) {
+            let authorizeAfterKeyboardDismissal = app.buttons["AuthorizeDocumentDiscount"]
+            XCTAssertTrue(authorizeAfterKeyboardDismissal.waitForExistence(timeout: 3))
+            XCTAssertTrue(authorizeAfterKeyboardDismissal.isEnabled)
+            authorizeAfterKeyboardDismissal
+                .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .tap()
+        }
+
+        XCTAssertTrue(app.navigationBars["Add Discount"].waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         let summary = app.staticTexts["AuthorizedDocumentDiscount"]
+        for _ in 0..<6 where !summary.exists {
+            app.swipeUp()
+        }
         XCTAssertTrue(summary.waitForExistence(timeout: 3))
         XCTAssertTrue(summary.label.contains("10%"))
         XCTAssertTrue(
@@ -3400,6 +3466,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(documentation.waitForExistence(timeout: 3))
         documentation.tap()
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        stagePicker.buttons["Billing"].tap()
 
         let recordUse = app.buttons["RecordJobMaterialUse-A1000000-0000-4000-8000-000000000013"]
         for _ in 0..<8 {

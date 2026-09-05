@@ -1,6 +1,20 @@
 import SwiftUI
 import SwiftData
 
+private struct ScheduleDocumentationPresentation: Identifiable {
+    enum Destination {
+        case recommended
+        case closeout
+        case collectPayment
+        case tapToPay
+    }
+
+    let call: ServiceCall
+    let destination: Destination
+
+    var id: UUID { call.id }
+}
+
 struct ScheduleView: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
@@ -38,10 +52,8 @@ struct ScheduleView: View {
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var showingAddCallSheet = false
     @State private var editingCall: ServiceCall?
-    @State private var documentationCall: ServiceCall?
+    @State private var documentationPresentation: ScheduleDocumentationPresentation?
     @State private var navigationPath = NavigationPath()
-    @State private var openDocumentationInCloseout = false
-    @State private var openDocumentationInTapToPay = false
     @State private var isSyncingGoogleCalendar = false
     @State private var syncMessage: String?
     @State private var deleteConfirmationCall: ServiceCall?
@@ -425,9 +437,10 @@ struct ScheduleView: View {
                 .sheet(isPresented: $showingAddCallSheet) {
                     if canManageDispatch {
                         AddServiceCallView(selectedDate: selectedDate) { createdCall in
-                            openDocumentationInCloseout = false
-                            openDocumentationInTapToPay = false
-                            documentationCall = createdCall
+                            documentationPresentation = ScheduleDocumentationPresentation(
+                                call: createdCall,
+                                destination: .recommended
+                            )
                         }
                             .tint(Color.brandGold)
                     } else {
@@ -532,19 +545,16 @@ struct ScheduleView: View {
                         dispatchAccessRequiredView
                     }
                 }
-                .fullScreenCover(item: $documentationCall) { call in
+                .fullScreenCover(item: $documentationPresentation) { presentation in
                     BillingDocumentsView(
-                        initialServiceCall: call,
-                        openCloseoutOnAppear: openDocumentationInCloseout,
-                        openTapToPayOnAppear: openDocumentationInTapToPay,
+                        initialServiceCall: presentation.call,
+                        initialJobStage: presentation.destination == .closeout ? .closeout : nil,
+                        openCloseoutOnAppear: presentation.destination == .collectPayment || presentation.destination == .tapToPay,
+                        openTapToPayOnAppear: presentation.destination == .tapToPay,
                         showsDismissButton: true,
                         dismissButtonTitle: "Minimize"
                     )
                     .tint(Color.brandGold)
-                    .onDisappear {
-                        openDocumentationInCloseout = false
-                        openDocumentationInTapToPay = false
-                    }
                 }
                 .confirmationDialog(
                     "Delete this calendar event?",
@@ -1239,9 +1249,7 @@ struct ScheduleView: View {
                         }
 
                         Button("Open Invoice Builder") {
-                            openDocumentationInCloseout = false
-                            openDocumentationInTapToPay = false
-                            documentationCall = job
+                            openDocumentation(job, at: .recommended)
                         }
                         .buttonStyle(.bordered)
                         .tint(Color.brandGold)
@@ -1273,9 +1281,7 @@ struct ScheduleView: View {
                         }
 
                         Button("Open Closeout") {
-                            openDocumentationInCloseout = true
-                            openDocumentationInTapToPay = false
-                            documentationCall = job
+                            openDocumentation(job, at: .closeout)
                         }
                         .buttonStyle(.bordered)
                         .tint(Color.brandGold)
@@ -1406,9 +1412,7 @@ struct ScheduleView: View {
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
                     Button {
-                        openDocumentationInCloseout = true
-                        openDocumentationInTapToPay = tapToPayReady
-                        documentationCall = call
+                        openDocumentation(call, at: tapToPayReady ? .tapToPay : .collectPayment)
                     } label: {
                         Label(tapToPayReady ? "Tap to Pay on iPhone" : "Take Payment", systemImage: "creditcard")
                     }
@@ -1416,12 +1420,14 @@ struct ScheduleView: View {
                 }
 
                 if isAdminUser || canCollectFieldPayments {
+                    let opensCloseout = shouldPrioritizeCloseout(for: call)
                     Button {
-                        openDocumentationInCloseout = false
-                        openDocumentationInTapToPay = false
-                        documentationCall = call
+                        openDocumentation(call, at: opensCloseout ? .closeout : .recommended)
                     } label: {
-                        Label(documentationActionTitle(for: call, compact: true), systemImage: "doc.text")
+                        Label(
+                            opensCloseout ? "Closeout" : documentationActionTitle(for: call, compact: true),
+                            systemImage: opensCloseout ? "checklist" : "doc.text"
+                        )
                     }
                     .tint(Color.brandGold)
                 }
@@ -1496,10 +1502,9 @@ struct ScheduleView: View {
                 }
 
                 if isAdminUser || canCollectFieldPayments {
-                    Button(documentationActionTitle(for: call, compact: true)) {
-                        openDocumentationInCloseout = false
-                        openDocumentationInTapToPay = false
-                        documentationCall = call
+                    let opensCloseout = shouldPrioritizeCloseout(for: call)
+                    Button(opensCloseout ? "Closeout" : documentationActionTitle(for: call, compact: true)) {
+                        openDocumentation(call, at: opensCloseout ? .closeout : .recommended)
                     }
                     .buttonStyle(.bordered)
                     .accessibilityIdentifier("OpenDocumentation-\(call.id.uuidString)")
@@ -1507,9 +1512,7 @@ struct ScheduleView: View {
 
                 if canCollectFieldPayments, let invoice = invoice(for: call), !isInvoicePaid(invoice) {
                     Button(tapToPayReady ? "Pay" : "Collect") {
-                        openDocumentationInCloseout = true
-                        openDocumentationInTapToPay = tapToPayReady
-                        documentationCall = call
+                        openDocumentation(call, at: tapToPayReady ? .tapToPay : .collectPayment)
                     }
                     .buttonStyle(.bordered)
                 } else if canManageDispatch, call.assignedTechnician == nil, let signedInTechnician {
@@ -1531,9 +1534,7 @@ struct ScheduleView: View {
                     )
                 } else if isAdminUser && call.isReadyToCreateBillingDocument {
                     Button("Invoice") {
-                        openDocumentationInCloseout = false
-                        openDocumentationInTapToPay = false
-                        documentationCall = call
+                        openDocumentation(call, at: .recommended)
                     }
                     .buttonStyle(.bordered)
                 }
@@ -1964,16 +1965,38 @@ struct ScheduleView: View {
 
     private func closeoutAttentionText(for call: ServiceCall) -> String? {
         guard isAdminUser,
-              call.linkedInvoiceID != nil ||
-                call.workCompletedChecklist ||
-                call.documentationChecklist ||
-                call.status == .completed ||
-                call.status == .invoiced else {
+              isScheduleCloseoutCandidate(call) else {
             return nil
         }
         let readiness = closeoutReadiness(for: call, invoice: invoice(for: call))
         guard !readiness.isReady else { return nil }
-        return "Closeout next: \(readiness.missingActionSummary(limit: 2))"
+        return readiness.compactNextActionSummary
+    }
+
+    private func openDocumentation(
+        _ call: ServiceCall,
+        at destination: ScheduleDocumentationPresentation.Destination
+    ) {
+        documentationPresentation = ScheduleDocumentationPresentation(
+            call: call,
+            destination: destination
+        )
+    }
+
+    private func shouldPrioritizeCloseout(for call: ServiceCall) -> Bool {
+        guard isAdminUser,
+              isScheduleCloseoutCandidate(call) else {
+            return false
+        }
+        return !closeoutReadiness(for: call, invoice: invoice(for: call)).isReady
+    }
+
+    private func isScheduleCloseoutCandidate(_ call: ServiceCall) -> Bool {
+        call.linkedInvoiceID != nil ||
+            call.workCompletedChecklist ||
+            call.documentationChecklist ||
+            call.status == .completed ||
+            call.status == .invoiced
     }
 
     private func closeoutReadiness(for call: ServiceCall, invoice: Invoice?) -> JobCloseoutReadiness {
