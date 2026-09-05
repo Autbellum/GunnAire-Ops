@@ -1,16 +1,17 @@
 # CloudKit and field-payment release checklist
 
-## Current verified increment — build `1.0 (2026090504)`
+## Current verified increment — build `1.0 (2026090506)`
 
-The exact current Apple Development-signed archive is installed on the physical
-iPad Pro 13-inch (M5), launches normally, and remained live for more than one
-minute. The exact universal Mac Catalyst app also passed normal launch and the
-same observation window before normal termination. Privacy-minimal persistent
-history shows completed CloudKit setup, import, and export events with zero
-failures or still-running events on each platform. The evidence record is
-`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/current-signed-cloudkit-launch-2026090504.json`
-(SHA-256
-`58a2a3ec050701a4e2f60584783842d936d1804133277aa0649220ac183118bf`).
+The exact current Apple Development-signed archive is installed over retained
+data on the physical iPad Pro 13-inch (M5), launches normally, and remained
+live for more than one minute. Its application database identifier matched the
+prior installation. The exact hardened-runtime universal Mac Catalyst archive
+also passed normal launch and the same observation window before normal
+termination. Privacy-minimal persistent history shows completed CloudKit
+setup, import, and export events with zero failures or still-running events on
+each platform. The evidence record is `/Users/gunnaire/Downloads/GunnAire Ops
+Releases/2026-09-05/current-signed-cloudkit-launch-2026090506.json` (SHA-256
+`7a33366242ba5282bf4f1b0c2fde41821eb674a9e00ff603e6aaeb0d414af4c5`).
 No normal application store, customer/accounting field, account identifier, or
 device identifier is retained in that record.
 
@@ -25,11 +26,14 @@ embedded-payment PSP/entitlement remain external gates.
 The current screenshot workflows pass **1/1** on both the iPad Pro 13-inch
 (M5) and iPhone 17 Pro Max simulators. All twelve selected current-build PNGs
 were visually reviewed, contain no account email, are opaque, and match the
-required dimensions. The clean iPad Schedule image is a passing same-source
-reacquisition after native split-view stabilization. The full release-tool
-suite passes **37/37**, and exact local signed-artifact, screenshot, privacy,
-configuration, and v23-Development/v15-Production schema preflight is
-**70 passed / 4 expected warnings / 0 failures**.
+required dimensions. One clipped system split-view Schedule capture was
+rejected; the retained clean frame comes from a separate passing exact-source
+reacquisition. The full release-tool suite passes **37/37**, and exact local
+signed-artifact, screenshot, privacy, configuration, and
+v23-Development/v15-Production schema preflight is **70 passed / 4 expected
+warnings / 0 failures**. Online read-only preflight is **72/3/1** solely because
+Production still serves backend `.17` instead of reviewed `.18`; Apple
+notification rejection and the QBO callback both pass.
 
 ### Prior Handoff increment — build `1.0 (2026090503)`
 

@@ -4,6 +4,37 @@ This is the final evidence procedure for the current iPad/Mac-first release. It
 does not authorize an App Store upload, CloudKit Production promotion, live
 QuickBooks mutation, card charge, customer communication, or supplier order.
 
+## Build-2026090506 M5 retained-data and Mac acceptance
+
+The exact Apple Development-signed `1.0 (2026090506)` Release was installed
+over `2026090504` on the paired physical 13-inch M5 iPad without removing the
+application. The application database identifier remained unchanged, the app
+stayed live beyond 60 seconds, and the privacy-minimal mirroring ledger recorded
+successful CloudKit setup, import, and export with no failed or running
+operation. The app/dSYM UUID is `94140186-7FDB-3EDF-879D-B496AE1D4C5E` and
+the arm64 binary SHA-256 is
+`77cf16eac5b99997f250d433b25a14a964a11267261015419b7dc9eb1f08ef2e`.
+
+The exact matching hardened-runtime Mac Catalyst archive is universal
+`arm64`/`x86_64`, has matching app/dSYM UUIDs
+`C998B840-17B8-3BC7-A6C1-B95893A94AE6` and
+`CCEE431C-1F38-3841-8603-5DB42E40E201`, and binary SHA-256
+`e8b7e8c3423d65527895fb469440376f95ec308966ad7aad7adc1dd4a1f93cf1`.
+It remained live for at least 60 seconds, recorded successful CloudKit
+setup/import/export with no failed or running operation, and then terminated
+normally. Both products retain Sign in with Apple, CloudKit, Associated
+Domains, and development APNs. Privacy-safe evidence is
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/current-signed-cloudkit-launch-2026090506.json`
+(SHA-256
+`7a33366242ba5282bf4f1b0c2fde41821eb674a9e00ff603e6aaeb0d414af4c5`).
+No normal business store or field value was copied or inspected.
+
+This closes exact-current Development-signed launch and aggregate CloudKit
+event health on the primary M5 iPad and Mac. It does not claim Apple
+Distribution, App Store upload, Production CloudKit promotion, a controlled
+same-record two-device round trip, offline conflict recovery, physical-iPhone
+Handoff/Tap-to-Pay, or approved production-provider acceptance.
+
 ## Build-2026090417 M5 retained-data acceptance
 
 The exact Apple Development-signed `1.0 (2026090417)` Release was installed
