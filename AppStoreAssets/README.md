@@ -65,6 +65,15 @@ The order is intentional:
 
 ## Current-source verification
 
+The retained screenshot set was re-inspected at full production dimensions on
+2026-09-05 against current build `1.0 (2026090417)`. All six 13-inch iPad
+captures retain a clear information hierarchy, complete content, progressive
+disclosure, and natural Command Center, schedule, customer-system, job-billing,
+field-collection, and QuickBooks transitions. No clipping, exposed account
+email, raw provider detail, keyboard, alert, spinner, notification banner, or
+new overload/navigation defect was found. The metadata/privacy contract was
+also revalidated against the current source manifest by the release preflight.
+
 The current iPad captures were exported from the complete sequential UI result
 that passed 104/104 logical tests with 107/107 device executions on 2026-09-02
 using an iPad Pro 13-inch (M5) simulator with iOS 26.5. The current iPhone
