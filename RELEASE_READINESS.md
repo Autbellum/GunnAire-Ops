@@ -22,6 +22,23 @@ Build `1.0 (2026090418)` now has clean whole-application acceptance after the fi
 
 Build `1.0 (2026090418)` makes supplier onboarding discoverable before a purchase order exists. Administrators can now open **Settings → Sync → Supplier Connections**, refresh the provider-neutral registry, see ready-versus-setup-required state, and progressively disclose provider scope, access model, protocol, requirements, review date, and the official provider page. Credentials remain server-side, non-administrators do not receive the surface, and any unavailable registry leaves manual ordering intact. Current-source verification passes **707/707** app-logic tests and **1/1** focused 13-inch M5 iPad Settings journey; the backend supplier contract passes **8/8** and release-preflight tests pass **10/10**. Official read-only Safari research reconfirms that Johnstone DirectConnect and Punch-out require account-representative/customer-specific onboarding, Johnstone's published P2P route targets ServiceTitan, and Lennox's published FSM/procurement route also targets ServiceTitan rather than a direct GunnAire API. No adapter, credential, supplier account, purchase order, accounting record, provider configuration, or production service changed. A live adapter remains gated on the provider's written technical contract, test account, commercial authorization, branch/pricing rules, acceptance evidence, and production approval.
 
+The 2026-09-05 signing recheck isolates the final App Store artifact blocker.
+The keychain reports one valid code-signing identity, **Apple Development: Eric
+Gunn (FXYT7XTN84)**, and no Apple Distribution identity. The installed **iOS
+Team Store Provisioning Profile: com.gunnaire.businesssuite**
+(`d899e5d4-dac7-450b-a15a-1a1fc4b2d4be`) is current through
+`2027-06-01T17:04:00Z`, belongs to team `7C4B3RR7RD`, has
+`get-task-allow = false`, production APNs, Production CloudKit, and TestFlight
+reporting. Exact build `2026090506` still passes local preflight **70/4/0**.
+Strict `--require-app-store-signing` mode reports the same 70 passes and only
+two failures: the iOS archive uses the Development identity/profile, and the
+Mac Catalyst artifact is not distribution signed. This proves the app,
+entitlements, privacy contract, screenshots, release markers, binaries/dSYMs,
+production configuration, and CloudKit exports remain valid; a usable Apple
+Distribution private key plus separate Mac distribution signing are required
+before a fresh export. No certificate, profile, entitlement, upload, or Apple
+account setting was changed.
+
 Backend candidate `2026.09.03.18` is ready at the pull-request boundary. [PR #17](https://github.com/Autbellum/GunnAire-Ops/pull/17) is open, mergeable, and clean at exact head `4273294dc3e0bf0ab71ddd2fa2e286965a3fdbc3`; its two commits change four reviewed files. GitHub **Backend regression** run [34001403596](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34001403596) passed on Python 3.13 and 3.14, including the full Backend and Tools suites in both jobs. Production still returns HTTP 200 on `2026.09.02.17`. Because Render deploys `main`, merging is a production change and remains paused for explicit deployment-owner confirmation.
 
 The exact build-`2026090418` release package is retained at the Development-signing boundary. The iOS archive passes strict signing, entitlement, configuration, privacy, version, app/dSYM, and release-hygiene checks with UUID `F4A9ACB0-A768-3543-9988-E1FDBA9BCD34` and binary SHA-256 `306d5116c440ab005404f28e7e427c703e46d748c5f5dabbb6780485cb3de04a`. The universal Mac Catalyst app passes the corresponding hardened-runtime and two-architecture checks with UUIDs `560F2426-D325-34A8-A634-7E8F75069D98` and `D501139C-7503-34EB-B60B-6E6DAEC2D4FC`, and binary SHA-256 `6bcf04e1d68ecdcebb0d5dc57c8fabaade0dc9453a7eab154b0e9e6cb3ff4780`. Exact local preflight is **68/4/0**; online read-only preflight is **70/3/1**, solely because Production still serves healthy backend `.17` while reviewed `.18` awaits review/merge/deployment. The verified source bundle for commit `a90f11c` has SHA-256 `3f3c6be090972ed4f572a7d0e60455dff30d88f67b9f1030a053a0bcc6847168`. No upload, Distribution signing, deployment, schema promotion, provider change, or business-data mutation occurred.
