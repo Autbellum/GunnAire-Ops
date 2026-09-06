@@ -20,6 +20,14 @@ credential rotation, production restores, or customer communications.
 
 - Production is healthy on `2026.09.02.17`; reviewed candidate
   `2026.09.03.18` remains undeployed.
+- Pull request [#17](https://github.com/Autbellum/GunnAire-Ops/pull/17) is open,
+  mergeable, and clean at exact head
+  `4273294dc3e0bf0ab71ddd2fa2e286965a3fdbc3`. Its two commits change exactly
+  four reviewed files. GitHub **Backend regression** run
+  [34001403596](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34001403596)
+  passed the complete Backend and Tools suites on Python 3.13 and 3.14.
+- Render follows `main`; merging PR #17 is the production deployment trigger
+  and remains paused for deployment-owner confirmation.
 - The production SQLite file is present and `PRAGMA quick_check` returns `ok`.
 - `/var/data/backup_status.json` records a manifest-verified backup at
   `2026-09-04T15:57:54.482894+00:00`: database 229,376 bytes, two document
