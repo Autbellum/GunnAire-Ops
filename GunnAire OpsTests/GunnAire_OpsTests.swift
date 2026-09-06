@@ -25911,6 +25911,31 @@ struct GunnAire_OpsTests {
         )
     }
 
+    @Test func quickBooksRateLimitRetriesPreserveProviderIdempotencyIdentityAndBody() throws {
+        let body = Data(#"{"amount":"125.00","clientTransID":"job-42"}"#.utf8)
+        var components = URLComponents(string: "https://quickbooks.api.intuit.com/v3/company/realm-1/invoice")!
+        components.queryItems = [
+            URLQueryItem(name: "minorversion", value: "75"),
+            URLQueryItem(name: "requestid", value: "accounting-request-42")
+        ]
+        var original = URLRequest(url: try #require(components.url))
+        original.httpMethod = "POST"
+        original.httpBody = body
+        original.setValue("payments-request-42", forHTTPHeaderField: "Request-Id")
+        original.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let retry = QuickBooksRateLimitRetryPolicy.requestForRetry(original)
+
+        #expect(retry.url == original.url)
+        #expect(retry.httpMethod == original.httpMethod)
+        #expect(retry.httpBody == body)
+        #expect(retry.value(forHTTPHeaderField: "Request-Id") == "payments-request-42")
+        #expect(URLComponents(url: try #require(retry.url), resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first(where: { $0.name.lowercased() == "requestid" })?
+            .value == "accounting-request-42")
+    }
+
     @Test func quickBooksWriteResponsesRequireRealProviderIdentifiers() throws {
         #expect(
             try QuickBooksProviderResponsePolicy.requiredIdentifier(
