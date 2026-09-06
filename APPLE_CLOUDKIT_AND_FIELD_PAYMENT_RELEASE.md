@@ -102,6 +102,16 @@ manifest is
 This is export evidence only; it does not authorize or perform Production
 promotion.
 
+The 2026-09-05 release-session recheck regenerated that manifest directly from
+`cloudkit-development-13.ckdb` and `cloudkit-production-7.ckdb`. The fresh
+output is byte-for-byte identical at SHA-256
+`3adef38006d8272ce5f8f0d27c9cc97d60dc027ada5b7169487e23ac46f7e377`,
+retains `riskClassification: additive-only` and `safeToPromote: true`, and has
+all eight promotion checks set to true. The six promotion-tool regressions also
+pass, including changed-field, changed-security-grant, partial-delta, and
+unapproved-grant rejection. No CloudKit environment or application record was
+changed during this validation.
+
 Embedded card reading remains an external provider/entitlement gate. This
 increment performed no charge, refund, QBO write, provider setting change,
 Production CloudKit promotion, backend deployment, customer communication, or
@@ -109,14 +119,17 @@ Apple portal mutation.
 
 ## Production backend gate
 
-Reviewed backend `2026.09.03.18` is now exact-branch regression-clean. Safari
-dispatched GitHub **Backend regression #36** for commit
-`8b667e278eba9f149ba70d10e56c654668ade95f`; its Python 3.13 and
-production-aligned Python 3.14 jobs both passed. The same source passes Backend
-**71/71** and the five applicable Tools checks **5/5** locally. Read-only
-production probes confirm that deployed `2026.09.02.17` remains healthy, the
-Apple account-notification route rejects an empty envelope, and SiteGround's
-QuickBooks callback returns to `gunnaireops://oauth/qbo/callback`.
+Reviewed backend `2026.09.03.18` is now exact-pull-request regression-clean.
+[PR #17](https://github.com/Autbellum/GunnAire-Ops/pull/17) is open,
+mergeable, and clean at head
+`4273294dc3e0bf0ab71ddd2fa2e286965a3fdbc3`. Its two commits change exactly
+four reviewed files. GitHub **Backend regression** run
+[34001403596](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34001403596)
+passed the complete Backend and Tools suites on Python 3.13 and the
+production-aligned Python 3.14. Read-only production probes confirm that
+deployed `2026.09.02.17` remains healthy, the Apple account-notification route
+rejects an empty envelope, and SiteGround's QuickBooks callback returns to
+`gunnaireops://oauth/qbo/callback`.
 
 The 2026-09-05 Render pre-deployment inspection also confirms that the live
 SQLite file is present and passes `PRAGMA quick_check`. A manifest-verified
@@ -128,10 +141,12 @@ adds eleven nullable customer-portal columns without deleting tables, columns,
 or rows, so routine code rollback must leave those columns intact rather than
 restoring production data.
 
-This evidence does not promote `.18` to production. Review, merge, and Render
-deployment remain required before the app may claim the customer-portal
-estimate-approval contract is live. No pull request, deployment, provider
-credential, QBO record, or customer communication changed during this check.
+This evidence does not promote `.18` to production. Merge and Render deployment
+remain required before the app may claim the customer-portal estimate-approval
+contract is live. Render follows `main`, so merging PR #17 is the production
+deployment trigger and remains paused for deployment-owner confirmation. No
+deployment, provider credential, QBO record, or customer communication changed
+during this check.
 The retained record is
 `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/backend-deployment-preflight-2026090503.json`
 (SHA-256
