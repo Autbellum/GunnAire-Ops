@@ -53,6 +53,18 @@ struct GoogleUserProfile: Codable {
 
 struct GoogleCalendarListResponse: Codable {
     let items: [GoogleCalendar]
+    let nextPageToken: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+        case nextPageToken
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        items = try container.decodeIfPresent([GoogleCalendar].self, forKey: .items) ?? []
+        nextPageToken = try container.decodeIfPresent(String.self, forKey: .nextPageToken)
+    }
 }
 
 struct GoogleCalendar: Codable, Identifiable {
@@ -102,6 +114,54 @@ struct GoogleCalendar: Codable, Identifiable {
 
 struct GoogleCalendarEventsResponse: Codable {
     let items: [GoogleCalendarEvent]
+    let nextPageToken: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+        case nextPageToken
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        items = try container.decodeIfPresent([GoogleCalendarEvent].self, forKey: .items) ?? []
+        nextPageToken = try container.decodeIfPresent(String.self, forKey: .nextPageToken)
+    }
+}
+
+enum GoogleCalendarPagination {
+    /// A visible failure is safer than silently returning an incomplete schedule
+    /// if Google ever returns a malformed or unexpectedly unbounded page chain.
+    static let maximumPageCount = 100
+
+    static func nextURL(
+        currentURL: URL,
+        nextPageToken: String?,
+        seenPageTokens: inout Set<String>,
+        completedPageCount: Int
+    ) throws -> URL? {
+        guard let nextPageToken else { return nil }
+        let token = nextPageToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { return nil }
+        guard completedPageCount < maximumPageCount else {
+            throw GoogleAuthError.calendarPaginationLimit
+        }
+        guard seenPageTokens.insert(token).inserted else {
+            throw GoogleAuthError.calendarPaginationLoop
+        }
+        guard var components = URLComponents(url: currentURL, resolvingAgainstBaseURL: false) else {
+            throw GoogleAuthError.invalidEndpoint
+        }
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "pageToken" }
+        queryItems.append(URLQueryItem(name: "pageToken", value: token))
+        components.queryItems = queryItems
+        guard let nextURL = components.url,
+              nextURL.scheme?.lowercased() == "https",
+              nextURL.host?.lowercased() == "www.googleapis.com" else {
+            throw GoogleAuthError.invalidEndpoint
+        }
+        return nextURL
+    }
 }
 
 struct GoogleCalendarEvent: Codable, Identifiable {
@@ -673,12 +733,19 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             completion(.failure(businessAccountLinkError))
             return
         }
-        authorizedGET("https://www.googleapis.com/calendar/v3/users/me/calendarList") { (result: Result<GoogleCalendarListResponse, Error>) in
-            switch result {
-            case .success(let response): completion(.success(response.items))
-            case .failure(let error): completion(.failure(error))
-            }
+        var components = URLComponents(string: "https://www.googleapis.com/calendar/v3/users/me/calendarList")
+        components?.queryItems = [URLQueryItem(name: "maxResults", value: "250")]
+        guard let url = components?.url else {
+            completion(.failure(GoogleAuthError.invalidEndpoint))
+            return
         }
+        fetchCalendarListPage(
+            url: url,
+            accumulated: [],
+            seenPageTokens: [],
+            completedPageCount: 0,
+            completion: completion
+        )
     }
 
     func fetchCalendarEvents(calendarID: String, timeMin: Date? = nil, timeMax: Date? = nil, completion: @escaping (Result<[GoogleCalendarEvent], Error>) -> Void) {
@@ -690,7 +757,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
         var queryItems = [
             URLQueryItem(name: "singleEvents", value: "true"),
             URLQueryItem(name: "orderBy", value: "startTime"),
-            URLQueryItem(name: "maxAttendees", value: "20")
+            URLQueryItem(name: "maxAttendees", value: "20"),
+            URLQueryItem(name: "maxResults", value: "2500")
         ]
         let iso = ISO8601DateFormatter()
         if let timeMin {
@@ -704,10 +772,87 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return
         }
+        fetchCalendarEventsPage(
+            url: url,
+            accumulated: [],
+            seenPageTokens: [],
+            completedPageCount: 0,
+            completion: completion
+        )
+    }
+
+    private func fetchCalendarListPage(
+        url: URL,
+        accumulated: [GoogleCalendar],
+        seenPageTokens: Set<String>,
+        completedPageCount: Int,
+        completion: @escaping (Result<[GoogleCalendar], Error>) -> Void
+    ) {
+        authorizedGET(url.absoluteString) { (result: Result<GoogleCalendarListResponse, Error>) in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success(let response):
+                let calendars = accumulated + response.items
+                var nextSeenTokens = seenPageTokens
+                do {
+                    guard let nextURL = try GoogleCalendarPagination.nextURL(
+                        currentURL: url,
+                        nextPageToken: response.nextPageToken,
+                        seenPageTokens: &nextSeenTokens,
+                        completedPageCount: completedPageCount + 1
+                    ) else {
+                        completion(.success(calendars))
+                        return
+                    }
+                    self.fetchCalendarListPage(
+                        url: nextURL,
+                        accumulated: calendars,
+                        seenPageTokens: nextSeenTokens,
+                        completedPageCount: completedPageCount + 1,
+                        completion: completion
+                    )
+                } catch {
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    private func fetchCalendarEventsPage(
+        url: URL,
+        accumulated: [GoogleCalendarEvent],
+        seenPageTokens: Set<String>,
+        completedPageCount: Int,
+        completion: @escaping (Result<[GoogleCalendarEvent], Error>) -> Void
+    ) {
         authorizedGET(url.absoluteString) { (result: Result<GoogleCalendarEventsResponse, Error>) in
             switch result {
-            case .success(let response): completion(.success(response.items))
-            case .failure(let error): completion(.failure(error))
+            case .failure(let error):
+                completion(.failure(error))
+            case .success(let response):
+                let events = accumulated + response.items
+                var nextSeenTokens = seenPageTokens
+                do {
+                    guard let nextURL = try GoogleCalendarPagination.nextURL(
+                        currentURL: url,
+                        nextPageToken: response.nextPageToken,
+                        seenPageTokens: &nextSeenTokens,
+                        completedPageCount: completedPageCount + 1
+                    ) else {
+                        completion(.success(events))
+                        return
+                    }
+                    self.fetchCalendarEventsPage(
+                        url: nextURL,
+                        accumulated: events,
+                        seenPageTokens: nextSeenTokens,
+                        completedPageCount: completedPageCount + 1,
+                        completion: completion
+                    )
+                } catch {
+                    completion(.failure(error))
+                }
             }
         }
     }
@@ -1347,6 +1492,8 @@ enum GoogleAuthError: Error, LocalizedError {
     case businessSessionMismatch
     case sessionStorageFailed
     case unsafeCalendarPatch(String)
+    case calendarPaginationLoop
+    case calendarPaginationLimit
     case unknown
 
     var errorDescription: String? {
@@ -1372,6 +1519,8 @@ enum GoogleAuthError: Error, LocalizedError {
         case .businessSessionMismatch: return "Google returned an identity that did not match the verified GunnAire business session."
         case .sessionStorageFailed: return "The verified Google business session could not be secured on this device."
         case .unsafeCalendarPatch(let keys): return "Blocked unsafe Google Calendar update that would overwrite event details: \(keys)."
+        case .calendarPaginationLoop: return "Google Calendar returned a repeated page. Sync stopped without accepting an incomplete schedule."
+        case .calendarPaginationLimit: return "Google Calendar returned too many pages in one sync. Narrow the schedule window and try again."
         case .unknown: return "An unknown error occurred."
         }
     }

@@ -18029,6 +18029,76 @@ struct GunnAire_OpsTests {
         #expect(GoogleCalendarScheduleSync.isImportedEventManagedByApp(appManagedEvent))
     }
 
+    @Test func googleCalendarPaginationPreservesFiltersAndRejectsRepeatedPages() throws {
+        let baseURL = try #require(URL(string: "https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&maxResults=2500"))
+        var seenTokens: Set<String> = []
+        let nextURL = try #require(GoogleCalendarPagination.nextURL(
+            currentURL: baseURL,
+            nextPageToken: "page token +/==",
+            seenPageTokens: &seenTokens,
+            completedPageCount: 1
+        ))
+        let components = try #require(URLComponents(url: nextURL, resolvingAgainstBaseURL: false))
+        let values = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+
+        #expect(components.scheme == "https")
+        #expect(components.host == "www.googleapis.com")
+        #expect(values["singleEvents"] == "true")
+        #expect(values["orderBy"] == "startTime")
+        #expect(values["maxResults"] == "2500")
+        #expect(values["pageToken"] == "page token +/==")
+        #expect(seenTokens == ["page token +/=="])
+
+        do {
+            _ = try GoogleCalendarPagination.nextURL(
+                currentURL: nextURL,
+                nextPageToken: "page token +/==",
+                seenPageTokens: &seenTokens,
+                completedPageCount: 2
+            )
+            Issue.record("A repeated Google Calendar page token must stop the sync.")
+        } catch GoogleAuthError.calendarPaginationLoop {
+            // Expected: never accept a silently incomplete or looping schedule.
+        }
+    }
+
+    @Test func googleCalendarResponsesDecodeEmptyAndPagedCollections() throws {
+        let emptyCalendars = try JSONDecoder().decode(
+            GoogleCalendarListResponse.self,
+            from: Data("{}".utf8)
+        )
+        #expect(emptyCalendars.items.isEmpty)
+        #expect(emptyCalendars.nextPageToken == nil)
+
+        let eventPage = try JSONDecoder().decode(
+            GoogleCalendarEventsResponse.self,
+            from: Data("{\"items\":[],\"nextPageToken\":\"next-2\"}".utf8)
+        )
+        #expect(eventPage.items.isEmpty)
+        #expect(eventPage.nextPageToken == "next-2")
+
+        var seenTokens: Set<String> = []
+        let baseURL = try #require(URL(string: "https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250"))
+        #expect(try GoogleCalendarPagination.nextURL(
+            currentURL: baseURL,
+            nextPageToken: "   ",
+            seenPageTokens: &seenTokens,
+            completedPageCount: 1
+        ) == nil)
+
+        do {
+            _ = try GoogleCalendarPagination.nextURL(
+                currentURL: baseURL,
+                nextPageToken: "page-101",
+                seenPageTokens: &seenTokens,
+                completedPageCount: GoogleCalendarPagination.maximumPageCount
+            )
+            Issue.record("An unexpectedly unbounded Google Calendar result must stop the sync.")
+        } catch GoogleAuthError.calendarPaginationLimit {
+            // Expected: surface an actionable error instead of truncating results.
+        }
+    }
+
     @Test func gmailInboxQueryAlwaysKeepsResultsInTheInbox() {
         #expect(GmailMessagePresentation.inboxQuery(searchText: "") == "in:inbox")
         #expect(GmailMessagePresentation.inboxQuery(searchText: "  furnace estimate  ") == "in:inbox furnace estimate")
