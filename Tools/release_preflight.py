@@ -15,10 +15,12 @@ import json
 import os
 import plistlib
 import re
+import struct
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+import zlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +34,40 @@ EXPECTED_ASSOCIATED_DOMAIN = "applinks:gunnaire.com"
 EXPECTED_BACKEND_URL = "https://gunnaire-api.onrender.com"
 EXPECTED_QBO_REDIRECT = "https://gunnaire.com/wp-json/ga/v1/qbo/oauth/callback"
 EXPECTED_QBO_CALLBACK_SCHEME = "gunnaireops"
+EXPECTED_APP_STORE_METADATA_PATH = Path("AppStoreAssets") / "AppStoreSubmission.json"
+EXPECTED_APP_STORE_SCREENSHOT_MANIFEST_PATH = (
+    Path("AppStoreAssets") / "ScreenshotManifest.json"
+)
+EXPECTED_APP_STORE_LOCALE = "en-US"
+EXPECTED_APP_STORE_PRIVACY_PURPOSE = (
+    "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+)
+EXPECTED_APP_STORE_SCREENSHOT_SETS = {
+    "iPad-13-inch": {
+        "width": 2064,
+        "height": 2752,
+        "filenames": (
+            "01-command-center.png",
+            "02-schedule.png",
+            "03-customer-systems.png",
+            "04-job-billing.png",
+            "05-field-collection.png",
+            "06-quickbooks-sales.png",
+        ),
+    },
+    "iPhone-6.9-inch": {
+        "width": 1320,
+        "height": 2868,
+        "filenames": (
+            "01-command-center.png",
+            "02-schedule.png",
+            "03-customer-systems.png",
+            "04-job-billing.png",
+            "05-field-collection.png",
+            "06-quickbooks-sales.png",
+        ),
+    },
+}
 EXPECTED_CLOUDKIT_V13_ADDITIONS = {
     "CD_Estimate": {
         "CD_salesTaxAmount": ("DOUBLE", "QUERYABLE", "SORTABLE"),
@@ -357,6 +393,165 @@ EXPECTED_CLOUDKIT_V22_ADDITIONS = {
     },
 }
 EXPECTED_CLOUDKIT_V22_RECORD_TYPES = {"CD_TechnicianWorkShift"}
+EXPECTED_CLOUDKIT_V23_ADDITIONS = {
+    **EXPECTED_CLOUDKIT_V22_ADDITIONS,
+    "CD_Customer": {
+        "CD_address": _CLOUDKIT_STRING_FIELD,
+        "CD_communicationConsentUpdatedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_email": _CLOUDKIT_STRING_FIELD,
+        "CD_phone": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_CustomerCommunication": {
+        "CD_backendCommunicationID": _CLOUDKIT_STRING_FIELD,
+        "CD_backendSyncError": _CLOUDKIT_STRING_FIELD,
+        "CD_estimateID": _CLOUDKIT_STRING_FIELD,
+        "CD_invoiceID": _CLOUDKIT_STRING_FIELD,
+        "CD_providerMessageID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_CustomerEquipment": {
+        "CD_equipmentTypeRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_filterSize": _CLOUDKIT_STRING_FIELD,
+        "CD_installDate": _CLOUDKIT_DATE_FIELD,
+        "CD_location": _CLOUDKIT_STRING_FIELD,
+        "CD_manufacturer": _CLOUDKIT_STRING_FIELD,
+        "CD_modelNumber": _CLOUDKIT_STRING_FIELD,
+        "CD_notes": _CLOUDKIT_STRING_FIELD,
+        "CD_serialNumber": _CLOUDKIT_STRING_FIELD,
+        "CD_technicalBaselineReadingsJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_warrantyExpiration": _CLOUDKIT_DATE_FIELD,
+    },
+    "CD_Estimate": {
+        **EXPECTED_CLOUDKIT_V22_ADDITIONS["CD_Estimate"],
+        "CD_catalogSnapshotJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_changeOrderReason": _CLOUDKIT_STRING_FIELD,
+        "CD_parentEstimateID": _CLOUDKIT_STRING_FIELD,
+        "CD_proposalGroupID": _CLOUDKIT_STRING_FIELD,
+        "CD_proposalOption": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_InventoryMovement": {
+        **EXPECTED_CLOUDKIT_V22_ADDITIONS["CD_InventoryMovement"],
+        "CD_destinationLocation": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceCallID": _CLOUDKIT_STRING_FIELD,
+        "CD_sourceLocation": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_Invoice": {
+        **EXPECTED_CLOUDKIT_V22_ADDITIONS["CD_Invoice"],
+        "CD_catalogSnapshotJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_completionNotes": _CLOUDKIT_STRING_FIELD,
+        "CD_customerSignatureImageBase64": _CLOUDKIT_STRING_FIELD,
+        "CD_customerSignatureName": _CLOUDKIT_STRING_FIELD,
+        "CD_customerSignedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_finalizedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_quickBooksBalanceDue": _CLOUDKIT_NUMBER_FIELD,
+        "CD_quickBooksID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksLastSyncedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_quickBooksSyncDetail": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceCallID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_Payment": {
+        "CD_authorizationReference": _CLOUDKIT_STRING_FIELD,
+        "CD_cardLast4": _CLOUDKIT_STRING_FIELD,
+        "CD_processor": _CLOUDKIT_STRING_FIELD,
+        "CD_processorSyncDetail": _CLOUDKIT_STRING_FIELD,
+        "CD_processorSyncStatus": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksAccountingSyncDetail": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksAccountingSyncStatus": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksChargeID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksClientTransID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksDepositID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksRefundReceiptID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksSalesReceiptID": _CLOUDKIT_STRING_FIELD,
+        "CD_refundedPaymentID": _CLOUDKIT_STRING_FIELD,
+        "CD_settlementBatchID": _CLOUDKIT_STRING_FIELD,
+        "CD_storedCardID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_ProjectMilestone": {
+        "CD_milestoneDescription": _CLOUDKIT_STRING_FIELD,
+        "CD_scheduledVisitID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_PurchaseOrder": {
+        "CD_itemSKU": _CLOUDKIT_STRING_FIELD,
+        "CD_orderedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_receivedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_receivedToLocation": _CLOUDKIT_STRING_FIELD,
+        "CD_vendorPartNumber": _CLOUDKIT_STRING_FIELD,
+        "CD_vendorQuickBooksID": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_RecurringMaintenanceContract": {
+        "CD_coveredEquipmentIDsJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_includedVisitsPerTerm": _CLOUDKIT_INTEGER_FIELD,
+        "CD_pricePerVisit": _CLOUDKIT_NUMBER_FIELD,
+        "CD_termEndsOn": _CLOUDKIT_DATE_FIELD,
+    },
+    "CD_ServiceCall": {
+        "CD_additionalTechnicianIDsJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_cancellationReason": _CLOUDKIT_STRING_FIELD,
+        "CD_cancelledAt": _CLOUDKIT_DATE_FIELD,
+        "CD_customerEquipmentID": _CLOUDKIT_STRING_FIELD,
+        "CD_documentationCompletedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_documentationStartedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_drainLineCondition": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentInstallDate": _CLOUDKIT_DATE_FIELD,
+        "CD_equipmentLocation": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentManufacturer": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentModel": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentName": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentNotes": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentSerialNumber": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentTypeRaw": _CLOUDKIT_STRING_FIELD,
+        "CD_equipmentWarrantyExpiration": _CLOUDKIT_DATE_FIELD,
+        "CD_filterCondition": _CLOUDKIT_STRING_FIELD,
+        "CD_filterSize": _CLOUDKIT_STRING_FIELD,
+        "CD_findingsSummary": _CLOUDKIT_STRING_FIELD,
+        "CD_followUpAction": _CLOUDKIT_STRING_FIELD,
+        "CD_followUpDueDate": _CLOUDKIT_DATE_FIELD,
+        "CD_googleCalendarID": _CLOUDKIT_STRING_FIELD,
+        "CD_googleEventID": _CLOUDKIT_STRING_FIELD,
+        "CD_indoorCoilCondition": _CLOUDKIT_STRING_FIELD,
+        "CD_linkedEstimateID": _CLOUDKIT_STRING_FIELD,
+        "CD_linkedInvoiceID": _CLOUDKIT_STRING_FIELD,
+        "CD_outdoorCoilCondition": _CLOUDKIT_STRING_FIELD,
+        "CD_promisedArrivalWindowEnd": _CLOUDKIT_DATE_FIELD,
+        "CD_promisedArrivalWindowStart": _CLOUDKIT_DATE_FIELD,
+        "CD_recommendedWorkSummary": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceActionChecklistJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceReportReadingsJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceReportSummary": _CLOUDKIT_STRING_FIELD,
+        "CD_technicianArrivedAt": _CLOUDKIT_DATE_FIELD,
+        "CD_technicianEnRouteAt": _CLOUDKIT_DATE_FIELD,
+        "CD_thermostatOperation": _CLOUDKIT_STRING_FIELD,
+        "CD_visitDispositionNotes": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_ServiceRequest": {
+        "CD_address": _CLOUDKIT_STRING_FIELD,
+        "CD_backendRequestID": _CLOUDKIT_STRING_FIELD,
+        "CD_convertedCustomerID": _CLOUDKIT_STRING_FIELD,
+        "CD_convertedServiceCallID": _CLOUDKIT_STRING_FIELD,
+        "CD_email": _CLOUDKIT_STRING_FIELD,
+        "CD_phone": _CLOUDKIT_STRING_FIELD,
+        "CD_preferredDate": _CLOUDKIT_DATE_FIELD,
+        "CD_qualifiedAt": _CLOUDKIT_DATE_FIELD,
+    },
+    "CD_Technician": {
+        "CD_laborCostPerHour": _CLOUDKIT_NUMBER_FIELD,
+        "CD_qualificationNotes": _CLOUDKIT_STRING_FIELD,
+        "CD_serviceAreasJSON": _CLOUDKIT_STRING_FIELD,
+        "CD_supportedEquipmentTypesJSON": _CLOUDKIT_STRING_FIELD,
+    },
+    "CD_TimeEntry": {
+        "CD_quickBooksTimeActivityID": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksTimeActivitySyncError": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksTimeActivitySyncToken": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksTimeActivitySyncedAt": _CLOUDKIT_DATE_FIELD,
+    },
+    "CD_Vendor": {
+        "CD_contactInfo": _CLOUDKIT_STRING_FIELD,
+        "CD_quickBooksID": _CLOUDKIT_STRING_FIELD,
+    },
+}
 EXPECTED_CLOUDKIT_BASELINE_RECORD_TYPES = {
     "CD_AppUser",
     "CD_Customer",
@@ -473,6 +668,372 @@ def load_plist(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{path} is not a dictionary property list")
     return value
+
+
+def load_json_object(path: Path) -> dict[str, Any]:
+    with path.open(encoding="utf-8") as stream:
+        value = json.load(stream)
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} is not a JSON object")
+    return value
+
+
+def is_https_url(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith("https://") and len(value) > 8
+
+
+def forbidden_secret_fields(value: Any, path: str = "") -> list[str]:
+    matches: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if any(
+                fragment in normalized_key
+                for fragment in ("password", "clientsecret", "privatekey", "apitoken", "accesstoken", "refreshtoken")
+            ):
+                matches.append(child_path)
+            matches.extend(forbidden_secret_fields(child, child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            matches.extend(forbidden_secret_fields(child, f"{path}[{index}]"))
+    return matches
+
+
+def check_app_store_metadata(root: Path, results: Results) -> None:
+    metadata_path = root / EXPECTED_APP_STORE_METADATA_PATH
+    privacy_path = root / "GunnAire Ops" / "PrivacyInfo.xcprivacy"
+    try:
+        metadata = load_json_object(metadata_path)
+        privacy_manifest = load_plist(privacy_path)
+    except (OSError, ValueError, json.JSONDecodeError, plistlib.InvalidFileException) as error:
+        results.fail(f"App Store metadata inspection failed: {error}")
+        return
+
+    app = metadata.get("app")
+    app_review = metadata.get("appReview")
+    privacy = metadata.get("privacy")
+    if not isinstance(app, dict) or not isinstance(app_review, dict) or not isinstance(privacy, dict):
+        results.fail("App Store metadata contract is missing app, appReview, or privacy objects")
+        return
+
+    results.require(
+        metadata.get("schemaVersion") == 1
+        and app.get("bundleID") == EXPECTED_BUNDLE_ID
+        and app.get("primaryLocale") == EXPECTED_APP_STORE_LOCALE,
+        "App Store metadata contract identifies the GunnAire bundle and primary locale",
+        "App Store metadata contract has an unexpected schema, bundle identifier, or locale",
+    )
+    results.require(
+        is_https_url(app.get("privacyPolicyURL"))
+        and is_https_url(app.get("supportURL"))
+        and is_https_url(app.get("marketingURL")),
+        "App Store privacy, support, and marketing URLs use HTTPS",
+        "App Store privacy, support, and marketing URLs must all be explicit HTTPS URLs",
+    )
+    forbidden_fields = forbidden_secret_fields(metadata)
+    results.require(
+        not forbidden_fields
+        and app_review.get("requiresSignIn") is True
+        and app_review.get("credentialStorage") == "App Store Connect only",
+        "App Review sign-in is declared without committing credentials or secrets",
+        "App Review metadata must require sign-in, keep credentials only in App Store Connect, and contain no secret fields: "
+        f"{forbidden_fields}",
+    )
+
+    manifest_rows = privacy_manifest.get("NSPrivacyCollectedDataTypes", [])
+    contract_rows = privacy.get("dataTypes", [])
+    if not isinstance(manifest_rows, list) or not isinstance(contract_rows, list):
+        results.fail("Privacy data types must be arrays in both source manifests")
+        return
+
+    manifest_by_type: dict[str, dict[str, Any]] = {}
+    contract_by_type: dict[str, dict[str, Any]] = {}
+    duplicate_types: set[str] = set()
+    malformed_rows = False
+    for row in manifest_rows:
+        if not isinstance(row, dict):
+            malformed_rows = True
+            continue
+        data_type = row.get("NSPrivacyCollectedDataType")
+        if not isinstance(data_type, str) or not data_type:
+            malformed_rows = True
+            continue
+        if data_type in manifest_by_type:
+            duplicate_types.add(data_type)
+        manifest_by_type[data_type] = row
+    for row in contract_rows:
+        if not isinstance(row, dict):
+            malformed_rows = True
+            continue
+        data_type = row.get("manifestDataType")
+        if not isinstance(data_type, str) or not data_type:
+            malformed_rows = True
+            continue
+        if data_type in contract_by_type:
+            duplicate_types.add(data_type)
+        contract_by_type[data_type] = row
+
+    results.require(
+        not malformed_rows and not duplicate_types,
+        "App Store privacy contract contains unique, well-formed data-type answers",
+        f"App Store privacy contract contains malformed or duplicate data types: {sorted(duplicate_types)}",
+    )
+    results.require(
+        set(contract_by_type) == set(manifest_by_type),
+        "App Store privacy answers exactly cover every source privacy-manifest data type",
+        "App Store privacy answers and PrivacyInfo.xcprivacy differ: "
+        f"contract-only={sorted(set(contract_by_type) - set(manifest_by_type))}, "
+        f"manifest-only={sorted(set(manifest_by_type) - set(contract_by_type))}",
+    )
+
+    mismatches: list[str] = []
+    for data_type in sorted(set(contract_by_type) & set(manifest_by_type)):
+        contract_row = contract_by_type[data_type]
+        manifest_row = manifest_by_type[data_type]
+        contract_purposes = contract_row.get("purposes")
+        manifest_purposes = manifest_row.get("NSPrivacyCollectedDataTypePurposes")
+        if (
+            contract_row.get("linkedToUser")
+            != manifest_row.get("NSPrivacyCollectedDataTypeLinked")
+            or contract_row.get("tracking")
+            != manifest_row.get("NSPrivacyCollectedDataTypeTracking")
+            or not isinstance(contract_purposes, list)
+            or not isinstance(manifest_purposes, list)
+            or set(contract_purposes) != set(manifest_purposes)
+            or set(contract_purposes) != {EXPECTED_APP_STORE_PRIVACY_PURPOSE}
+            or not str(contract_row.get("category", "")).strip()
+            or not str(contract_row.get("displayName", "")).strip()
+            or not str(contract_row.get("usage", "")).strip()
+        ):
+            mismatches.append(data_type)
+    results.require(
+        not mismatches,
+        "App Store privacy linkage, tracking, purpose, labels, and usage explanations match the source manifest",
+        f"App Store privacy answers do not match PrivacyInfo.xcprivacy for: {mismatches}",
+    )
+    results.require(
+        privacy.get("tracking") is privacy_manifest.get("NSPrivacyTracking") is False,
+        "App Store metadata and source privacy manifest both declare no tracking",
+        "App Store metadata and source privacy manifest disagree about tracking",
+    )
+
+
+def png_dimensions_and_alpha(path: Path) -> tuple[int, int, bool]:
+    """Return PNG dimensions and whether the encoded image can contain transparency."""
+    signature = b"\x89PNG\r\n\x1a\n"
+    with path.open("rb") as stream:
+        if stream.read(len(signature)) != signature:
+            raise ValueError(f"{path} is not a PNG file")
+
+        width = height = color_type = None
+        has_transparency_chunk = False
+        saw_idat = False
+        saw_iend = False
+        chunk_index = 0
+        while not saw_iend:
+            header = stream.read(8)
+            if len(header) != 8:
+                raise ValueError(f"{path} has a truncated PNG chunk header")
+            length, chunk_type = struct.unpack(">I4s", header)
+            if length > 256 * 1024 * 1024:
+                raise ValueError(f"{path} contains an unreasonably large PNG chunk")
+            chunk_data = stream.read(length)
+            encoded_crc = stream.read(4)
+            if len(chunk_data) != length or len(encoded_crc) != 4:
+                raise ValueError(f"{path} has a truncated PNG chunk")
+            expected_crc = zlib.crc32(chunk_type)
+            expected_crc = zlib.crc32(chunk_data, expected_crc) & 0xFFFFFFFF
+            if struct.unpack(">I", encoded_crc)[0] != expected_crc:
+                raise ValueError(f"{path} has an invalid PNG chunk checksum")
+
+            if chunk_index == 0 and chunk_type != b"IHDR":
+                raise ValueError(f"{path} does not begin with a PNG IHDR chunk")
+            if chunk_type == b"IHDR":
+                if chunk_index != 0 or length != 13 or width is not None:
+                    raise ValueError(f"{path} has an invalid PNG IHDR chunk")
+                width, height, _, color_type, _, _, _ = struct.unpack(
+                    ">IIBBBBB", chunk_data
+                )
+                if width < 1 or height < 1 or color_type not in {0, 2, 3, 4, 6}:
+                    raise ValueError(f"{path} has unsupported PNG image metadata")
+            elif chunk_type == b"tRNS":
+                has_transparency_chunk = True
+            elif chunk_type == b"IDAT":
+                saw_idat = True
+            elif chunk_type == b"IEND":
+                if length != 0:
+                    raise ValueError(f"{path} has an invalid PNG IEND chunk")
+                saw_iend = True
+            chunk_index += 1
+
+        if stream.read(1):
+            raise ValueError(f"{path} contains data after the PNG IEND chunk")
+        if width is None or height is None or color_type is None or not saw_idat:
+            raise ValueError(f"{path} is missing required PNG chunks")
+        return width, height, color_type in {4, 6} or has_transparency_chunk
+
+
+def check_app_store_screenshots(
+    root: Path,
+    marketing_version: str,
+    build_version: str,
+    results: Results,
+) -> None:
+    manifest_path = root / EXPECTED_APP_STORE_SCREENSHOT_MANIFEST_PATH
+    try:
+        manifest = load_json_object(manifest_path)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        results.fail(f"App Store screenshot manifest inspection failed: {error}")
+        return
+
+    contract_errors: list[str] = []
+    if manifest.get("schemaVersion") != 1:
+        contract_errors.append("schemaVersion must be 1")
+    if manifest.get("sourceVersion") != marketing_version:
+        contract_errors.append(
+            f"sourceVersion must be {marketing_version!r}"
+        )
+    if manifest.get("sourceBuild") != build_version:
+        contract_errors.append(f"sourceBuild must be {build_version!r}")
+    reviewed_at = manifest.get("reviewedAt")
+    try:
+        parsed_reviewed_at = datetime.strptime(str(reviewed_at), "%Y-%m-%d")
+    except ValueError:
+        parsed_reviewed_at = None
+    if (
+        parsed_reviewed_at is None
+        or parsed_reviewed_at.strftime("%Y-%m-%d") != reviewed_at
+    ):
+        contract_errors.append("reviewedAt must use YYYY-MM-DD")
+
+    expected_set_names = set(EXPECTED_APP_STORE_SCREENSHOT_SETS)
+    capture_evidence = manifest.get("captureEvidence")
+    if not isinstance(capture_evidence, dict) or set(capture_evidence) != expected_set_names:
+        contract_errors.append("captureEvidence must identify both expected device sets")
+    else:
+        for set_name, evidence_name in capture_evidence.items():
+            if (
+                not isinstance(evidence_name, str)
+                or not evidence_name.endswith(".xcresult")
+                or Path(evidence_name).name != evidence_name
+                or build_version not in evidence_name
+            ):
+                contract_errors.append(
+                    f"captureEvidence.{set_name} must be a non-path xcresult name for build {build_version}"
+                )
+
+    screenshot_sets = manifest.get("sets")
+    if not isinstance(screenshot_sets, dict) or set(screenshot_sets) != expected_set_names:
+        contract_errors.append("sets must exactly identify the expected device sets")
+        screenshot_sets = {}
+
+    results.require(
+        not contract_errors,
+        f"App Store screenshot manifest matches source version {marketing_version} ({build_version})",
+        "App Store screenshot manifest is stale or malformed: "
+        + "; ".join(contract_errors),
+    )
+
+    asset_errors: list[str] = []
+    screenshots_root = root / "AppStoreAssets" / "Screenshots"
+    if screenshots_root.is_dir():
+        actual_set_names = {
+            path.name for path in screenshots_root.iterdir() if path.is_dir()
+        }
+        if actual_set_names != expected_set_names:
+            asset_errors.append(
+                "screenshot directories differ: "
+                f"unexpected={sorted(actual_set_names - expected_set_names)}, "
+                f"missing={sorted(expected_set_names - actual_set_names)}"
+            )
+    else:
+        asset_errors.append("AppStoreAssets/Screenshots is missing")
+
+    for set_name, expected in EXPECTED_APP_STORE_SCREENSHOT_SETS.items():
+        set_contract = screenshot_sets.get(set_name)
+        if not isinstance(set_contract, dict):
+            asset_errors.append(f"{set_name} manifest entry is missing")
+            continue
+        if (
+            set_contract.get("width") != expected["width"]
+            or set_contract.get("height") != expected["height"]
+        ):
+            asset_errors.append(
+                f"{set_name} manifest dimensions must be "
+                f"{expected['width']}x{expected['height']}"
+            )
+
+        file_rows = set_contract.get("files")
+        if not isinstance(file_rows, list):
+            asset_errors.append(f"{set_name}.files must be an array")
+            continue
+        hashes: dict[str, str] = {}
+        malformed_rows = False
+        for row in file_rows:
+            if not isinstance(row, dict):
+                malformed_rows = True
+                continue
+            name = row.get("name")
+            digest = row.get("sha256")
+            if (
+                not isinstance(name, str)
+                or Path(name).name != name
+                or not re.fullmatch(r"[0-9a-f]{64}", str(digest or ""))
+                or name in hashes
+            ):
+                malformed_rows = True
+                continue
+            hashes[name] = str(digest)
+        if malformed_rows:
+            asset_errors.append(f"{set_name} contains malformed or duplicate file rows")
+
+        expected_names = set(expected["filenames"])
+        if set(hashes) != expected_names:
+            asset_errors.append(
+                f"{set_name} manifest files differ: "
+                f"unexpected={sorted(set(hashes) - expected_names)}, "
+                f"missing={sorted(expected_names - set(hashes))}"
+            )
+
+        set_directory = screenshots_root / set_name
+        actual_names = (
+            {path.name for path in set_directory.glob("*.png") if path.is_file()}
+            if set_directory.is_dir()
+            else set()
+        )
+        if actual_names != expected_names:
+            asset_errors.append(
+                f"{set_name} PNG files differ: "
+                f"unexpected={sorted(actual_names - expected_names)}, "
+                f"missing={sorted(expected_names - actual_names)}"
+            )
+
+        for filename in expected["filenames"]:
+            screenshot_path = set_directory / filename
+            if not screenshot_path.is_file():
+                continue
+            recorded_digest = hashes.get(filename)
+            if recorded_digest and sha256(screenshot_path) != recorded_digest:
+                asset_errors.append(f"{set_name}/{filename} does not match its audited hash")
+            try:
+                width, height, has_alpha = png_dimensions_and_alpha(screenshot_path)
+            except (OSError, ValueError, struct.error) as error:
+                asset_errors.append(f"{set_name}/{filename} is invalid: {error}")
+                continue
+            if (width, height) != (expected["width"], expected["height"]):
+                asset_errors.append(
+                    f"{set_name}/{filename} is {width}x{height}, expected "
+                    f"{expected['width']}x{expected['height']}"
+                )
+            if has_alpha:
+                asset_errors.append(f"{set_name}/{filename} contains transparency")
+
+    results.require(
+        not asset_errors,
+        "App Store screenshot assets match the audited 13-inch iPad and 6.9-inch iPhone sets",
+        "App Store screenshot asset validation failed: " + "; ".join(asset_errors),
+    )
 
 
 def configured_url_schemes(info: dict[str, Any]) -> set[str]:
@@ -679,6 +1240,9 @@ def check_source(root: Path, results: Results) -> tuple[str, str, str]:
         )
     except (OSError, ValueError) as error:
         results.fail(f"Source entitlement inspection failed: {error}")
+
+    check_app_store_metadata(root, results)
+    check_app_store_screenshots(root, marketing_version, build_version, results)
 
     return marketing_version, build_version, backend_version
 
@@ -1340,22 +1904,22 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
             "Development changes remove or alter no Production CloudKit fields",
             f"Development removes or alters Production fields: {changed_or_removed}",
         )
-        malformed_existing_v22_fields: list[str] = []
-        for record_name, expected_fields in EXPECTED_CLOUDKIT_V22_ADDITIONS.items():
+        malformed_existing_v23_fields: list[str] = []
+        for record_name, expected_fields in EXPECTED_CLOUDKIT_V23_ADDITIONS.items():
             production_fields = prod.get(record_name, {})
             for field_name, expected_definition in expected_fields.items():
                 if (
                     field_name in production_fields
                     and production_fields[field_name] != expected_definition
                 ):
-                    malformed_existing_v22_fields.append(
+                    malformed_existing_v23_fields.append(
                         f"{record_name}.{field_name}"
                     )
         results.require(
-            not malformed_existing_v22_fields,
-            "Existing Production fields through v22 match their approved definitions",
-            "CloudKit Production contains malformed approved fields through v22: "
-            f"{malformed_existing_v22_fields}",
+            not malformed_existing_v23_fields,
+            "Existing Production fields through v23 match their approved definitions",
+            "CloudKit Production contains malformed approved fields through v23: "
+            f"{malformed_existing_v23_fields}",
         )
 
         def expected_remaining(
@@ -1382,6 +1946,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 if records.get(record_name, {}).get(field_name) != expected_definition
             ]
 
+        expected_remaining_v23_additions = expected_remaining(EXPECTED_CLOUDKIT_V23_ADDITIONS)
         expected_remaining_v22_additions = expected_remaining(EXPECTED_CLOUDKIT_V22_ADDITIONS)
         expected_remaining_v21_additions = expected_remaining(EXPECTED_CLOUDKIT_V21_ADDITIONS)
         expected_remaining_v20_additions = expected_remaining(EXPECTED_CLOUDKIT_V20_ADDITIONS)
@@ -1389,6 +1954,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         expected_remaining_v18_additions = expected_remaining(EXPECTED_CLOUDKIT_V18_ADDITIONS)
         expected_remaining_v17_additions = expected_remaining(EXPECTED_CLOUDKIT_V17_ADDITIONS)
         expected_remaining_v16_additions = expected_remaining(EXPECTED_CLOUDKIT_V16_ADDITIONS)
+        dev_missing_v23 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V23_ADDITIONS)
         dev_missing_v22 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V22_ADDITIONS)
         prod_missing_v22 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V22_ADDITIONS)
         dev_missing_v21 = missing_or_changed(dev, EXPECTED_CLOUDKIT_V21_ADDITIONS)
@@ -1405,6 +1971,16 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         prod_missing_v16 = missing_or_changed(prod, EXPECTED_CLOUDKIT_V16_ADDITIONS)
 
         if (
+            not dev_missing_v23
+            and (
+                not missing_or_changed(prod, EXPECTED_CLOUDKIT_V23_ADDITIONS)
+                or actual_additions == expected_remaining_v23_additions
+            )
+        ):
+            results.pass_(
+                "CloudKit Development contains the exact cumulative v23 operational field closure across every persisted optional business attribute"
+            )
+        elif (
             not dev_missing_v22
             and (
                 not prod_missing_v22
@@ -1413,6 +1989,9 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         ):
             results.pass_(
                 "CloudKit Development contains exactly the approved additive v22 recurring technician work-shift record plus the cumulative v21 schema relative to Production"
+            )
+            results.warn(
+                "CloudKit source v23 operational field closure is not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v21
@@ -1425,7 +2004,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 "CloudKit Development contains exactly the approved additive v21 technician time-off request, audit-event, and availability-cancellation fields plus the cumulative v20 schema relative to Production"
             )
             results.warn(
-                "CloudKit source v22 recurring technician work-shift record is not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v22 recurring technician work-shift record and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v20
@@ -1438,7 +2017,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 "CloudKit Development contains exactly the approved additive v20 team task and audit-event records plus the cumulative v19 schema relative to Production"
             )
             results.warn(
-                "CloudKit source v21 technician time-off and v22 recurring work-shift records are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v21 technician time-off, v22 recurring work-shift, and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v19
@@ -1451,7 +2030,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 "CloudKit Development contains exactly the approved additive v19 customer operational alert record and cumulative v18 schema relative to Production"
             )
             results.warn(
-                "CloudKit source v20 team task, v21 technician time-off, and v22 recurring work-shift records are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v20 team task, v21 technician time-off, v22 recurring work-shift, and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v18
@@ -1464,7 +2043,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 "CloudKit Development contains exactly the approved additive v18 expense record, receipt linkage, and cumulative fleet schema relative to Production"
             )
             results.warn(
-                "CloudKit source v19 operational alert, v20 task, v21 technician time-off, and v22 recurring work-shift records are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v19 operational alert, v20 task, v21 technician time-off, v22 recurring work-shift, and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v17
@@ -1477,7 +2056,7 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
                 "CloudKit Development contains exactly the approved additive v17 fleet records and document linkage relative to Production"
             )
             results.warn(
-                "CloudKit source v18 expense, v19 operational alert, v20 task, v21 technician time-off, and v22 recurring work-shift records are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v18 expense, v19 operational alert, v20 task, v21 technician time-off, v22 recurring work-shift, and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif (
             not dev_missing_v16
@@ -1488,40 +2067,40 @@ def check_cloudkit(development: Path, production: Path, results: Results) -> Non
         ):
             results.pass_("CloudKit exports exactly satisfy the approved v16 schema")
             results.warn(
-                "CloudKit source v17 fleet, v18 expense, v19 operational alert, v20 task, v21 technician time-off, and v22 recurring work-shift records are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v17 fleet, v18 expense, v19 operational alert, v20 task, v21 technician time-off, v22 recurring work-shift, and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V13_ADDITIONS:
             results.pass_(
                 "CloudKit Development v13 delta is exactly six additive tax fields on Estimate and Invoice"
             )
             results.warn(
-                "CloudKit source additions through v22 are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source additions through v23 are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V14_ADDITIONS:
             results.pass_(
                 "CloudKit Development v14 cumulative delta is exactly six tax fields plus Invoice.dueDate"
             )
             results.warn(
-                "CloudKit source additions through v22 are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source additions through v23 are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V15_ADDITIONS:
             results.pass_(
                 "CloudKit Development v15 cumulative delta is exactly the approved tax, due-date, inventory continuity, Item continuity, and service-package fields"
             )
             results.warn(
-                "CloudKit source additions through v22 are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source additions through v23 are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         elif actual_additions == EXPECTED_CLOUDKIT_V16_ADDITIONS:
             results.pass_(
                 "CloudKit Development v16 cumulative delta is exactly the approved tax, due-date, inventory continuity, Item continuity, service-package, document-linkage, and Google Drive fields"
             )
             results.warn(
-                "CloudKit source v17 fleet, v18 expense, v19 operational alert, v20 task, v21 technician time-off, and v22 recurring work-shift records are not staged in Development; run the signed v22 bootstrap before promotion review"
+                "CloudKit source v17 fleet, v18 expense, v19 operational alert, v20 task, v21 technician time-off, v22 recurring work-shift, and v23 operational field closure are not staged in Development; run the signed v23 bootstrap before promotion review"
             )
         else:
             results.fail(
-                "Unexpected CloudKit v13/v14/v15/v16/v17/v18/v19/v20/v21/v22 delta: "
-                f"{actual_additions}; missing Development v22 fields: {dev_missing_v22}"
+                "Unexpected CloudKit v13/v14/v15/v16/v17/v18/v19/v20/v21/v22/v23 delta: "
+                f"{actual_additions}; missing Development v23 fields: {dev_missing_v23}"
             )
         results.pass_(f"Development export SHA-256 is {sha256(development)}")
         results.pass_(f"Production export SHA-256 is {sha256(production)}")
@@ -1640,7 +2219,7 @@ def main() -> int:
             results,
         )
     else:
-        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15/v16/v17/v18/v19/v20/v21/v22 Production delta was not rechecked")
+        results.warn("CloudKit exports were not supplied; the exact v13/v14/v15/v16/v17/v18/v19/v20/v21/v22/v23 Production delta was not rechecked")
 
     if args.online:
         check_online(backend_version, results)

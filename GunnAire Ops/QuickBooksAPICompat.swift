@@ -21,8 +21,24 @@ final class QuickBooksAPI: ObservableObject {
         data.fetchCustomers(completion: completion)
     }
 
-    func createCustomer(_ customer: QuickBooksCustomerCreate, completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void) {
-        data.createCustomer(customer, completion: completion)
+    func createCustomer(
+        _ customer: QuickBooksCustomerCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void
+    ) {
+        data.createCustomer(customer, requestID: requestID, completion: completion)
+    }
+
+    func recoverOrCreateCustomer(
+        _ draft: QuickBooksCustomerCreateDraft,
+        remoteCustomers: [QuickBooksCustomer]? = nil,
+        completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void
+    ) {
+        data.recoverOrCreateCustomer(
+            draft,
+            remoteCustomers: remoteCustomers,
+            completion: completion
+        )
     }
 
     func fetchItems(completion: @escaping (Result<[QuickBooksItem], Error>) -> Void) {
@@ -33,8 +49,12 @@ final class QuickBooksAPI: ObservableObject {
         data.fetchItem(id: id, completion: completion)
     }
 
-    func createItem(_ item: QuickBooksItemCreate, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {
-        data.createItem(item, completion: completion)
+    func createItem(
+        _ item: QuickBooksItemCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksItem, Error>) -> Void
+    ) {
+        data.createItem(item, requestID: requestID, completion: completion)
     }
 
     func updateItem(_ item: QuickBooksItemUpdate, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {
@@ -97,16 +117,48 @@ final class QuickBooksAPI: ObservableObject {
         data.fetchVendors(completion: completion)
     }
     
-    func createVendor(_ vendor: QuickBooksVendorCreate, completion: @escaping (Result<QuickBooksVendor, Error>) -> Void) {
-        data.createVendor(vendor, completion: completion)
+    func createVendor(
+        _ vendor: QuickBooksVendorCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksVendor, Error>) -> Void
+    ) {
+        data.createVendor(vendor, requestID: requestID, completion: completion)
+    }
+
+    func recoverOrCreateVendor(
+        _ draft: QuickBooksVendorCreateDraft,
+        remoteVendors: [QuickBooksVendor]? = nil,
+        completion: @escaping (Result<QuickBooksVendor, Error>) -> Void
+    ) {
+        data.recoverOrCreateVendor(
+            draft,
+            remoteVendors: remoteVendors,
+            completion: completion
+        )
     }
     
     func fetchPayments(completion: @escaping (Result<[QuickBooksPayment], Error>) -> Void) {
         data.fetchPayments(completion: completion)
     }
     
-    func createPayment(_ payment: QuickBooksPaymentCreate, completion: @escaping (Result<QuickBooksPayment, Error>) -> Void) {
-        data.createPayment(payment, completion: completion)
+    func createPayment(
+        _ payment: QuickBooksPaymentCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksPayment, Error>) -> Void
+    ) {
+        data.createPayment(payment, requestID: requestID, completion: completion)
+    }
+
+    func recoverOrCreatePayment(
+        _ draft: QuickBooksAccountingPaymentDraft,
+        remotePayments: [QuickBooksPayment]? = nil,
+        completion: @escaping (Result<QuickBooksPayment, Error>) -> Void
+    ) {
+        data.recoverOrCreatePayment(
+            draft,
+            remotePayments: remotePayments,
+            completion: completion
+        )
     }
 
     func fetchSalesReceipts(completion: @escaping (Result<[QuickBooksSalesReceipt], Error>) -> Void) {
@@ -135,10 +187,6 @@ final class QuickBooksAPI: ObservableObject {
 
     func createCardToken(_ tokenRequest: QuickBooksPaymentsTokenCreateRequest, completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void) {
         data.createCardToken(tokenRequest, completion: completion)
-    }
-
-    func fetchCards(completion: @escaping (Result<[QuickBooksPaymentsCardRecord], Error>) -> Void) {
-        data.fetchCards(completion: completion)
     }
 
     func fetchCards(forCustomerID customerID: String, completion: @escaping (Result<[QuickBooksPaymentsCardRecord], Error>) -> Void) {

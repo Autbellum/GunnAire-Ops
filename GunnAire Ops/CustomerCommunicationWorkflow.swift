@@ -70,6 +70,9 @@ enum CustomerCommunicationWorkflow {
                 serviceCalls.contains { $0.id == id && $0.customer.id == customerID }
             } ?? false
             return invoiceMatches || estimateMatches || callMatches
+
+        case .accountStatement:
+            return invoices.contains { $0.customer.id == customerID }
         }
     }
 
@@ -214,7 +217,7 @@ enum CustomerCommunicationWorkflow {
                 $0.id == maintenanceContractID && $0.customer.id == customerID && $0.active
             }
 
-        case .receipt, .customerDocument:
+        case .receipt, .customerDocument, .accountStatement:
             return true
         }
     }

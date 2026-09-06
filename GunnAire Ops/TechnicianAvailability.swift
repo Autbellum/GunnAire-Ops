@@ -645,6 +645,7 @@ struct TechnicianAvailabilityView: View {
                                         Text(technician.name).tag(technician.id)
                                     }
                                 }
+                                .accessibilityIdentifier("TechnicianAvailabilityPicker")
 
                                 Button {
                                     selectedTechnicianID = selectedTechnician?.id

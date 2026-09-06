@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "sourceVersion": "1.0",
+  "sourceBuild": "2026090506",
+  "reviewedAt": "2026-09-05",
+  "captureEvidence": {
+    "iPad-13-inch": "GunnAire Ops 1.0 (2026090506 Current iPad App Store Screenshots).xcresult",
+    "iPhone-6.9-inch": "GunnAire Ops 1.0 (2026090506 Current iPhone App Store Screenshots).xcresult"
+  },
+  "sets": {
+    "iPad-13-inch": {
+      "width": 2064,
+      "height": 2752,
+      "files": [
+        {
+          "name": "01-command-center.png",
+          "sha256": "49b43b1a8a08a0ac3f331eb67af2212ff0b98e8d4da4f28057bc63a35f185088"
+        },
+        {
+          "name": "02-schedule.png",
+          "sha256": "86181fc380054aab2f50fa86e72066fa2b86d12952d85c6c82930becaddeb9f0"
+        },
+        {
+          "name": "03-customer-systems.png",
+          "sha256": "ab3397df9cce5ee9e5194272a422c2692e42a7c41f5862d21221d374b14db007"
+        },
+        {
+          "name": "04-job-billing.png",
+          "sha256": "8f03720e6bc54f3428bc01d8167f37af597eadd10458c0d249c305952fa19071"
+        },
+        {
+          "name": "05-field-collection.png",
+          "sha256": "2ddc907016ae9398abe26562be5232e8907e0ab3c1e046e76a502cb8f85b67e3"
+        },
+        {
+          "name": "06-quickbooks-sales.png",
+          "sha256": "9d235cf0ad522395413803a75e9159cbfecbf278a74c077a7acf337781a939e2"
+        }
+      ]
+    },
+    "iPhone-6.9-inch": {
+      "width": 1320,
+      "height": 2868,
+      "files": [
+        {
+          "name": "01-command-center.png",
+          "sha256": "9aa8fa6583175a76c26c4b17a6acb7525dee3d4bb102346cf3fe23f6f8987df9"
+        },
+        {
+          "name": "02-schedule.png",
+          "sha256": "8d88a8e04d25135d1428b928cf7597673b935695bf92aa2d48cd3a97ee05c9b0"
+        },
+        {
+          "name": "03-customer-systems.png",
+          "sha256": "8ac94c197f0ab5435e1ce67c70103de20d283fc5d821fef01af159364a4b6150"
+        },
+        {
+          "name": "04-job-billing.png",
+          "sha256": "cbe75a97911b6baddf7c4357933af3ba6ecdb1ebb2219c241741e5053e2324d7"
+        },
+        {
+          "name": "05-field-collection.png",
+          "sha256": "4f10c801a625edba50bbc9a745b99579587c651ed3d33b441815bf22a41502cd"
+        },
+        {
+          "name": "06-quickbooks-sales.png",
+          "sha256": "ca25eb39c3302683c61e6bb637c3c59abb402feb6458db32fa83eb6192a7470f"
+        }
+      ]
+    }
+  }
+}

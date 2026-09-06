@@ -1,10 +1,174 @@
 # CloudKit and field-payment release checklist
 
+## Current verified increment — build `1.0 (2026090506)`
+
+The exact current Apple Development-signed archive is installed over retained
+data on the physical iPad Pro 13-inch (M5), launches normally, and remained
+live for more than one minute. Its application database identifier matched the
+prior installation. The exact hardened-runtime universal Mac Catalyst archive
+also passed normal launch and the same observation window before normal
+termination. Privacy-minimal persistent history shows completed CloudKit
+setup, import, and export events with zero failures or still-running events on
+each platform. The evidence record is `/Users/gunnaire/Downloads/GunnAire Ops
+Releases/2026-09-05/current-signed-cloudkit-launch-2026090506.json` (SHA-256
+`7a33366242ba5282bf4f1b0c2fde41821eb674a9e00ff603e6aaeb0d414af4c5`).
+No normal application store, customer/accounting field, account identifier, or
+device identifier is retained in that record.
+
+This closes exact signed launch and CloudKit event completion on the available
+M5 iPad and Mac. It does not claim a controlled same-record round trip,
+cross-device field equality, offline-conflict recovery, Production schema
+promotion, or physical-iPhone Handoff/Tap-to-Pay acceptance. Apple Distribution
+signing, the physical iPhone, Production promotion, backend review/deployment,
+approved QBO and Google production acceptance, supplier onboarding, and any
+embedded-payment PSP/entitlement remain external gates.
+
+The current screenshot workflows pass **1/1** on both the iPad Pro 13-inch
+(M5) and iPhone 17 Pro Max simulators. All twelve selected current-build PNGs
+were visually reviewed, contain no account email, are opaque, and match the
+required dimensions. One clipped system split-view Schedule capture was
+rejected; the retained clean frame comes from a separate passing exact-source
+reacquisition. The full release-tool suite passes **37/37**, and exact local
+signed-artifact, screenshot, privacy, configuration, and
+v23-Development/v15-Production schema preflight is **70 passed / 4 expected
+warnings / 0 failures**. Online read-only preflight is **72/3/1** solely because
+Production still serves backend `.17` instead of reviewed `.18`; Apple
+notification rejection and the QBO callback both pass.
+
+### Prior Handoff increment — build `1.0 (2026090503)`
+
+The Handoff continuation listener now lives at the application boundary instead
+of only inside the authenticated workspace. A receiving iPhone can therefore
+accept the activity while GunnAire Ops is signed out, retain only the expiring
+local invoice UUID, and resume after business-account authentication. Customer,
+invoice, and payment details remain unavailable until the existing role,
+technician-assignment, CloudKit relationship, QBO-publication, open-balance, and
+expiration checks succeed. Invalid, unrelated, and expired activities are
+discarded without leaving a pending route.
+
+Current official Apple guidance confirms that `NSUserActivity` is the supported
+Handoff mechanism and that its `requiredUserInfoKeys` should contain the minimum
+state needed to restore a task. GunnAire continues to declare
+`com.gunnaire.businesssuite.field-payment-handoff` in `NSUserActivityTypes` and
+uses a 30-minute `expirationDate`. Apple also confirms that embedded Tap to Pay
+on iPhone requires a supported payment service provider, certified terminal
+configuration, and Apple's managed
+`com.apple.developer.proximity-reader.payment.acceptance` entitlement. Intuit's
+current supported GunnAire path remains QuickBooks Mobile or GoPayment on an
+iPhone XS or newer: enable Tap to Pay in the Intuit app, select the published
+open invoice, choose Charge, then choose Tap to Pay. References:
+
+- https://developer.apple.com/documentation/foundation/implementing-handoff-in-your-app
+- https://developer.apple.com/documentation/proximityreader/setting-up-the-entitlement-for-tap-to-pay-on-iphone
+- https://developer.apple.com/tap-to-pay/
+- https://quickbooks.intuit.com/learn-support/en-us/help-article/receive-payments/use-tap-pay-quickbooks-gopayment-quickbooks-mobile/L38jd9HdC_US_en_US
+
+Exact-source verification passes **712/712** logic tests on the 13-inch M5 iPad
+Simulator and **712/712** on Mac Catalyst. The clean serial run of the complete
+main M5 iPad interface class passes **112/113 tests**, with one intentional
+physical-device-only skip and zero failures; the separate launch class passes
+all **4/4** light/dark portrait/landscape executions. The complete run includes
+iPad origin controls, iPhone task opening, expired and deferred CloudKit
+recovery, QuickBooks accounting verification, technician-created invoice items,
+secure unauthenticated launch, simple Mail, both Invoice crash guards,
+existing-invoice editing, and the compact CloudKit warning. The authoritative
+result bundles are
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/GunnAire Ops 1.0 (2026090503 Full Serial M5 iPad UI).xcresult`
+and
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/GunnAire Ops 1.0 (2026090503 Launch M5 iPad UI).xcresult`.
+An earlier parallel attempt is not acceptance evidence: cloned simulators filled
+the host disk and stopped SpringBoard before completion. Only generated test
+devices, result data, and DerivedData were removed; the serial single-device run
+then completed without an app crash or failed assertion. Optimized iOS and
+universal arm64/x86_64 Mac Catalyst Release builds succeed. The Apple
+Development-signed iOS archive preserves Sign in with Apple,
+CloudKit `iCloud.com.gunnaire.businesssuite`, Associated Domains, Handoff, and
+development APNs; its arm64 UUID is
+`5D4406D4-E36C-36DE-9519-D77922FAB412` and binary SHA-256 is
+`3657e95495ab0ec9c48a1fa70dae062d25a7feca0435b4bc5be008a1270d7983`.
+The exact build is installed over retained data and running on the paired
+13-inch M5 iPad as build `2026090503`.
+
+The exact build and retained CloudKit exports now pass **70 release-preflight
+checks**, with four expected warnings and zero failures. The new fail-closed
+promotion manifest independently records 33 Development record types versus 24
+Production types, nine additive record types, and 335 additive fields. It finds
+zero changed or removed fields, zero existing record-metadata changes, and zero
+security-grant changes. The complete release-tool suite passes **37/37**. The
+manifest is
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/cloudkit-production-promotion-manifest-v23.json`
+(SHA-256
+`3adef38006d8272ce5f8f0d27c9cc97d60dc027ada5b7169487e23ac46f7e377`).
+This is export evidence only; it does not authorize or perform Production
+promotion.
+
+The 2026-09-05 release-session recheck regenerated that manifest directly from
+`cloudkit-development-13.ckdb` and `cloudkit-production-7.ckdb`. The fresh
+output is byte-for-byte identical at SHA-256
+`3adef38006d8272ce5f8f0d27c9cc97d60dc027ada5b7169487e23ac46f7e377`,
+retains `riskClassification: additive-only` and `safeToPromote: true`, and has
+all eight promotion checks set to true. The six promotion-tool regressions also
+pass, including changed-field, changed-security-grant, partial-delta, and
+unapproved-grant rejection. No CloudKit environment or application record was
+changed during this validation.
+
+Embedded card reading remains an external provider/entitlement gate. This
+increment performed no charge, refund, QBO write, provider setting change,
+Production CloudKit promotion, backend deployment, customer communication, or
+Apple portal mutation.
+
+## Production backend gate
+
+Reviewed backend `2026.09.03.18` is now exact-pull-request regression-clean.
+[PR #17](https://github.com/Autbellum/GunnAire-Ops/pull/17) is open,
+mergeable, and clean at head
+`4273294dc3e0bf0ab71ddd2fa2e286965a3fdbc3`. Its two commits change exactly
+four reviewed files. GitHub **Backend regression** run
+[34001403596](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34001403596)
+passed the complete Backend and Tools suites on Python 3.13 and the
+production-aligned Python 3.14. Read-only production probes confirm that
+deployed `2026.09.02.17` remains healthy, the Apple account-notification route
+rejects an empty envelope, and SiteGround's QuickBooks callback returns to
+`gunnaireops://oauth/qbo/callback`.
+
+The 2026-09-05 Render pre-deployment inspection also confirms that the live
+SQLite file is present and passes `PRAGMA quick_check`. A manifest-verified
+backup marker exists from `2026-09-04T15:57:54.482894+00:00` for the database
+and two document artifacts, and Render exposes a newer daily provider snapshot
+plus prior-code rollback. Neither item proves that a separate encrypted copy is
+held off-host, and no timed restore drill has been completed. Candidate `.18`
+adds eleven nullable customer-portal columns without deleting tables, columns,
+or rows, so routine code rollback must leave those columns intact rather than
+restoring production data.
+
+This evidence does not promote `.18` to production. Merge and Render deployment
+remain required before the app may claim the customer-portal estimate-approval
+contract is live. Render follows `main`, so merging PR #17 is the production
+deployment trigger and remains paused for deployment-owner confirmation. No
+deployment, provider credential, QBO record, or customer communication changed
+during this check.
+The retained record is
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/backend-deployment-preflight-2026090503.json`
+(SHA-256
+`463fdd8bdb5ae17da363a213854e8c059205655b027b3af303c05c4d855865d0`).
+
 ## CloudKit
 
 The app uses the private CloudKit database container
 `iCloud.com.gunnaire.businesssuite` for its SwiftData store. Apple configuration
-and schema status as of 2026-08-30.
+and schema status below is current as of 2026-09-04.
+
+Private means per iCloud user. The supported production topology is company-owned
+iPad, Mac, and any operational iPhone signed into the same approved managed
+business iCloud account, while each employee uses an individual GunnAire Ops
+business login for role and tenant authorization. Distinct personal iCloud
+accounts do not share this SwiftData store. Build `2026090504` blocks a
+non-administrator from entering work when the inspected replica is empty, but
+that guard is not exact Apple-ID attestation and cannot detect a wrong private
+database that already contains operational-looking records. Supporting separate
+Apple IDs requires a tenant-scoped backend authority or an explicitly designed
+CloudKit sharing system; SwiftData's current automatic private-database setup
+does not provide that topology.
 
 ### Current capability and schema status
 
@@ -33,18 +197,44 @@ and schema status as of 2026-08-30.
   gated on a participating certified payment service provider, Account Holder
   entitlement approval, provider integration, and signed physical-iPhone
   acceptance.
-- Exact build `1.0 (2026083021)` is retained as a development-signed iOS
+- Exact current build `1.0 (2026083101)` is retained as a development-signed iOS
+  Release archive and universal arm64/x86_64 Mac Catalyst Release app. Strict
+  signature verification confirms Apple login, CloudKit, Push Notifications,
+  and Associated Domains in both products. The iOS app/dSYM UUID matches at
+  `C62573CC-15F9-3413-A341-8452EF322FBA`; Mac app/dSYM UUIDs match at
+  `641B4DEA-FB67-3D3C-831F-8CF5B0A3F309` and
+  `B8BC1EC8-08FF-3F56-92F5-DD6289C6E767`. Exact retained-artifact and CloudKit
+  export preflight reports **61 checks, 4 expected warnings, and 0 failures**;
+  one warning records that online probes were intentionally omitted. The exact
+  read-only online probe reports **64/3/0**: production serves reviewed backend
+  `2026.08.30.16`, Apple notification routing rejects a malformed envelope with
+  HTTP 400, and the QBO callback reaches the app scheme. Complete iPad and Mac
+  logic suites pass **672/672** each, and the complete iPad UI target passes
+  **92/92 logical workflows** with **95/95 device executions**. The retained
+  consolidated evidence is
+  `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/release-verification-2026083101.json`.
+- The final signed-hardware gate is executable rather than an informal
+  checklist. Run `Tools/physical_device_acceptance.py` with the exact retained
+  archive and Mac app, then follow `PHYSICAL_DEVICE_ACCEPTANCE.md`. The
+  read-only inventory omits device names, serial numbers, UDIDs, ECIDs,
+  accounts, customer data, and credentials. Its structured record validator
+  requires real evidence for every iPad/Mac/iPhone, CloudKit, offline, Handoff,
+  QBO sandbox item/invoice, payment recovery, Google, APNs, scanning, role,
+  accessibility, and revocation scenario; it refuses stale builds, missing
+  evidence, privacy-unsafe records, or Production QBO/CloudKit claims without
+  an explicit authorization reference.
+- Prior exact build `1.0 (2026083021)` is retained as a development-signed iOS
   Release archive and universal arm64/x86_64 Mac Catalyst Release app. Strict
   signature verification confirms Apple login, CloudKit, Push Notifications,
   and Associated Domains in both products. The iOS app/dSYM UUID matches at
   `7C335331-C438-3C6E-B889-77AE067DE476`; Mac app/dSYM UUIDs match at
   `97010FC5-A7B9-3148-9B2D-7906D4ED0D9B` and
   `B88F9531-0261-36DD-9C29-0B5EAA729A24`. Exact retained-artifact and CloudKit
-  export preflight reports **61 checks, 5 expected warnings, and 0 failures**;
-  one warning records that online probes were intentionally omitted. The
-  read-only online probe reports **63/4/1** solely because production remains
-  backend `2026.08.30.15` while source expects undeployed `.16`; Apple
-  notification routing and the QBO callback pass. Complete iPad and Mac logic
+  export preflight reports **61 checks, 4 expected warnings, and 0 failures**;
+  one warning records that online probes were intentionally omitted. The exact
+  read-only online probe reports **64/3/0**: production serves reviewed backend
+  `2026.08.30.16`, Apple notification routing rejects a malformed envelope with
+  HTTP 400, and the QBO callback reaches the app scheme. Complete iPad and Mac logic
   suites pass **672/672** each; role-scoped iPad Find/navigation passes **4/4**,
   direct Mac global Find passes **1/1** after a controlled stale-test-service
   recycle, and the compact field iPhone Find passes **1/1**. This authorization
@@ -96,14 +286,14 @@ and schema status as of 2026-08-30.
   `.16` retains its prior **70/70** result. No CloudKit bootstrap, Development
   mutation, Production promotion, provider authorization, accounting write,
   refund, or payment was required or performed.
-- Production remains schema v15 across 24 record types in retained export
-  `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
+- Production remains schema v15 across 24 record types and 286 fields in retained
+  export `/Users/gunnaire/Downloads/cloudkit-production-7.ckdb`, SHA-256
   `f81de36537620a10fe34fde22883a94dc6f5b00deea6fec08004160c0aae7594`.
   The signed isolated bootstrap now initializes the complete Development schema
-  v22 across 33 record types. Fresh export
-  `/Users/gunnaire/Downloads/cloudkit-development-11.ckdb` has SHA-256
-  `9d357a64b9b17b7efcc8256c5c0d8bb6670b86357e2b48a145d95a5603f77f8b`.
-- Source schema v22 retains the exact v16 attachment delta;
+  v23 across 33 record types and 621 fields. Fresh export
+  `/Users/gunnaire/Downloads/cloudkit-development-13.ckdb` has SHA-256
+  `1beb4588ec0ce4bf44bbc077596d934c179d0ed6054650c2eee5efb74499debd`.
+- Source schema v23 retains the exact v16 attachment delta;
   adds the v17 fleet vehicle/event pair and attachment linkage; the v18 field
   expense record and receipt linkage; the v19 customer operational-alert record;
   the v20 business-task/event pair; and the v21 technician-time-off
@@ -111,32 +301,51 @@ and schema status as of 2026-08-30.
   `CD_TechnicianAvailabilityBlock`; then adds the v22 19-field
   `CD_TechnicianWorkShift` record for regular/on-call weekly capacity,
   effective dates, time zone, stable creation evidence, and reason-required
-  retirement history. The isolated Debug bootstrap writes every optional value
-  through v22, and unit contracts assert the complete seed. The signed staging
-  run exposed and fixed ten previously absent optional values: six expense
-  review/reimbursement fields and four operational-alert resolution fields.
-  The release
-  preflight accepts only the exact cumulative additive v22 delta or an
-  exact post-promotion match, requires each new record family to be all-or-none,
-  and rejects partial v21 availability-block fields or a partial v22 shift
-  record.
+  retirement history. V23 closes every persisted optional operational attribute
+  with 123 approved fields across Customer, communications, equipment, Estimate,
+  Inventory Movement, Invoice, Payment, Project Milestone, Purchase Order,
+  maintenance agreements, Service Call, Service Request, Technician, Time Entry,
+  and Vendor. Thirty-nine were already present because retained Development data
+  had exercised them; the signed v23 bootstrap staged the remaining 84. The
+  isolated Debug bootstrap now writes every optional value through v23, and unit
+  contracts assert the complete seed and marker-only cleanup. Release preflight
+  accepts only the exact cumulative additive v23 delta or an exact post-promotion
+  match and rejects partial v21, v22, or v23 field families.
 - Exact export comparison proves Development differs from Production by only
-  the nine approved additive record families and 212 additive fields across 11
-  affected record types. No existing Production field, system field, or
-  security grant is removed or changed, and every added record uses the
-  approved system fields and default private-database grants. The exact schema
-  audit passes **9/9**; the strengthened verifier regression suite passes
-  **5/5**.
+  the approved nine additive record types and 335 additive fields across 26
+  affected record types. No existing Production field, system field, or security
+  grant is removed or changed, and every added record uses the approved system
+  fields and default private-database grants. Exact build-`2026090503` export
+  verification passes **70/4/0**, and the complete release-tool suite passes
+  **37/37** including six dedicated promotion-manifest regressions. The app
+  remains green at **712/712** iPad and **712/712** Mac Catalyst logic tests,
+  and backend `.18` remains **71/71**. Read-only
+  online preflight is **70 passed / 3 expected warnings / 1 failure**; CloudKit,
+  Apple notification routing, and the QBO callback pass, and the only failure is
+  that Render still serves healthy backend `.17` instead of reviewed `.18`.
 - Versioned marker cleanup identifies the synthetic operational alert by the
   dedicated bootstrap actor rather than its title, because CloudKit truncates
   that title to 32 characters. A regression now proves cleanup removes the
-  complete 32-model synthetic graph. The final signed cleanup left zero marker
-  strings, only the 16 intended starter rows, no pending bootstrap process, and
-  **29/29** successful CloudKit mirroring events with zero failures.
+  complete synthetic graph. The signed v23 export completed before cleanup; a
+  final independent cleanup launch then found zero marker records on its initial
+  and two delayed passes. No bootstrap process remains running.
 - Production was not promoted. Complete representative signed two-device
   iPad/Mac/iPhone role, offline, conflict, and reconnect acceptance before
-  deploying the reviewed v22 schema. After promotion, export Production again
+  deploying the reviewed v23 schema. After promotion, export Production again
   and require exact Development/Production parity before business use.
+- Generate the review artifact from retained exports before and after any
+  authorized promotion:
+
+  ```sh
+  python3 Tools/cloudkit_promotion_manifest.py \
+    --development /path/to/cloudkit-development.ckdb \
+    --production /path/to/cloudkit-production.ckdb \
+    --output /path/to/cloudkit-production-promotion-manifest.json
+  ```
+
+  Exit status `0` requires the exact cumulative v23 schema and an additive-only
+  delta. A changed/removed field, partial v23 family, unapproved record type,
+  system-field change, or security-grant change exits nonzero.
 
 Historical deployment evidence follows:
 
@@ -270,13 +479,21 @@ Historical deployment evidence follows:
    fields plus this one invoice due-date field, with no deletion or security-role
    change. Then complete a signed two-device invoice merge and QBO due-date
    round trip.
-10. Sign the company iPad and Mac into the same approved business iCloud account
-   and sign every staff member into GunnAire Ops with their own business login.
-11. Verify offline edits made on each physical device merge after reconnection before
+10. Sign every operational company iPad, Mac, and iPhone into the same approved
+   managed business iCloud account, then sign each staff member into GunnAire Ops
+   with their own role-bearing business login. Distinct personal iCloud accounts
+   are not supported for the operational SwiftData graph.
+11. Have an administrator create a privacy-safe acceptance canary on that account;
+   verify a fresh non-administrator company device imports it and can work, then
+   verify a wrong or empty iCloud replica shows **Company workspace not loaded**
+   and prevents data entry. The app guard cannot attest the exact Apple ID or
+   detect a wrong private database that already has operational-looking records.
+12. Verify offline edits made on each physical device merge after reconnection before
    relying on CloudKit for live dispatch.
 
-The CloudKit private database keeps the company-owned iPad and Mac in sync. It
-does not replace server-side business authorization, and it should not be used
+The CloudKit private database keeps company-owned devices using that same
+iCloud account in sync. It does not replace server-side business authorization,
+and it should not be used
 as a multi-employee permission system.
 
 The SwiftData schema uses optional CloudKit relationships with explicit
@@ -337,9 +554,24 @@ The project now uses the enabled Push Notifications capability for optional staf
 
 A new field-payment assignment queues one idempotent delivery per active device without delaying assignment creation. APNs previews are intentionally generic and omit customer names, addresses, balances, amounts, and payment data. The route contains only a versioned invoice UUID; the receiving app still applies its current role, assignment, invoice-visibility, and balance policy before opening Payments → Collect. Logout, session expiry, user deactivation, and permanent APNs token errors deactivate the registration and suppress its pending deliveries.
 
-Backend source `2026.08.30.15` is deployed and passes the 69-test suite. Native push and compact Settings behavior retain framework-appropriate unit/UI coverage. Before activation, create and store an authorized APNs signing key plus a separate Fernet device-token key in Render; confirm Admin readiness; update App Store privacy answers for the linked device identifier used only for app functionality; and prove sandbox and TestFlight/production delivery, tap routing, logout, deactivation, credential revocation, and invalid-token cleanup on signed hardware.
+Backend source `2026.08.30.16` is deployed and passes the 70-test suite. Native push and compact Settings behavior retain framework-appropriate unit/UI coverage. Before activation, create and store an authorized APNs signing key plus a separate Fernet device-token key in Render; confirm Admin readiness; update App Store privacy answers for the linked device identifier used only for app functionality; and prove sandbox and TestFlight/production delivery, tap routing, logout, deactivation, credential revocation, and invalid-token cleanup on signed hardware.
 
 ## Field iPhone payment handoff
+
+Build `1.0 (2026090417)` keeps this lifecycle intact while simplifying both
+ends of the handoff. The iPad/Mac origin now presents a compact readiness state,
+one next-step sentence, optional setup help, and persistent cancellation. The
+iPhone guide combines copying the verified QBO invoice identifier with opening
+the official QuickBooks or GoPayment app page, so the field user does not have
+to copy and launch separately. It still cannot present those actions for an
+unpublished invoice or infer payment success from opening another app.
+Current-source verification passes **707/707** logic tests, **2/2** redesigned
+origin/receiver journeys, and **4/4** adjacent publication, deferred-CloudKit,
+expiration, and QBO-verification journeys on the 13-inch M5 iPad Simulator.
+Optimized universal iPad Simulator and Mac Catalyst Release builds also pass;
+the Mac result retains only the known optional host Metal-toolchain path
+warning. No schema, capability, account, provider, payment, invoice, or
+production state changed.
 
 The Payments workspace can hand an unpaid invoice from the iPad or Mac to the
 company iPhone with Apple Handoff. The handoff contains only an invoice
@@ -356,9 +588,9 @@ iPhone reapplies the field user's current role, invoice visibility,
 assigned-job, and unpaid-balance restrictions. A QBO-linked invoice shows the
 freshly resolved balance, its copyable provider identifier, and documented
 QuickBooks Mobile/GoPayment navigation without inventing an unsupported deep
-link. It also exposes static HTTPS actions to Intuit's official QuickBooks
-Mobile and GoPayment App Store records so staff can open or install the supported
-payment app without sending invoice or customer data to that URL. An unpublished
+link. Its combined copy-and-open actions copy the verified QBO invoice identifier
+locally before opening Intuit's official QuickBooks Mobile or GoPayment App Store
+record, so no invoice or customer data is sent to that URL. An unpublished
 invoice hides those unusable QuickBooks steps, explains
 the publication dependency, and offers a direct verified cash/check/other
 payment fallback; a local UUID is never presented as a QuickBooks reference.

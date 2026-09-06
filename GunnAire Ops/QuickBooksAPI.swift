@@ -4,14 +4,6 @@ import Foundation
 import AuthenticationServices
 import Combine
 
-/// Enum for QBO resource endpoints
-enum QBOResource: String {
-    case customers = "customer"
-    case invoices = "invoice"
-    case payments = "payment"
-    case vendors = "vendor"
-    case estimates = "estimate"
-}
 final class QuickBooksAuthAPI: ObservableObject {
     // MARK: - OAuth2 Properties
     static let shared = QuickBooksAuthAPI()
@@ -20,7 +12,6 @@ final class QuickBooksAuthAPI: ObservableObject {
     private let clientID = Config.QuickBooks.clientID
     private let redirectURI = Config.QuickBooks.redirectURI
     private let callbackScheme = Config.QuickBooks.callbackScheme
-    private let environment = Config.QuickBooks.environment
     private var activeAuthSession: ASWebAuthenticationSession?
     private var activePresentationContext: ASWebAuthenticationPresentationContextProviding?
     private var pendingOAuthState: String?
@@ -205,36 +196,10 @@ final class QuickBooksAuthAPI: ObservableObject {
         }
     }
     
-    // MARK: - API Requests (scaffold)
-    func fetchResource(_ resource: QBOResource, completion: @escaping (Result<Data, Error>) -> Void) {
-        guard let accessToken = accessToken, let realmID = realmID else {
-            completion(Result<Data, Error>.failure(QBOError.notAuthenticated))
-            return
-        }
-        let base = environment == "sandbox" ? "https://sandbox-quickbooks.api.intuit.com/v3/company/" : "https://quickbooks.api.intuit.com/v3/company/"
-        guard var components = URLComponents(string: base + realmID + "/query") else {
-            completion(Result<Data, Error>.failure(QBOError.invalidEndpoint))
-            return
-        }
-        components.queryItems = [
-            URLQueryItem(name: "query", value: "select * from \(resource.rawValue.capitalized)"),
-            URLQueryItem(name: "minorversion", value: "75")
-        ]
-        guard let url = components.url else {
-            completion(Result<Data, Error>.failure(QBOError.invalidEndpoint))
-            return
-        }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = Config.QuickBooks.requestTimeoutSeconds
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        // Perform network call (omitted for brevity)
-        // Call completion(.success(data)) or completion(.failure(error))
-    }
 }
 
 enum QBOError: Error, LocalizedError {
-    case invalidAuthURL, missingAuthCode, missingRealmID, invalidState, notAuthenticated, invalidEndpoint, invalidRedirectURI(String), callbackSchemeNotRegistered(String), missingConfiguration, providerError(String, String?), tokenExchangeFailed(Int, String?), unknown
+    case invalidAuthURL, missingAuthCode, missingRealmID, invalidState, notAuthenticated, invalidRedirectURI(String), callbackSchemeNotRegistered(String), missingConfiguration, providerError(String, String?), tokenExchangeFailed(Int, String?), unknown
     var errorDescription: String? {
         switch self {
         case .invalidAuthURL: return "Could not build authorization URL."
@@ -242,7 +207,6 @@ enum QBOError: Error, LocalizedError {
         case .missingRealmID: return "QuickBooks realmId was not returned."
         case .invalidState: return "OAuth state validation failed."
         case .notAuthenticated: return "You are not signed in to QuickBooks."
-        case .invalidEndpoint: return "API endpoint is invalid."
         case .invalidRedirectURI(let uri): return "QuickBooks redirect URI is invalid: \(uri)"
         case .callbackSchemeNotRegistered(let scheme): return "QuickBooks callback scheme '\(scheme)' is not registered in app URL Types."
         case .missingConfiguration: return "QuickBooks OAuth credentials are missing. For production, set QB_ENVIRONMENT=production, the production Intuit client ID/secret, and the production HTTPS redirect URI from the Intuit Developer Portal."

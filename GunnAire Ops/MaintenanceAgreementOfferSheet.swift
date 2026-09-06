@@ -359,7 +359,7 @@ struct MaintenanceAgreementOfferSheet: View {
     }
     private var selectableBillingItems: [Item] {
         billingItems
-            .filter { !$0.requiresPricebookReview }
+            .filter { !$0.requiresPricebookReview && $0.isAvailableForNewWork }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
     private var selectedBillingItem: Item? {

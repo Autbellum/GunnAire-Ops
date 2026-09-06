@@ -32,6 +32,10 @@ This app reads its API credentials from Xcode build settings, not from hardcoded
 
 ## Google Workspace APIs
 
+The implemented product boundary, security controls, current test evidence, and
+signed-device production checklist are maintained in
+`GOOGLE_INTEGRATION_ACCEPTANCE.md`.
+
 Use one Google Cloud project and its iOS OAuth client for the GunnAire bundle.
 In **Google Cloud Console → APIs & Services → Library**, enable:
 

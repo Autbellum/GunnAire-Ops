@@ -1,5 +1,108 @@
+import Foundation
 import SwiftUI
 import SwiftData
+
+enum GmailMessagePresentation {
+    static func inboxQuery(searchText: String) -> String {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "in:inbox" : "in:inbox \(trimmed)"
+    }
+
+    static func headerValue(named name: String, in message: GmailMessageDetail) -> String? {
+        message.payload?.headers?
+            .first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?
+            .value
+    }
+
+    static func bodyText(from payload: GmailMessagePayload?) -> String? {
+        guard let payload else { return nil }
+        if let plainText = decodedText(in: payload, matching: "text/plain") {
+            return cleaned(plainText)
+        }
+        if let html = decodedText(in: payload, matching: "text/html") {
+            return cleaned(plainText(fromHTML: html))
+        }
+        if let encoded = payload.body?.data, let decoded = decodeBase64URL(encoded) {
+            return cleaned(decoded)
+        }
+        return nil
+    }
+
+    static func removingUnreadLabel(from message: GmailMessageDetail) -> GmailMessageDetail {
+        GmailMessageDetail(
+            id: message.id,
+            threadId: message.threadId,
+            labelIds: message.labelIds?.filter { $0 != "UNREAD" },
+            snippet: message.snippet,
+            internalDate: message.internalDate,
+            payload: message.payload
+        )
+    }
+
+    private static func decodedText(in payload: GmailMessagePayload, matching mimeType: String) -> String? {
+        if payload.mimeType?.lowercased() == mimeType,
+           let encoded = payload.body?.data,
+           let decoded = decodeBase64URL(encoded),
+           !decoded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return decoded
+        }
+        for part in payload.parts ?? [] {
+            if let decoded = decodedText(in: part, matching: mimeType) {
+                return decoded
+            }
+        }
+        return nil
+    }
+
+    private static func decodeBase64URL(_ value: String) -> String? {
+        var normalized = value
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padding = normalized.count % 4
+        if padding > 0 {
+            normalized += String(repeating: "=", count: 4 - padding)
+        }
+        guard let data = Data(base64Encoded: normalized) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func plainText(fromHTML html: String) -> String {
+        html
+            .replacingOccurrences(
+                of: "(?is)<(?:head|style|script)[^>]*>.*?</(?:head|style|script)>",
+                with: "",
+                options: .regularExpression
+            )
+            .replacingOccurrences(of: "(?s)<!--.*?-->", with: "", options: .regularExpression)
+            .replacingOccurrences(
+                of: "(?i)<\\s*(br\\s*/?|/p|/div|/li|/tr)\\s*>",
+                with: "\n",
+                options: .regularExpression
+            )
+            .replacingOccurrences(of: "(?s)<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+    }
+
+    private static func cleaned(_ value: String) -> String? {
+        var normalized = value
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        normalized = normalized
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .joined(separator: "\n")
+        while normalized.contains("\n\n\n") {
+            normalized = normalized.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        }
+        normalized = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? nil : normalized
+    }
+}
 
 struct GmailView: View {
     @Environment(\.modelContext) private var modelContext
@@ -14,82 +117,111 @@ struct GmailView: View {
     @State private var isLoading = false
     @State private var statusMessage: String?
     @State private var searchQuery = ""
-    @State private var selectedMessage: GmailMessageDetail?
+    @State private var deletingMessageIDs: Set<String> = []
     @State private var showingComposeSheet = false
     @State private var composeDraft: GmailDraft?
     @State private var didConsumePendingDraft = false
 
+    private var usesMailUITestFixture: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-uiTestSeedMailInbox")
+        #else
+        false
+        #endif
+    }
+
+    private var isMailConnected: Bool {
+        usesMailUITestFixture || googleAuth.isAuthenticated
+    }
+
     private var canUseGoogleIntegration: Bool {
-        googleAuth.canUseCurrentBusinessIdentity
+        usesMailUITestFixture || googleAuth.canUseCurrentBusinessIdentity
     }
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Mailbox") {
-                    if !googleAuth.isAuthenticated {
-                        Text("Connect Google in Settings before using Mail.")
-                            .foregroundColor(.secondary)
-                    } else if !canUseGoogleIntegration {
-                        Label(
-                            "The connected Google account does not match this GunnAire login. Disconnect Google in Settings, then connect the matching business account.",
-                            systemImage: "person.crop.circle.badge.xmark"
-                        )
-                        .foregroundStyle(.orange)
-                    } else if isLoading {
+                if !isMailConnected {
+                    ContentUnavailableView(
+                        "Connect Google",
+                        systemImage: "envelope",
+                        description: Text("Connect your GunnAire Google account in Settings to use Mail.")
+                    )
+                    .listRowBackground(Color.clear)
+                } else if !canUseGoogleIntegration {
+                    ContentUnavailableView(
+                        "Use Your GunnAire Account",
+                        systemImage: "person.crop.circle.badge.xmark",
+                        description: Text("Reconnect Google in Settings using the account that matches this business login.")
+                    )
+                    .listRowBackground(Color.clear)
+                } else if isLoading && messages.isEmpty {
+                    HStack {
+                        Spacer()
                         ProgressView("Loading mail...")
-                    } else if messages.isEmpty {
-                        Text("No messages loaded.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(messages) { message in
-                            Button {
-                                selectedMessage = message
+                        Spacer()
+                    }
+                    .listRowBackground(Color.clear)
+                } else if messages.isEmpty {
+                    ContentUnavailableView(
+                        searchQuery.nilIfBlank == nil ? "Inbox Empty" : "No Results",
+                        systemImage: searchQuery.nilIfBlank == nil ? "tray" : "magnifyingglass",
+                        description: Text(searchQuery.nilIfBlank == nil ? "New messages will appear here." : "Try a different search.")
+                    )
+                    .listRowBackground(Color.clear)
+                } else {
+                    ForEach(messages) { message in
+                        NavigationLink {
+                            GmailMessageDetailView(
+                                message: message,
+                                loadsRemoteMessage: !usesMailUITestFixture,
+                                onReply: { draft in
+                                    composeDraft = draft
+                                },
+                                onDelete: trashMessage,
+                                onRead: markMessageRead
+                            )
+                        } label: {
+                            GmailMessageRow(
+                                message: message,
+                                isDeleting: deletingMessageIDs.contains(message.id)
+                            )
+                        }
+                        .disabled(deletingMessageIDs.contains(message.id))
+                        .accessibilityIdentifier("MailMessage-\(message.id)")
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                trashMessage(message)
                             } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(headerValue(named: "Subject", in: message) ?? "(No Subject)")
-                                        .font(.headline)
-                                        .foregroundColor(.primary)
-                                    Text(headerValue(named: "From", in: message) ?? "Unknown sender")
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                    if let snippet = message.snippet, !snippet.isEmpty {
-                                        Text(snippet)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(2)
-                                    }
-                                    HStack {
-                                        if let date = formattedDate(for: message) {
-                                            Text(date)
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                        }
-                                        Spacer()
-                                        if (message.labelIds ?? []).contains("UNREAD") {
-                                            Text("Unread")
-                                                .font(.caption2)
-                                                .foregroundColor(Color.brandGold)
-                                        }
-                                    }
-                                }
-                                .padding(.vertical, 4)
+                                Label("Delete", systemImage: "trash")
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
-
+            }
+            .listStyle(.plain)
+            .accessibilityIdentifier("MailInboxList")
+            .navigationTitle("Inbox")
+            .searchable(text: $searchQuery, prompt: "Search mail")
+            .safeAreaInset(edge: .bottom) {
                 if let statusMessage, !statusMessage.isEmpty {
-                    Section("Status") {
+                    HStack(spacing: 12) {
                         Text(statusMessage)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .font(.footnote)
+                        Spacer()
+                        Button {
+                            self.statusMessage = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Dismiss mail status")
                     }
+                    .padding(.horizontal)
+                    .padding(.vertical, 10)
+                    .background(.thinMaterial)
                 }
             }
-            .navigationTitle("Mail")
-            .searchable(text: $searchQuery, prompt: "Search Gmail")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
@@ -98,6 +230,7 @@ struct GmailView: View {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
                     .disabled(isLoading || !canUseGoogleIntegration)
+                    .accessibilityIdentifier("MailRefreshButton")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -106,6 +239,7 @@ struct GmailView: View {
                         Label("Compose", systemImage: "square.and.pencil")
                     }
                     .disabled(!canUseGoogleIntegration)
+                    .accessibilityIdentifier("MailComposeButton")
                 }
             }
             .onAppear {
@@ -119,11 +253,6 @@ struct GmailView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                 applyPendingDraftIfNeeded(force: true)
-            }
-            .sheet(item: $selectedMessage) { message in
-                GmailMessageDetailView(message: message) { draft in
-                    composeDraft = draft
-                }
             }
             .sheet(item: $composeDraft) { draft in
                 GmailComposeView(
@@ -143,7 +272,24 @@ struct GmailView: View {
         }
     }
 
-    private func loadMessages() {
+    private func loadMessages(preservingStatus: Bool = false) {
+        if usesMailUITestFixture {
+            let search = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            messages = search.isEmpty ? Self.uiTestMessages : Self.uiTestMessages.filter { message in
+                [
+                    GmailMessagePresentation.headerValue(named: "From", in: message),
+                    GmailMessagePresentation.headerValue(named: "Subject", in: message),
+                    message.snippet
+                ]
+                .compactMap { $0?.lowercased() }
+                .contains { $0.contains(search) }
+            }
+            isLoading = false
+            if !preservingStatus {
+                statusMessage = nil
+            }
+            return
+        }
         guard canUseGoogleIntegration else {
             statusMessage = googleAuth.isAuthenticated
                 ? GoogleAuthError.businessAccountMismatch.localizedDescription
@@ -152,23 +298,31 @@ struct GmailView: View {
         }
 
         isLoading = true
-        statusMessage = "Loading Gmail..."
-        googleAuth.fetchGmailMessages(query: searchQuery.nilIfBlank) { result in
+        if !preservingStatus {
+            statusMessage = nil
+        }
+        googleAuth.fetchGmailMessages(query: GmailMessagePresentation.inboxQuery(searchText: searchQuery)) { result in
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
                 case .success(let loadedMessages):
                     messages = loadedMessages
-                    statusMessage = "Loaded \(loadedMessages.count) messages."
-                case .failure(let error):
+                    if !preservingStatus {
+                        statusMessage = nil
+                    }
+                case .failure:
                     messages = []
-                    statusMessage = "Mail sync failed: \(error.localizedDescription). Disconnect and reconnect Google if Gmail permission was just added."
+                    statusMessage = "Mail couldn't be refreshed. Check your Google connection in Settings and try again."
                 }
             }
         }
     }
 
     private func sendMessage(to: String, subject: String, body: String, threadID: String?, attachments: [GmailAttachment], auditDraft: GmailDraft?) {
+        if usesMailUITestFixture {
+            statusMessage = "Message sent."
+            return
+        }
         guard canUseGoogleIntegration else {
             statusMessage = GoogleAuthError.businessAccountMismatch.localizedDescription
             return
@@ -247,7 +401,7 @@ struct GmailView: View {
                         )
                     }
                     statusMessage = "Message sent."
-                    loadMessages()
+                    loadMessages(preservingStatus: true)
                 case .failure(let error):
                     if let auditDraft,
                        let customerID = auditDraft.customerID,
@@ -263,7 +417,45 @@ struct GmailView: View {
                             providerStatusDetail: error.localizedDescription
                         )
                     }
-                    statusMessage = "Send failed: \(error.localizedDescription)"
+                    statusMessage = "The message couldn't be sent. Check your connection and try again."
+                }
+            }
+        }
+    }
+
+    private func markMessageRead(_ message: GmailMessageDetail) {
+        guard (message.labelIds ?? []).contains("UNREAD") else { return }
+        if usesMailUITestFixture {
+            guard let index = messages.firstIndex(where: { $0.id == message.id }) else { return }
+            messages[index] = GmailMessagePresentation.removingUnreadLabel(from: messages[index])
+            return
+        }
+        googleAuth.markGmailMessageRead(id: message.id) { result in
+            guard case .success = result else { return }
+            DispatchQueue.main.async {
+                guard let index = messages.firstIndex(where: { $0.id == message.id }) else { return }
+                messages[index] = GmailMessagePresentation.removingUnreadLabel(from: messages[index])
+            }
+        }
+    }
+
+    private func trashMessage(_ message: GmailMessageDetail) {
+        guard canUseGoogleIntegration, !deletingMessageIDs.contains(message.id) else { return }
+        if usesMailUITestFixture {
+            messages.removeAll { $0.id == message.id }
+            statusMessage = "Message moved to Trash."
+            return
+        }
+        deletingMessageIDs.insert(message.id)
+        googleAuth.moveGmailMessageToTrash(id: message.id) { result in
+            DispatchQueue.main.async {
+                deletingMessageIDs.remove(message.id)
+                switch result {
+                case .success:
+                    messages.removeAll { $0.id == message.id }
+                    statusMessage = "Message moved to Trash."
+                case .failure:
+                    statusMessage = "The message couldn't be moved to Trash. Refresh and try again."
                 }
             }
         }
@@ -360,104 +552,232 @@ struct GmailView: View {
         }
     }
 
-    private func headerValue(named name: String, in message: GmailMessageDetail) -> String? {
-        message.payload?.headers?.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.value
+    private static var uiTestMessages: [GmailMessageDetail] {
+        let html = "<div>Your service appointment is confirmed.</div><p>We will see you Tuesday morning.</p>"
+        let encodedHTML = Data(html.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let headers = [
+            GmailMessageHeader(name: "From", value: "Jordan Customer <jordan@example.com>"),
+            GmailMessageHeader(name: "To", value: "service@gunnaire.com"),
+            GmailMessageHeader(name: "Subject", value: "Service appointment confirmed"),
+            GmailMessageHeader(name: "Date", value: "Tue, 3 Sep 2026 9:30:00 -0400"),
+            GmailMessageHeader(name: "MIME-Version", value: "1.0"),
+            GmailMessageHeader(name: "Content-Type", value: "text/html; charset=UTF-8")
+        ]
+        return [
+            GmailMessageDetail(
+                id: "ui-mail-1",
+                threadId: "ui-thread-1",
+                labelIds: ["INBOX", "UNREAD"],
+                snippet: "Your service appointment is confirmed. We will see you Tuesday morning.",
+                internalDate: "1788442200000",
+                payload: GmailMessagePayload(
+                    headers: headers,
+                    mimeType: "text/html",
+                    body: GmailMessageBody(data: encodedHTML, size: html.utf8.count),
+                    parts: nil,
+                    filename: nil
+                )
+            )
+        ]
+    }
+}
+
+private struct GmailMessageRow: View {
+    let message: GmailMessageDetail
+    let isDeleting: Bool
+
+    private var isUnread: Bool {
+        (message.labelIds ?? []).contains("UNREAD")
     }
 
-    private func formattedDate(for message: GmailMessageDetail) -> String? {
-        guard let internalDate = message.internalDate,
-              let timestamp = Double(internalDate) else {
-            return nil
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(isUnread ? Color.brandGold : Color.clear)
+                .frame(width: 8, height: 8)
+                .padding(.top, 7)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(GmailMessagePresentation.headerValue(named: "From", in: message) ?? "Unknown sender")
+                        .font(.headline)
+                        .fontWeight(isUnread ? .semibold : .regular)
+                        .lineLimit(1)
+                    Spacer(minLength: 12)
+                    if let formattedDate {
+                        Text(formattedDate)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Text(GmailMessagePresentation.headerValue(named: "Subject", in: message) ?? "(No subject)")
+                    .fontWeight(isUnread ? .semibold : .regular)
+                    .lineLimit(1)
+
+                if let snippet = message.snippet?.trimmingCharacters(in: .whitespacesAndNewlines), !snippet.isEmpty {
+                    Text(snippet)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            if isDeleting {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Moving message to Trash")
+            }
         }
+        .padding(.vertical, 5)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(isUnread ? "Unread" : "Read")
+    }
+
+    private var formattedDate: String? {
+        guard let internalDate = message.internalDate, let timestamp = Double(internalDate) else { return nil }
         let date = Date(timeIntervalSince1970: timestamp / 1000)
-        return date.formatted(date: .abbreviated, time: .shortened)
+        if Calendar.current.isDateInToday(date) {
+            return date.formatted(date: .omitted, time: .shortened)
+        }
+        return date.formatted(date: .abbreviated, time: .omitted)
     }
 }
 
 private struct GmailMessageDetailView: View {
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     let message: GmailMessageDetail
+    let loadsRemoteMessage: Bool
     let onReply: (GmailDraft) -> Void
+    let onDelete: (GmailMessageDetail) -> Void
+    let onRead: (GmailMessageDetail) -> Void
 
     @State private var loadedMessage: GmailMessageDetail?
-    @State private var threadMessages: [GmailMessageDetail] = []
     @State private var isLoading = false
-    @State private var loadError: String?
+    @State private var loadFailed = false
+    @State private var showingDeleteConfirmation = false
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section("Headers") {
-                    ForEach(activeMessage.payload?.headers ?? [], id: \.name) { header in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(header.name)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text(header.value)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text(GmailMessagePresentation.headerValue(named: "Subject", in: activeMessage) ?? "(No subject)")
+                    .font(.title2.weight(.semibold))
+                    .textSelection(.enabled)
+
+                HStack(alignment: .top, spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.brandGold.opacity(0.2))
+                        Text(senderInitial)
+                            .font(.headline)
+                            .foregroundStyle(Color.brandGold)
+                    }
+                    .frame(width: 40, height: 40)
+                    .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(GmailMessagePresentation.headerValue(named: "From", in: activeMessage) ?? "Unknown sender")
+                            .font(.headline)
+                            .textSelection(.enabled)
+                        if let recipient = GmailMessagePresentation.headerValue(named: "To", in: activeMessage), !recipient.isEmpty {
+                            Text("To: \(recipient)")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
                         }
+                    }
+
+                    Spacer(minLength: 12)
+                    if let formattedDate {
+                        Text(formattedDate)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
                     }
                 }
 
-                Section("Snippet") {
-                    Text(activeMessage.snippet ?? "No preview available.")
-                }
+                Divider()
 
                 if isLoading {
-                    Section("Message Body") {
+                    HStack {
+                        Spacer()
                         ProgressView("Loading message...")
+                        Spacer()
                     }
-                } else if let bodyText = extractedBody, !bodyText.isEmpty {
-                    Section("Message Body") {
-                        Text(bodyText)
-                            .textSelection(.enabled)
-                    }
-                }
-
-                if let loadError, !loadError.isEmpty {
-                    Section("Load Error") {
-                        Text(loadError)
+                    .padding(.vertical, 32)
+                } else if let bodyText = extractedBody {
+                    Text(bodyText)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                } else if loadFailed {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("The full message couldn't be loaded.")
                             .foregroundColor(.secondary)
+                        Button("Try Again") {
+                            loadMessageIfNeeded(force: true)
+                        }
                     }
+                } else {
+                    Text("This message has no text content.")
+                        .foregroundStyle(.secondary)
                 }
+            }
+            .padding()
+        }
+        .navigationTitle("Mail")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button {
+                    onReply(makeReplyDraft())
+                } label: {
+                    Label("Reply", systemImage: "arrowshape.turn.up.left")
+                }
+                .accessibilityIdentifier("MailReplyButton")
 
-                if !threadMessages.isEmpty {
-                    Section("Thread") {
-                        ForEach(threadMessages) { threadMessage in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(headerValue(named: "From", in: threadMessage) ?? "Unknown sender")
-                                    .font(.headline)
-                                if let bodyText = decodeBody(from: threadMessage.payload), !bodyText.isEmpty {
-                                    Text(bodyText)
-                                        .font(.caption)
-                                        .lineLimit(8)
-                                } else {
-                                    Text(threadMessage.snippet ?? "No preview available.")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .padding(.vertical, 2)
-                        }
+                Menu {
+                    Button {
+                        onReply(makeReplyAllDraft())
+                    } label: {
+                        Label("Reply All", systemImage: "arrowshape.turn.up.left.2")
                     }
-                }
-            }
-            .navigationTitle("Message")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu("Reply") {
-                        Button("Reply") {
-                            onReply(makeReplyDraft())
-                        }
-                        Button("Reply All") {
-                            onReply(makeReplyAllDraft())
-                        }
-                        Button("Forward") {
-                            onReply(makeForwardDraft())
-                        }
+                    Button {
+                        onReply(makeForwardDraft())
+                    } label: {
+                        Label("Forward", systemImage: "arrowshape.turn.up.right")
                     }
+                    Divider()
+                    Button(role: .destructive) {
+                        showingDeleteConfirmation = true
+                    } label: {
+                        Label("Move to Trash", systemImage: "trash")
+                    }
+                } label: {
+                    Label("More", systemImage: "ellipsis.circle")
                 }
+                .accessibilityIdentifier("MailMoreActionsButton")
             }
-            .onAppear(perform: loadMessageIfNeeded)
+        }
+        .alert("Move this message to Trash?", isPresented: $showingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Move to Trash", role: .destructive) {
+                onDelete(activeMessage)
+                dismiss()
+            }
+        } message: {
+            Text("You can recover it later from Gmail Trash.")
+        }
+        .onAppear {
+            onRead(message)
+            if loadsRemoteMessage {
+                loadMessageIfNeeded()
+            }
         }
     }
 
@@ -466,11 +786,26 @@ private struct GmailMessageDetailView: View {
     }
 
     private var extractedBody: String? {
-        decodeBody(from: activeMessage.payload)
+        GmailMessagePresentation.bodyText(from: activeMessage.payload)
     }
 
-    private func loadMessageIfNeeded() {
-        guard loadedMessage == nil, !isLoading else { return }
+    private var senderInitial: String {
+        let sender = GmailMessagePresentation.headerValue(named: "From", in: activeMessage) ?? "?"
+        return String(sender.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1)).uppercased()
+    }
+
+    private var formattedDate: String? {
+        guard let internalDate = activeMessage.internalDate, let timestamp = Double(internalDate) else { return nil }
+        return Date(timeIntervalSince1970: timestamp / 1000)
+            .formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func loadMessageIfNeeded(force: Bool = false) {
+        guard (force || loadedMessage == nil), !isLoading else { return }
+        if force {
+            loadedMessage = nil
+        }
+        loadFailed = false
         isLoading = true
         googleAuth.fetchGmailMessage(id: message.id) { result in
             DispatchQueue.main.async {
@@ -478,52 +813,17 @@ private struct GmailMessageDetailView: View {
                 switch result {
                 case .success(let fullMessage):
                     loadedMessage = fullMessage
-                    loadThreadIfNeeded(from: fullMessage)
-                case .failure(let error):
-                    loadError = error.localizedDescription
-                }
-            }
-        }
-    }
-
-    private func decodeBody(from payload: GmailMessagePayload?) -> String? {
-        guard let payload else { return nil }
-        if let data = payload.body?.data,
-           let decoded = decodeBase64URL(data),
-           !decoded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return decoded
-        }
-        for part in payload.parts ?? [] {
-            if let nested = decodeBody(from: part),
-               !nested.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return nested
-            }
-        }
-        return nil
-    }
-
-    private func headerValue(named name: String, in message: GmailMessageDetail) -> String? {
-        message.payload?.headers?.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame })?.value
-    }
-
-    private func loadThreadIfNeeded(from message: GmailMessageDetail) {
-        guard threadMessages.isEmpty, let threadID = message.threadId, !threadID.isEmpty else { return }
-        googleAuth.fetchGmailThread(id: threadID) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let messages):
-                    threadMessages = messages
                 case .failure:
-                    break
+                    loadFailed = true
                 }
             }
         }
     }
 
     private func makeReplyDraft() -> GmailDraft {
-        let sender = headerValue(named: "From", in: activeMessage) ?? ""
+        let sender = GmailMessagePresentation.headerValue(named: "From", in: activeMessage) ?? ""
         let extractedEmail = extractEmailAddress(from: sender) ?? sender
-        let subject = headerValue(named: "Subject", in: activeMessage) ?? ""
+        let subject = GmailMessagePresentation.headerValue(named: "Subject", in: activeMessage) ?? ""
         let replySubject = subject.lowercased().hasPrefix("re:") ? subject : "Re: \(subject)"
         let bodyText = extractedBody ?? activeMessage.snippet ?? ""
         let quoted = bodyText.isEmpty ? "" : "\n\n--- Original Message ---\n\(bodyText)"
@@ -538,12 +838,12 @@ private struct GmailMessageDetailView: View {
 
     private func makeReplyAllDraft() -> GmailDraft {
         let selfEmail = googleAuth.signedInEmail?.lowercased()
-        let senderValues = parseAddresses(from: headerValue(named: "From", in: activeMessage))
-        let toValues = parseAddresses(from: headerValue(named: "To", in: activeMessage))
-        let ccValues = parseAddresses(from: headerValue(named: "Cc", in: activeMessage))
+        let senderValues = parseAddresses(from: GmailMessagePresentation.headerValue(named: "From", in: activeMessage))
+        let toValues = parseAddresses(from: GmailMessagePresentation.headerValue(named: "To", in: activeMessage))
+        let ccValues = parseAddresses(from: GmailMessagePresentation.headerValue(named: "Cc", in: activeMessage))
         let uniqueRecipients = Array(Set((senderValues + toValues + ccValues).filter { $0.lowercased() != selfEmail }))
             .sorted()
-        let subject = headerValue(named: "Subject", in: activeMessage) ?? ""
+        let subject = GmailMessagePresentation.headerValue(named: "Subject", in: activeMessage) ?? ""
         let replySubject = subject.lowercased().hasPrefix("re:") ? subject : "Re: \(subject)"
         let bodyText = extractedBody ?? activeMessage.snippet ?? ""
         let quoted = bodyText.isEmpty ? "" : "\n\n--- Original Message ---\n\(bodyText)"
@@ -557,11 +857,11 @@ private struct GmailMessageDetailView: View {
     }
 
     private func makeForwardDraft() -> GmailDraft {
-        let subject = headerValue(named: "Subject", in: activeMessage) ?? ""
+        let subject = GmailMessagePresentation.headerValue(named: "Subject", in: activeMessage) ?? ""
         let forwardSubject = subject.lowercased().hasPrefix("fwd:") ? subject : "Fwd: \(subject)"
         let bodyText = extractedBody ?? activeMessage.snippet ?? ""
-        let sender = headerValue(named: "From", in: activeMessage) ?? ""
-        let originalDate = headerValue(named: "Date", in: activeMessage) ?? ""
+        let sender = GmailMessagePresentation.headerValue(named: "From", in: activeMessage) ?? ""
+        let originalDate = GmailMessagePresentation.headerValue(named: "Date", in: activeMessage) ?? ""
         let quoted = [
             "",
             "",
@@ -569,7 +869,7 @@ private struct GmailMessageDetailView: View {
             "From: \(sender)",
             "Date: \(originalDate)",
             "Subject: \(subject)",
-            "To: \(headerValue(named: "To", in: activeMessage) ?? "")",
+            "To: \(GmailMessagePresentation.headerValue(named: "To", in: activeMessage) ?? "")",
             "",
             bodyText
         ].joined(separator: "\n")
@@ -602,17 +902,6 @@ private struct GmailMessageDetailView: View {
             .filter { !$0.isEmpty }
     }
 
-    private func decodeBase64URL(_ value: String) -> String? {
-        var normalized = value
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padding = normalized.count % 4
-        if padding > 0 {
-            normalized += String(repeating: "=", count: 4 - padding)
-        }
-        guard let data = Data(base64Encoded: normalized) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
 }
 
 private struct GmailComposeView: View {
@@ -645,9 +934,12 @@ private struct GmailComposeView: View {
                 TextField("To", text: $to)
                     .keyboardType(.emailAddress)
                     .textInputAutocapitalization(.never)
+                    .accessibilityIdentifier("MailComposeTo")
                 TextField("Subject", text: $subject)
+                    .accessibilityIdentifier("MailComposeSubject")
                 TextField("Message", text: $messageBody, axis: .vertical)
                     .lineLimit(8...16)
+                    .accessibilityIdentifier("MailComposeBody")
                 if !attachments.isEmpty {
                     Section("Attachments") {
                         ForEach(attachments) { attachment in
@@ -675,6 +967,7 @@ private struct GmailComposeView: View {
                         dismiss()
                     }
                     .disabled(to.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || messageBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("MailSendButton")
                 }
             }
         }

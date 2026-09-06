@@ -24,6 +24,22 @@ final class GunnAire_OpsUITests: XCTestCase {
     private let operationalAlertID = "A1000000-0000-4000-8000-000000000042"
     private let businessTaskID = "A1000000-0000-4000-8000-000000000043"
     private let timeOffRequestID = "A1000000-0000-4000-8000-000000000045"
+    private let archivedCatalogItemID = "A1000000-0000-4000-8000-000000000049"
+    private let adminWorkspaceDestinations: [(sidebar: String, route: String, title: String)] = [
+        ("Command Center", "commandCenter", "Command Center"),
+        ("Clock In/Out", "timeClock", "Time Clock"),
+        ("Schedule & Jobs", "scheduleAndJobs", "Schedule"),
+        ("Customers", "customers", "Customers"),
+        ("Onsite Documentation", "onsiteDocumentation", "Onsite Documentation"),
+        ("Mail", "mail", "Inbox"),
+        ("Estimates", "estimates", "Estimates"),
+        ("Invoices", "invoices", "Invoices"),
+        ("Payments", "payments", "Payments"),
+        ("Reports", "reports", "Business Reports"),
+        ("Receipts & Bills", "receiptsBills", "Receipts & Bills"),
+        ("Sync & Integrations", "syncIntegrations", "Sync & Integrations"),
+        ("QuickBooks Management", "quickBooksManagement", "QuickBooks Management")
+    ]
 
     private func dispatchCapacityIdentifier(for date: Date) -> String {
         let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
@@ -43,6 +59,125 @@ final class GunnAire_OpsUITests: XCTestCase {
         return calendar.date(byAdding: .day, value: -offsetFromMonday, to: day) ?? day
     }
 
+    private func waitForHittable(_ element: XCUIElement, timeout: TimeInterval = 3) -> Bool {
+        let hittable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == true AND hittable == true"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [hittable], timeout: timeout) == .completed
+    }
+
+    @MainActor
+    private func openRoleAwareFind(in app: XCUIApplication) {
+        let globalFind = app.buttons["GlobalFindButton"]
+        if waitForHittable(globalFind, timeout: 1) {
+            globalFind.tap()
+            return
+        }
+
+        let commandCenterFind = app.buttons["CommandCenterToolbarFindButton"]
+        XCTAssertTrue(
+            waitForHittable(commandCenterFind),
+            "Find must remain reachable from the visible compact or regular navigation surface."
+        )
+        commandCenterFind.tap()
+    }
+
+    @MainActor
+    private func revealSidebar(in app: XCUIApplication) -> XCUIElement {
+        let regularSidebar = app.collectionViews["Sidebar"]
+        if regularSidebar.waitForExistence(timeout: 1) {
+            return regularSidebar
+        }
+
+        let compactRoot = app.navigationBars["GunnAire Ops"]
+        if !compactRoot.exists {
+            let sidebarButton = app.buttons["GunnAire Ops"]
+            XCTAssertTrue(
+                waitForHittable(sidebarButton),
+                "The compact workspace must provide a route back to GunnAire Ops navigation."
+            )
+            sidebarButton.tap()
+        }
+        XCTAssertTrue(
+            compactRoot.waitForExistence(timeout: 3),
+            "GunnAire Ops navigation did not appear."
+        )
+
+        // NavigationSplitView exposes the regular-width sidebar with the
+        // "Sidebar" label. Its compact iPhone root is the same SwiftUI List,
+        // but UIKit intentionally leaves that collection view unlabeled.
+        let compactSidebar = app.collectionViews.firstMatch
+        XCTAssertTrue(
+            compactSidebar.waitForExistence(timeout: 3),
+            "The compact GunnAire Ops navigation list did not appear."
+        )
+        return compactSidebar
+    }
+
+    @MainActor
+    private func revealSidebarDestination(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        let destination = app.staticTexts[title]
+        let sidebar = revealSidebar(in: app)
+        for _ in 0..<18 where !destination.exists || !destination.isHittable {
+            sidebar.swipeUp()
+        }
+        if !destination.exists || !destination.isHittable {
+            for _ in 0..<18 where !destination.exists || !destination.isHittable {
+                sidebar.swipeDown()
+            }
+        }
+        XCTAssertTrue(destination.waitForExistence(timeout: 3), "Missing navigation destination: \(title)")
+        XCTAssertTrue(destination.isHittable, "Navigation destination is not tappable: \(title)")
+        return destination
+    }
+
+    @MainActor
+    private func assertAllAdminWorkspacesRemainReachable(in app: XCUIApplication) {
+        let sidebar = app.collectionViews["Sidebar"]
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+
+        // A prior launch may restore the native List's scroll position. Start
+        // at the top so this top-to-bottom journey never confuses a matching
+        // detail-pane heading with its sidebar destination.
+        for _ in 0..<12 {
+            sidebar.swipeDown()
+        }
+
+        for destination in adminWorkspaceDestinations {
+            let sidebarItem = sidebar.staticTexts[destination.sidebar]
+            for _ in 0..<24 where !(sidebarItem.exists && sidebarItem.isHittable) {
+                sidebar.swipeUp()
+            }
+            XCTAssertTrue(
+                waitForHittable(sidebarItem),
+                "Missing reachable sidebar item: \(destination.sidebar)"
+            )
+            sidebarItem.tap()
+            XCTAssertTrue(
+                app.navigationBars[destination.title].waitForExistence(timeout: 3),
+                "Failed to open \(destination.title) from the iPad sidebar"
+            )
+        }
+    }
+
+    private func replaceText(in field: XCUIElement, with replacement: String) {
+        field.tap()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(replacement)
+
+        guard (field.value as? String) != replacement else { return }
+        let currentValue = field.value as? String ?? ""
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        field.typeText(
+            String(
+                repeating: XCUIKeyboardKey.delete.rawValue,
+                count: max(currentValue.count, 1)
+            )
+        )
+        field.typeText(replacement)
+    }
+
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
 
@@ -50,6 +185,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         continueAfterFailure = false
 
         // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
+        XCUIDevice.shared.orientation = .portrait
     }
 
     override func tearDownWithError() throws {
@@ -96,12 +232,347 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["QuickBooks Management"].exists)
         let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
         XCTAssertTrue(accountIdentity.exists)
-        XCTAssertTrue(accountIdentity.label.contains("@"))
+        XCTAssertEqual(accountIdentity.label, "Administrator")
+        XCTAssertFalse(accountIdentity.label.contains("@"))
 
-        app.staticTexts["Schedule & Jobs"].tap()
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
         app.staticTexts["Payments"].tap()
+        XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testMailWorkspaceUsesASimpleInboxInterface() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures",
+            "-uiTestSeedMailInbox",
+            "-GunnAirePendingAppRoute", "mail"
+        ]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 6))
+        XCTAssertTrue(app.descendants(matching: .any)["MailInboxList"].exists)
+        XCTAssertTrue(app.buttons["MailRefreshButton"].exists)
+        XCTAssertTrue(app.buttons["MailComposeButton"].exists)
+        XCTAssertFalse(app.staticTexts["Headers"].exists)
+        XCTAssertFalse(app.staticTexts["Snippet"].exists)
+        XCTAssertFalse(app.staticTexts["Message Body"].exists)
+        XCTAssertFalse(app.staticTexts["Status"].exists)
+
+        let inboxEvidence = XCTAttachment(screenshot: app.screenshot())
+        inboxEvidence.name = "Simple Mail Inbox"
+        inboxEvidence.lifetime = .keepAlways
+        add(inboxEvidence)
+
+        app.buttons["MailComposeButton"].tap()
+        XCTAssertTrue(app.navigationBars["Compose"].waitForExistence(timeout: 3))
+        let composeTo = app.textFields["MailComposeTo"]
+        let composeBody = app.textFields["MailComposeBody"]
+        XCTAssertTrue(composeTo.exists)
+        XCTAssertTrue(app.textFields["MailComposeSubject"].exists)
+        XCTAssertTrue(composeBody.exists)
+        XCTAssertFalse(app.buttons["MailSendButton"].isEnabled)
+        composeTo.tap()
+        composeTo.typeText("customer@example.com")
+        composeBody.tap()
+        composeBody.typeText("Your appointment is confirmed.")
+        XCTAssertTrue(app.buttons["MailSendButton"].isEnabled)
+        let composeEvidence = XCTAttachment(screenshot: app.screenshot())
+        composeEvidence.name = "Simple Mail Compose"
+        composeEvidence.lifetime = .keepAlways
+        add(composeEvidence)
+        app.navigationBars["Compose"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 3))
+
+        let message = app.descendants(matching: .any)["MailMessage-ui-mail-1"]
+        XCTAssertTrue(message.waitForExistence(timeout: 3))
+        message.tap()
+
+        XCTAssertTrue(app.navigationBars["Mail"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Service appointment confirmed"].exists)
+        XCTAssertTrue(app.staticTexts["Jordan Customer <jordan@example.com>"].exists)
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] 'We will see you Tuesday morning'")
+        ).firstMatch.exists)
+        XCTAssertTrue(app.buttons["MailReplyButton"].exists)
+        XCTAssertTrue(app.buttons["MailMoreActionsButton"].exists)
+        XCTAssertFalse(app.staticTexts["MIME-Version"].exists)
+        XCTAssertFalse(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] '<div>'")
+        ).firstMatch.exists)
+
+        let messageEvidence = XCTAttachment(screenshot: app.screenshot())
+        messageEvidence.name = "Simple Mail Message"
+        messageEvidence.lifetime = .keepAlways
+        add(messageEvidence)
+
+        app.buttons["MailReplyButton"].tap()
+        XCTAssertTrue(app.navigationBars["Compose"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.textFields["MailComposeTo"].value as? String, "jordan@example.com")
+        XCTAssertEqual(app.textFields["MailComposeSubject"].value as? String, "Re: Service appointment confirmed")
+        app.navigationBars["Compose"].buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Mail"].waitForExistence(timeout: 3))
+
+        app.buttons["MailMoreActionsButton"].tap()
+        XCTAssertTrue(app.buttons["Reply All"].exists)
+        XCTAssertTrue(app.buttons["Forward"].exists)
+        app.buttons["Move to Trash"].tap()
+        XCTAssertTrue(app.staticTexts["Move this message to Trash?"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["You can recover it later from Gmail Trash."].exists)
+        let trashEvidence = XCTAttachment(screenshot: app.screenshot())
+        trashEvidence.name = "Simple Mail Trash Confirmation"
+        trashEvidence.lifetime = .keepAlways
+        add(trashEvidence)
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Mail"].exists)
+    }
+
+    @MainActor
+    func testInvoiceWorkspaceOpensWithoutTerminating() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures",
+            "-GunnAirePendingAppRoute", "invoices"
+        ]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+
+        XCTAssertTrue(
+            app.navigationBars["Invoices"].waitForExistence(timeout: 8),
+            "The Invoices workspace must open without exhausting the SwiftUI view-construction stack."
+        )
+        let lanePicker = app.segmentedControls["InvoiceWorkspaceLanePicker"]
+        XCTAssertTrue(lanePicker.waitForExistence(timeout: 3))
+        XCTAssertTrue(lanePicker.buttons["Overview"].isSelected)
+        XCTAssertTrue(app.staticTexts["Collections Queue"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["Invoice Details"].exists)
+
+        lanePicker.buttons["New Invoice"].tap()
+        XCTAssertTrue(app.staticTexts["Invoice Details"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["Collections Queue"].exists)
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    @MainActor
+    func testInvoiceSidebarTransitionRemainsStable() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures",
+            "-GunnAirePendingAppRoute", "commandCenter"
+        ]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+
+        XCTAssertTrue(
+            app.navigationBars["Command Center"].waitForExistence(timeout: 8),
+            "The authenticated fixture must begin in Command Center."
+        )
+
+        revealSidebarDestination("Invoices", in: app).tap()
+        XCTAssertTrue(
+            app.otherElements["InvoiceWorkspaceTransitionGuard"].waitForExistence(timeout: 1) ||
+                app.navigationBars["Invoices"].waitForExistence(timeout: 1),
+            "The lightweight invoice transition host must take ownership before the billing workspace is constructed."
+        )
+        XCTAssertTrue(
+            app.navigationBars["Invoices"].waitForExistence(timeout: 8),
+            "Tapping Invoices from the normal sidebar must not exhaust the SwiftUI view-construction stack."
+        )
+        XCTAssertTrue(app.segmentedControls["InvoiceWorkspaceLanePicker"].waitForExistence(timeout: 3))
+
+        revealSidebarDestination("Payments", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 5))
+
+        revealSidebarDestination("Invoices", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
+
+        for _ in 0..<3 {
+            revealSidebarDestination("Payments", in: app).tap()
+            XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 5))
+            revealSidebarDestination("Invoices", in: app).tap()
+            XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
+            XCTAssertTrue(app.segmentedControls["InvoiceWorkspaceLanePicker"].waitForExistence(timeout: 3))
+        }
+
+        let survivesDeferredUpdates = expectation(description: "Invoices remains foregrounded after deferred view updates")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+            if app.state == .runningForeground,
+               app.navigationBars["Invoices"].exists {
+                survivesDeferredUpdates.fulfill()
+            }
+        }
+        wait(for: [survivesDeferredUpdates], timeout: 20)
+    }
+
+    @MainActor
+    func testExistingInvoiceCanReturnToBuilderAndAddALineItem() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-GunnAirePendingAppRoute", "invoices"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
+        let invoiceDisclosure = app.buttons["InvoiceDisclosure-\(screenshotInvoiceID)"]
+        for _ in 0..<8 where !invoiceDisclosure.exists || !invoiceDisclosure.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(invoiceDisclosure.waitForExistence(timeout: 3))
+        XCTAssertTrue(invoiceDisclosure.isHittable)
+        invoiceDisclosure.tap()
+
+        let editInvoice = app.buttons["Edit Line Items"]
+        for _ in 0..<4 where !editInvoice.exists || !editInvoice.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(editInvoice.waitForExistence(timeout: 3))
+        XCTAssertTrue(editInvoice.isHittable)
+        editInvoice.tap()
+
+        let lanePicker = app.segmentedControls["InvoiceWorkspaceLanePicker"]
+        XCTAssertTrue(lanePicker.buttons["New Invoice"].isSelected)
+        XCTAssertTrue(app.descendants(matching: .any)["ExistingInvoiceEditContext"].waitForExistence(timeout: 3))
+        let existingInvoicePrimaryAction = app.buttons["Update Invoice"]
+        for _ in 0..<8 where !existingInvoicePrimaryAction.exists || !existingInvoicePrimaryAction.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(existingInvoicePrimaryAction.waitForExistence(timeout: 3))
+        XCTAssertTrue(existingInvoicePrimaryAction.isHittable)
+        XCTAssertTrue(existingInvoicePrimaryAction.isEnabled)
+
+        let createNewItem = app.buttons["Create New Item"]
+        for _ in 0..<6 where !createNewItem.exists || !createNewItem.isHittable {
+            app.swipeDown()
+        }
+        XCTAssertTrue(createNewItem.waitForExistence(timeout: 3))
+        createNewItem.tap()
+
+        XCTAssertTrue(app.navigationBars["Create Item"].waitForExistence(timeout: 3))
+        replaceText(in: app.textFields["Item name"], with: "Invoice Workspace Added Part")
+        replaceText(in: app.textFields["Sales price (optional)"], with: "25")
+        let saveItem = app.navigationBars["Create Item"].buttons["Save"]
+        XCTAssertTrue(saveItem.waitForExistence(timeout: 3))
+        XCTAssertTrue(saveItem.isEnabled)
+        XCTAssertFalse(saveItem.frame.isEmpty)
+        saveItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        if app.navigationBars["Create Item"].exists {
+            saveItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Invoice Workspace Added Part"].waitForExistence(timeout: 3))
+        let updateInvoice = app.buttons["Update Invoice"]
+        for _ in 0..<8 where !updateInvoice.exists || !updateInvoice.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(updateInvoice.waitForExistence(timeout: 3))
+        XCTAssertTrue(updateInvoice.isEnabled)
+        updateInvoice.tap()
+
+        XCTAssertTrue(lanePicker.buttons["Overview"].waitForExistence(timeout: 5))
+        XCTAssertTrue(lanePicker.buttons["Overview"].isSelected)
+        XCTAssertTrue(app.staticTexts["$214.00"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    /// Opt-in physical-device diagnostic that deliberately retains the installed
+    /// production store and authentication state. Normal UI runs skip it so
+    /// seeded fixtures remain deterministic.
+    @MainActor
+    func testRetainedStoreInvoiceSidebarNavigationRemainsStable() throws {
+        guard ProcessInfo.processInfo.environment["GUNNAIRE_RUN_RETAINED_STORE_TEST"] == "1" else {
+            throw XCTSkip("Requires an explicitly backed-up physical-device store.")
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO"
+        ]
+        app.launch()
+
+        XCTAssertFalse(
+            app.staticTexts["Sign in with your approved GunnAire business account."].waitForExistence(timeout: 2),
+            "The retained-store diagnostic requires the device's existing authenticated session."
+        )
+
+        revealSidebarDestination("Invoices", in: app).tap()
+        XCTAssertTrue(
+            app.navigationBars["Invoices"].waitForExistence(timeout: 8),
+            "Opening Invoices from the sidebar terminated or failed against the retained device store."
+        )
+
+        let lanePicker = app.segmentedControls["InvoiceWorkspaceLanePicker"]
+        XCTAssertTrue(lanePicker.waitForExistence(timeout: 3))
+        for _ in 0..<2 {
+            lanePicker.buttons["New Invoice"].tap()
+            XCTAssertTrue(
+                app.staticTexts["Invoice Details"].waitForExistence(timeout: 5),
+                "The isolated invoice builder must open against the retained device store."
+            )
+            lanePicker.buttons["Overview"].tap()
+            XCTAssertTrue(
+                app.staticTexts["Workspace Snapshot"].waitForExistence(timeout: 5),
+                "The lightweight invoice overview must be restored after leaving the builder."
+            )
+        }
+
+        for _ in 0..<3 {
+            revealSidebarDestination("Payments", in: app).tap()
+            XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 5))
+            revealSidebarDestination("Invoices", in: app).tap()
+            XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
+            XCTAssertTrue(app.segmentedControls["InvoiceWorkspaceLanePicker"].waitForExistence(timeout: 3))
+        }
+
+        let remainedForeground = expectation(
+            description: "Invoices remains foregrounded after retained-store deferred updates"
+        )
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+            if app.state == .runningForeground,
+               app.navigationBars["Invoices"].exists {
+                remainedForeground.fulfill()
+            }
+        }
+        wait(for: [remainedForeground], timeout: 35)
+    }
+
+    @MainActor
+    func testReducedMotionSkipsTheSplashAndKeepsCoreNavigationAvailable() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "YES",
+            "-maximumSplashDurationSeconds", "6",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestReduceMotion"
+        ]
+        app.launch()
+
+        let regularNavigation = app.navigationBars["GunnAire Ops"]
+        let compactNavigation = app.navigationBars["Command Center"]
+        XCTAssertTrue(
+            regularNavigation.waitForExistence(timeout: 1) ||
+                compactNavigation.waitForExistence(timeout: 3)
+        )
+        XCTAssertFalse(app.staticTexts["Tap to skip"].exists)
+
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        revealSidebarDestination("Payments", in: app).tap()
         XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 3))
     }
 
@@ -162,10 +633,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 6))
-        let globalFind = app.buttons["GlobalFindButton"]
-        XCTAssertTrue(globalFind.waitForExistence(timeout: 3))
-        globalFind.tap()
+        openRoleAwareFind(in: app)
 
         XCTAssertTrue(app.navigationBars["Find"].waitForExistence(timeout: 3))
         XCTAssertEqual(app.searchFields.firstMatch.placeholderValue, "Job, Invoice, Address")
@@ -211,10 +679,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 6))
-        let globalFind = app.buttons["GlobalFindButton"]
-        XCTAssertTrue(globalFind.waitForExistence(timeout: 3))
-        globalFind.tap()
+        openRoleAwareFind(in: app)
 
         XCTAssertTrue(app.navigationBars["Find"].waitForExistence(timeout: 3))
         XCTAssertEqual(app.searchFields.firstMatch.placeholderValue, "Customer, Invoice, Address")
@@ -260,9 +725,7 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         let notice = app.buttons["CloudKitContinuityNotice"]
         if !notice.waitForExistence(timeout: 3) {
-            let sidebarButton = app.buttons["GunnAire Ops"]
-            XCTAssertTrue(sidebarButton.waitForExistence(timeout: 3))
-            sidebarButton.tap()
+            _ = revealSidebar(in: app)
         }
 
         XCTAssertTrue(notice.waitForExistence(timeout: 3))
@@ -316,6 +779,27 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["OK"].exists)
     }
 
+    @MainActor
+    func testNonAdminEmptyCloudReplicaBlocksShadowCompanyDataEntry() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedEmptyCompanyWorkspace"
+        ]
+        app.launch()
+
+        let gateTitle = app.staticTexts["Company workspace not loaded"]
+        XCTAssertTrue(gateTitle.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] 'approved business iCloud account'")
+        ).firstMatch.exists)
+        XCTAssertTrue(app.buttons["Check Again"].exists)
+        XCTAssertTrue(app.buttons["Review Status"].exists)
+        XCTAssertFalse(app.navigationBars["Invoices"].exists)
+    }
+
     /// The iPad workspace intentionally has a small, role-aware sidebar rather
     /// than putting every workflow in the Command Center. This smoke test
     /// verifies that the primary administrative destinations remain reachable
@@ -330,27 +814,122 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let destinations: [(sidebar: String, title: String)] = [
-            ("Clock In/Out", "Time Clock"),
-            ("Customers", "Customers"),
-            ("Mail", "Mail"),
-            ("Estimates", "Estimates"),
-            ("Invoices", "Invoices"),
-            ("Reports", "Business Reports"),
-            ("Receipts & Bills", "Receipts & Bills"),
-            ("Sync & Integrations", "Sync & Integrations"),
-            ("Onsite Documentation", "Onsite Documentation"),
-            ("QuickBooks Management", "QuickBooks Management")
-        ]
+        assertAllAdminWorkspacesRemainReachable(in: app)
+    }
 
-        for destination in destinations {
-            let sidebarItem = app.staticTexts[destination.sidebar]
-            XCTAssertTrue(sidebarItem.waitForExistence(timeout: 3), "Missing sidebar item: \(destination.sidebar)")
-            sidebarItem.tap()
+    /// At the largest accessibility text size the role-aware sidebar is
+    /// intentionally scrollable. Every workspace must remain discoverable and
+    /// tappable without shrinking text or replacing the native navigation.
+    @MainActor
+    func testMaximumDynamicTypeKeepsEveryAdminWorkspaceReachable() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestMaximumDynamicType"
+        ]
+        app.launch()
+
+        assertAllAdminWorkspacesRemainReachable(in: app)
+    }
+
+    /// VoiceOver and Voice Control depend on a useful accessibility name for
+    /// each visible action. Audit the real seeded accessibility tree for all
+    /// primary Administrator workspaces and retain the inventory as evidence.
+    @MainActor
+    func testPrimaryWorkspacesExposeNamedVisibleActions() throws {
+        for destination in adminWorkspaceDestinations {
+            let app = XCUIApplication()
+            app.launchArguments = [
+                "-enableSplashVideo", "NO",
+                "-disableCloudKitForTesting",
+                "-appStoreScreenshotFixtures",
+                "-GunnAirePendingAppRoute", destination.route
+            ]
+            app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+            app.launch()
+
             XCTAssertTrue(
-                app.navigationBars[destination.title].waitForExistence(timeout: 3),
-                "Failed to open \(destination.title) from the iPad sidebar"
+                app.navigationBars[destination.title].waitForExistence(timeout: 8),
+                "Failed to reach accessibility audit route: \(destination.title)"
             )
+
+            let visibleActions = app.buttons.allElementsBoundByIndex.filter {
+                $0.exists && $0.isHittable
+            }
+            XCTAssertFalse(
+                visibleActions.isEmpty,
+                "No visible actions were exposed in \(destination.title)"
+            )
+
+            let namedVisibleActions = visibleActions.filter {
+                !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            var inventory: [String] = []
+            for action in visibleActions {
+                let name = action.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                if name.isEmpty {
+                    let isNestedImplementationControl = namedVisibleActions.contains { candidate in
+                        candidate.frame != action.frame && candidate.frame.contains(action.frame)
+                    }
+                    XCTAssertTrue(
+                        isNestedImplementationControl,
+                        "Unnamed independent action in \(destination.title): \(action.debugDescription)"
+                    )
+                    continue
+                }
+                inventory.append("\(name) | \(action.identifier)")
+            }
+
+            let ambiguousLabelsByRoute: [String: Set<String>] = [
+                "commandCenter": ["Open", "Docs", "Collect", "Find", "Schedule"],
+                "onsiteDocumentation": ["Open Documents", "Open Schedule", "Collect Payment", "Documents"]
+            ]
+            if let ambiguousLabels = ambiguousLabelsByRoute[destination.route] {
+                let remainingAmbiguousActions = namedVisibleActions.filter {
+                    ambiguousLabels.contains($0.label.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                XCTAssertTrue(
+                    remainingAmbiguousActions.isEmpty,
+                    "Ambiguous visible actions remain in \(destination.title): \(remainingAmbiguousActions.map(\.debugDescription).joined(separator: "\n"))"
+                )
+            }
+
+            let contextualActionPrefixes: [String: [String]] = [
+                "commandCenter": ["CommandCenterDispatchJob-"],
+                "onsiteDocumentation": [
+                    "DocumentationQueueJob-",
+                    "DocumentationQueueOpenDocuments-",
+                    "DocumentationQueueOpenSchedule-",
+                    "DocumentationQueueDocumentActions-",
+                    "DocumentationQueueCreateInvoice-",
+                    "DocumentationQueueCollectPayment-",
+                    "InvoiceCloseoutOpenDocuments-",
+                    "InvoiceCloseoutOpenSchedule-",
+                    "InvoiceCloseoutCollectPayment-",
+                    "InvoiceCloseoutDocumentActions-"
+                ]
+            ]
+            if let prefixes = contextualActionPrefixes[destination.route] {
+                for action in namedVisibleActions where prefixes.contains(where: { prefix in
+                    action.identifier.hasPrefix(prefix)
+                }) {
+                    XCTAssertTrue(
+                        action.label.localizedCaseInsensitiveContains(" for ") &&
+                            action.label.filter { $0 == "," }.count >= 2,
+                        "Job-specific action lacks customer context in \(destination.title): \(action.debugDescription)"
+                    )
+                }
+            }
+
+            let evidence = XCTAttachment(
+                string: inventory.sorted().joined(separator: "\n")
+            )
+            evidence.name = "Accessible actions - \(destination.title)"
+            evidence.lifetime = .keepAlways
+            add(evidence)
+            app.terminate()
         }
     }
 
@@ -366,12 +945,20 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 8))
+        XCTAssertTrue(
+            app.navigationBars["Command Center"].waitForExistence(timeout: 6) ||
+                app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 3)
+        )
         let review = app.buttons["ReviewFleetReadiness"]
         XCTAssertTrue(review.waitForExistence(timeout: 5))
         review.tap()
 
-        XCTAssertTrue(app.navigationBars["Fleet"].waitForExistence(timeout: 5))
+        // The compact fleet sheet automatically selects the only seeded
+        // vehicle, so its detail title replaces the regular Fleet list title.
+        XCTAssertTrue(
+            app.navigationBars["Fleet"].waitForExistence(timeout: 2) ||
+                app.navigationBars["Fleet UI Truck 21"].waitForExistence(timeout: 3)
+        )
         XCTAssertTrue(app.staticTexts["Fleet UI Truck 21"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Inspection Due"].exists)
         let beforeInspection = XCTAttachment(screenshot: app.screenshot())
@@ -379,7 +966,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         beforeInspection.lifetime = .keepAlways
         add(beforeInspection)
         let inspect = app.buttons["RecordFleetInspection"]
+        for _ in 0..<4 where !inspect.exists || !inspect.isHittable {
+            app.swipeUp()
+        }
         XCTAssertTrue(inspect.waitForExistence(timeout: 3))
+        XCTAssertTrue(inspect.isHittable)
         inspect.tap()
 
         XCTAssertTrue(app.navigationBars["Inspect Fleet UI Truck 21"].waitForExistence(timeout: 3))
@@ -392,7 +983,11 @@ final class GunnAire_OpsUITests: XCTestCase {
             "safety_equipment"
         ] {
             let picker = app.buttons["FleetInspection_\(item)"]
+            for _ in 0..<4 where !picker.exists || !picker.isHittable {
+                app.swipeUp()
+            }
             XCTAssertTrue(picker.waitForExistence(timeout: 3), "Missing inspection picker: \(item)")
+            XCTAssertTrue(picker.isHittable, "Inspection picker is not tappable: \(item)")
             picker.tap()
             let pass = app.buttons["Pass"]
             XCTAssertTrue(pass.waitForExistence(timeout: 3), "Missing Pass option for: \(item)")
@@ -400,9 +995,16 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
 
         let record = app.buttons["SaveFleetInspection"]
+        for _ in 0..<6 where !record.exists || !record.isHittable {
+            app.swipeUp()
+        }
         XCTAssertTrue(record.waitForExistence(timeout: 3))
+        XCTAssertTrue(record.isHittable)
         record.tap()
-        XCTAssertTrue(app.navigationBars["Fleet"].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.navigationBars["Fleet"].waitForExistence(timeout: 2) ||
+                app.navigationBars["Fleet UI Truck 21"].waitForExistence(timeout: 3)
+        )
         XCTAssertTrue(app.staticTexts["Recorded a passing inspection for Fleet UI Truck 21."].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Ready"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["Inspection Due"].exists)
@@ -450,18 +1052,36 @@ final class GunnAire_OpsUITests: XCTestCase {
         jobChoice.tap()
 
         let origin = app.textFields["FieldMileageOrigin"]
+        for _ in 0..<6 where !origin.exists || !origin.isHittable {
+            app.swipeUp()
+        }
         XCTAssertTrue(origin.waitForExistence(timeout: 3))
+        XCTAssertTrue(origin.isHittable)
         origin.tap()
         origin.typeText("GunnAire shop")
+        let doneEditingExpense = app.buttons["Done Editing Expense"]
+        XCTAssertTrue(doneEditingExpense.waitForExistence(timeout: 3))
+        doneEditingExpense.tap()
+
         let destination = app.textFields["FieldMileageDestination"]
+        XCTAssertTrue(waitForHittable(destination))
         destination.tap()
         destination.typeText("Johnstone Supply")
+        XCTAssertTrue(doneEditingExpense.waitForExistence(timeout: 3))
+        doneEditingExpense.tap()
+
         let miles = app.textFields["FieldMileageMiles"]
+        XCTAssertTrue(waitForHittable(miles))
         miles.tap()
         miles.typeText("20")
+        XCTAssertTrue(doneEditingExpense.waitForExistence(timeout: 3))
+        doneEditingExpense.tap()
         let rate = app.textFields["FieldMileageRate"]
+        XCTAssertTrue(waitForHittable(rate))
         rate.tap()
         rate.typeText("0.655")
+        XCTAssertTrue(doneEditingExpense.waitForExistence(timeout: 3))
+        doneEditingExpense.tap()
         let purpose = app.textFields["FieldExpensePurpose"]
         for _ in 0..<3 where !purpose.exists || !purpose.isHittable {
             app.swipeUp()
@@ -544,7 +1164,9 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Expense Claim"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Reimbursed"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["CHECK-UI-1042"].exists)
-        XCTAssertFalse(app.descendants(matching: .any)["SidebarAccountIdentity"].exists)
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        XCTAssertTrue(accountIdentity.exists)
+        XCTAssertEqual(accountIdentity.label, "Administrator")
         XCTAssertFalse(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
         ).firstMatch.exists)
@@ -565,20 +1187,32 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let timeClock = app.staticTexts["Clock In/Out"]
-        XCTAssertTrue(timeClock.waitForExistence(timeout: 5))
+        let timeClock = revealSidebarDestination("Clock In/Out", in: app)
         timeClock.tap()
         XCTAssertTrue(app.navigationBars["Time Clock"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Team Time"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Ready"].exists)
         XCTAssertTrue(app.buttons.matching(identifier: "TeamTimeActivitySummary").firstMatch.exists)
 
+        let teamTime = app.staticTexts["Team Time"]
+        for _ in 0..<6 where !teamTime.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(teamTime.waitForExistence(timeout: 3))
+
         let technician = app.staticTexts["UI Test Technician"]
+        for _ in 0..<4 where !technician.exists || !technician.isHittable {
+            app.swipeUp()
+        }
         XCTAssertTrue(technician.waitForExistence(timeout: 3))
+        XCTAssertTrue(technician.isHittable)
         technician.tap()
 
         let approve = app.buttons.matching(identifier: "ApproveTimeEntry-A1000000-0000-4000-8000-000000000026").firstMatch
+        for _ in 0..<4 where !approve.exists || !approve.isHittable {
+            app.swipeUp()
+        }
         XCTAssertTrue(approve.waitForExistence(timeout: 3))
+        XCTAssertTrue(approve.isHittable)
         XCTAssertTrue(app.staticTexts["Ready for review"].exists)
         XCTAssertTrue(app.staticTexts["Job Labor"].exists)
         let beforeApproval = XCTAttachment(screenshot: app.screenshot())
@@ -618,13 +1252,21 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertFalse(workspace.buttons["Team Review"].exists)
         workspace.buttons["My Performance"].tap()
 
+        let scorecard = app.otherElements["MyTechnicianScorecard"]
+        for _ in 0..<12 where !scorecard.exists {
+            app.swipeUp()
+        }
         XCTAssertTrue(app.staticTexts["My Scorecard"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.otherElements["MyTechnicianScorecard"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Assigned Completed"].exists)
-        XCTAssertTrue(app.staticTexts["Lead Invoiced"].exists)
-        XCTAssertTrue(app.staticTexts["Estimate Close"].exists)
-        XCTAssertTrue(app.staticTexts["Recorded Hours"].exists)
-        XCTAssertTrue(app.staticTexts["Job Time Mix"].exists)
+        XCTAssertTrue(scorecard.waitForExistence(timeout: 3))
+        for metric in ["Assigned Completed", "Lead Invoiced", "Estimate Close", "Recorded Hours", "Job Time Mix"] {
+            let element = app.descendants(matching: .any).matching(
+                NSPredicate(format: "label CONTAINS[c] %@", metric)
+            ).firstMatch
+            for _ in 0..<8 where !element.exists {
+                app.swipeUp()
+            }
+            XCTAssertTrue(element.waitForExistence(timeout: 3), "Missing personal scorecard metric: \(metric)")
+        }
         XCTAssertFalse(app.staticTexts["Known Labor"].exists)
 
         let attachment = XCTAttachment(screenshot: app.screenshot())
@@ -648,7 +1290,7 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         XCTAssertTrue(app.navigationBars["Time Clock"].waitForExistence(timeout: 8))
         let signSnapshot = app.buttons["SignTimesheetSnapshot"]
-        for _ in 0..<8 where !signSnapshot.exists || !signSnapshot.isHittable {
+        for _ in 0..<14 where !signSnapshot.exists || !signSnapshot.isHittable {
             app.swipeUp()
         }
         XCTAssertTrue(signSnapshot.waitForExistence(timeout: 3))
@@ -664,7 +1306,9 @@ final class GunnAire_OpsUITests: XCTestCase {
             NSPredicate(format: "label BEGINSWITH 'Signed '")
         ).firstMatch.waitForExistence(timeout: 3))
         XCTAssertFalse(signSnapshot.isEnabled)
-        XCTAssertFalse(app.descendants(matching: .any)["SidebarAccountIdentity"].exists)
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        XCTAssertTrue(accountIdentity.exists)
+        XCTAssertEqual(accountIdentity.label, "Field Technician")
         XCTAssertFalse(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
         ).firstMatch.exists)
@@ -705,7 +1349,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(clockOut.waitForExistence(timeout: 3))
         clockOut.tap()
 
-        XCTAssertTrue(app.staticTexts["Ready for review"].waitForExistence(timeout: 3))
+        let readyForReview = app.staticTexts["Ready for review"]
+        for _ in 0..<4 where !readyForReview.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(readyForReview.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Travel"].exists)
         XCTAssertTrue(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] 'submitted for office review'")
@@ -723,7 +1371,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        app.staticTexts["Schedule & Jobs"].tap()
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Google Lead Customer"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Google Business Profile"].exists)
@@ -761,7 +1409,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3))
         app.typeKey("7", modifierFlags: .command)
-        XCTAssertTrue(app.navigationBars["Business Reports"].waitForExistence(timeout: 3))
+        let reports = app.navigationBars["Business Reports"]
+        if !reports.waitForExistence(timeout: 2) {
+            app.typeKey("7", modifierFlags: .command)
+        }
+        XCTAssertTrue(reports.waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -894,8 +1546,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let reports = app.staticTexts["Reports"]
-        XCTAssertTrue(reports.waitForExistence(timeout: 5))
+        let reports = revealSidebarDestination("Reports", in: app)
         reports.tap()
         XCTAssertTrue(app.navigationBars["Business Reports"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Financial Pulse"].exists)
@@ -933,7 +1584,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(maintenanceAgreements.waitForExistence(timeout: 3))
         workspace.buttons["Operations"].tap()
         XCTAssertTrue(app.staticTexts["Operations Quality"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Agreement Delivery"].waitForExistence(timeout: 3))
+        let agreementDelivery = app.staticTexts["Agreement Delivery"]
+        for _ in 0..<6 where !agreementDelivery.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(agreementDelivery.waitForExistence(timeout: 3))
         workspace.buttons["Team"].tap()
         XCTAssertTrue(app.staticTexts["Team Scorecards"].waitForExistence(timeout: 3))
         let scorecard = app.buttons["TechnicianScorecard-A1000000-0000-4000-8000-000000000006"]
@@ -941,8 +1596,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         scorecard.tap()
         XCTAssertTrue(app.staticTexts["Lead Invoiced"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Estimate Close"].exists)
-        XCTAssertTrue(app.staticTexts["Job Time Mix"].exists)
-        XCTAssertTrue(app.staticTexts["Known Labor"].exists)
+        let jobTimeMix = app.staticTexts["Job Time Mix"]
+        for _ in 0..<6 where !jobTimeMix.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(jobTimeMix.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Known Labor"].waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -956,8 +1615,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let reports = app.staticTexts["Reports"]
-        XCTAssertTrue(reports.waitForExistence(timeout: 5))
+        let reports = revealSidebarDestination("Reports", in: app)
         reports.tap()
         XCTAssertTrue(app.navigationBars["Business Reports"].waitForExistence(timeout: 3))
 
@@ -978,7 +1636,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["UI Test Collectible Customer"].exists)
         XCTAssertTrue(app.staticTexts["Cost review"].exists)
         row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertTrue(app.staticTexts["Known materials"].waitForExistence(timeout: 3))
+        let knownMaterials = app.staticTexts["Known materials"]
+        for _ in 0..<6 where !knownMaterials.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(knownMaterials.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Known labor"].exists)
         XCTAssertTrue(app.staticTexts["Gross profit"].exists)
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'no completed labor time'")).firstMatch.exists)
@@ -1023,8 +1685,10 @@ final class GunnAire_OpsUITests: XCTestCase {
             return false
         }
 
-        XCTAssertTrue(reveal(app.staticTexts["Shared Server Readiness"]))
-        XCTAssertTrue(app.buttons["BackendReadinessRefreshButton"].exists)
+        XCTAssertTrue(reveal(app.staticTexts["Supplier Connections"]))
+        XCTAssertTrue(app.buttons["SupplierConnectionsRefreshButton"].exists)
+        XCTAssertTrue(reveal(app.staticTexts["Shared Server Readiness"], maximumSwipes: 2))
+        XCTAssertTrue(reveal(app.buttons["BackendReadinessRefreshButton"], maximumSwipes: 1))
         XCTAssertTrue(reveal(app.staticTexts["Customer Portal"], maximumSwipes: 2))
         XCTAssertTrue(reveal(app.staticTexts["Shared Server Activity"], maximumSwipes: 2))
     }
@@ -1078,7 +1742,12 @@ final class GunnAire_OpsUITests: XCTestCase {
         app.launch()
 
         let settings = app.buttons["Settings"]
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        if !settings.waitForExistence(timeout: 3) {
+            let sidebarButton = app.buttons["GunnAire Ops"]
+            XCTAssertTrue(sidebarButton.waitForExistence(timeout: 3))
+            sidebarButton.tap()
+        }
+        XCTAssertTrue(settings.waitForExistence(timeout: 3))
         settings.tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 3))
 
@@ -1087,17 +1756,17 @@ final class GunnAire_OpsUITests: XCTestCase {
         settingsArea.buttons["Workflow"].tap()
 
         let settingsForm = app.collectionViews["SettingsForm"]
-        let manageForms = app.descendants(matching: .any)["ManageFieldFormTemplates"]
-        XCTAssertTrue(manageForms.waitForExistence(timeout: 3))
-        let scrollStart = settingsForm.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.78))
-        let scrollEnd = settingsForm.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.46))
-        scrollStart.press(forDuration: 0.05, thenDragTo: scrollEnd)
-        XCTAssertTrue(manageForms.waitForExistence(timeout: 3))
-        manageForms.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let manageForms = app.buttons["ManageFieldFormTemplates"]
+        for _ in 0..<8 where !manageForms.exists || !manageForms.isHittable {
+            settingsForm.swipeUp()
+        }
+        XCTAssertTrue(manageForms.waitForExistence(timeout: 3), app.debugDescription)
+        XCTAssertTrue(manageForms.isHittable, app.debugDescription)
+        manageForms.tap()
 
-        XCTAssertTrue(app.navigationBars["Field Form Templates"].waitForExistence(timeout: 3))
         let createForm = app.buttons["CreateFieldFormTemplate"]
-        XCTAssertTrue(createForm.waitForExistence(timeout: 3))
+        XCTAssertTrue(createForm.waitForExistence(timeout: 6), app.debugDescription)
+        XCTAssertTrue(app.navigationBars["Field Form Templates"].waitForExistence(timeout: 3))
         createForm.tap()
 
         XCTAssertTrue(app.navigationBars["New Field Form"].waitForExistence(timeout: 3))
@@ -1134,9 +1803,7 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         let schedule = app.staticTexts["Schedule & Jobs"]
         if !schedule.waitForExistence(timeout: 2) {
-            let sidebarButton = app.buttons["GunnAire Ops"]
-            XCTAssertTrue(sidebarButton.waitForExistence(timeout: 3))
-            sidebarButton.tap()
+            _ = revealSidebar(in: app)
         }
         XCTAssertTrue(schedule.waitForExistence(timeout: 3))
         schedule.tap()
@@ -1184,9 +1851,7 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         let schedule = app.staticTexts["Schedule & Jobs"]
         if !schedule.waitForExistence(timeout: 2) {
-            let sidebarButton = app.buttons["GunnAire Ops"]
-            XCTAssertTrue(sidebarButton.waitForExistence(timeout: 3))
-            sidebarButton.tap()
+            _ = revealSidebar(in: app)
         }
         XCTAssertTrue(schedule.waitForExistence(timeout: 3))
         schedule.tap()
@@ -1249,35 +1914,26 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-disableCloudKitForTesting",
             "-uiTestAuthenticatedTechnician",
             "-uiTestSeedCollectibleJob",
-            "-uiTestSeedScheduleAuthorization"
+            "-uiTestSeedScheduleAuthorization",
+            "-GunnAirePendingAppRoute", "scheduleAndJobs"
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        if !schedule.waitForExistence(timeout: 2) {
-            let sidebarButton = app.buttons["GunnAire Ops"]
-            XCTAssertTrue(sidebarButton.waitForExistence(timeout: 3))
-            sidebarButton.tap()
-        }
-        XCTAssertTrue(schedule.waitForExistence(timeout: 3))
-        schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["NavigateNextStop"].waitForExistence(timeout: 3))
 
-        let assignedJob = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
-        for _ in 0..<8 where !assignedJob.exists {
-            app.swipeUp()
-        }
-        XCTAssertTrue(assignedJob.waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Navigate"].waitForExistence(timeout: 3))
+        app.terminate()
+        app.launchArguments += [
+            "-GunnAirePendingScheduleServiceCallID", maintenanceServiceCallID
+        ]
+        app.launch()
 
-        assignedJob.tap()
-        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
         let workspace = app.segmentedControls["ServiceCallWorkspacePicker"]
-        XCTAssertTrue(workspace.waitForExistence(timeout: 3))
+        XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Call Details"].exists)
         workspace.buttons["Overview"].tap()
         let directions = app.buttons["Driving Directions"]
-        for _ in 0..<8 where !directions.exists {
+        for _ in 0..<20 where !directions.exists {
             app.swipeUp()
         }
         XCTAssertTrue(directions.waitForExistence(timeout: 3))
@@ -1285,7 +1941,7 @@ final class GunnAire_OpsUITests: XCTestCase {
 
     @MainActor
     func testEnRouteHandoffKeepsETACommunicationAndDirectionsInOneCompactFlow() throws {
-        XCUIDevice.shared.orientation = .landscapeLeft
+        XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments = [
             "-enableSplashVideo", "NO",
@@ -1296,13 +1952,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        if !schedule.waitForExistence(timeout: 2) {
-            let sidebarButton = app.buttons["GunnAire Ops"]
-            XCTAssertTrue(sidebarButton.waitForExistence(timeout: 3))
-            sidebarButton.tap()
-        }
-        XCTAssertTrue(schedule.waitForExistence(timeout: 3))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -1327,8 +1977,14 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] 'does not use live traffic'")
         ).firstMatch.exists)
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        if accountIdentity.exists {
+            XCTAssertEqual(accountIdentity.label, "Field Technician")
+            XCTAssertFalse(accountIdentity.label.contains("@"))
+        }
+        XCTAssertFalse(app.staticTexts["technician-ui-test@gunnaire.com"].exists)
         let handoffScreenshot = XCTAttachment(screenshot: app.screenshot())
-        handoffScreenshot.name = "En Route Handoff – iPad Landscape"
+        handoffScreenshot.name = "En Route Handoff – iPhone Portrait"
         handoffScreenshot.lifetime = .keepAlways
         add(handoffScreenshot)
 
@@ -1485,7 +2141,7 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    func testDispatchWeekBoardOpensAsDedicatedIPadWorkspace() throws {
+    func testDispatchWeekBoardOpensAsDedicatedWorkspace() throws {
         let app = XCUIApplication()
         app.launchArguments = [
             "-enableSplashVideo", "NO",
@@ -1496,8 +2152,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -1546,6 +2201,9 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         let routeLegID = "A1000000-0000-4000-8000-000000000002-A1000000-0000-4000-8000-000000000048"
         let routeTitle = app.staticTexts["Collectible HVAC service → Follow-up airflow repair"]
+        for _ in 0..<3 where !routeTitle.exists {
+            technicianDay.swipeUp()
+        }
         XCTAssertTrue(routeTitle.waitForExistence(timeout: 3), app.debugDescription)
         XCTAssertTrue(app.staticTexts["1h scheduled gap"].exists)
         XCTAssertFalse(routeTitle.label.localizedCaseInsensitiveContains("@gunnaire.com"))
@@ -1557,6 +2215,9 @@ final class GunnAire_OpsUITests: XCTestCase {
                 "Optional Apple Maps estimates require a connection and account for expected traffic. They are informational only and never change appointments, capacity, or promised arrival windows."
             )
         ).firstMatch
+        for _ in 0..<3 where !routeFooter.exists {
+            technicianDay.swipeUp()
+        }
         XCTAssertTrue(routeFooter.exists)
 
         let dayEvidence = XCTAttachment(screenshot: app.screenshot())
@@ -1564,6 +2225,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         dayEvidence.lifetime = .keepAlways
         add(dayEvidence)
 
+        for _ in 0..<4 where !routeDisclosure.isHittable {
+            technicianDay.swipeDown()
+        }
+        XCTAssertTrue(routeDisclosure.isHittable, app.debugDescription)
         routeDisclosure.tap()
         technicianDay.swipeDown()
         let editableDayJob = app.descendants(matching: .any)["DispatchTechnicianDayJob-A1000000-0000-4000-8000-000000000002"]
@@ -1599,8 +2264,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -1658,8 +2322,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -1677,7 +2340,7 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
-    func testJobDocumentationOpensAtTheRecommendedBillingStage() throws {
+    func testScheduleCloseoutHandoffKeepsBillingOneTapAway() throws {
         let app = XCUIApplication()
         app.launchArguments = [
             "-enableSplashVideo", "NO",
@@ -1687,8 +2350,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -1703,9 +2365,13 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
         XCTAssertTrue(stagePicker.exists)
-        XCTAssertTrue(stagePicker.buttons["Billing"].isSelected)
-        XCTAssertTrue(app.staticTexts["Documentation Builder"].exists)
+        XCTAssertTrue(stagePicker.buttons["Closeout"].isSelected)
+        XCTAssertFalse(app.staticTexts["Documentation Builder"].exists)
         XCTAssertFalse(app.staticTexts["Technical Service Report"].exists)
+
+        stagePicker.buttons["Billing"].tap()
+        XCTAssertTrue(stagePicker.buttons["Billing"].isSelected)
+        XCTAssertTrue(app.staticTexts["Documentation Builder"].waitForExistence(timeout: 3))
 
         let paymentTerms = app.descendants(matching: .any)["InvoicePaymentTerms"]
         for _ in 0..<6 where !paymentTerms.exists || !paymentTerms.isHittable {
@@ -1713,10 +2379,94 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         XCTAssertTrue(paymentTerms.waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Due Date"].waitForExistence(timeout: 3))
+        let dueDateExplanation = app.staticTexts[
+            "The same due date drives customer documents, overdue queues, reminders, and QuickBooks."
+        ]
+        for _ in 0..<4 where !dueDateExplanation.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(
+            dueDateExplanation.waitForExistence(timeout: 3)
+        )
+    }
+
+    @MainActor
+    func testJobPhotoCanOpenCopyPreservingMarkup() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedPhotoMarkup"
+        ]
+        app.launch()
+
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
+        for _ in 0..<6 where !documentation.exists || !documentation.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(documentation.waitForExistence(timeout: 3))
+        documentation.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        stagePicker.buttons["Files"].tap()
+
+        let attachmentGroup = app.buttons["Diagnostic Photo, 1"]
+        for _ in 0..<12 where !attachmentGroup.exists || !attachmentGroup.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(attachmentGroup.waitForExistence(timeout: 3))
+        attachmentGroup.tap()
+
+        let annotate = app.buttons["AnnotateAttachment-A1000000-0000-4000-8000-000000000050"]
+        for _ in 0..<4 where !annotate.exists || !annotate.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(annotate.waitForExistence(timeout: 3))
+        XCTAssertEqual(annotate.label, "Annotate")
+        annotate.tap()
+
+        let previewNavigationBar = app.navigationBars.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "UI-Diagnostic-Photo")
+        ).firstMatch
+        XCTAssertTrue(previewNavigationBar.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 3))
+        let markup = app.switches["QLOverlayMarkupButtonAccessibilityIdentifier"]
+        XCTAssertTrue(markup.waitForExistence(timeout: 5))
+        markup.tap()
+        let markupCanvas = app.descendants(matching: .any)[
+            "QLMarkupImageItemViewControllerMarkupImageViewAccessibilityIdentifier"
+        ]
+        XCTAssertTrue(markupCanvas.waitForExistence(timeout: 5))
+
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Copy-preserving job photo markup"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        let strokeStart = markupCanvas.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.55))
+        let strokeEnd = markupCanvas.coordinate(withNormalizedOffset: CGVector(dx: 0.65, dy: 0.55))
+        strokeStart.press(forDuration: 0.2, thenDragTo: strokeEnd)
+        markup.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 8))
+        let updatedGroup = app.buttons["Diagnostic Photo, 2"]
+        for _ in 0..<10 where !updatedGroup.exists || !updatedGroup.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(updatedGroup.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["UI-Diagnostic-Photo.png"].waitForExistence(timeout: 5))
         XCTAssertTrue(
             app.staticTexts[
-                "The same due date drives customer documents, overdue queues, reminders, and QuickBooks."
-            ].exists
+                "Annotated copy of UI-Diagnostic-Photo.png — Control-board wiring before repair"
+            ].waitForExistence(timeout: 5)
         )
     }
 
@@ -1731,8 +2481,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -1742,12 +2491,19 @@ final class GunnAire_OpsUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(documentation.waitForExistence(timeout: 3))
+        XCTAssertEqual(documentation.label, "Closeout")
+
+        let scheduleEvidence = XCTAttachment(screenshot: app.screenshot())
+        scheduleEvidence.name = "Schedule next closeout action without blocker overload"
+        scheduleEvidence.lifetime = .keepAlways
+        add(scheduleEvidence)
+
         documentation.tap()
 
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
         XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
-        stagePicker.buttons["Closeout"].tap()
+        XCTAssertTrue(stagePicker.buttons["Closeout"].isSelected)
 
         let nextAction = app.buttons["JobCloseoutNextAction"]
         XCTAssertTrue(nextAction.waitForExistence(timeout: 3))
@@ -1771,8 +2527,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -1811,8 +2566,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -1868,8 +2622,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
 
         let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
@@ -1879,6 +2632,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         XCTAssertTrue(documentation.waitForExistence(timeout: 3))
         documentation.tap()
+
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        stagePicker.buttons["Billing"].tap()
 
         let approval = app.buttons["Record Customer Approval"]
         for _ in 0..<10 {
@@ -1899,12 +2656,24 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(reference.waitForExistence(timeout: 2))
         reference.tap()
         reference.typeText("Approved by reply to estimate email")
-        if app.keyboards.buttons["Hide keyboard"].exists {
-            app.keyboards.buttons["Hide keyboard"].tap()
-        }
+        app.typeKey(.escape, modifierFlags: [])
         let confirmation = app.switches["Customer reviewed the scope, total price, and terms"]
         confirmation.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        XCTAssertEqual(confirmation.value as? String, "1")
+        let initialConfirmationSelected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == '1'"),
+            object: confirmation
+        )
+        if XCTWaiter.wait(for: [initialConfirmationSelected], timeout: 2) != .completed {
+            // Simulator text-entry focus can occasionally consume the first
+            // synthesized switch event even after Escape. Retry semantically
+            // only while the switch is still off.
+            confirmation.tap()
+        }
+        let confirmationSelected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == '1'"),
+            object: confirmation
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [confirmationSelected], timeout: 3), .completed)
         let approveButton = app.buttons["Approve"]
         let enabled = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "enabled == true"),
@@ -1915,6 +2684,57 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Method: Email approval"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testJobBillingSharesOnlyTheExactPendingEstimateInCustomerPortal() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedPendingEstimate"
+        ]
+        app.launchEnvironment["GUNNAIRE_BACKEND_BASE_URL"] = "https://portal-test.example.invalid"
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "google-id-token"
+        app.launch()
+
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let job = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        for _ in 0..<8 where !job.exists || !job.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(job.waitForExistence(timeout: 3))
+        XCTAssertTrue(job.isHittable)
+        job.tap()
+
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+        let workspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Billing"].tap()
+
+        let sharePortal = app.buttons["Share Customer Portal"]
+        for _ in 0..<14 where !sharePortal.exists || !sharePortal.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(sharePortal.waitForExistence(timeout: 3))
+        XCTAssertTrue(sharePortal.isHittable)
+        sharePortal.tap()
+
+        XCTAssertTrue(app.navigationBars["Customer Portal"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Estimate Approval"].exists)
+        XCTAssertTrue(app.staticTexts["Estimate"].exists)
+        let amount = app.staticTexts["PortalEstimateAmount"]
+        XCTAssertTrue(amount.exists)
+        XCTAssertEqual(amount.label, "$425.00")
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] 'exact amount and line-item revision'")
+        ).firstMatch.exists)
+        XCTAssertTrue(app.buttons["Create Link"].exists)
     }
 
     @MainActor
@@ -1930,8 +2750,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
 
         let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
@@ -1941,6 +2760,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         }
         XCTAssertTrue(documentation.waitForExistence(timeout: 3))
         documentation.tap()
+
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        stagePicker.buttons["Billing"].tap()
 
         let moreActions = app.buttons["EstimateMoreActions"]
         for _ in 0..<10 {
@@ -2012,8 +2835,13 @@ final class GunnAire_OpsUITests: XCTestCase {
         createWorkOrder.tap()
 
         XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["ServiceCallJobBrief"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Customer: UI Test Collectible Customer"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Technician: Unassigned"].waitForExistence(timeout: 3))
+        let jobBriefEvidence = XCTAttachment(screenshot: app.screenshot())
+        jobBriefEvidence.name = "Compact Job Brief"
+        jobBriefEvidence.lifetime = .keepAlways
+        add(jobBriefEvidence)
         let workspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
         XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
         workspacePicker.buttons["Overview"].tap()
@@ -2037,8 +2865,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -2055,7 +2882,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
         XCTAssertTrue(stagePicker.buttons["Billing"].isSelected)
         XCTAssertFalse(app.buttons["Create Invoice"].exists)
-        XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].exists)
+        let diagnosticLine = app.staticTexts["HVAC Diagnostic Service"]
+        for _ in 0..<6 where !diagnosticLine.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(diagnosticLine.waitForExistence(timeout: 3))
         XCTAssertFalse(app.buttons["DocumentDiscountAction"].exists)
 
         let servicedSystemPicker = app.descendants(matching: .any)["LineEquipmentPicker-\(catalogItemID)"]
@@ -2078,16 +2909,32 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(salesPrice.exists)
         salesPrice.tap()
         salesPrice.typeText("100")
-        let saveItem = app.buttons["Save"]
+        let saveItem = app.navigationBars["Create Item"].buttons["Save"]
         XCTAssertTrue(saveItem.waitForExistence(timeout: 3))
-        if app.keyboards.firstMatch.exists {
-            app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(saveItem.isEnabled)
+        XCTAssertFalse(saveItem.frame.isEmpty)
+        saveItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        if app.navigationBars["Create Item"].exists {
+            // iPad's decimal keyboard can consume the first toolbar tap solely
+            // to resign focus. The second tap activates the still-visible Save.
+            saveItem.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         }
-        XCTAssertTrue(saveItem.isHittable)
-        saveItem.tap()
 
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["UI Test Added Repair"].waitForExistence(timeout: 3))
+        let catalogState = app.staticTexts.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "CatalogSyncState-")
+        ).firstMatch
+        XCTAssertTrue(catalogState.waitForExistence(timeout: 3))
+        XCTAssertEqual(catalogState.label, "Admin pricebook review")
+        let removeAddedRepair = app.buttons.matching(
+            NSPredicate(format: "label == %@", "Remove UI Test Added Repair from invoice")
+        ).firstMatch
+        XCTAssertTrue(removeAddedRepair.waitForExistence(timeout: 3))
+        XCTAssertTrue(removeAddedRepair.identifier.hasPrefix("RemoveBillingLine-"))
+        XCTAssertTrue(removeAddedRepair.isHittable)
+        XCTAssertGreaterThanOrEqual(removeAddedRepair.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(removeAddedRepair.frame.height, 44)
         let updateInvoice = app.buttons["Update Invoice"]
         for _ in 0..<5 {
             if updateInvoice.exists && updateInvoice.isHittable { break }
@@ -2105,6 +2952,99 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testFieldBillingKeepsProviderControlsOutOfDocumentScopedDraftFlow() throws {
+        let app = XCUIApplication()
+        let draftName = "Scoped Draft \(UUID().uuidString.prefix(8))"
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedTechnician",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestForceQuickBooksConnected"
+        ]
+        app.launch()
+
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
+        schedule.tap()
+
+        let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
+        for _ in 0..<6 where !documentation.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(documentation))
+        documentation.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Sync Catalog"].exists)
+        XCTAssertEqual(
+            app.buttons.matching(
+                NSPredicate(format: "label BEGINSWITH 'Publish ' AND label ENDSWITH ' Pending'")
+            ).count,
+            0
+        )
+
+        let createNewItem = app.buttons["Create New Item"]
+        for _ in 0..<6 where !createNewItem.exists || !createNewItem.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(createNewItem.waitForExistence(timeout: 3))
+        XCTAssertTrue(createNewItem.isHittable)
+        createNewItem.tap()
+
+        XCTAssertTrue(app.navigationBars["Create Item"].waitForExistence(timeout: 3))
+        let itemName = app.textFields["Item name"]
+        XCTAssertTrue(itemName.waitForExistence(timeout: 3))
+        replaceText(in: itemName, with: draftName)
+        let hideKeyboard = app.buttons["Hide keyboard"]
+        if hideKeyboard.waitForExistence(timeout: 2) {
+            if waitForHittable(hideKeyboard, timeout: 10) {
+                hideKeyboard.tap()
+            }
+        }
+        let saveItem = app.buttons["Save"]
+        XCTAssertTrue(waitForHittable(saveItem))
+        saveItem.tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        let draft = app.staticTexts[draftName]
+        for _ in 0..<6 where !draft.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(draft.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "CatalogSyncState-", "Admin pricebook review")
+            ).firstMatch.exists
+        )
+        let removeDraft = app.buttons.matching(
+            NSPredicate(format: "label == %@", "Remove \(draftName) from invoice")
+        ).firstMatch
+        XCTAssertTrue(waitForHittable(removeDraft))
+        removeDraft.tap()
+
+        let addLineItems = app.buttons["Add Line Items"]
+        for _ in 0..<6 where !addLineItems.exists || !addLineItems.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(addLineItems.waitForExistence(timeout: 3))
+        XCTAssertTrue(addLineItems.isHittable)
+        addLineItems.tap()
+        XCTAssertTrue(app.navigationBars["Select Items"].waitForExistence(timeout: 3))
+        let scopedDraft = app.staticTexts[draftName]
+        XCTAssertTrue(scopedDraft.waitForExistence(timeout: 3))
+        scopedDraft.tap()
+        XCTAssertTrue(app.staticTexts["2 lines selected"].waitForExistence(timeout: 3))
+        app.buttons["Done"].tap()
+
+        XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.buttons.matching(
+                NSPredicate(format: "label == %@", "Remove \(draftName) from invoice")
+            ).firstMatch.waitForExistence(timeout: 3)
+        )
+    }
+
+    @MainActor
     func testAssignedTechnicianSelectsFlatRatePackageWithServicedSystemContext() throws {
         let app = XCUIApplication()
         app.launchArguments = [
@@ -2116,8 +3056,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
 
         let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
@@ -2130,7 +3069,11 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         let addLineItems = app.buttons["Add Line Items"]
+        for _ in 0..<6 where !addLineItems.exists || !addLineItems.isHittable {
+            app.swipeUp()
+        }
         XCTAssertTrue(addLineItems.waitForExistence(timeout: 3))
+        XCTAssertTrue(addLineItems.isHittable)
         addLineItems.tap()
 
         XCTAssertTrue(app.navigationBars["Select Items"].waitForExistence(timeout: 3))
@@ -2181,8 +3124,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let invoices = app.staticTexts["Invoices"]
-        XCTAssertTrue(invoices.waitForExistence(timeout: 8))
+        let invoices = revealSidebarDestination("Invoices", in: app)
         invoices.tap()
         XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Project Milestones Ready"].waitForExistence(timeout: 3))
@@ -2238,7 +3180,13 @@ final class GunnAire_OpsUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(progressInvoice.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["$5,550.00 • Unpaid"].exists)
+        let progressInvoiceStatus = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS '$5,550.00' AND label CONTAINS[c] 'Open'")
+        ).firstMatch
+        for _ in 0..<6 where !progressInvoiceStatus.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(progressInvoiceStatus.waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -2252,7 +3200,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        app.staticTexts["Schedule & Jobs"].tap()
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
         let documentation = app.buttons["OpenDocumentation-A1000000-0000-4000-8000-000000000002"]
@@ -2275,22 +3223,52 @@ final class GunnAire_OpsUITests: XCTestCase {
         adjustPrice.tap()
 
         XCTAssertTrue(app.navigationBars["Discount or Adjust"].waitForExistence(timeout: 3))
+        let expectedReason = "Approved service-plan price"
         let reason = app.textFields["PriceAdjustmentReason"]
         XCTAssertTrue(reason.waitForExistence(timeout: 3))
         reason.tap()
-        reason.typeText("Approved service-plan price")
+        reason.typeText(expectedReason)
+        let completeReason = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", expectedReason),
+            object: reason
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [completeReason], timeout: 5), .completed)
+        if app.keyboards.firstMatch.exists {
+            app.typeKey(.escape, modifierFlags: [])
+        }
 
         let unitPrice = app.textFields["PriceAdjustmentUnitPrice"]
         XCTAssertTrue(unitPrice.waitForExistence(timeout: 3))
         unitPrice.tap()
         let currentPriceText = unitPrice.value as? String ?? "189.00"
-        unitPrice.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: currentPriceText.count))
+        unitPrice.typeText(
+            String(
+                repeating: XCUIKeyboardKey.delete.rawValue,
+                count: max(currentPriceText.count, 1)
+            )
+        )
         unitPrice.typeText("175")
-        let authorize = app.buttons["Authorize Price"]
-        XCTAssertTrue(authorize.isEnabled)
-        authorize.tap()
 
-        XCTAssertFalse(app.navigationBars["Discount or Adjust"].waitForExistence(timeout: 1))
+        let authorize = app.buttons["Authorize Price"]
+        let authorizeEnabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"),
+            object: authorize
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [authorizeEnabled], timeout: 3), .completed)
+        authorize.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        if !app.navigationBars["Discount or Adjust"].waitForNonExistence(timeout: 1) {
+            let authorizeAfterKeyboardDismissal = app.buttons["Authorize Price"]
+            XCTAssertTrue(authorizeAfterKeyboardDismissal.waitForExistence(timeout: 3))
+            XCTAssertTrue(authorizeAfterKeyboardDismissal.isEnabled)
+            authorizeAfterKeyboardDismissal
+                .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .tap()
+        }
+
+        XCTAssertTrue(
+            app.navigationBars["Discount or Adjust"].waitForNonExistence(timeout: 5),
+            "The price-adjustment sheet did not finish dismissing after authorization"
+        )
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         XCTAssertEqual(adjustPrice.label, "Edit Adjustment")
         XCTAssertTrue(
@@ -2319,7 +3297,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        app.staticTexts["Schedule & Jobs"].tap()
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
         let documentation = app.buttons["OpenDocumentation-\(screenshotServiceCallID)"]
@@ -2343,29 +3321,58 @@ final class GunnAire_OpsUITests: XCTestCase {
         discountAction.tap()
 
         XCTAssertTrue(app.navigationBars["Add Discount"].waitForExistence(timeout: 3))
+        let reason = app.textFields["DocumentDiscountReason"]
+        XCTAssertTrue(reason.waitForExistence(timeout: 3))
+        let expectedReason = "Plan"
+        reason.tap()
+        reason.typeText(expectedReason)
+        let completeReason = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", expectedReason),
+            object: reason
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [completeReason], timeout: 5),
+            .completed,
+            "Discount reason did not finish entering before the keyboard was dismissed. Current value: \(String(describing: reason.value))"
+        )
+        if app.keyboards.firstMatch.exists {
+            app.typeKey(.escape, modifierFlags: [])
+        }
+
         let discountValue = app.textFields["DocumentDiscountValue"]
         XCTAssertTrue(discountValue.waitForExistence(timeout: 3))
         discountValue.tap()
         discountValue.typeText("10")
 
-        let reason = app.textFields["DocumentDiscountReason"]
-        XCTAssertTrue(reason.waitForExistence(timeout: 3))
-        reason.tap()
-        reason.typeText("Maintenance plan member benefit")
-        if app.keyboards.firstMatch.exists {
-            app.typeKey(.escape, modifierFlags: [])
-        }
-
         let authorize = app.buttons["AuthorizeDocumentDiscount"]
         XCTAssertTrue(authorize.waitForExistence(timeout: 3))
         XCTAssertTrue(authorize.isEnabled)
-        authorize.tap()
+        authorize.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
+        // On iPadOS, the first navigation-bar tap can be consumed while the
+        // decimal keyboard resigns focus. Retry only when the sheet remains,
+        // then continue to require the actual authorization result below.
+        if !app.navigationBars["Add Discount"].waitForNonExistence(timeout: 1) {
+            let authorizeAfterKeyboardDismissal = app.buttons["AuthorizeDocumentDiscount"]
+            XCTAssertTrue(authorizeAfterKeyboardDismissal.waitForExistence(timeout: 3))
+            XCTAssertTrue(authorizeAfterKeyboardDismissal.isEnabled)
+            authorizeAfterKeyboardDismissal
+                .coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .tap()
+        }
+
+        XCTAssertTrue(app.navigationBars["Add Discount"].waitForNonExistence(timeout: 5))
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
         let summary = app.staticTexts["AuthorizedDocumentDiscount"]
+        for _ in 0..<6 where !summary.exists {
+            app.swipeUp()
+        }
         XCTAssertTrue(summary.waitForExistence(timeout: 3))
         XCTAssertTrue(summary.label.contains("10%"))
-        XCTAssertTrue(summary.label.contains("Maintenance plan member benefit"))
+        XCTAssertTrue(
+            summary.label.contains(expectedReason),
+            "Unexpected authorized discount summary: \(summary.label)"
+        )
         XCTAssertFalse(summary.label.contains("@"))
         XCTAssertTrue(app.staticTexts["−$18.90"].exists)
         let netSubtotal = app.staticTexts["DocumentNetSubtotal"]
@@ -2396,7 +3403,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        app.staticTexts["Schedule & Jobs"].tap()
+        revealSidebarDestination("Schedule & Jobs", in: app).tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
         let documentation = app.buttons["OpenDocumentation-\(screenshotServiceCallID)"]
@@ -2434,8 +3441,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -2479,8 +3485,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -2492,6 +3497,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(documentation.waitForExistence(timeout: 3))
         documentation.tap()
         XCTAssertTrue(app.navigationBars["Job Documentation"].waitForExistence(timeout: 3))
+
+        let stagePicker = app.segmentedControls["JobDocumentationStagePicker"]
+        XCTAssertTrue(stagePicker.waitForExistence(timeout: 3))
+        stagePicker.buttons["Billing"].tap()
 
         let recordUse = app.buttons["RecordJobMaterialUse-A1000000-0000-4000-8000-000000000013"]
         for _ in 0..<8 {
@@ -2520,8 +3529,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         jobBackButton.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
-        let receiptsBills = app.staticTexts["Receipts & Bills"]
-        XCTAssertTrue(receiptsBills.waitForExistence(timeout: 3))
+        let receiptsBills = revealSidebarDestination("Receipts & Bills", in: app)
         receiptsBills.tap()
         XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 3))
         let workspacePicker = app.segmentedControls["ReceiptsBillsWorkspacePicker"]
@@ -2609,27 +3617,29 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         receiveShipment.tap()
         XCTAssertTrue(app.navigationBars["Receive Shipment"].waitForExistence(timeout: 3))
-        let quantity = app.textFields["PurchaseOrderReceiptQuantity"]
-        XCTAssertTrue(quantity.waitForExistence(timeout: 3))
-        quantity.tap()
-        quantity.typeKey("a", modifierFlags: .command)
-        quantity.typeText("1")
 
         let note = app.textFields["PurchaseOrderReceiptNote"]
-        XCTAssertTrue(note.exists)
-        let doneEditingShipment = app.buttons["Done Editing Shipment"]
-        if doneEditingShipment.exists && doneEditingShipment.isHittable {
-            doneEditingShipment.tap()
-        }
-        for _ in 0..<3 where !note.isHittable {
-            app.swipeUp()
-        }
-        XCTAssertTrue(note.isHittable)
+        XCTAssertTrue(waitForHittable(note))
         note.tap()
         note.typeText("Packing slip UI-1; one unit backordered.")
 
+        let doneEditingShipment = app.buttons["Done Editing Shipment"]
+        XCTAssertTrue(doneEditingShipment.waitForExistence(timeout: 3))
+        doneEditingShipment.tap()
+
+        let quantity = app.textFields["PurchaseOrderReceiptQuantity"]
+        XCTAssertTrue(waitForHittable(quantity))
+        replaceText(in: quantity, with: "1")
+        XCTAssertEqual(quantity.value as? String, "1", app.debugDescription)
+        XCTAssertTrue(doneEditingShipment.waitForExistence(timeout: 3))
+        doneEditingShipment.tap()
+
         let confirmReceipt = app.buttons["ConfirmPurchaseOrderReceipt"]
-        XCTAssertTrue(confirmReceipt.isEnabled)
+        let receiptEnabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"),
+            object: confirmReceipt
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [receiptEnabled], timeout: 3), .completed)
         confirmReceipt.tap()
 
         XCTAssertFalse(app.navigationBars["Receive Shipment"].waitForExistence(timeout: 1))
@@ -2941,7 +3951,10 @@ final class GunnAire_OpsUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(installedSerial.waitForExistence(timeout: 3))
         let equipmentName = app.textFields["PurchaseOrderInstallEquipmentName"]
-        XCTAssertTrue(equipmentName.waitForExistence(timeout: 3))
+        for _ in 0..<5 where !equipmentName.exists || !equipmentName.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(equipmentName.waitForExistence(timeout: 3), app.debugDescription)
         XCTAssertTrue((equipmentName.value as? String)?.hasPrefix("Lennox Elite Heat") == true)
         let confirmInstallation = app.buttons["ConfirmPurchaseOrderAssetInstallation"]
         XCTAssertTrue(confirmInstallation.waitForExistence(timeout: 3))
@@ -3170,8 +4183,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -3202,8 +4214,13 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Completion Checklist"].exists)
         XCTAssertFalse(app.staticTexts["Documentation"].exists)
 
-        workspacePicker.buttons["History"].tap()
-        XCTAssertTrue(workspacePicker.buttons["History"].isSelected)
+        let historyWorkspace = workspacePicker.buttons["History"]
+        historyWorkspace.tap()
+        let historySelected = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "selected == true"),
+            object: historyWorkspace
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [historySelected], timeout: 3), .completed)
         XCTAssertTrue(app.staticTexts["Job Activity"].exists)
         XCTAssertTrue(app.staticTexts["Membership & History"].exists)
         XCTAssertFalse(app.staticTexts["Completion Checklist"].exists)
@@ -3215,8 +4232,121 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testPostJobReviewDraftRequiresExplicitCustomerMarketingConsent() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-appStoreScreenshotFixtures",
+            "-enableMarketingCampaigns", "YES",
+            "-customerReviewURL", "https://review.example.invalid/gunnaire"
+        ]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
+        schedule.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let job = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        for _ in 0..<8 where !job.exists || !job.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(job.waitForExistence(timeout: 3))
+        XCTAssertTrue(job.isHittable)
+        job.tap()
+
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+        let workspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Overview"].tap()
+
+        // Customer Contact is rendered after the optional review action, so
+        // reaching it proves this absence is the consent gate rather than an
+        // unexamined portion of the job overview.
+        let customerContact = app.staticTexts["Customer Contact"]
+        for _ in 0..<12 where !customerContact.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(customerContact.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Draft Review Request"].exists)
+        XCTAssertFalse(app.staticTexts["Optional marketing follow-up. It opens as a draft and is recorded only after staff sends it."].exists)
+
+        let customers = revealSidebarDestination("Customers", in: app)
+        customers.tap()
+        XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
+
+        let customerRecord = app.buttons["OpenCustomerRecord-\(screenshotCustomerID)"]
+        for _ in 0..<6 where !customerRecord.exists || !customerRecord.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(customerRecord.waitForExistence(timeout: 3))
+        XCTAssertTrue(customerRecord.isHittable)
+        customerRecord.tap()
+        XCTAssertTrue(app.navigationBars["Edit Customer"].waitForExistence(timeout: 3))
+
+        let marketingConsent = app.switches["Allow marketing email"]
+        let customerForm = app.collectionViews.firstMatch
+        for _ in 0..<8 where !marketingConsent.exists || !marketingConsent.isHittable {
+            customerForm.swipeUp()
+        }
+        XCTAssertTrue(marketingConsent.waitForExistence(timeout: 3))
+        XCTAssertTrue(marketingConsent.isHittable)
+        XCTAssertEqual(marketingConsent.value as? String, "0")
+        marketingConsent.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(marketingConsent.value as? String, "1")
+
+        let save = app.navigationBars["Edit Customer"].buttons["Save"]
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
+
+        let scheduleAgain = revealSidebarDestination("Schedule & Jobs", in: app)
+        scheduleAgain.tap()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
+
+        let restoredJob = app.buttons["OpenServiceCall-\(screenshotServiceCallID)"]
+        for _ in 0..<8 where !restoredJob.exists || !restoredJob.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(restoredJob.waitForExistence(timeout: 3))
+        XCTAssertTrue(restoredJob.isHittable)
+        restoredJob.tap()
+        XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 3))
+
+        let restoredWorkspacePicker = app.segmentedControls["ServiceCallWorkspacePicker"]
+        XCTAssertTrue(restoredWorkspacePicker.waitForExistence(timeout: 3))
+        restoredWorkspacePicker.buttons["Overview"].tap()
+
+        let reviewDraft = app.buttons["Draft Review Request"]
+        for _ in 0..<12 where !reviewDraft.exists || !reviewDraft.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(reviewDraft.waitForExistence(timeout: 3))
+        XCTAssertTrue(reviewDraft.isHittable)
+        XCTAssertTrue(app.staticTexts["Optional marketing follow-up. It opens as a draft and is recorded only after staff sends it."].exists)
+
+        // The evidence intentionally stops before launching Mail or Gmail.
+        // Screenshot fixtures retain the useful role while suppressing the
+        // signed-in account address.
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        XCTAssertTrue(accountIdentity.exists)
+        XCTAssertEqual(accountIdentity.label, "Administrator")
+        XCTAssertFalse(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
+        ).firstMatch.exists)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Consent-gated post-job review draft without account email"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
     func testAdministratorRecordsAppendOnlyWorkAndReviewsTheCustomerSummary() throws {
-        XCUIDevice.shared.orientation = .landscapeLeft
+        XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments = [
             "-enableSplashVideo", "NO",
@@ -3227,8 +4357,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -3302,7 +4431,9 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Call Details"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["CurrentCustomerWorkSummary"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["1 retained summary revision"].exists)
-        XCTAssertFalse(app.descendants(matching: .any)["SidebarAccountIdentity"].exists)
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        XCTAssertTrue(accountIdentity.exists)
+        XCTAssertEqual(accountIdentity.label, "Administrator")
         XCTAssertFalse(app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
         ).firstMatch.exists)
@@ -3326,8 +4457,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -3370,8 +4500,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let customers = app.staticTexts["Customers"]
-        XCTAssertTrue(customers.waitForExistence(timeout: 5))
+        let customers = revealSidebarDestination("Customers", in: app)
         customers.tap()
         XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
 
@@ -3390,6 +4519,11 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(workspacePicker.buttons["Overview"].isSelected)
         XCTAssertTrue(app.staticTexts["Profile Photo"].exists)
         XCTAssertTrue(app.staticTexts["Maintain contact and consent details, review account health, and resolve open balances."].exists)
+        let communicationGuidance = app.staticTexts["CustomerCommunicationConsentGuidance"]
+        XCTAssertTrue(communicationGuidance.exists)
+        XCTAssertTrue(communicationGuidance.label.contains("staff-reviewed Apple Messages drafts"))
+        XCTAssertTrue(communicationGuidance.label.contains("Automated SMS requires an approved provider and separate consent"))
+        XCTAssertFalse(communicationGuidance.label.contains("this app does not send texts yet"))
         XCTAssertFalse(app.staticTexts["Equipment Profiles"].exists)
 
         workspacePicker.buttons["Systems"].tap()
@@ -3458,6 +4592,63 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testCustomerAccountStatementGeneratesFromTheExistingFilesWorkspace() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+
+        revealSidebarDestination("Customers", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
+
+        let customerRecord = app.buttons["OpenCustomerRecord-\(screenshotCustomerID)"]
+        for _ in 0..<5 where !customerRecord.exists || !customerRecord.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(customerRecord.waitForExistence(timeout: 3))
+        customerRecord.tap()
+        XCTAssertTrue(app.navigationBars["Edit Customer"].waitForExistence(timeout: 3))
+
+        let workspacePicker = app.segmentedControls["CustomerProfileWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Files"].tap()
+        XCTAssertTrue(app.staticTexts["Account Statement"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["$189.00"].exists)
+        XCTAssertTrue(app.buttons["EmailCustomerAccountStatement"].exists)
+
+        let generate = app.buttons["GenerateCustomerAccountStatement"]
+        let customerForm = app.collectionViews.firstMatch
+        for _ in 0..<5 where !generate.exists || !generate.isHittable {
+            customerForm.swipeUp()
+        }
+        XCTAssertTrue(generate.waitForExistence(timeout: 3))
+        XCTAssertTrue(generate.isHittable)
+        generate.tap()
+
+        let previewNavigation = app.navigationBars.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@ OR label BEGINSWITH %@", "GunnAire-Account-Statement-", "GunnAire-Account-Statement-")
+        ).firstMatch
+        XCTAssertTrue(previewNavigation.waitForExistence(timeout: 8))
+        let done = previewNavigation.buttons["Done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 3))
+        done.tap()
+
+        XCTAssertTrue(app.navigationBars["Edit Customer"].waitForExistence(timeout: 5))
+        let generatedStatements = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Account Statements (1)")
+        ).firstMatch
+        for _ in 0..<5 where !generatedStatements.exists {
+            customerForm.swipeUp()
+        }
+        XCTAssertTrue(generatedStatements.waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testAdministratorResolvesDoNotServiceFromCustomerRecordAndRestoresJobStart() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -3470,8 +4661,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -3510,8 +4700,16 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(customerRecord.waitForExistence(timeout: 3))
         customerRecord.tap()
         XCTAssertTrue(app.navigationBars["Edit Customer"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["CustomerOperationalAlertSummary"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Management review hold"].exists)
+        let alertSummary = app.staticTexts["CustomerOperationalAlertSummary"]
+        for _ in 0..<6 where !alertSummary.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(alertSummary.waitForExistence(timeout: 3))
+        let alertReason = app.staticTexts["Management review hold"]
+        for _ in 0..<3 where !alertReason.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(alertReason.waitForExistence(timeout: 3))
 
         let manage = app.buttons["ManageCustomerOperationalAlerts"]
         for _ in 0..<4 where !manage.exists || !manage.isHittable {
@@ -3571,7 +4769,8 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-disableCloudKitForTesting",
             "-uiTestAuthenticatedAdmin",
             "-uiTestSeedCollectibleJob",
-            "-uiTestSeedBusinessTask"
+            "-uiTestSeedBusinessTask",
+            "-GunnAirePendingAppRoute", "commandCenter"
         ]
         app.launch()
 
@@ -3658,14 +4857,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["GunnAire Ops"].waitForExistence(timeout: 6))
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        if !schedule.waitForExistence(timeout: 2) {
-            let sidebar = app.buttons["GunnAire Ops"]
-            XCTAssertTrue(sidebar.waitForExistence(timeout: 3))
-            sidebar.tap()
-        }
-        XCTAssertTrue(schedule.waitForExistence(timeout: 3))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -3673,10 +4865,18 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(availability.waitForExistence(timeout: 3), app.debugDescription)
         availability.tap()
         XCTAssertTrue(app.navigationBars["Technician Availability"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Jordan Lee"].exists)
-        XCTAssertTrue(app.staticTexts.matching(
+        let technicianPicker = app.descendants(matching: .any)["TechnicianAvailabilityPicker"]
+        for _ in 0..<6 where !technicianPicker.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(technicianPicker.waitForExistence(timeout: 3))
+        let noRecurringHours = app.staticTexts.matching(
             NSPredicate(format: "label CONTAINS[c] 'No recurring hours are configured'")
-        ).firstMatch.exists)
+        ).firstMatch
+        for _ in 0..<4 where !noRecurringHours.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(noRecurringHours.waitForExistence(timeout: 3), app.debugDescription)
 
         let addShift = app.buttons["AddRecurringTechnicianShift"]
         XCTAssertTrue(addShift.waitForExistence(timeout: 3))
@@ -4224,8 +5424,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let customers = app.staticTexts["Customers"]
-        XCTAssertTrue(customers.waitForExistence(timeout: 5))
+        let customers = revealSidebarDestination("Customers", in: app)
         customers.tap()
         XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
 
@@ -4262,8 +5461,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -4306,8 +5504,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let schedule = app.staticTexts["Schedule & Jobs"]
-        XCTAssertTrue(schedule.waitForExistence(timeout: 5))
+        let schedule = revealSidebarDestination("Schedule & Jobs", in: app)
         schedule.tap()
         XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 3))
 
@@ -4336,8 +5533,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let customers = app.staticTexts["Customers"]
-        XCTAssertTrue(customers.waitForExistence(timeout: 5))
+        let customers = revealSidebarDestination("Customers", in: app)
         customers.tap()
         XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["Add Customer"].exists)
@@ -4424,6 +5620,388 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testLinkedPricebookApprovalStagesComparisonWithoutChoosingQuickBooksValues() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedLinkedPricebookReview",
+            "-uiTestForceQuickBooksConnected",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let approveItem = app.buttons["ApprovePricebookItem-\(catalogItemID)"]
+        for _ in 0..<8 where !approveItem.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(approveItem.waitForExistence(timeout: 3))
+        XCTAssertEqual(approveItem.label, "Approve & Compare")
+        XCTAssertTrue(app.staticTexts["$189.00"].exists)
+        approveItem.tap()
+
+        let approvalMessage = app.staticTexts["QuickBooksActionMessage"]
+        XCTAssertTrue(approvalMessage.waitForExistence(timeout: 3))
+        XCTAssertTrue(approvalMessage.label.contains("Approved and linked HVAC Diagnostic Service"))
+        XCTAssertFalse(approveItem.exists)
+        XCTAssertTrue(app.staticTexts["QuickBooksCatalogReconciliationQueue"].waitForExistence(timeout: 3))
+        let comparison = app.staticTexts["QBO QBO-UI-PRICEBOOK-REVIEW • 1 changed field"]
+        for _ in 0..<4 where !comparison.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(comparison.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Sales price"].exists)
+        XCTAssertTrue(app.staticTexts["$189.00"].exists)
+        XCTAssertTrue(app.staticTexts["$239.00"].exists)
+        XCTAssertTrue(app.buttons["Use QuickBooks Version"].exists)
+        XCTAssertTrue(app.buttons["Publish GunnAire Version"].exists)
+    }
+
+    @MainActor
+    func testUnlinkedPricebookApprovalRequiresExactQuickBooksPublicationConfirmation() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedPricebookReview",
+            "-uiTestForceQuickBooksConnected",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let approveItem = app.buttons["ApprovePricebookItem-\(catalogItemID)"]
+        for _ in 0..<8 where !approveItem.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(approveItem.waitForExistence(timeout: 3))
+        XCTAssertEqual(approveItem.label, "Approve & Publish")
+        approveItem.tap()
+
+        XCTAssertTrue(app.staticTexts["Publish to QuickBooks?"].waitForExistence(timeout: 3))
+        let details = app.staticTexts.matching(
+            NSPredicate(
+                format: "label CONTAINS[c] %@ AND label CONTAINS[c] %@ AND label CONTAINS[c] %@",
+                "HVAC Diagnostic Service",
+                "No SKU",
+                "No invoice is created"
+            )
+        ).firstMatch
+        XCTAssertTrue(details.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["ConfirmQuickBooksCatalogPublication"].exists)
+        // iPad presents confirmationDialog as a popover and dismisses it by
+        // tapping outside rather than exposing the iPhone-style Cancel row.
+        // Leave the dialog open so this test can never publish to QuickBooks.
+        XCTAssertTrue(approveItem.exists)
+        XCTAssertFalse(app.staticTexts["No field-created catalog items need review."].exists)
+    }
+
+    @MainActor
+    func testAdministratorEditsCompanyPricebookOfflineAndStagesQuickBooksComparison() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedOfflineCompanyPricebook",
+            "-uiTestForceQuickBooksDisconnected",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let companyPricebook = app.buttons["CompanyPricebookDisclosure"]
+        for _ in 0..<14 where !(companyPricebook.exists && companyPricebook.isHittable) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(companyPricebook))
+        companyPricebook.tap()
+
+        let syncStatus = app.staticTexts["Synced with QuickBooks"]
+        for _ in 0..<4 where !(syncStatus.exists && syncStatus.isHittable) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(syncStatus))
+        XCTAssertTrue(app.staticTexts["$189.00"].exists)
+
+        let edit = app.buttons["Edit HVAC Diagnostic Service"]
+        XCTAssertTrue(waitForHittable(edit))
+        edit.tap()
+
+        XCTAssertTrue(app.navigationBars["Edit Catalog Item"].waitForExistence(timeout: 3))
+        let salesPrice = app.textFields["CatalogEditSalesPrice"]
+        XCTAssertTrue(salesPrice.waitForExistence(timeout: 3))
+        replaceText(in: salesPrice, with: "215")
+        let doneEditing = app.buttons["DoneEditingCatalogItem"]
+        XCTAssertTrue(doneEditing.waitForExistence(timeout: 3))
+        doneEditing.tap()
+        let editorNavigation = app.navigationBars["Edit Catalog Item"]
+        let stage = editorNavigation.buttons["Stage Changes"]
+        XCTAssertTrue(waitForHittable(stage))
+        XCTAssertTrue(stage.isEnabled)
+        stage.tap()
+
+        let editorDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.navigationBars["Edit Catalog Item"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [editorDismissed], timeout: 3), .completed)
+        let comparisonPending = app.staticTexts["QuickBooks comparison pending"]
+        for _ in 0..<10 where !comparisonPending.exists || !comparisonPending.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(comparisonPending.waitForExistence(timeout: 3))
+        XCTAssertTrue(comparisonPending.isHittable)
+        XCTAssertTrue(app.staticTexts["$215.00"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Publish GunnAire Version"].exists)
+    }
+
+    @MainActor
+    func testAdministratorCreatesTaxableCatalogItemOfflineBeforeQuickBooksPublication() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let addCatalogItem = app.buttons["Add Catalog Item"]
+        for _ in 0..<14 where !addCatalogItem.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(addCatalogItem))
+        addCatalogItem.tap()
+
+        XCTAssertTrue(app.navigationBars["Add Catalog Item"].waitForExistence(timeout: 3))
+        let name = app.textFields["QuickBooksCatalogItemName"]
+        let sku = app.textFields["QuickBooksCatalogItemSKU"]
+        XCTAssertTrue(name.waitForExistence(timeout: 3))
+        replaceText(in: name, with: "Offline Taxable Capacitor")
+        replaceText(in: sku, with: "OFF-CAP-45")
+        let returnKey = app.keyboards.buttons["Return"]
+        if returnKey.exists {
+            returnKey.tap()
+        }
+        let taxable = app.switches["QuickBooksCatalogItemTaxable"]
+        XCTAssertTrue(taxable.exists)
+        if (taxable.value as? String) != "1" {
+            taxable.tap()
+        }
+
+        let create = app.buttons["CreateQuickBooksCatalogItem"]
+        XCTAssertTrue(create.exists)
+        XCTAssertTrue(create.isEnabled)
+        XCTAssertTrue(waitForHittable(create))
+        create.tap()
+
+        let composerDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.navigationBars["Add Catalog Item"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [composerDismissed], timeout: 3), .completed)
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].exists)
+        let result = app.staticTexts["QuickBooksActionMessage"]
+        for _ in 0..<14 where !result.isHittable {
+            app.swipeDown()
+        }
+        XCTAssertTrue(waitForHittable(result))
+        XCTAssertEqual(
+            result.label,
+            "Saved Offline Taxable Capacitor locally. Connect QuickBooks to publish it."
+        )
+
+        let queuedItem = app.staticTexts["Offline Taxable Capacitor"]
+        for _ in 0..<14 where !queuedItem.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(queuedItem))
+        XCTAssertTrue(app.staticTexts["SKU OFF-CAP-45 • Service"].exists)
+        XCTAssertTrue(app.staticTexts["Publication pending"].exists)
+        let retry = app.buttons["Retry publication for Offline Taxable Capacitor"]
+        XCTAssertTrue(retry.exists)
+        XCTAssertFalse(retry.isEnabled)
+    }
+
+    @MainActor
+    func testAdministratorCreatesCustomerOfflineAndHandsItToCustomerSync() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let addCustomer = app.buttons["Add Customer"]
+        for _ in 0..<14 where !addCustomer.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(addCustomer))
+        XCTAssertTrue(addCustomer.isEnabled)
+        addCustomer.tap()
+
+        XCTAssertTrue(app.navigationBars["Add Customer"].waitForExistence(timeout: 3))
+        let name = app.textFields["QuickBooksCustomerName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 3))
+        replaceText(in: name, with: "Offline QBO Customer")
+        let create = app.buttons["CreateQuickBooksCustomer"]
+        XCTAssertTrue(create.exists)
+        XCTAssertTrue(create.isEnabled)
+        create.tap()
+
+        let composerDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.navigationBars["Add Customer"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [composerDismissed], timeout: 3), .completed)
+        let result = app.staticTexts["QuickBooksActionMessage"]
+        XCTAssertTrue(waitForHittable(result))
+        XCTAssertEqual(
+            result.label,
+            "Saved Offline QBO Customer locally. Connect QuickBooks or use Customers → Sync to publish it."
+        )
+
+        let sidebar = revealSidebar(in: app)
+        let customers = sidebar.staticTexts["Customers"]
+        for _ in 0..<18 where !customers.isHittable {
+            sidebar.swipeDown()
+        }
+        XCTAssertTrue(waitForHittable(customers))
+        customers.tap()
+
+        XCTAssertTrue(app.navigationBars["Customers"].waitForExistence(timeout: 3))
+        let createdCustomer = app.staticTexts["Offline QBO Customer"]
+        for _ in 0..<10 where !createdCustomer.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(createdCustomer.waitForExistence(timeout: 3))
+        let sync = app.buttons["Sync"]
+        XCTAssertTrue(sync.exists)
+        XCTAssertFalse(sync.isEnabled)
+    }
+
+    @MainActor
+    func testAdministratorCreatesVendorOfflineAndQueuesOneSafePublication() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Expenses"].tap()
+
+        let addVendor = app.buttons["Add Vendor"]
+        for _ in 0..<24 where !addVendor.isHittable {
+            app.swipeUp()
+        }
+        for _ in 0..<6 where !addVendor.isHittable {
+            app.swipeDown()
+        }
+        XCTAssertTrue(waitForHittable(addVendor))
+        XCTAssertTrue(addVendor.isEnabled)
+        addVendor.tap()
+
+        XCTAssertTrue(app.navigationBars["Add Vendor"].waitForExistence(timeout: 3))
+        let name = app.textFields["QuickBooksVendorName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 3))
+        replaceText(in: name, with: "Offline QBO Vendor")
+        let create = app.buttons["CreateQuickBooksVendor"]
+        XCTAssertTrue(create.exists)
+        XCTAssertTrue(create.isEnabled)
+        create.tap()
+
+        let composerDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.navigationBars["Add Vendor"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [composerDismissed], timeout: 3), .completed)
+
+        let result = app.staticTexts["QuickBooksActionMessage"]
+        XCTAssertTrue(waitForHittable(result))
+        XCTAssertEqual(
+            result.label,
+            "Saved Offline QBO Vendor locally. Connect QuickBooks, then publish it from the pending vendor queue."
+        )
+
+        let pendingCount = app.descendants(matching: .any)["PendingQuickBooksVendorCount"]
+        for _ in 0..<12 where !pendingCount.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(pendingCount))
+        XCTAssertEqual(pendingCount.label, "1 local vendor awaiting QuickBooks")
+
+        let publish = app.buttons["PublishPendingQuickBooksVendors"]
+        XCTAssertTrue(publish.exists)
+        XCTAssertFalse(publish.isEnabled)
+
+        for _ in 0..<6 where !addVendor.isHittable {
+            app.swipeDown()
+        }
+        XCTAssertTrue(waitForHittable(addVendor))
+        addVendor.tap()
+        XCTAssertTrue(app.navigationBars["Add Vendor"].waitForExistence(timeout: 3))
+        let duplicateName = app.textFields["QuickBooksVendorName"]
+        XCTAssertTrue(duplicateName.waitForExistence(timeout: 3))
+        replaceText(in: duplicateName, with: "Offline QBO Vendor")
+        app.buttons["CreateQuickBooksVendor"].tap()
+
+        let duplicateComposerDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.navigationBars["Add Vendor"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [duplicateComposerDismissed], timeout: 3), .completed)
+        XCTAssertTrue(waitForHittable(result))
+        XCTAssertEqual(
+            result.label,
+            "Offline QBO Vendor is already saved locally. Review it in the pending vendor queue before publishing."
+        )
+        XCTAssertEqual(pendingCount.label, "1 local vendor awaiting QuickBooks")
+    }
+
+    @MainActor
     func testQuickBooksManagementUsesFocusedAccountingWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -4436,8 +6014,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let quickBooks = app.staticTexts["QuickBooks Management"]
-        XCTAssertTrue(quickBooks.waitForExistence(timeout: 5))
+        let quickBooks = revealSidebarDestination("QuickBooks Management", in: app)
         quickBooks.tap()
         XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 3))
 
@@ -4445,24 +6022,61 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(workspacePicker.exists)
         XCTAssertTrue(workspacePicker.buttons["Overview"].isSelected)
         XCTAssertTrue(app.staticTexts["Connection"].exists)
-        XCTAssertTrue(app.staticTexts["Sync Health"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["QuickBooksWebhookPendingCount"].exists)
+        let syncHealth = app.staticTexts["Sync Health"]
+        for _ in 0..<5 where !syncHealth.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(syncHealth.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["QuickBooksWebhookPendingCount"].waitForExistence(timeout: 3)
+        )
 
-        workspacePicker.buttons["Sales"].tap()
-        XCTAssertTrue(workspacePicker.buttons["Sales"].isSelected)
-        XCTAssertTrue(app.staticTexts["Local Estimate Publication"].exists)
+        let salesWorkspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        for _ in 0..<8 where !salesWorkspacePicker.exists {
+            app.swipeDown()
+        }
+        XCTAssertTrue(salesWorkspacePicker.waitForExistence(timeout: 3))
+        let salesWorkspace = salesWorkspacePicker.buttons["Sales"]
+        XCTAssertTrue(waitForHittable(salesWorkspace))
+        salesWorkspace.tap()
+        XCTAssertTrue(salesWorkspace.isSelected)
+        let estimatePublication = app.staticTexts["Local Estimate Publication"]
+        for _ in 0..<5 where !estimatePublication.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(estimatePublication.waitForExistence(timeout: 3))
         let estimateQueue = app.buttons["Review 1 open estimate"]
-        XCTAssertTrue(estimateQueue.exists)
+        XCTAssertTrue(estimateQueue.waitForExistence(timeout: 3))
         estimateQueue.tap()
-        XCTAssertTrue(app.buttons["Recover or Publish"].waitForExistence(timeout: 3))
-        XCTAssertFalse(app.buttons["Recover or Publish"].isEnabled)
-        XCTAssertTrue(app.staticTexts["Local Invoice Publication"].exists)
+        let recoverEstimate = app.buttons["Recover or Publish"]
+        for _ in 0..<5 where !recoverEstimate.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(recoverEstimate.waitForExistence(timeout: 3))
+        XCTAssertFalse(recoverEstimate.isEnabled)
+        let invoicePublication = app.staticTexts["Local Invoice Publication"]
+        for _ in 0..<6 where !invoicePublication.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(invoicePublication.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Retry Publication"].exists)
+        let invoiceQueue = app.buttons["Review 1 pending invoice"]
+        for _ in 0..<3 where !invoiceQueue.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(invoiceQueue.waitForExistence(timeout: 3))
+        XCTAssertEqual(invoiceQueue.label, "Review 1 pending invoice")
+        invoiceQueue.tap()
         XCTAssertTrue(app.staticTexts["UI Test Collectible Customer"].exists)
         XCTAssertTrue(app.buttons["Retry Publication"].exists)
         XCTAssertFalse(app.buttons["Retry Publication"].isEnabled)
         XCTAssertTrue(app.buttons["Open Job Billing"].exists)
-        XCTAssertTrue(app.staticTexts["Pricebook Review"].exists)
-        XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].exists)
+        let pricebookReview = app.staticTexts["Pricebook Review"]
+        for _ in 0..<6 where !pricebookReview.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(pricebookReview.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].waitForExistence(timeout: 3))
         let approvePricebookItem = app.buttons["ApprovePricebookItem-\(catalogItemID)"]
         for _ in 0..<3 where !approvePricebookItem.exists {
             app.swipeUp()
@@ -4471,12 +6085,28 @@ final class GunnAire_OpsUITests: XCTestCase {
         approvePricebookItem.tap()
         XCTAssertTrue(app.staticTexts["No field-created catalog items need review."].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Customers"].exists)
-        XCTAssertTrue(app.staticTexts["Product Catalog"].exists)
+        XCTAssertTrue(app.staticTexts["Company Pricebook"].exists)
+        let quickBooksCatalog = app.staticTexts["QuickBooks Catalog"]
+        for _ in 0..<4 where !quickBooksCatalog.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(quickBooksCatalog.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Record QB Payment"].exists)
         XCTAssertFalse(app.staticTexts["Sync Health"].exists)
 
-        workspacePicker.buttons["Payments"].tap()
-        XCTAssertTrue(workspacePicker.buttons["Payments"].isSelected)
-        XCTAssertTrue(app.descendants(matching: .any)["QuickBooksLinkedPaymentMethods"].exists)
+        let paymentsWorkspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        for _ in 0..<12 where !paymentsWorkspacePicker.exists {
+            app.swipeDown()
+        }
+        XCTAssertTrue(paymentsWorkspacePicker.waitForExistence(timeout: 3))
+        paymentsWorkspacePicker.buttons["Payments"].tap()
+        XCTAssertTrue(paymentsWorkspacePicker.buttons["Payments"].isSelected)
+        XCTAssertTrue(app.buttons["Record Payment"].exists)
+        let linkedPaymentMethods = app.descendants(matching: .any)["QuickBooksLinkedPaymentMethods"]
+        for _ in 0..<8 where !linkedPaymentMethods.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(linkedPaymentMethods.waitForExistence(timeout: 3))
     }
 
     @MainActor
@@ -4588,6 +6218,105 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdministratorRestoresArchivedCatalogItemIntoExplicitQuickBooksReconciliation() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedArchivedCatalog",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let archivedSection = app.staticTexts["ArchivedPricebookSection"]
+        for _ in 0..<10 where !archivedSection.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(archivedSection.waitForExistence(timeout: 3))
+        let disclosure = app.buttons["Review 1 archived item"]
+        for _ in 0..<4 where !(disclosure.exists && disclosure.isHittable) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(disclosure))
+        disclosure.tap()
+        let archivedItem = app.staticTexts["Archived Blower Motor"]
+        for _ in 0..<4 where !archivedItem.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(archivedItem.waitForExistence(timeout: 3))
+
+        let restore = app.buttons["RestoreArchivedCatalogItem-\(archivedCatalogItemID)"]
+        for _ in 0..<4 where !restore.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(restore.waitForExistence(timeout: 3))
+        restore.tap()
+
+        let archivedRemoved = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: archivedSection
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [archivedRemoved], timeout: 3), .completed)
+        let comparisonWaiting = app.staticTexts["QuickBooksCatalogComparisonWaiting"]
+        for _ in 0..<12 where !comparisonWaiting.exists || !comparisonWaiting.isHittable {
+            app.swipeDown()
+        }
+        if !comparisonWaiting.exists || !comparisonWaiting.isHittable {
+            for _ in 0..<18 where !comparisonWaiting.exists || !comparisonWaiting.isHittable {
+                app.swipeUp()
+            }
+        }
+        XCTAssertTrue(comparisonWaiting.waitForExistence(timeout: 3))
+        XCTAssertTrue(comparisonWaiting.isHittable)
+        XCTAssertTrue(app.staticTexts["QBO QBO-UI-ARCHIVED-CATALOG • Staged locally"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testStagedCatalogUpdateRemainsVisibleWhileQuickBooksComparisonIsUnavailable() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedCatalogReconciliation",
+            "-uiTestCatalogComparisonUnavailable",
+            "-GunnAirePendingAppRoute", "quickBooksManagement"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let workspacePicker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        XCTAssertTrue(workspacePicker.waitForExistence(timeout: 3))
+        workspacePicker.buttons["Sales"].tap()
+
+        let waiting = app.staticTexts["QuickBooksCatalogComparisonWaiting"]
+        for _ in 0..<8 where !waiting.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(waiting.waitForExistence(timeout: 3))
+        XCTAssertEqual(waiting.label, "Waiting for a live QuickBooks comparison")
+        XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].exists)
+        XCTAssertTrue(app.staticTexts["QBO QBO-UI-CATALOG-RECONCILE • Staged locally"].exists)
+        XCTAssertTrue(app.staticTexts["The local changes remain saved and no QuickBooks update has been sent. Reconnect or refresh before choosing which version wins."].exists)
+        let refresh = app.buttons["RefreshQuickBooksCatalogComparison"]
+        XCTAssertTrue(refresh.exists)
+        XCTAssertFalse(refresh.isEnabled)
+        let catalogPublicationRetries = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "RetryCatalogPublication-")
+        )
+        XCTAssertEqual(catalogPublicationRetries.count, 0)
+    }
+
+    @MainActor
     func testAdministratorResolvesDuplicateQuickBooksCatalogMappingWithoutDeletingLocalItems() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -4642,12 +6371,12 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-enableSplashVideo", "NO",
             "-disableCloudKitForTesting",
             "-uiTestAuthenticatedAdmin",
+            "-uiTestForceQuickBooksDisconnected",
             "-uiTestSeedSyncRecovery"
         ]
         app.launch()
 
-        let syncIntegrations = app.staticTexts["Sync & Integrations"]
-        XCTAssertTrue(syncIntegrations.waitForExistence(timeout: 5))
+        let syncIntegrations = revealSidebarDestination("Sync & Integrations", in: app)
         syncIntegrations.tap()
         // On iPadOS 26 a nested NavigationStack inside the split view does not
         // consistently expose its title as an XCUI navigation bar. A unique
@@ -4656,9 +6385,15 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         let recoveryDisclosure = app.buttons["SyncRecoveryDisclosure"]
         XCTAssertTrue(recoveryDisclosure.waitForExistence(timeout: 3))
-        XCTAssertTrue(
-            recoveryDisclosure.label.contains("Review 3 sync items"),
-            "Unexpected recovery disclosure label: \(recoveryDisclosure.label)"
+        let recoveryCount = recoveryDisclosure.label
+            .split(separator: " ")
+            .dropFirst()
+            .first
+            .flatMap { Int($0) }
+        XCTAssertGreaterThanOrEqual(
+            recoveryCount ?? 0,
+            2,
+            "Expected at least the two seeded recovery items: \(recoveryDisclosure.label)"
         )
         recoveryDisclosure.tap()
 
@@ -4666,6 +6401,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         let pricebookRecovery = app.buttons["SyncRecoveryPricebook"]
         XCTAssertTrue(pricebookRecovery.exists)
         XCTAssertFalse(app.buttons["SyncRecoveryPayments"].exists)
+        XCTAssertFalse(app.buttons["SyncRecoveryCalendar"].exists)
 
         pricebookRecovery.tap()
         XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 3))
@@ -4674,14 +6410,14 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(workspacePicker.buttons["Sales"].isSelected)
         XCTAssertTrue(app.staticTexts["Catalog Publication"].exists)
 
-        let catalogDisclosure = app.descendants(matching: .any)["QuickBooksCatalogPublicationDisclosure"]
+        let catalogDisclosure = app.buttons["QuickBooksCatalogPublicationDisclosure"]
         for _ in 0..<4 where !catalogDisclosure.exists {
             app.swipeUp()
         }
         XCTAssertTrue(catalogDisclosure.waitForExistence(timeout: 3))
         catalogDisclosure.tap()
 
-        let retryCatalogPublication = app.buttons["Retry Catalog Publication"]
+        let retryCatalogPublication = app.buttons["Retry publication for HVAC Diagnostic Service"]
         XCTAssertTrue(app.staticTexts["HVAC Diagnostic Service"].waitForExistence(timeout: 3))
         XCTAssertTrue(retryCatalogPublication.exists)
         XCTAssertFalse(retryCatalogPublication.isEnabled)
@@ -4699,8 +6435,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let syncIntegrations = app.staticTexts["Sync & Integrations"]
-        XCTAssertTrue(syncIntegrations.waitForExistence(timeout: 5))
+        let syncIntegrations = revealSidebarDestination("Sync & Integrations", in: app)
         syncIntegrations.tap()
         XCTAssertTrue(app.staticTexts["Sync Status"].waitForExistence(timeout: 8))
 
@@ -4737,8 +6472,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let payments = app.staticTexts["Payments"]
-        XCTAssertTrue(payments.waitForExistence(timeout: 5))
+        let payments = revealSidebarDestination("Payments", in: app)
         payments.tap()
         XCTAssertTrue(app.navigationBars["Payments"].waitForExistence(timeout: 3))
 
@@ -4752,13 +6486,25 @@ final class GunnAire_OpsUITests: XCTestCase {
         workspacePicker.buttons["Collect"].tap()
         XCTAssertTrue(workspacePicker.buttons["Collect"].isSelected)
         XCTAssertTrue(app.staticTexts["Outstanding Invoices"].exists)
-        XCTAssertTrue(app.staticTexts["Record Payment"].exists)
+        let recordPayment = app.staticTexts["Record Payment"]
+        for _ in 0..<5 where !recordPayment.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(recordPayment.waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["Collections Dashboard"].exists)
 
-        workspacePicker.buttons["History"].tap()
-        XCTAssertTrue(workspacePicker.buttons["History"].isSelected)
-        XCTAssertTrue(app.staticTexts["Shared Field Collections"].exists)
-        XCTAssertTrue(app.staticTexts["Payment History"].exists)
+        for _ in 0..<6 {
+            app.swipeDown()
+        }
+        let historyWorkspace = app.segmentedControls["PaymentsWorkspacePicker"].buttons["History"]
+        XCTAssertTrue(waitForHittable(historyWorkspace))
+        historyWorkspace.tap()
+        let sharedCollections = app.staticTexts["Shared Field Collections"]
+        for _ in 0..<5 where !sharedCollections.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(sharedCollections.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Payment History"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["Outstanding Invoices"].exists)
     }
 
@@ -4797,11 +6543,20 @@ final class GunnAire_OpsUITests: XCTestCase {
         sendToFieldIPhone.tap()
 
         app.swipeDown()
-        let handoffStatus = app.staticTexts.containing(
-            NSPredicate(format: "label CONTAINS %@", "Payment handoff is ready")
-        ).firstMatch
+        let handoffStatus = app.descendants(matching: .any)["ActiveFieldPaymentHandoffStatus"]
         XCTAssertTrue(handoffStatus.waitForExistence(timeout: 5))
-        XCTAssertTrue(handoffStatus.label.contains("Tap to Pay on iPhone"))
+        XCTAssertTrue(handoffStatus.label.contains("Ready for nearby iPhone"))
+
+        let requirementsDetail = "Handoff requires the nearby iPad or Mac and iPhone to use the same approved business Apple Account, with Wi-Fi, Bluetooth, and Handoff enabled."
+        let handoffHelp = app.buttons["ActiveFieldPaymentHandoffHelp"]
+        XCTAssertTrue(handoffHelp.exists)
+        XCTAssertTrue(handoffHelp.label.contains("Handoff help"))
+        let requirementsText = app.staticTexts.matching(
+            NSPredicate(format: "label == %@", requirementsDetail)
+        ).firstMatch
+        XCTAssertFalse(requirementsText.exists)
+        handoffHelp.tap()
+        XCTAssertTrue(requirementsText.waitForExistence(timeout: 3))
 
         let stopFieldHandoff = app.buttons["Stop Field Handoff"]
         XCTAssertTrue(stopFieldHandoff.waitForExistence(timeout: 3))
@@ -4847,14 +6602,99 @@ final class GunnAire_OpsUITests: XCTestCase {
         let quickBooksInvoiceID = app.descendants(matching: .any)["ContactlessQuickBooksInvoiceID"]
         XCTAssertTrue(quickBooksInvoiceID.exists)
         XCTAssertTrue(quickBooksInvoiceID.label.contains("QBO-UI-INVOICE-189"))
-        XCTAssertTrue(app.buttons["Copy QuickBooks Invoice ID"].exists)
-        let quickBooksAppHandoff = app.descendants(matching: .any)["Open or Install QuickBooks Mobile"]
-        let goPaymentAppHandoff = app.descendants(matching: .any)["Open or Install GoPayment"]
+        let quickBooksAppHandoff = app.buttons["Copy Invoice ID & Open QuickBooks"]
+        let goPaymentAppHandoff = app.buttons["Copy Invoice ID & Open GoPayment"]
         for _ in 0..<3 where !quickBooksAppHandoff.exists || !goPaymentAppHandoff.exists {
             app.swipeUp()
         }
         XCTAssertTrue(quickBooksAppHandoff.exists)
         XCTAssertTrue(goPaymentAppHandoff.exists)
+        let collectionSteps = app.buttons["Show collection steps"]
+        XCTAssertTrue(collectionSteps.exists)
+        collectionSteps.tap()
+        let firstCollectionStep = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS[c] %@", "owner or company admin")
+        ).firstMatch
+        for _ in 0..<3 where !firstCollectionStep.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(firstCollectionStep.exists)
+        XCTAssertTrue(firstCollectionStep.label.localizedCaseInsensitiveContains("approved team members"))
+        let accountingInstruction = app.staticTexts["ContactlessAccountingVerificationInstruction"]
+        for _ in 0..<3 where !accountingInstruction.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(accountingInstruction.exists)
+        XCTAssertTrue(accountingInstruction.label.contains("Leave the invoice open. Accounting will verify"))
+        XCTAssertFalse(app.buttons["VerifyContactlessQuickBooksPayment"].exists)
+    }
+
+    @MainActor
+    func testFinancialContactlessGuideKeepsVerificationBesideTheHandoff() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO",
+            "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob",
+            "-uiTestSeedQuickBooksLinkedCollection",
+            "-uiTestForceQuickBooksDisconnected",
+            "-GunnAirePendingAppRoute", "payments",
+            "-GunnAirePendingInvoiceID", screenshotInvoiceID,
+            "-GunnAirePendingOpenPaymentCollection", "YES",
+            "-GunnAirePendingContactlessPaymentGuide", "YES"
+        ]
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Contactless Payment"].waitForExistence(timeout: 8))
+        let connectQuickBooks = app.buttons["ConnectQuickBooksForContactlessVerification"]
+        for _ in 0..<5 where !connectQuickBooks.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(connectQuickBooks.exists)
+        XCTAssertTrue(connectQuickBooks.isHittable)
+        XCTAssertFalse(app.buttons["VerifyContactlessQuickBooksPayment"].exists)
+        let recordVerifiedPayment = app.buttons["Record Cash, Check, or Another Verified Payment"]
+        for _ in 0..<3 where !recordVerifiedPayment.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(recordVerifiedPayment.exists)
+        XCTAssertTrue(recordVerifiedPayment.isHittable)
+
+        app.terminate()
+        app.launchArguments.removeAll { $0 == "-uiTestForceQuickBooksDisconnected" }
+        app.launchArguments.append("-uiTestForceQuickBooksConnected")
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Contactless Payment"].waitForExistence(timeout: 8))
+        let verifyPayment = app.buttons["VerifyContactlessQuickBooksPayment"]
+        for _ in 0..<5 where !verifyPayment.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(verifyPayment.exists)
+        XCTAssertTrue(verifyPayment.isEnabled)
+        XCTAssertTrue(verifyPayment.isHittable)
+        XCTAssertFalse(app.buttons["ConnectQuickBooksForContactlessVerification"].exists)
+
+        app.terminate()
+        app.launchArguments.removeAll {
+            $0 == "-uiTestAuthenticatedAdmin" || $0 == "-uiTestForceQuickBooksConnected"
+        }
+        app.launchArguments.append(contentsOf: [
+            "-uiTestAuthenticatedAccounting",
+            "-uiTestForceQuickBooksDisconnected"
+        ])
+        app.launch()
+
+        XCTAssertTrue(app.navigationBars["Contactless Payment"].waitForExistence(timeout: 8))
+        let adminConnectionInstruction = app.staticTexts["ContactlessQuickBooksAdminConnectionInstruction"]
+        for _ in 0..<5 where !adminConnectionInstruction.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(adminConnectionInstruction.exists)
+        XCTAssertFalse(app.buttons["ConnectQuickBooksForContactlessVerification"].exists)
+        XCTAssertFalse(app.buttons["VerifyContactlessQuickBooksPayment"].exists)
     }
 
     @MainActor
@@ -4967,8 +6807,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         ]
         app.launch()
 
-        let receiptsBills = app.staticTexts["Receipts & Bills"]
-        XCTAssertTrue(receiptsBills.waitForExistence(timeout: 5))
+        let receiptsBills = revealSidebarDestination("Receipts & Bills", in: app)
         receiptsBills.tap()
         XCTAssertTrue(app.navigationBars["Receipts & Bills"].waitForExistence(timeout: 3))
 
@@ -5043,14 +6882,17 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(count.waitForExistence(timeout: 3))
         count.tap()
         count.typeText("2.5")
+        let doneEditingCount = app.buttons["Done Editing Inventory Count"]
+        XCTAssertTrue(doneEditingCount.waitForExistence(timeout: 3))
+        doneEditingCount.tap()
 
         let reason = app.textFields["InventoryCountReason"]
         XCTAssertTrue(reason.waitForExistence(timeout: 3))
+        XCTAssertTrue(reason.isHittable)
         reason.tap()
         reason.typeText("Damaged during truck bin inspection")
-        if app.keyboards.buttons["Hide keyboard"].exists {
-            app.keyboards.buttons["Hide keyboard"].tap()
-        }
+        XCTAssertTrue(doneEditingCount.waitForExistence(timeout: 3))
+        doneEditingCount.tap()
 
         let save = app.buttons["SaveInventoryCount"]
         XCTAssertTrue(save.isEnabled)
@@ -5095,17 +6937,31 @@ final class GunnAire_OpsUITests: XCTestCase {
                 workspace.buttons["Systems"].tap()
                 XCTAssertTrue(app.staticTexts["Equipment Profiles"].waitForExistence(timeout: 3))
                 let editEquipment = app.buttons["EditEquipment-\(screenshotEquipmentID)"]
+                let assetLabel = app.buttons["EquipmentAssetLabel-\(screenshotEquipmentID)"]
+                let actionsMenu = app.buttons["EquipmentActionsMenu-\(screenshotEquipmentID)"]
                 let customerForm = app.collectionViews.firstMatch
+                let visibleCustomerFormBottom = customerForm.frame.maxY - 80
                 for _ in 0..<10 {
-                    if editEquipment.waitForExistence(timeout: 1), editEquipment.isHittable {
+                    if editEquipment.waitForExistence(timeout: 1),
+                       editEquipment.isHittable,
+                       assetLabel.exists,
+                       assetLabel.isHittable,
+                       actionsMenu.exists,
+                       actionsMenu.isHittable,
+                       actionsMenu.frame.midY < visibleCustomerFormBottom {
                         break
                     }
                     customerForm.swipeUp()
                 }
                 XCTAssertTrue(editEquipment.waitForExistence(timeout: 5))
                 XCTAssertTrue(editEquipment.isHittable)
-                editEquipment.tap()
-                XCTAssertTrue(app.staticTexts["Heat Pump"].waitForExistence(timeout: 3))
+                XCTAssertTrue(assetLabel.exists)
+                XCTAssertTrue(assetLabel.isHittable)
+                XCTAssertTrue(actionsMenu.exists)
+                XCTAssertTrue(actionsMenu.isHittable)
+                XCTAssertLessThan(actionsMenu.frame.midY, visibleCustomerFormBottom)
+                XCTAssertFalse(app.buttons["EquipmentStatus-\(screenshotEquipmentID)"].exists)
+                XCTAssertFalse(app.buttons["DeleteEquipment-\(screenshotEquipmentID)"].exists)
             }
         )
         captureAppStoreScreenshot(
@@ -5121,7 +6977,19 @@ final class GunnAire_OpsUITests: XCTestCase {
                 "-GunnAirePendingInvoiceID", screenshotInvoiceID,
                 "-GunnAirePendingOpenPaymentCollection", "YES"
             ],
-            expectedNavigationTitle: "Record Payment"
+            expectedNavigationTitle: "Record Payment",
+            afterLaunch: { app in
+                let staleServerError = app.staticTexts.matching(
+                    NSPredicate(
+                        format: "label CONTAINS[c] %@",
+                        "before accessing the shared business server"
+                    )
+                ).firstMatch
+                XCTAssertFalse(
+                    staleServerError.exists,
+                    "App Store payment fixture exposed a stale shared-server authentication error"
+                )
+            }
         )
         captureAppStoreScreenshot(
             name: "06-quickbooks-sales",
@@ -5151,6 +7019,10 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-disableCloudKitForTesting",
             "-appStoreScreenshotFixtures"
         ]
+        // Keep App Store fixture capture deterministic without changing the
+        // production app. An unsupported test-process auth mode makes the
+        // shared backend intentionally unconfigured for these launches only.
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
         if let route {
             app.launchArguments += ["-GunnAirePendingAppRoute", route]
         }
@@ -5172,17 +7044,110 @@ final class GunnAire_OpsUITests: XCTestCase {
             "App window did not finish rotating for screenshot \(name)"
         )
         afterLaunch(app)
+        refreshPersistentSidebarIfNeeded(app, screenshotName: name)
+        waitForAppStoreScreenshotSurfaceToSettle(app, screenshotName: name)
 
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        if accountIdentity.exists {
+            XCTAssertEqual(
+                accountIdentity.label,
+                "Administrator",
+                "App Store screenshot \(name) did not retain the role-only account context"
+            )
+            XCTAssertFalse(
+                accountIdentity.label.contains("@"),
+                "App Store screenshot \(name) exposed an account address"
+            )
+        }
         XCTAssertFalse(
-            app.descendants(matching: .any)["SidebarAccountIdentity"].exists,
-            "App Store screenshot \(name) exposed the signed-in account identity"
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS[c] '@gunnaire.com'")
+            ).firstMatch.exists,
+            "App Store screenshot \(name) exposed a GunnAire account address"
         )
+        waitForSystemBannerToClear(beforeCapturing: name)
 
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
         app.terminate()
+    }
+
+    @MainActor
+    private func refreshPersistentSidebarIfNeeded(
+        _ app: XCUIApplication,
+        screenshotName: String
+    ) {
+        // On iPad, a rapid fixture relaunch can occasionally leave the
+        // system-owned split-view column in an intermediate clipping mask
+        // even though the requested route is ready. Close and reopen the
+        // persistent sidebar through its native control so every retained
+        // image reflects the normal settled layout.
+        let accountIdentity = app.staticTexts["SidebarAccountIdentity"]
+        guard accountIdentity.exists, accountIdentity.isHittable else { return }
+
+        let sidebarButton = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "sidebar")
+        ).firstMatch
+        guard sidebarButton.waitForExistence(timeout: 2) else { return }
+        sidebarButton.tap()
+
+        let reopenedSidebarButton = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "sidebar")
+        ).firstMatch
+        XCTAssertTrue(reopenedSidebarButton.waitForExistence(timeout: 2))
+        reopenedSidebarButton.tap()
+        XCTAssertTrue(
+            accountIdentity.waitForExistence(timeout: 3) && accountIdentity.isHittable,
+            "Persistent iPad sidebar did not reopen for \(screenshotName)"
+        )
+    }
+
+    @MainActor
+    private func waitForAppStoreScreenshotSurfaceToSettle(
+        _ app: XCUIApplication,
+        screenshotName: String
+    ) {
+        // Route restoration and split-view disclosure can report the expected
+        // navigation bar before their visual transition has completed. Wait
+        // through a short stable window so retained App Store evidence cannot
+        // capture clipped sidebar labels or a partially shifted phone route.
+        // The iOS simulator can finish the app's transition while SpringBoard
+        // is still repositioning the status bar after a rapid terminate/launch
+        // cycle. Four seconds consistently spans both surfaces.
+        let readyAt = Date().addingTimeInterval(4)
+        let window = app.windows.firstMatch
+        let settled = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                Date() >= readyAt &&
+                    window.exists &&
+                    window.frame.height > window.frame.width
+            },
+            object: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [settled], timeout: 6),
+            .completed,
+            "App Store screenshot surface did not settle for \(screenshotName)"
+        )
+    }
+
+    @MainActor
+    private func waitForSystemBannerToClear(beforeCapturing screenshotName: String) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let banner = springboard.descendants(matching: .any)["NotificationShortLookView"]
+        guard banner.exists else { return }
+
+        let bannerCleared = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: banner
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [bannerCleared], timeout: 12),
+            .completed,
+            "System notification obscured App Store screenshot \(screenshotName)"
+        )
     }
 
     @MainActor

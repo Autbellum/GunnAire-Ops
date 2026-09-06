@@ -33,7 +33,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.02.17"
+SERVICE_VERSION = "2026.09.03.18"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -101,6 +101,10 @@ QBO_ENVIRONMENT = os.environ.get("GUNNAIRE_QBO_ENVIRONMENT", "sandbox").strip().
 QBO_TOKEN_ENCRYPTION_KEY = os.environ.get("GUNNAIRE_QBO_TOKEN_ENCRYPTION_KEY", "").strip()
 QBO_WEBHOOK_VERIFIER_TOKEN = os.environ.get("GUNNAIRE_QBO_WEBHOOK_VERIFIER_TOKEN", "").strip()
 QBO_WEBHOOK_MAX_BYTES = min(max(int(os.environ.get("GUNNAIRE_QBO_WEBHOOK_MAX_BYTES", str(1024 * 1024))), 1024), 5 * 1024 * 1024)
+CUSTOMER_PORTAL_RESPONSE_MAX_BYTES = min(
+    max(int(os.environ.get("GUNNAIRE_CUSTOMER_PORTAL_RESPONSE_MAX_BYTES", "4096")), 512),
+    16 * 1024,
+)
 QBO_TOKEN_ENDPOINT = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 QBO_REVOCATION_ENDPOINT = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
 QBO_ACCOUNTING_REFERENCE_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
@@ -2134,6 +2138,17 @@ def initialize_database() -> None:
                 appointment_summary TEXT,
                 invoice_reference TEXT,
                 balance_due REAL,
+                estimate_id TEXT,
+                estimate_label TEXT,
+                estimate_amount REAL,
+                estimate_revision TEXT,
+                estimate_response_id TEXT,
+                estimate_response_name TEXT,
+                estimate_responded_at TEXT,
+                estimate_resolution_status TEXT,
+                estimate_resolution_detail TEXT,
+                estimate_resolved_at TEXT,
+                estimate_resolved_by TEXT,
                 expires_at TEXT NOT NULL,
                 revoked_at TEXT,
                 opened_count INTEGER NOT NULL DEFAULT 0,
@@ -2145,6 +2160,17 @@ def initialize_database() -> None:
         )
         ensure_column(connection, "customer_portal_links", "opened_count", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(connection, "customer_portal_links", "last_opened_at", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_id", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_label", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_amount", "REAL")
+        ensure_column(connection, "customer_portal_links", "estimate_revision", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_response_id", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_response_name", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_responded_at", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_resolution_status", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_resolution_detail", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_resolved_at", "TEXT")
+        ensure_column(connection, "customer_portal_links", "estimate_resolved_by", "TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS qbo_connections (
@@ -2896,6 +2922,17 @@ def customer_portal_link_record(row: sqlite3.Row) -> dict[str, object]:
         "appointmentSummary": row["appointment_summary"],
         "invoiceReference": row["invoice_reference"],
         "balanceDue": row["balance_due"],
+        "estimateID": row["estimate_id"],
+        "estimateLabel": row["estimate_label"],
+        "estimateAmount": row["estimate_amount"],
+        "estimateRevision": row["estimate_revision"],
+        "estimateResponseID": row["estimate_response_id"],
+        "estimateResponseName": row["estimate_response_name"],
+        "estimateRespondedAt": row["estimate_responded_at"],
+        "estimateResolutionStatus": row["estimate_resolution_status"],
+        "estimateResolutionDetail": row["estimate_resolution_detail"],
+        "estimateResolvedAt": row["estimate_resolved_at"],
+        "estimateResolvedBy": row["estimate_resolved_by"],
         "expiresAt": row["expires_at"],
         "revokedAt": row["revoked_at"],
         "openedCount": max(int(row["opened_count"] or 0), 0),
@@ -3187,6 +3224,12 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/portal/") and parsed.path.endswith("/estimate-response"):
+            token = unquote(
+                parsed.path.removeprefix("/portal/").removesuffix("/estimate-response")
+            ).strip("/")
+            self.record_customer_portal_estimate_response(token)
+            return
         if parsed.path == "/api/qbo/webhooks":
             self.receive_qbo_webhook()
             return
@@ -3246,6 +3289,15 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             if not self.require_admin():
                 return
             self.create_customer_portal_link()
+            return
+        if parsed.path.startswith("/api/customer-portal-links/") and parsed.path.endswith("/estimate-response-resolution"):
+            if not self.require_admin():
+                return
+            link_id = unquote(
+                parsed.path.removeprefix("/api/customer-portal-links/")
+                .removesuffix("/estimate-response-resolution")
+            ).strip("/")
+            self.resolve_customer_portal_estimate_response(link_id)
             return
         if parsed.path.startswith("/api/service-requests/") and parsed.path.endswith("/claim"):
             if not self.require_dispatch_access():
@@ -3921,7 +3973,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         text_fields = (
             "customerName", "customerEmail", "serviceCallID", "invoiceID",
-            "title", "appointmentSummary", "invoiceReference",
+            "title", "appointmentSummary", "invoiceReference", "estimateID",
+            "estimateLabel", "estimateRevision",
         )
         if any(payload.get(key) is not None and not isinstance(payload.get(key), str) for key in text_fields):
             self.write_json({"error": "Portal link text fields are invalid"}, status=HTTPStatus.BAD_REQUEST)
@@ -3934,6 +3987,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         title = (payload.get("title") or "GunnAire service update").strip()
         appointment_summary = (payload.get("appointmentSummary") or "").strip() or None
         invoice_reference = (payload.get("invoiceReference") or "").strip() or None
+        estimate_id = (payload.get("estimateID") or "").strip() or None
+        estimate_label = (payload.get("estimateLabel") or "").strip() or None
+        estimate_revision = (payload.get("estimateRevision") or "").strip().lower() or None
 
         if not customer_name or not is_valid_email(customer_email) or not (service_call_id or invoice_id):
             self.write_json({"error": "Customer, email, and a job or invoice reference are required"}, status=HTTPStatus.BAD_REQUEST)
@@ -3941,10 +3997,11 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         try:
             service_call_id = str(uuid.UUID(service_call_id)) if service_call_id else None
             invoice_id = str(uuid.UUID(invoice_id)) if invoice_id else None
+            estimate_id = str(uuid.UUID(estimate_id)) if estimate_id else None
         except ValueError:
-            self.write_json({"error": "Job and invoice references must be valid UUIDs"}, status=HTTPStatus.BAD_REQUEST)
+            self.write_json({"error": "Job, invoice, and estimate references must be valid UUIDs"}, status=HTTPStatus.BAD_REQUEST)
             return
-        if any(len(value) > limit for value, limit in ((customer_name, 300), (customer_email, 254), (title, 200), (appointment_summary or "", 600), (invoice_reference or "", 160), (service_call_id or "", 80), (invoice_id or "", 80))):
+        if any(len(value) > limit for value, limit in ((customer_name, 300), (customer_email, 254), (title, 200), (appointment_summary or "", 600), (invoice_reference or "", 160), (service_call_id or "", 80), (invoice_id or "", 80), (estimate_id or "", 80), (estimate_label or "", 100), (estimate_revision or "", 64))):
             self.write_json({"error": "Portal link fields are too long"}, status=HTTPStatus.BAD_REQUEST)
             return
 
@@ -3959,6 +4016,34 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 self.write_json({"error": "Balance due must be a non-negative amount"}, status=HTTPStatus.BAD_REQUEST)
                 return
             balance_due = round(balance_due, 2)
+
+        raw_estimate_amount = payload.get("estimateAmount")
+        estimate_amount: float | None = None
+        estimate_fields_present = (
+            estimate_id is not None,
+            estimate_label is not None,
+            raw_estimate_amount is not None,
+            estimate_revision is not None,
+        )
+        if any(estimate_fields_present) and not all(estimate_fields_present):
+            self.write_json({"error": "Estimate approval links require an exact estimate snapshot"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if all(estimate_fields_present):
+            if (
+                isinstance(raw_estimate_amount, bool)
+                or not isinstance(raw_estimate_amount, (int, float))
+            ):
+                self.write_json({"error": "Estimate amount is invalid"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            estimate_amount = float(raw_estimate_amount)
+            if (
+                not math.isfinite(estimate_amount)
+                or not 0 <= estimate_amount <= 999_999_999.99
+                or re.fullmatch(r"[0-9a-f]{64}", estimate_revision or "") is None
+            ):
+                self.write_json({"error": "Estimate approval snapshot is invalid"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            estimate_amount = round(estimate_amount, 2)
 
         requested_days = payload.get("expiresInDays", 14)
         if isinstance(requested_days, bool):
@@ -3987,11 +4072,17 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 """
                 INSERT INTO customer_portal_links(
                     id, token_hash, customer_name, customer_email, service_call_id, invoice_id,
-                    title, appointment_summary, invoice_reference, balance_due, expires_at,
-                    created_at, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    title, appointment_summary, invoice_reference, balance_due,
+                    estimate_id, estimate_label, estimate_amount, estimate_revision,
+                    expires_at, created_at, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (link_id, portal_token_hash(token), customer_name, customer_email, service_call_id, invoice_id, title, appointment_summary, invoice_reference, balance_due, expires_at, created_at, actor),
+                (
+                    link_id, portal_token_hash(token), customer_name, customer_email,
+                    service_call_id, invoice_id, title, appointment_summary,
+                    invoice_reference, balance_due, estimate_id, estimate_label,
+                    estimate_amount, estimate_revision, expires_at, created_at, actor,
+                ),
             )
         record_audit_event(actor, "create", "customer-portal-link", link_id)
         self.write_json({"id": link_id, "url": portal_url(token), "expiresAt": expires_at}, status=HTTPStatus.CREATED)
@@ -4033,7 +4124,38 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         items = [("Appointment", row["appointment_summary"]), ("Invoice", row["invoice_reference"])]
         if row["balance_due"] is not None:
             items.append(("Balance due", f"${float(row['balance_due']):,.2f}"))
+        if row["estimate_id"] is not None:
+            items.append(
+                (
+                    "Estimate",
+                    f"{row['estimate_label']} — ${float(row['estimate_amount']):,.2f}",
+                )
+            )
         detail_rows = "".join(f"<dt>{html.escape(label)}</dt><dd>{html.escape(str(value))}</dd>" for label, value in items if value)
+        if row["estimate_id"] is None:
+            estimate_action = "<p>Please contact GunnAire to request changes or ask a question.</p>"
+        elif row["estimate_response_id"] is not None:
+            estimate_action = (
+                "<section class=\"decision confirmed\" aria-labelledby=\"approval-title\">"
+                "<h2 id=\"approval-title\">Estimate approved</h2>"
+                f"<p>Approval was recorded for {html.escape(str(row['estimate_response_name']))} "
+                f"on <time datetime=\"{html.escape(str(row['estimate_responded_at']))}\">"
+                f"{html.escape(str(row['estimate_responded_at']))}</time>.</p>"
+                "<p>GunnAire will review the approval and contact you with the next step.</p></section>"
+            )
+        else:
+            response_path = f"/portal/{token}/estimate-response"
+            estimate_action = f"""
+<section class="decision" aria-labelledby="approval-title">
+<h2 id="approval-title">Approve this estimate</h2>
+<p>Confirm the exact estimate and amount shown above. Approval authorizes GunnAire to proceed with that scope; scheduling and payment remain separate.</p>
+<form method="post" action="{html.escape(response_path, quote=True)}">
+<label for="approval-name">Your full name</label>
+<input id="approval-name" name="approvalName" type="text" maxlength="120" autocomplete="name" required>
+<label class="check"><input name="approvalConfirmed" type="checkbox" value="yes" required> I approve this estimate and understand that GunnAire will contact me about scheduling.</label>
+<button type="submit">Approve estimate</button>
+</form></section>
+"""
         content = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -4041,12 +4163,15 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>GunnAire service update</title>
-<style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:42rem;margin:clamp(1rem,7vw,3rem) auto;padding:0 1.25rem;color:CanvasText;background:Canvas}}main{{border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:16px;padding:clamp(1.25rem,5vw,2rem);box-shadow:0 12px 32px color-mix(in srgb,CanvasText 8%,transparent)}}h1{{font-size:clamp(1.55rem,5vw,2.2rem);line-height:1.15}}dt{{font-weight:650;margin-top:1rem}}dd{{margin:.25rem 0}}small{{color:color-mix(in srgb,CanvasText 65%,transparent);line-height:1.45}} </style>
+<style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:42rem;margin:clamp(1rem,7vw,3rem) auto;padding:0 1.25rem;color:CanvasText;background:Canvas}}main{{border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:16px;padding:clamp(1.25rem,5vw,2rem);box-shadow:0 12px 32px color-mix(in srgb,CanvasText 8%,transparent)}}h1{{font-size:clamp(1.55rem,5vw,2.2rem);line-height:1.15}}h2{{font-size:1.2rem}}dt{{font-weight:650;margin-top:1rem}}dd{{margin:.25rem 0}}.decision{{border-top:1px solid color-mix(in srgb,CanvasText 18%,transparent);margin-top:1.5rem;padding-top:.5rem}}label{{display:block;font-weight:650;margin:.9rem 0 .35rem}}input[type=text]{{box-sizing:border-box;width:100%;font:inherit;padding:.7rem;border:1px solid color-mix(in srgb,CanvasText 35%,transparent);border-radius:8px;background:Canvas;color:CanvasText}}.check{{display:flex;gap:.55rem;align-items:flex-start;font-weight:400;line-height:1.4}}.check input{{margin-top:.25rem}}button{{font:inherit;font-weight:700;padding:.75rem 1rem;border:0;border-radius:10px;background:#d7a928;color:#111;cursor:pointer}}small{{display:block;margin-top:1.5rem;color:color-mix(in srgb,CanvasText 65%,transparent);line-height:1.45}}</style>
 </head>
-<body><main aria-labelledby="portal-title"><h1 id="portal-title">{html.escape(str(row['title']))}</h1><p>Hello {html.escape(str(row['customer_name']))},</p><dl>{detail_rows}</dl><p>Please contact GunnAire to request changes or ask a question.</p><small>This secure link expires <time datetime="{html.escape(str(row['expires_at']))}">{html.escape(str(row['expires_at']))}</time>. Do not forward it.</small></main></body>
+<body><main aria-labelledby="portal-title"><h1 id="portal-title">{html.escape(str(row['title']))}</h1><p>Hello {html.escape(str(row['customer_name']))},</p><dl>{detail_rows}</dl>{estimate_action}<small>This secure link expires <time datetime="{html.escape(str(row['expires_at']))}">{html.escape(str(row['expires_at']))}</time>. Do not forward it.</small></main></body>
 </html>"""
+        self.write_customer_portal_html(content)
+
+    def write_customer_portal_html(self, content: str, status: HTTPStatus = HTTPStatus.OK) -> None:
         data = content.encode("utf-8")
-        self.send_response(HTTPStatus.OK)
+        self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
@@ -4058,10 +4183,170 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
         )
         self.end_headers()
         self.wfile.write(data)
+
+    def record_customer_portal_estimate_response(self, token: str) -> None:
+        if (
+            not CUSTOMER_PORTAL_ENABLED
+            or customer_portal_origin() is None
+            or re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token) is None
+        ):
+            self.write_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            content_length = 0
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/x-www-form-urlencoded" or not 1 <= content_length <= CUSTOMER_PORTAL_RESPONSE_MAX_BYTES:
+            self.write_json({"error": "Invalid approval response"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        try:
+            body = self.rfile.read(content_length).decode("utf-8")
+            fields = urllib.parse.parse_qs(
+                body,
+                keep_blank_values=True,
+                strict_parsing=True,
+                max_num_fields=4,
+            )
+        except (UnicodeDecodeError, ValueError):
+            self.write_json({"error": "Invalid approval response"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        names = fields.get("approvalName", [])
+        confirmations = fields.get("approvalConfirmed", [])
+        if len(names) != 1 or len(confirmations) != 1:
+            self.write_json({"error": "Name and approval confirmation are required"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+        approval_name = names[0].strip()
+        if (
+            not approval_name
+            or len(approval_name) > 120
+            or any(ord(character) < 32 or ord(character) == 127 for character in approval_name)
+            or confirmations[0] != "yes"
+        ):
+            self.write_json({"error": "Name and approval confirmation are required"}, status=HTTPStatus.BAD_REQUEST, require_auth=False)
+            return
+
+        with db() as connection:
+            row = connection.execute(
+                "SELECT * FROM customer_portal_links WHERE token_hash = ? AND revoked_at IS NULL",
+                (portal_token_hash(token),),
+            ).fetchone()
+            try:
+                expires_at = datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00")) if row is not None else None
+            except (TypeError, ValueError):
+                expires_at = None
+            if expires_at is not None and expires_at.tzinfo is None:
+                expires_at = None
+            if (
+                row is None
+                or expires_at is None
+                or expires_at <= datetime.now(timezone.utc)
+                or row["estimate_id"] is None
+            ):
+                self.write_json({"error": "This approval link is unavailable"}, status=HTTPStatus.NOT_FOUND, require_auth=False)
+                return
+            if row["estimate_response_id"] is None:
+                response_id = str(uuid.uuid4())
+                responded_at = utc_now()
+                updated = connection.execute(
+                    """
+                    UPDATE customer_portal_links
+                    SET estimate_response_id = ?, estimate_response_name = ?,
+                        estimate_responded_at = ?, estimate_resolution_status = 'pending'
+                    WHERE id = ? AND revoked_at IS NULL AND estimate_response_id IS NULL
+                    """,
+                    (response_id, approval_name, responded_at, row["id"]),
+                ).rowcount
+                if updated != 1:
+                    concurrent_row = connection.execute(
+                        "SELECT estimate_response_id FROM customer_portal_links WHERE id = ?",
+                        (row["id"],),
+                    ).fetchone()
+                    if concurrent_row is None or concurrent_row["estimate_response_id"] is None:
+                        self.write_json({"error": "Approval could not be recorded"}, status=HTTPStatus.CONFLICT, require_auth=False)
+                        return
+            row = connection.execute(
+                "SELECT * FROM customer_portal_links WHERE token_hash = ?",
+                (portal_token_hash(token),),
+            ).fetchone()
+
+        content = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Estimate approved</title><style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:40rem;margin:clamp(1rem,8vw,4rem) auto;padding:0 1.25rem;color:CanvasText;background:Canvas}}main{{border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:16px;padding:clamp(1.25rem,5vw,2rem)}}h1{{font-size:clamp(1.55rem,5vw,2.2rem);line-height:1.15}}small{{color:color-mix(in srgb,CanvasText 65%,transparent)}}</style></head>
+<body><main><h1>Estimate approved</h1><p>Thank you, {html.escape(str(row['estimate_response_name']))}. Your approval of {html.escape(str(row['estimate_label']))} for ${float(row['estimate_amount']):,.2f} was recorded.</p><p>GunnAire will review the approval and contact you about scheduling.</p><small>You can close this page.</small></main></body></html>"""
+        self.write_customer_portal_html(content)
+
+    def resolve_customer_portal_estimate_response(self, link_id: str) -> None:
+        try:
+            link_id = str(uuid.UUID(link_id.strip()))
+        except (AttributeError, ValueError):
+            self.write_json({"error": "Invalid portal link"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            payload = self.read_json()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            self.write_json({"error": "Invalid JSON"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if not isinstance(payload, dict):
+            self.write_json({"error": "Resolution body must be an object"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        response_id = payload.get("responseID")
+        status = payload.get("status")
+        detail = payload.get("detail")
+        if (
+            not isinstance(response_id, str)
+            or not isinstance(status, str)
+            or (detail is not None and not isinstance(detail, str))
+        ):
+            self.write_json({"error": "Resolution fields are invalid"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            response_id = str(uuid.UUID(response_id.strip()))
+        except ValueError:
+            self.write_json({"error": "Invalid response reference"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        status = status.strip().lower()
+        detail = (detail or "").strip() or None
+        if status not in {"applied", "needs_attention"} or (detail is not None and len(detail) > 300):
+            self.write_json({"error": "Invalid resolution"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if status == "needs_attention" and detail is None:
+            self.write_json({"error": "Attention resolutions require a safe detail"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        principal = self.principal() or {}
+        actor = principal.get("email") if isinstance(principal.get("email"), str) else "unknown"
+        with db() as connection:
+            row = connection.execute(
+                "SELECT * FROM customer_portal_links WHERE id = ?",
+                (link_id,),
+            ).fetchone()
+            if row is None or row["estimate_response_id"] != response_id:
+                self.write_json({"error": "Portal approval response not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            if row["estimate_resolution_status"] == "applied" and status != "applied":
+                self.write_json({"error": "An applied approval cannot be downgraded"}, status=HTTPStatus.CONFLICT)
+                return
+            resolved_at = row["estimate_resolved_at"] if row["estimate_resolution_status"] == "applied" else utc_now()
+            resolved_by = row["estimate_resolved_by"] if row["estimate_resolution_status"] == "applied" else actor
+            connection.execute(
+                """
+                UPDATE customer_portal_links
+                SET estimate_resolution_status = ?, estimate_resolution_detail = ?,
+                    estimate_resolved_at = ?, estimate_resolved_by = ?
+                WHERE id = ? AND estimate_response_id = ?
+                """,
+                (status, detail, resolved_at, resolved_by, link_id, response_id),
+            )
+            updated_row = connection.execute(
+                "SELECT * FROM customer_portal_links WHERE id = ?",
+                (link_id,),
+            ).fetchone()
+        record_audit_event(actor, f"estimate-approval-{status}", "customer-portal-link", link_id)
+        self.write_json(customer_portal_link_record(updated_row))
 
     def store_public_service_request(self) -> None:
         if not PUBLIC_BOOKING_ENABLED:
