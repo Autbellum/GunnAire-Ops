@@ -2653,6 +2653,7 @@ private struct CustomerEditorView: View {
     @State private var maintenanceAgreementCancellationReason = ""
     @State private var customerActionMessage: String?
     @State private var isSyncingCustomer = false
+    @State private var customerPublicationOwner: CustomerPublicationWorkflow?
     @State private var showingDeleteConfirmation = false
     @State private var equipmentPendingDeletion: CustomerEquipment?
     @State private var showingCustomerFileImporter = false
@@ -3743,6 +3744,13 @@ private struct CustomerEditorView: View {
                             Label(isSyncingCustomer ? "Syncing Customer" : "Sync Customer to QuickBooks", systemImage: "arrow.triangle.2.circlepath")
                         }
                         .disabled(isSyncingCustomer || !QuickBooksDataAPI.shared.isAuthenticated)
+                        NavigationLink {
+                            CustomerPublicationReviewView(customer: customer, context: modelContext)
+                        } label: {
+                            Label("Customer sync review", systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
+                        }
+                        .disabled(isSyncingCustomer)
+                        .accessibilityIdentifier("OpenCustomerPublicationReview")
                     }
 
                     if canDeleteCustomerRecords {
@@ -3760,6 +3768,7 @@ private struct CustomerEditorView: View {
                 }
             }
             .navigationTitle(canEditCustomerRecords ? "Edit Customer" : "Customer Record")
+            .onDisappear { customerPublicationOwner?.cancel() }
             .onAppear {
                 if selectedWorkspace == .files,
                    canViewFinancials,
@@ -5680,27 +5689,20 @@ private struct CustomerEditorView: View {
             customerActionMessage = "Connect QuickBooks before syncing this customer."
             return
         }
-        isSyncingCustomer = true
-        customerActionMessage = "Reconciling \(customer.name) with QuickBooks..."
-        QuickBooksDataAPI.shared.recoverOrCreateCustomer(
-            QuickBooksCustomerCreateOperation.draft(for: customer)
-        ) { result in
-            DispatchQueue.main.async {
-                isSyncingCustomer = false
-                switch result {
-                case .success(let quickBooksCustomer):
-                    customer.quickBooksID = quickBooksCustomer.Id
-                    do {
-                        try modelContext.save()
-                        customerActionMessage = "\(customer.name) is linked to QuickBooks."
-                    } catch {
-                        customerActionMessage = "QuickBooks linked \(customer.name), but the local confirmation could not be saved: \(error.localizedDescription)"
-                    }
-                case .failure(let error):
-                    customerActionMessage = "QuickBooks customer sync failed: \(error.localizedDescription)"
-                }
+        guard !isSyncingCustomer else { return }
+        do {
+            let owner = try CustomerPublicationWorkflow(customer: customer, context: modelContext, api: .shared)
+            customerPublicationOwner = owner
+            isSyncingCustomer = true
+            customerActionMessage = "Reconciling the saved customer with QuickBooks…"
+            Task { @MainActor in
+                defer { isSyncingCustomer = false; customerPublicationOwner = nil }
+                do {
+                    try await owner.publish()
+                    customerActionMessage = "Customer linked to QuickBooks. Saved contact details were kept."
+                } catch { customerActionMessage = error.localizedDescription }
             }
-        }
+        } catch { customerActionMessage = error.localizedDescription }
     }
 
     private func perform(_ action: CustomerIntelligenceAction) {

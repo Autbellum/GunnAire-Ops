@@ -18,10 +18,13 @@ struct QuickBooksBillingWorkflowTests {
         var documents: [[String: Any]] = []
         var customers: [[String: Any]] = []
         var remoteItems: [[String: Any]] = []
+        var customerPublisher: CustomerPublicationBoundary.Transport?
         var beforeResponse: ((URLRequest) throws -> Void)?
         var transformDocument: (([String: Any]) -> [String: Any])?
         lazy var api = QuickBooksDataAPI(testTokens: .init(accessToken: "billing-fixture", expiration: .distantFuture),
-            realmID: "billing-realm", environment: Config.QuickBooks.environment) { [unowned self] request in
+            realmID: "billing-realm", environment: Config.QuickBooks.environment,
+            catalogCompanyID: UUID(uuidString: "10000000-0000-4000-8000-000000000001"),
+            customerPublisher: customerPublisher) { [unowned self] request in
                 self.requests.append(request)
                 try self.beforeResponse?(request)
                 return try self.reply(request)
@@ -127,6 +130,46 @@ struct QuickBooksBillingWorkflowTests {
         #expect(throws: (any Error).self) { _ = try f.flow() }
         #expect(f.requests.isEmpty)
         #expect(f.customer.quickBooksID == nil)
+    }
+
+    @Test func invoiceUsesServerConfirmedCustomerAndRetainsSoldLines() async throws {
+        let f = try Fixture(mapped: false)
+        f.item.quickBooksID = "I1"
+        var publications = 0
+        f.customerPublisher = { request in
+            publications += 1
+            #expect(request.localCustomerID == f.customer.id)
+            return .init(publication: .init(id: UUID(), companyID: request.companyID, realmID: request.realmID,
+                environment: request.environment, localCustomerID: request.localCustomerID, state: "confirmed", providerID: "C1",
+                updatedAt: "2026-09-07T00:00:00+00:00"), customer: .init(Id: "C1", DisplayName: "Fixture customer",
+                    PrimaryPhone: nil, PrimaryEmailAddr: .init(Address: "fixture@example.invalid"), BillAddr: nil, Active: true), created: true)
+        }
+        f.beforeResponse = { request in
+            let sql = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "query" }?.value ?? ""
+            #expect(!sql.contains("Customer"))
+            #expect(!request.url!.path.hasSuffix("/customer"))
+        }
+        let sold = f.invoice.catalogSnapshotJSON
+        _ = try await f.flow().execute()
+        #expect(publications == 1)
+        #expect(f.customer.quickBooksID == "C1")
+        #expect(f.invoice.quickBooksID == "D1")
+        #expect(f.invoice.catalogSnapshotJSON == sold)
+        #expect(f.invoice.amount == 190)
+    }
+
+    @Test func customerOfficeApprovalFailureLeavesFieldDocumentAndStopsInvoiceWrites() async throws {
+        let f = try Fixture(mapped: false)
+        f.item.quickBooksID = "I1"
+        f.customerPublisher = { _ in throw CustomerPublicationError.accessRequired }
+        let sold = f.invoice.catalogSnapshotJSON
+        do { _ = try await f.flow().execute(); Issue.record("Customer approval denial bypassed") }
+        catch { #expect(error as? CustomerPublicationError == .accessRequired) }
+        #expect(f.requests.isEmpty)
+        #expect(f.customer.quickBooksID == nil)
+        #expect(f.invoice.quickBooksID == nil)
+        #expect(f.invoice.catalogSnapshotJSON == sold)
+        #expect(try f.context.fetch(FetchDescriptor<Invoice>()).count == 1)
     }
 
 

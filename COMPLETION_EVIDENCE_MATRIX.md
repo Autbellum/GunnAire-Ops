@@ -1,3 +1,17 @@
+Customer publication checkpoint, 2026-09-07: **1100/1100 logic tests pass on each
+native platform, 10/10 selected iPad journeys, 216/216 Backend and 37/37 Tools**.
+The unsigned optimized universal Mac Release passes; both architectures are
+verified and both final customer-review screenshots were visually checked.
+The server owns new customer create/link intents and one-to-one
+mapping, encrypted original proposals, one-time dispatch and read-only unknown
+recovery. Native customer publication cannot fall back to device-only create.
+The single-customer action and recovery retain exact model/contact identity;
+the existing billing coordinator uses server-confirmed customers without
+repricing invoice items. Administrator-only customer sync is enforced on the
+server, while field drafts remain saved. Scope, initial test failure and remaining
+customer/billing/CloudKit work: [QBO_SERVER_CUSTOMER_PUBLICATION.md](QBO_SERVER_CUSTOMER_PUBLICATION.md).
+This does not qualify the full application or any production deployment.
+
 Mailbox checkpoint, 2026-09-07: **1081/1081 logic tests pass on each native
 platform, 10/10 selected iPad journeys, Backend 173/173 and Tools 37/37**.
 Mail now exposes older messages, Sent/All Mail/Trash, read/unread, archive and

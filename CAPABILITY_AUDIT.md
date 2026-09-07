@@ -1,3 +1,15 @@
+Customer publication follow-up, September 7, 2026: production customer create
+and recovery now use the server-owned encrypted journal and one-to-one mapping
+in [QBO_SERVER_CUSTOMER_PUBLICATION.md](QBO_SERVER_CUSTOMER_PUBLICATION.md).
+Customer Actions has focused original-link recovery and confirmed unsent
+cancellation, without another modal stack or contact-data overwrite. Existing
+administrator-only customer sync is now enforced server-side; field documents
+remain saved while awaiting a missing customer link. Local acceptance passes
+1100 logic tests per native platform, ten selected iPad journeys, 216 Backend,
+37 Tools and the unsigned universal Mac Release. This is the customer phase,
+not server-owned invoice/estimate/
+payment dispatch, complete legacy customer migration or signed CloudKit proof.
+
 Current scope correction, September 7, 2026: earlier descriptions that only
 external acceptance gates remained were too broad. Current source review has
 also found and corrected internal billing-identity, partial-payment balance,

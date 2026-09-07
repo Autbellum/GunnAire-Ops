@@ -2,6 +2,12 @@
 
 This is a small backend for sharing app users, roles, uploaded field receipts, and field payment records across iPads.
 
+Candidate **2026.09.07.24** adds the administrator-only, encrypted shared customer
+publication journal and scoped customer mappings. The native customer publisher
+requires these routes; it never falls back to direct QBO creation. Review
+[the customer publication contract](../QBO_SERVER_CUSTOMER_PUBLICATION.md) and
+the backup/rollback requirements before deployment. No deployment is implied.
+
 ## Start It On The Mac Studio
 
 ```sh

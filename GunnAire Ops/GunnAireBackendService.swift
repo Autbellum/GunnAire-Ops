@@ -762,6 +762,48 @@ enum GunnAireBackendService {
     }
 
 
+    private struct CustomerPublicationList: Decodable { let publications: [CustomerPublicationRecord] }
+
+    static func publishCustomer(_ request: CustomerPublicationRequest) async throws -> CustomerPublicationResponse {
+        do {
+            let data = try await send(path: "/api/customer-publications", method: "POST", body: JSONEncoder().encode(request))
+            let result = try JSONDecoder().decode(CustomerPublicationResponse.self, from: data)
+            try result.validate(companyID: request.companyID, realmID: request.realmID,
+                                environment: request.environment, customerID: request.localCustomerID)
+            return result
+        } catch { throw customerPublicationError(error) }
+    }
+
+    static func customerPublications(companyID: UUID, customerID: UUID) async throws -> [CustomerPublicationRecord] {
+        do {
+            let path = "/api/customer-publications?companyID=\(companyID.uuidString.lowercased())&localCustomerID=\(customerID.uuidString.lowercased())"
+            return try JSONDecoder().decode(CustomerPublicationList.self, from: await send(path: path, method: "GET")).publications
+        } catch { throw customerPublicationError(error) }
+    }
+
+    static func recoverCustomerPublication(_ id: UUID) async throws -> CustomerPublicationResponse {
+        do {
+            return try JSONDecoder().decode(CustomerPublicationResponse.self,
+                from: await send(path: "/api/customer-publications/\(id.uuidString.lowercased())/recover", method: "POST", body: Data("{}".utf8)))
+        } catch { throw customerPublicationError(error) }
+    }
+
+    static func cancelCustomerPublication(_ id: UUID) async throws {
+        do {
+            _ = try await send(path: "/api/customer-publications/\(id.uuidString.lowercased())/cancel", method: "POST", body: Data("{}".utf8))
+        } catch { throw customerPublicationError(error) }
+    }
+
+    private static func customerPublicationError(_ error: Error) -> CustomerPublicationError {
+        if let error = error as? CustomerPublicationError { return error }
+        if case GunnAireBackendError.server(let status, _) = error {
+            if status == 400 { return .invalidProposal }
+            if status == 409 { return .needsReview }
+            if status == 401 || status == 403 { return .accessRequired }
+        }
+        return .unavailable
+    }
+
     private struct CatalogPublicationList: Decodable { let publications: [CatalogPublicationRecord] }
 
     static func publishCatalog(_ request: CatalogPublicationRequest) async throws -> CatalogPublicationResponse {

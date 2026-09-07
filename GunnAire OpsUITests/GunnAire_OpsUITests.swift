@@ -4775,6 +4775,75 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    private func openCustomerPublicationReviewFixture() -> XCUIApplication {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+                               "-uiTestSeedCollectibleJob", "-uiTestCustomerPublicationReview"]
+        app.launch()
+        revealSidebarDestination("Customers", in: app).tap()
+        let record = app.buttons["OpenCustomerRecord-A1000000-0000-4000-8000-000000000001"]
+        for _ in 0..<6 {
+            if record.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(record.waitForExistence(timeout: 5))
+        record.tap()
+        XCTAssertTrue(app.navigationBars["Edit Customer"].waitForExistence(timeout: 5))
+        let review = app.buttons["OpenCustomerPublicationReview"]
+        for _ in 0..<12 {
+            if review.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(review.waitForExistence(timeout: 5))
+        XCTAssertTrue(review.isHittable)
+        review.tap()
+        XCTAssertTrue(app.navigationBars["Customer sync review"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Not sent"].waitForExistence(timeout: 5))
+        return app
+    }
+
+    @MainActor
+    func testCustomerSyncReviewCancelsOnlyUnsentProposalAndReturnsToOriginalCustomer() throws {
+        let app = openCustomerPublicationReviewFixture()
+        app.buttons["Cancel unsent customer sync"].tap()
+        let confirmation = app.sheets.firstMatch
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 3))
+        confirmation.buttons["Cancel unsent customer sync"].tap()
+        XCTAssertTrue(app.staticTexts["Cancelled before sending"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Recover original customer link"].exists)
+        let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        capture.name = "Customer sync cancelled without deleting saved work"
+        capture.lifetime = .keepAlways
+        add(capture)
+        app.navigationBars["Customer sync review"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Edit Customer"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["OpenCustomerPublicationReview"].exists)
+        let picker = app.segmentedControls["CustomerProfileWorkspacePicker"]
+        for _ in 0..<12 {
+            if picker.isHittable { break }
+            app.swipeDown()
+        }
+        XCTAssertTrue(picker.exists)
+        XCTAssertTrue(picker.buttons["Overview"].isSelected)
+    }
+
+    @MainActor
+    func testCustomerSyncReviewRecoversOriginalLinkWithoutAnotherCustomerCreate() throws {
+        let app = openCustomerPublicationReviewFixture()
+        app.buttons["Recover original customer link"].tap()
+        XCTAssertTrue(app.staticTexts["Confirmed in QuickBooks"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Original customer link recovered. Your saved contact details were kept."].exists)
+        XCTAssertFalse(app.buttons["Cancel unsent customer sync"].exists)
+        let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        capture.name = "Original customer link recovered"
+        capture.lifetime = .keepAlways
+        add(capture)
+        app.navigationBars["Customer sync review"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Edit Customer"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testCustomerRecordUsesFocusedOperationalWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

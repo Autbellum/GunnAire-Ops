@@ -6,6 +6,15 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
+Published mailbox head `7d18532` now passes all four hosted jobs:
+[Native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34127258110) and
+[Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34127258022).
+The customer publication candidate adds two customer recovery/cancellation
+journeys, for fourteen hosted selections. See
+[QBO_SERVER_CUSTOMER_PUBLICATION.md](QBO_SERVER_CUSTOMER_PUBLICATION.md) for
+its distinct source/acceptance boundary and the remaining full-goal work.
+Previous-head results do not qualify the new candidate.
+
 Published Mail/workflow head `3348725` passes all four hosted jobs:
 [Native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34121851059) and
 [Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34121851023).
@@ -55,7 +64,7 @@ The published resource-sync checkpoint 529fe26 passes all four hosted jobs:
 [Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728884).
 This is exact-head evidence for that checkpoint, not subsequent catalog work.
 
-- **iPad native tests**: the complete `GunnAire OpsTests` target plus twelve
+- **iPad native tests**: the complete `GunnAire OpsTests` target plus fourteen
   serial interface journeys: direct Invoice launch, simple Mail actions,
   current customer statement generation, statement review-to-Invoices,
   billing-identity review-to-Invoices with safe report export controls,
@@ -63,7 +72,8 @@ This is exact-head evidence for that checkpoint, not subsequent catalog work.
   exact-target schedule deletion with billed-job retention, editable draft
   recovery after a rejected send, uncertain-send duplicate prevention, and
   native attachment preview/forward/removal, mailbox pagination/Sent/archive,
-  and recoverable Trash/restore inside the app.
+  recoverable Trash/restore inside the app, and customer sync original-link
+  recovery/unsent cancellation with return to the customer record.
 - **Mac native tests**: the complete logic target on arm64 Mac Catalyst,
   followed by an unsigned optimized Release build. `lipo -verify_arch`
   requires both arm64 and x86_64 in the Release executable.

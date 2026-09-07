@@ -32,14 +32,15 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
-    from Backend import payment_attempts, catalog_publications
+    from Backend import payment_attempts, catalog_publications, customer_publications
 except ModuleNotFoundError:
     import payment_attempts  # Direct launch from the Backend directory.
     import catalog_publications
+    import customer_publications
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.07.23"
+SERVICE_VERSION = "2026.09.07.24"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -1165,6 +1166,104 @@ def encrypt_catalog_payload(raw):
     if encryptor is None:
         raise RuntimeError("Catalog encryption is not configured")
     return encryptor.encrypt(raw.encode()).decode()
+
+
+def qbo_customer_transport(request):
+    """Customer-only fixed-origin transport. No send-email, update or delete route."""
+    try:
+        parsed = urllib.parse.urlsplit(request.full_url)
+        if (parsed.scheme != "https" or parsed.hostname not in
+            {"quickbooks.api.intuit.com", "sandbox-quickbooks.api.intuit.com"}
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port not in (None, 443) or parsed.fragment):
+            raise ValueError("unsupported origin")
+        if not re.fullmatch(r"/v3/company/[A-Za-z0-9._:-]+/(?:query|customer(?:/[A-Za-z0-9._:-]+)?)", parsed.path):
+            raise ValueError("unsupported resource")
+        if request.get_method() not in ("GET", "POST") or (request.get_method() == "POST" and not parsed.path.endswith("/customer")):
+            raise ValueError("unsupported method")
+        with urllib.request.build_opener(QBOReadNoRedirect()).open(request, timeout=20) as response:
+            raw = response.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise ValueError("oversized response")
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict) or not 200 <= response.status < 300:
+                raise ValueError("unconfirmed response")
+            return payload
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+        raise payment_attempts.AttemptError("provider_unavailable",
+            "QuickBooks could not confirm the customer request. Review the original attempt before retrying.", 502) from None
+
+
+class CustomerQBOProvider:
+    def __init__(self, context, authorize):
+        self.context, self.authorize, self.bearer = context, authorize, None
+
+    def request(self, resource, query=None, customer=None, before_send=None):
+        if not re.fullmatch(r"query|customer(?:/[A-Za-z0-9._:-]+)?", resource):
+            raise customer_publications.failure("invalid_resource", "Unsupported customer operation.", 400)
+        if customer is not None and (resource != "customer" or before_send is None):
+            raise customer_publications.failure("invalid_resource", "Unsupported customer publication.", 400)
+        payment_attempts.reference(self.context["realm_id"])
+        if self.context["environment"] not in ("sandbox", "production"):
+            raise customer_publications.failure("invalid_resource", "Unsupported QuickBooks environment.", 400)
+        self.authorize()
+        if self.bearer is None:
+            self.bearer = qbo_authorized_bearer(self.context, "system:customer-publication")
+        self.authorize()
+        origin = "https://sandbox-quickbooks.api.intuit.com" if self.context["environment"] == "sandbox" else "https://quickbooks.api.intuit.com"
+        url = origin + "/v3/company/" + urllib.parse.quote(self.context["realm_id"], safe="") + "/" + resource
+        url += "?" + urllib.parse.urlencode({"minorversion": "75", **(query or {})})
+        request = urllib.request.Request(url, method="POST" if customer is not None else "GET",
+            data=catalog_publications.canonical(customer).encode() if customer is not None else None,
+            headers={"Authorization": "Bearer " + self.bearer, "Accept": "application/json", "Content-Type": "application/json"})
+        if customer is not None:
+            before_send()
+        result = qbo_customer_transport(request)
+        self.authorize()
+        return result
+
+    def read(self, identifier):
+        payment_attempts.reference(identifier)
+        return self.request("customer/" + identifier).get("Customer")
+
+    def customers(self):
+        predicate = " FROM Customer WHERE Active IN (true, false)"
+        def count():
+            result = self.request("query", {"query": "SELECT COUNT(*)" + predicate}).get("QueryResponse")
+            value = result.get("totalCount") if isinstance(result, dict) else None
+            if type(value) is not int or not 0 <= value <= 100000:
+                raise customer_publications.failure("customers_incomplete", "The complete QuickBooks customer list could not be counted.")
+            return value
+        expected = count()
+        customers, seen = [], set()
+        for start in range(1, expected + 1, 1000):
+            query = "SELECT *" + predicate + " ORDERBY DisplayName STARTPOSITION " + str(start) + " MAXRESULTS 1000"
+            page = self.request("query", {"query": query}).get("QueryResponse")
+            values = page.get("Customer") if isinstance(page, dict) else None
+            size = min(1000, expected - start + 1)
+            if (not isinstance(values, list) or len(values) != size or page.get("startPosition", start) != start
+                    or page.get("maxResults", size) != size):
+                raise customer_publications.failure("customers_incomplete", "QuickBooks customer pages changed or were incomplete.")
+            for value in values:
+                identifier = value.get("Id") if isinstance(value, dict) else None
+                payment_attempts.reference(identifier)
+                if identifier in seen:
+                    raise customer_publications.failure("customers_incomplete", "QuickBooks repeated a customer across pages.")
+                seen.add(identifier)
+                customers.append(value)
+        if count() != expected:
+            raise customer_publications.failure("customers_incomplete", "The QuickBooks customer list changed during comparison.")
+        return customers
+
+    def write(self, customer, request_id, before_send):
+        if not isinstance(request_id, str) or not re.fullmatch(r"ga-customer-[0-9a-f-]{36}", request_id):
+            raise customer_publications.failure("invalid_request", "The customer request identity is invalid.", 400)
+        identifier = payment_attempts.canonical_uuid(request_id.removeprefix("ga-customer-"))
+        if not isinstance(customer, dict) or customer.get("Notes") != customer_publications.lineage(identifier):
+            raise customer_publications.failure("invalid_request", "The customer lineage is invalid.", 400)
+        validated = customer_publications.validate_customer({key: value for key, value in customer.items() if key != "Notes"})
+        return self.request("customer", {"requestid": request_id},
+                            {**validated, "Notes": customer["Notes"]}, before_send).get("Customer")
 
 
 def decrypt_catalog_payload(ciphertext):
@@ -2352,6 +2451,7 @@ def initialize_database() -> None:
         ensure_column(connection, "field_payment_assignments", "completion_payment_id", "TEXT")
         payment_attempts.initialize_schema(connection)
         catalog_publications.initialize_schema(connection)
+        customer_publications.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -3398,6 +3498,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/catalog-publications" or parsed.path.startswith("/api/catalog-publications/"):
             self.handle_catalog_publication(parsed, method="GET")
             return
+        if parsed.path == "/api/customer-publications" or parsed.path.startswith("/api/customer-publications/"):
+            self.handle_customer_publication(parsed, method="GET")
+            return
         if parsed.path == "/api/workspace":
             if not self.require_application_session():
                 return
@@ -3593,6 +3696,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/catalog-publications" or parsed.path.startswith("/api/catalog-publications/"):
             self.handle_catalog_publication(parsed, method="POST")
+            return
+        if parsed.path == "/api/customer-publications" or parsed.path.startswith("/api/customer-publications/"):
+            self.handle_customer_publication(parsed, method="POST")
             return
         if parsed.path == "/api/workspace/bind":
             if not self.require_application_session() or not self.require_admin():
@@ -5660,6 +5766,46 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 ).fetchone()
         record_audit_event(actor, "cancel", "field-payment", assignment_id)
         self.write_json({"assignment": field_payment_assignment_record(row)})
+
+    def handle_customer_publication(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        publisher = customer_publications.CustomerPublisher(
+            db, CustomerQBOProvider, encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        session_id = self._application_session_id
+        suffix = parsed.path.removeprefix("/api/customer-publications")
+        parts = suffix.strip("/").split("/") if suffix else []
+        try:
+            if method == "GET" and not parts:
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                if set(query) != {"companyID", "localCustomerID"} or any(len(value) != 1 for value in query.values()):
+                    raise customer_publications.failure("invalid_query", "Choose one business customer.", 400)
+                result = {"publications": publisher.list_for_customer(session_id, query["companyID"][0], query["localCustomerID"][0])}
+            elif method == "POST" and not parsed.query:
+                payload = json.loads(self.read_limited_body(32768).decode("utf-8"))
+                if not parts:
+                    result = publisher.publish(session_id, payload)
+                elif len(parts) == 2 and isinstance(payload, dict) and not payload:
+                    identifier, action = parts
+                    if action == "recover":
+                        result = publisher.run(session_id, identifier)
+                    elif action == "cancel":
+                        result = publisher.cancel(session_id, identifier)
+                    else:
+                        raise customer_publications.failure("invalid_action", "Choose recover or cancel for this customer attempt.", 400)
+                else:
+                    raise customer_publications.failure("invalid_request", "Use the supported customer publication fields only.", 400)
+            else:
+                raise customer_publications.failure("not_found", "Customer publication action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid customer publication request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Customer publication storage is unavailable. Keep the original attempt for review.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
 
     def handle_catalog_publication(self, parsed, *, method):
         if not self.require_application_session():

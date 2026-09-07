@@ -139,6 +139,7 @@ final class QuickBooksDataAPI: ObservableObject {
     private let requestTransport: WorkspaceProviderOperation.Transport
     private let persistsCredentials: Bool
     let catalogPublicationTransport: CatalogPublicationBoundary.Transport?
+    let customerPublicationTransport: CustomerPublicationBoundary.Transport?
     let catalogRecoveryTransport: (UUID) async throws -> CatalogPublicationResponse
     private let catalogFixtureCompanyID: UUID?
     private struct WorkflowScope: Sendable {
@@ -158,6 +159,7 @@ final class QuickBooksDataAPI: ObservableObject {
         requestTransport = { try await URLSession.shared.data(for: $0) }
         persistsCredentials = true
         catalogPublicationTransport = GunnAireBackendService.publishCatalog
+        customerPublicationTransport = GunnAireBackendService.publishCustomer
         catalogRecoveryTransport = GunnAireBackendService.recoverCatalogPublication
         catalogFixtureCompanyID = nil
         loadTokens()
@@ -170,12 +172,14 @@ final class QuickBooksDataAPI: ObservableObject {
     init(testTokens: QuickBooksOAuthTokens, realmID: String, environment: String,
          catalogCompanyID: UUID? = nil,
          catalogPublisher: CatalogPublicationBoundary.Transport? = nil,
+         customerPublisher: CustomerPublicationBoundary.Transport? = nil,
          catalogRecovery: @escaping (UUID) async throws -> CatalogPublicationResponse = { _ in throw CatalogPublicationError.unavailable },
          transport: @escaping WorkspaceProviderOperation.Transport) {
         precondition(GunnAireCloudKit.usesTestDatabase)
         requestTransport = transport
         persistsCredentials = false
         catalogPublicationTransport = catalogPublisher
+        customerPublicationTransport = customerPublisher
         catalogRecoveryTransport = catalogRecovery
         catalogFixtureCompanyID = catalogCompanyID
         tokens = testTokens
@@ -1024,6 +1028,10 @@ final class QuickBooksDataAPI: ObservableObject {
         requestID: String? = nil,
         completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void
     ) {
+        guard !persistsCredentials && customerPublicationTransport == nil else {
+            completion(.failure(CustomerPublicationError.unavailable))
+            return
+        }
         let body = try? JSONEncoder().encode(customer)
         let normalizedRequestID = requestID?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1060,6 +1068,34 @@ final class QuickBooksDataAPI: ObservableObject {
         remoteCustomers: [QuickBooksCustomer]? = nil,
         completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void
     ) {
+        if let transport = customerPublicationTransport {
+            do {
+                // Capture before scheduling; a retained caller cannot adopt a new
+                // connection. The server owns the census even if a caller has a cache.
+                let workflow = try captureWorkspaceWorkflow()
+                let request = try CustomerPublicationBoundary.request(workflow: workflow, draft: draft)
+                Task { @MainActor in
+                    do {
+                        let customer = try await workflow.perform { operation in
+                            let result = try await operation.performExternalMutation { try await transport(request) }
+                            try result.validate(companyID: request.companyID, realmID: request.realmID,
+                                environment: request.environment, customerID: request.localCustomerID)
+                            guard try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(for: draft, in: [result.customer]) != nil else {
+                                throw CustomerPublicationError.needsReview
+                            }
+                            try workflow.check()
+                            return result.customer
+                        }
+                        // Deliver exactly once under the original scope. A
+                        // callback may legitimately finish/cancel its owner.
+                        Self.$workflowScope.withValue(WorkflowScope(owner: ObjectIdentifier(self), operation: workflow.operation)) {
+                            completion(.success(customer))
+                        }
+                    } catch { completion(.failure(error)) }
+                }
+            } catch { completion(.failure(error)) }
+            return
+        }
         let recoverOrCreate: ([QuickBooksCustomer]) -> Void = { customers in
             do {
                 if let existing = try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
@@ -2795,6 +2831,7 @@ struct QuickBooksCustomer: Codable, Identifiable {
     let PrimaryPhone: QuickBooksPhoneNumber?
     let PrimaryEmailAddr: QuickBooksEmailAddress?
     let BillAddr: QuickBooksAddress?
+    var Active: Bool? = nil
 
     var id: String { Id }
     var reference: QuickBooksReference { QuickBooksReference(value: Id, name: DisplayName) }

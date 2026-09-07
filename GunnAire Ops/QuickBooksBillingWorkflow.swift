@@ -352,14 +352,21 @@ final class QuickBooksBillingWorkflow {
             try validateCustomerAssignment(customerID!)
             return
         }
-        let remotes = try await run.receive(api.fetchCustomers)
-        try check()
         let remote: QuickBooksCustomer
-        if let existing = try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(for: customerDraft, in: remotes) {
-            remote = existing
-        } else {
+        if api.customerPublicationTransport != nil {
             attemptedWrite = true
-            remote = try await run.receive { api.recoverOrCreateCustomer(customerDraft, remoteCustomers: remotes, completion: $0) }
+            remote = try await run.receive { api.recoverOrCreateCustomer(customerDraft, completion: $0) }
+        } else {
+            // Isolated legacy transport fixtures only. Production always has
+            // the server publisher and never trusts a device-only match.
+            let remotes = try await run.receive(api.fetchCustomers)
+            try check()
+            if let existing = try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(for: customerDraft, in: remotes) {
+                remote = existing
+            } else {
+                attemptedWrite = true
+                remote = try await run.receive { api.recoverOrCreateCustomer(customerDraft, remoteCustomers: remotes, completion: $0) }
+            }
         }
         try check()
         guard try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(for: customerDraft, in: [remote]) != nil else {

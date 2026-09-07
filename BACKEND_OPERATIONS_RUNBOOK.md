@@ -16,6 +16,23 @@ credential rotation, production restores, or customer communications.
 - Proposed recovery time objective: 4 hours. This is not proven until a timed
   restore drill is completed by the deployment owner.
 
+## 2026-09-07 customer publication candidate
+
+Candidate **2026.09.07.24** adds `customer_publications`,
+`customer_publication_keys`, `customer_entity_mappings` and indexes. Preserve
+all of them and the existing QBO encryption key in off-host backups, restore
+tests and code rollback. One authoritative transactional database is required;
+independent SQLite replicas do not coordinate customer dispatch.
+
+Use **Customers → customer record → Overview → Customer sync review** to recover
+the original provider result or explicitly cancel a never-sent proposal. Never
+clear sending/unknown attempts to force another create. Reconnected grants and
+unresolved outcomes still require further administrator-resolution tooling.
+This native candidate requires the new backend before distribution. Current
+local backend verification passes 216 tests; full native/release acceptance and
+remaining limits are tracked in `QBO_SERVER_CUSTOMER_PUBLICATION.md`. No live
+provider mutation or deployment is included. Render still follows `main`.
+
 ## 2026-09-07 catalog publication candidate
 
 Candidate `2026.09.07.23` adds the server-owned catalog publisher required by

@@ -79,6 +79,21 @@ final class WorkspaceProviderOperation {
         try Task.checkCancellation()
     }
 
+    /// A backend may send to the provider on our behalf. Preserve the same
+    /// uncertain-write risk even though its transport owns a separate request.
+    func performExternalMutation<T>(_ body: () async throws -> T) async throws -> T {
+        try check()
+        mayHaveReachedProvider = true
+        do {
+            let result = try await body()
+            try check()
+            return result
+        } catch {
+            if let failure { throw failure }
+            throw error
+        }
+    }
+
     func data(
         for request: URLRequest,
         transport: Transport = { try await URLSession.shared.data(for: $0) }
