@@ -51,6 +51,7 @@ struct QuickBooksInvoicePublicationInputs {
 enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
     case missingCatalogSnapshot
     case missingCatalogItem(String)
+    case ambiguousLocalCatalogItem(String)
     case pricebookReviewRequired(String)
     case catalogItemArchived(String)
     case missingQuickBooksItemMapping(String)
@@ -64,6 +65,8 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
             return "This document has no durable catalog snapshot. Open Job Billing and review its line items before retrying."
         case .missingCatalogItem(let name):
             return "The local catalog item for \(name) is missing. Open Job Billing and replace that line before retrying."
+        case .ambiguousLocalCatalogItem(let name):
+            return "More than one local catalog record identifies \(name). Ask an administrator to resolve the item identity before publishing this document."
         case .pricebookReviewRequired(let name):
             return "\(name) needs administrator pricebook review before this document can publish to QuickBooks."
         case .catalogItemArchived(let name):
@@ -86,6 +89,13 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
 /// reuse an ambiguous QBO Item ID, or publish a different total than the local
 /// customer document.
 enum QuickBooksDocumentLinePublication {
+    /// Retain conflicting model identities for validation. Merging by UUID
+    /// would hide the very duplicates the publication boundary must reject.
+    static func catalogIncluding(_ documentItems: [Item], storedItems: [Item]) -> [Item] {
+        var seen: Set<ObjectIdentifier> = []
+        return (storedItems + documentItems).filter { seen.insert(ObjectIdentifier($0)).inserted }
+    }
+
     static func lines(
         snapshotJSON: String?,
         expectedSubtotal: Double,
@@ -96,10 +106,13 @@ enum QuickBooksDocumentLinePublication {
             throw QuickBooksDocumentLinePublicationError.missingCatalogSnapshot
         }
 
-        let itemsByID = Dictionary(catalogItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let itemsByID = Dictionary(grouping: catalogItems, by: \.id)
         let documentItems = try snapshots.map { snapshot in
-            guard let item = itemsByID[snapshot.catalogItemID] else {
+            guard let matches = itemsByID[snapshot.catalogItemID], let item = matches.first else {
                 throw QuickBooksDocumentLinePublicationError.missingCatalogItem(snapshot.name)
+            }
+            guard matches.count == 1 else {
+                throw QuickBooksDocumentLinePublicationError.ambiguousLocalCatalogItem(snapshot.name)
             }
             guard !item.requiresPricebookReview else {
                 throw QuickBooksDocumentLinePublicationError.pricebookReviewRequired(snapshot.name)
@@ -351,6 +364,7 @@ enum PricebookReviewPublicationError: LocalizedError, Equatable {
     case ambiguousRemoteMatch(String)
     case missingLinkedRemoteItem(name: String, quickBooksID: String)
     case ambiguousLinkedRemoteItem(String)
+    case conflictingRemoteMatch(String)
 
     var errorDescription: String? {
         switch self {
@@ -360,6 +374,8 @@ enum PricebookReviewPublicationError: LocalizedError, Equatable {
             return "QuickBooks did not return linked item \(quickBooksID) for \(name). No catalog write was sent; confirm the company realm and item before retrying."
         case .ambiguousLinkedRemoteItem(let quickBooksID):
             return "QuickBooks returned linked item \(quickBooksID) more than once. No catalog write was sent."
+        case .conflictingRemoteMatch(let name):
+            return "QuickBooks has a conflicting name, SKU or type for \(name). Review the existing catalog item before linking or creating another."
         }
     }
 }
@@ -417,6 +433,7 @@ struct QuickBooksCatalogPublicationConfirmation: Identifiable, Equatable {
     let sku: String?
     let unitPrice: Double
     let intent: QuickBooksCatalogPublicationConfirmationIntent
+    let revision: QuickBooksCatalogItemRevision
 
     var id: String { "\(intent.rawValue)-\(itemID.uuidString)" }
     var title: String { "Publish to QuickBooks?" }
@@ -439,8 +456,15 @@ struct QuickBooksCatalogPublicationConfirmation: Identifiable, Equatable {
             itemType: item.itemType,
             sku: item.sku,
             unitPrice: item.unitPrice,
-            intent: intent
+            intent: intent,
+            revision: QuickBooksCatalogItemRevision(item)
         )
+    }
+
+    func validate(_ item: Item) throws {
+        guard item.id == itemID, QuickBooksCatalogItemRevision(item) == revision else {
+            throw QuickBooksCatalogWorkflowError.itemChanged
+        }
     }
 }
 
@@ -588,14 +612,19 @@ enum PricebookReviewPublication {
         let normalizedName = normalize(localItem.name)
         let normalizedSKU = normalize(localItem.sku ?? "")
         let candidates = remoteItems.filter { remote in
-            guard normalize(remote.Name) == normalizedName else { return false }
-            let remoteSKU = normalize(remote.Sku ?? "")
-            return normalizedSKU.isEmpty || remoteSKU.isEmpty || normalizedSKU == remoteSKU
+            normalize(remote.Name) == normalizedName ||
+                (!normalizedSKU.isEmpty && normalize(remote.Sku ?? "") == normalizedSKU)
         }
         guard candidates.count <= 1 else {
             throw PricebookReviewPublicationError.ambiguousRemoteMatch(localItem.name)
         }
-        return candidates.first
+        guard let match = candidates.first else { return nil }
+        guard normalize(match.Name) == normalizedName,
+              normalize(match.Sku ?? "") == normalizedSKU,
+              normalize(match.ItemType ?? "") == normalize(localItem.itemType.rawValue) else {
+            throw PricebookReviewPublicationError.conflictingRemoteMatch(localItem.name)
+        }
+        return match
     }
 
     static func linkedRemoteItem(
@@ -1174,6 +1203,10 @@ struct QuickBooksManagementView: View {
     @State private var activePricebookReviewID: UUID?
     @State private var activeCatalogPublicationID: UUID?
     @State private var activeCatalogReconciliationID: UUID?
+    @State private var catalogLifecycle = QuickBooksSyncLifecycle()
+    @State private var catalogTask: Task<Void, Never>?
+    @State private var catalogConfirmationWorkflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow?
+    @State private var catalogSnapshotWorkflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow?
     @State private var catalogPublicationConfirmation: QuickBooksCatalogPublicationConfirmation?
     @State private var catalogMappingResolutionCandidateID: UUID?
     @State private var catalogItemBeingEdited: Item?
@@ -2146,6 +2179,11 @@ struct QuickBooksManagementView: View {
                                             VStack(alignment: .leading) {
                                                 catalogReconciliationButtons(for: entry)
                                             }
+                                        }
+                                        if !isAuthenticated {
+                                            Text("Connect QuickBooks to recheck these values before choosing a version.")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
                                         }
                                     }
                                     .padding(.vertical, 5)
@@ -3184,6 +3222,7 @@ struct QuickBooksManagementView: View {
                     }
                     #if DEBUG
                     if catalogReconciliationFixtureRequested {
+                        catalogSnapshotWorkflow = try? catalogAPIForCurrentContext().captureWorkspaceWorkflow()
                         if catalogComparisonUnavailableFixtureRequested {
                             items = []
                         } else if linkedPricebookReviewFixtureRequested {
@@ -3219,6 +3258,15 @@ struct QuickBooksManagementView: View {
                     }
                 }
                 .onDisappear {
+                    catalogLifecycle.cancel()
+                    catalogTask?.cancel()
+                    catalogTask = nil
+                    catalogConfirmationWorkflow = nil
+                    catalogSnapshotWorkflow = nil
+                    catalogPublicationConfirmation = nil
+                    activePricebookReviewID = nil
+                    activeCatalogPublicationID = nil
+                    activeCatalogReconciliationID = nil
                     syncLifecycle.cancel()
                     resourceSyncTask?.cancel()
                     resourceSyncTask = nil
@@ -3229,6 +3277,10 @@ struct QuickBooksManagementView: View {
     }
 
     private func syncAllQuickBooksData() {
+        guard catalogLifecycle.activeID == nil else {
+            statusMessage = "Finish the current catalog action before refreshing QuickBooks."
+            return
+        }
         guard isAuthenticated else {
             statusMessage = "QuickBooks is not connected. Open Settings to authenticate."
             return
@@ -3247,6 +3299,7 @@ struct QuickBooksManagementView: View {
         }
         resourceSyncTask?.cancel()
         clearQuickBooksSyncSnapshot()
+        catalogSnapshotWorkflow = try? quickBooksDataAPI.captureWorkspaceWorkflow()
         lastSuccessfulSyncAt = syncRun.workflow.successfulSyncDateKey.flatMap {
             UserDefaults.standard.object(forKey: $0) as? Date
         }
@@ -3475,6 +3528,9 @@ struct QuickBooksManagementView: View {
     }
 
     private func createCatalogItem(_ draft: QuickBooksCatalogItemDraft) {
+        guard catalogLifecycle.activeID == nil else { actionMessage = QuickBooksCatalogWorkflowError.busy.localizedDescription; return }
+        do { try QuickBooksSyncAccessPolicy.validate(context: modelContext) }
+        catch { actionMessage = error.localizedDescription; return }
         let localItem = QuickBooksCatalogLocalCreationPolicy.makeItem(
             name: draft.name,
             itemType: draft.itemType,
@@ -3566,6 +3622,10 @@ struct QuickBooksManagementView: View {
     }
 
     private func approvePricebookItem(_ item: Item) {
+        guard catalogLifecycle.activeID == nil else { actionMessage = QuickBooksCatalogWorkflowError.busy.localizedDescription; return }
+        do { try QuickBooksSyncAccessPolicy.validate(context: modelContext) }
+        catch { actionMessage = error.localizedDescription; return }
+        let previous = QuickBooksCatalogItemRevision(item)
         let reviewerEmail = AppIdentity.currentEmail
         let hasLinkedQuickBooksItem = item.quickBooksID?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3575,6 +3635,7 @@ struct QuickBooksManagementView: View {
         do {
             try modelContext.save()
         } catch {
+            previous.restore(item)
             activePricebookReviewID = nil
             actionMessage = "Could not save the pricebook approval: \(error.localizedDescription)"
             return
@@ -3608,7 +3669,7 @@ struct QuickBooksManagementView: View {
             approvePricebookItem(item)
             return
         }
-        catalogPublicationConfirmation = .make(for: item, intent: .approval)
+        requestCatalogConfirmation(item, intent: .approval)
     }
 
     private func requestCatalogPublicationRetry(_ item: Item) {
@@ -3616,7 +3677,15 @@ struct QuickBooksManagementView: View {
             retryCatalogPublication(item)
             return
         }
-        catalogPublicationConfirmation = .make(for: item, intent: .retry)
+        requestCatalogConfirmation(item, intent: .retry)
+    }
+
+    private func requestCatalogConfirmation(_ item: Item, intent: QuickBooksCatalogPublicationConfirmationIntent) {
+        do {
+            try QuickBooksSyncAccessPolicy.validate(context: modelContext)
+            catalogConfirmationWorkflow = try catalogAPIForCurrentContext().captureWorkspaceWorkflow()
+            catalogPublicationConfirmation = .make(for: item, intent: intent)
+        } catch { actionMessage = error.localizedDescription }
     }
 
     private func confirmCatalogPublication() {
@@ -3626,6 +3695,19 @@ struct QuickBooksManagementView: View {
             actionMessage = "That catalog item is no longer available. Refresh before publishing to QuickBooks."
             return
         }
+        do {
+            guard let workflow = catalogConfirmationWorkflow else { throw WorkspaceProviderAccessError.unavailable }
+            try workflow.check()
+            try QuickBooksSyncAccessPolicy.validate(context: modelContext)
+            let matches = try modelContext.fetch(FetchDescriptor<Item>()).filter { $0.id == confirmation.itemID }
+            guard matches.count == 1, matches.first === item else { throw QuickBooksCatalogWorkflowError.itemChanged }
+            try confirmation.validate(item)
+        } catch {
+            catalogConfirmationWorkflow = nil
+            actionMessage = error.localizedDescription
+            return
+        }
+        catalogConfirmationWorkflow = nil
         switch confirmation.intent {
         case .approval:
             approvePricebookItem(item)
@@ -3635,210 +3717,136 @@ struct QuickBooksManagementView: View {
     }
 
     private func refreshApprovedLinkedCatalogItem(_ item: Item) {
-        actionMessage = "Approved \(item.name). Loading its linked QuickBooks comparison..."
-        #if DEBUG
-        if linkedPricebookReviewFixtureRequested {
-            finishApprovedCatalogLink(
-                item,
-                remoteItemResult: Result {
-                    try PricebookReviewPublication.linkedRemoteItem(
-                        for: item,
-                        in: Self.linkedPricebookReviewFixtureItems
-                    )
-                },
-                remoteItems: Self.linkedPricebookReviewFixtureItems
-            )
-            return
-        }
-        #endif
-        liveAPI.fetchItems { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .failure(let error):
-                    markApprovedPricebookPublicationFailure(item, error: error)
-                case .success(let remoteItems):
-                    finishApprovedCatalogLink(
-                        item,
-                        remoteItemResult: Result {
-                            try PricebookReviewPublication.linkedRemoteItem(
-                                for: item,
-                                in: remoteItems
-                            )
-                        },
-                        remoteItems: remoteItems
-                    )
-                }
-            }
-        }
+        startCatalogWorkflow(item, mode: .compare)
     }
 
     private func retryCatalogPublication(_ item: Item) {
-        guard !item.requiresPricebookReview,
-              !item.isCatalogArchived,
+        guard !item.requiresPricebookReview, !item.isCatalogArchived,
               item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else { return }
-
-        activeCatalogPublicationID = item.id
-        item.quickBooksSyncStatus = "pending"
-        item.quickBooksSyncDetail = "QuickBooks publication retry is in progress."
-        do {
-            try modelContext.save()
-        } catch {
-            activeCatalogPublicationID = nil
-            actionMessage = "Could not save the catalog publication retry: \(error.localizedDescription)"
-            return
-        }
-
         guard isAuthenticated else {
-            activeCatalogPublicationID = nil
             actionMessage = "Connect QuickBooks before retrying \(item.name)."
             return
         }
-
-        publishApprovedCatalogItem(item)
+        startCatalogWorkflow(item, mode: .publish)
     }
 
     private func publishApprovedCatalogItem(_ item: Item) {
-        guard !item.isCatalogArchived else {
-            markApprovedPricebookPublicationFailure(
-                item,
-                error: CatalogItemLifecycleError.archivedCannotPublish(item.name)
-            )
+        startCatalogWorkflow(item, mode: .publish)
+    }
+
+    private func catalogAPIForCurrentContext() -> QuickBooksDataAPI {
+        #if DEBUG
+        if GunnAireCloudKit.usesTestDatabase &&
+            (catalogReconciliationFixtureRequested ||
+             ProcessInfo.processInfo.arguments.contains("-uiTestForceQuickBooksConnected")) {
+            let fixtureItems = linkedPricebookReviewFixtureRequested
+                ? Self.linkedPricebookReviewFixtureItems : Self.catalogReconciliationFixtureItems
+            return QuickBooksDataAPI(testTokens: .init(accessToken: "catalog-ui-fixture", expiration: .distantFuture),
+                realmID: "catalog-ui-fixture", environment: Config.QuickBooks.environment) { request in
+                // UI previews exercise the real lifecycle with isolated GETs.
+                // They never use saved credentials or dispatch provider writes.
+                guard request.httpMethod == "GET", let remote = fixtureItems.first else {
+                    throw URLError(.notConnectedToInternet)
+                }
+                return (try JSONEncoder().encode(QuickBooksItemResponse(Item: remote)),
+                    HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            }
+        }
+        #endif
+        return quickBooksDataAPI
+    }
+
+    private func startCatalogWorkflow(_ item: Item, mode: QuickBooksCatalogWorkflow.Mode) {
+        guard catalogLifecycle.activeID == nil else { actionMessage = QuickBooksCatalogWorkflowError.busy.localizedDescription; return }
+        let workflow: QuickBooksCatalogWorkflow
+        let snapshotOwner: QuickBooksDataAPI.CapturedWorkspaceWorkflow
+        do {
+            switch mode {
+            case .update, .useProvider:
+                guard let owner = catalogSnapshotWorkflow else { throw WorkspaceProviderAccessError.unavailable }
+                try owner.check()
+            default: break
+            }
+            let api = catalogAPIForCurrentContext()
+            snapshotOwner = try api.captureWorkspaceWorkflow()
+            workflow = try QuickBooksCatalogWorkflow(item: item, context: modelContext, api: api,
+                lifecycle: catalogLifecycle, mode: mode, configuration: accountingConfiguration)
+        } catch {
+            activePricebookReviewID = nil
+            activeCatalogPublicationID = nil
+            actionMessage = error.localizedDescription
             return
         }
-        actionMessage = "Approved \(item.name). Checking QuickBooks for an existing match..."
-        liveAPI.fetchItems { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .failure(let error):
-                    markApprovedPricebookPublicationFailure(item, error: error)
-                case .success(let remoteItems):
-                    do {
-                        if let existing = try PricebookReviewPublication.matchingRemoteItem(for: item, in: remoteItems) {
-                            finishApprovedCatalogLink(
-                                item,
-                                remoteItemResult: .success(existing),
-                                remoteItems: remoteItems
-                            )
-                            return
-                        }
-                    } catch {
-                        markApprovedPricebookPublicationFailure(item, error: error)
-                        return
+        // Do not let a simultaneous general import race the reviewed proposal.
+        let wasRefreshing = isLoading
+        syncLifecycle.cancel()
+        resourceSyncTask?.cancel()
+        resourceSyncTask = nil
+        isLoading = false
+        if wasRefreshing {
+            markAllSyncStatusesFailed("Refresh paused for catalog review.")
+            statusMessage = "Refresh paused while this catalog action finishes."
+        }
+        do {
+            guard let owner = catalogSnapshotWorkflow else { throw WorkspaceProviderAccessError.unavailable }
+            try owner.check()
+        } catch {
+            items = []
+            catalogSnapshotWorkflow = nil
+        }
+        switch mode {
+        case .publish: activeCatalogPublicationID = item.id
+        case .compare: activePricebookReviewID = item.id
+        case .update, .useProvider: activeCatalogReconciliationID = item.id
+        }
+        actionMessage = "Checking \(item.name) in QuickBooks…"
+        catalogTask = Task { @MainActor in
+            defer {
+                if catalogLifecycle.finish(workflow.run) {
+                    activePricebookReviewID = nil
+                    activeCatalogPublicationID = nil
+                    activeCatalogReconciliationID = nil
+                    catalogTask = nil
+                }
+            }
+            do {
+                let outcome = try await workflow.execute()
+                try workflow.run.check()
+                if let index = items.firstIndex(where: { $0.Id == outcome.remote.Id }) {
+                    items[index] = outcome.remote
+                } else {
+                    items.append(outcome.remote)
+                }
+                catalogSnapshotWorkflow = snapshotOwner
+                let message: String
+                switch outcome.link {
+                case .reconciliationRequired(let count):
+                    showCatalogReconciliationQueue = true
+                    message = "Approved and linked \(item.name). Review \(count) linked QuickBooks difference\(count == 1 ? "" : "s") before choosing which version to publish."
+                case .synchronized:
+                    switch mode {
+                    case .useProvider: message = "Applied the reviewed QuickBooks version of \(item.name) to GunnAire."
+                    case .update: message = "Published and reconciled \(item.name) with QuickBooks."
+                    case .compare: message = "Approved and linked \(item.name). Its QuickBooks catalog values already match."
+                    case .publish: message = outcome.created
+                        ? "Approved and published \(item.name) to QuickBooks."
+                        : "Approved and linked \(item.name). Its QuickBooks catalog values already match."
                     }
-                    createApprovedPricebookItem(item, remoteItems: remoteItems)
                 }
-            }
-        }
-    }
-
-    private func finishApprovedCatalogLink(
-        _ item: Item,
-        remoteItemResult: Result<QuickBooksItem, Error>,
-        remoteItems: [QuickBooksItem]
-    ) {
-        do {
-            let remoteItem = try remoteItemResult.get()
-            try QuickBooksCatalogMappingIntegrity.validateAssignment(
-                of: remoteItem.Id,
-                to: item,
-                in: localCatalogItems
-            )
-            items = remoteItems.sorted {
-                $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending
-            }
-            let outcome = PricebookReviewPublication.linkApprovedItem(item, to: remoteItem)
-            switch outcome {
-            case .synchronized:
-                finishApprovedPricebookPublication(
-                    item,
-                    message: "Approved and linked \(item.name). Its QuickBooks catalog values already match."
-                )
-            case .reconciliationRequired(let differenceCount):
+                let impact = PricebookReviewQueue.documentImpact(for: item,
+                    estimates: localEstimates, invoices: localInvoices)
+                if impact.estimateCount > 0 { showEstimatePublicationQueue = true }
+                if impact.invoiceCount > 0 { showInvoicePublicationQueue = true }
+                actionMessage = impact.publicationNextStep.map { "\(message) Next, \($0.lowercased())" } ?? message
+            } catch {
+                guard catalogLifecycle.isCurrent(workflow.run) else { return }
+                // A revoked context or a changed item is deliberately not saved.
+                do { try workflow.recordFailure(error) } catch { /* retained for explicit review */ }
+                showCatalogPublicationQueue = true
                 showCatalogReconciliationQueue = true
-                finishApprovedPricebookPublication(
-                    item,
-                    message: "Approved and linked \(item.name). Review \(differenceCount) linked QuickBooks difference\(differenceCount == 1 ? "" : "s") before choosing which version to publish."
-                )
-            }
-        } catch {
-            markApprovedPricebookPublicationFailure(item, error: error)
-        }
-    }
-
-    private func createApprovedPricebookItem(_ item: Item, remoteItems: [QuickBooksItem]) {
-        guard let incomeAccountRef = QuickBooksItemAccountResolver.incomeAccountRef(
-            from: remoteItems,
-            configuration: accountingConfiguration
-        ) else {
-            markApprovedPricebookPublicationFailure(
-                item,
-                error: QuickBooksDataAPI.QBError.missingDefaultIncomeAccountRef
-            )
-            return
-        }
-        let payload = QuickBooksCatalogCreateOperation.payload(
-            for: item,
-            incomeAccountRef: incomeAccountRef,
-            expenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(
-                configuration: accountingConfiguration
-            )
-        )
-        liveAPI.createItem(
-            payload,
-            requestID: QuickBooksCatalogCreateOperation.requestID(for: item.id)
-        ) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .failure(let error):
-                    markApprovedPricebookPublicationFailure(item, error: error)
-                case .success(let quickBooksItem):
-                    applyApprovedQuickBooksItem(quickBooksItem, to: item)
-                    finishApprovedPricebookPublication(item, message: "Approved and published \(item.name) to QuickBooks.")
-                    syncAllQuickBooksData()
-                }
+                actionMessage = workflow.failureMessage(error)
             }
         }
-    }
-
-    private func applyApprovedQuickBooksItem(_ quickBooksItem: QuickBooksItem, to item: Item) {
-        QuickBooksCatalogSnapshotApplication.apply(quickBooksItem, to: item)
-    }
-
-    private func finishApprovedPricebookPublication(_ item: Item, message: String) {
-        activePricebookReviewID = nil
-        activeCatalogPublicationID = nil
-        do {
-            try modelContext.save()
-            let impact = PricebookReviewQueue.documentImpact(
-                for: item,
-                estimates: localEstimates,
-                invoices: localInvoices
-            )
-            if impact.estimateCount > 0 {
-                showEstimatePublicationQueue = true
-            }
-            if impact.invoiceCount > 0 {
-                showInvoicePublicationQueue = true
-            }
-            actionMessage = impact.publicationNextStep.map { "\(message) Next, \($0.lowercased())" } ?? message
-        } catch {
-            actionMessage = "QuickBooks accepted \(item.name), but the local catalog link could not be saved: \(error.localizedDescription)"
-        }
-    }
-
-    private func markApprovedPricebookPublicationFailure(_ item: Item, error: Error) {
-        activePricebookReviewID = nil
-        activeCatalogPublicationID = nil
-        item.quickBooksSyncStatus = "needs_attention"
-        item.quickBooksSyncDetail = error.localizedDescription
-        item.quickBooksLastSyncedAt = Date()
-        if item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            showCatalogReconciliationQueue = true
-        } else {
-            showCatalogPublicationQueue = true
-        }
-        try? modelContext.save()
-        actionMessage = "\(item.name) is approved locally, but QuickBooks catalog review needs attention: \(error.localizedDescription)"
     }
 
     private func createEstimate(
@@ -4707,7 +4715,7 @@ struct QuickBooksManagementView: View {
             useQuickBooksCatalogVersion(entry)
         }
         .buttonStyle(.bordered)
-        .disabled(activeCatalogReconciliationID != nil)
+        .disabled(!isAuthenticated || catalogLifecycle.activeID != nil)
         .accessibilityIdentifier("UseQuickBooksCatalogVersion-\(entry.localItem.id.uuidString)")
 
         Button(activeCatalogReconciliationID == entry.localItem.id ? "Publishing..." : "Publish GunnAire Version") {
@@ -4718,7 +4726,7 @@ struct QuickBooksManagementView: View {
         .foregroundStyle(Color.primaryBlack)
         .disabled(
             !isAuthenticated ||
-            activeCatalogReconciliationID != nil ||
+            catalogLifecycle.activeID != nil ||
             !QuickBooksCatalogReconciliation.canPublish(
                 localItem: entry.localItem,
                 currentRemoteItem: entry.remoteItem
@@ -4740,121 +4748,11 @@ struct QuickBooksManagementView: View {
     }
 
     private func useQuickBooksCatalogVersion(_ entry: QuickBooksCatalogReconciliationEntry) {
-        if let conflict = QuickBooksCatalogMappingIntegrity.conflict(
-            containing: entry.localItem,
-            in: localCatalogItems
-        ) {
-            actionMessage = QuickBooksCatalogMappingIntegrityError.ambiguousIdentifier(
-                quickBooksID: conflict.quickBooksID,
-                localItemNames: conflict.localItems.map(\.name)
-            ).localizedDescription
-            return
-        }
-        activeCatalogReconciliationID = entry.localItem.id
-        applyApprovedQuickBooksItem(entry.remoteItem, to: entry.localItem)
-        do {
-            try modelContext.save()
-            actionMessage = "Applied the reviewed QuickBooks version of \(entry.remoteItem.Name) to GunnAire."
-        } catch {
-            entry.localItem.quickBooksSyncStatus = "needs_attention"
-            entry.localItem.quickBooksSyncDetail = "QuickBooks version was selected, but the local catalog could not be saved: \(error.localizedDescription)"
-            actionMessage = entry.localItem.quickBooksSyncDetail
-        }
-        activeCatalogReconciliationID = nil
+        startCatalogWorkflow(entry.localItem, mode: .useProvider(entry.remoteItem))
     }
 
     private func publishGunnAireCatalogVersion(_ entry: QuickBooksCatalogReconciliationEntry) {
-        let localItem = entry.localItem
-        if let conflict = QuickBooksCatalogMappingIntegrity.conflict(
-            containing: localItem,
-            in: localCatalogItems
-        ) {
-            markCatalogReconciliationFailure(
-                localItem,
-                error: QuickBooksCatalogMappingIntegrityError.ambiguousIdentifier(
-                    quickBooksID: conflict.quickBooksID,
-                    localItemNames: conflict.localItems.map(\.name)
-                )
-            )
-            return
-        }
-        guard let quickBooksID = localItem.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !quickBooksID.isEmpty else {
-            markCatalogReconciliationFailure(
-                localItem,
-                error: QuickBooksCatalogReconciliationError.identifierMismatch
-            )
-            return
-        }
-        activeCatalogReconciliationID = localItem.id
-        actionMessage = "Refreshing \(localItem.name) from QuickBooks before publishing..."
-
-        liveAPI.fetchItem(id: quickBooksID) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .failure(let error):
-                    markCatalogReconciliationFailure(localItem, error: error)
-                case .success(let currentRemoteItem):
-                    guard !QuickBooksCatalogReconciliation.differences(
-                        localItem: localItem,
-                        remoteItem: currentRemoteItem
-                    ).isEmpty else {
-                        applyApprovedQuickBooksItem(currentRemoteItem, to: localItem)
-                        finishCatalogReconciliation(
-                            localItem,
-                            message: "\(localItem.name) already matches QuickBooks."
-                        )
-                        return
-                    }
-                    do {
-                        let payload = try QuickBooksCatalogReconciliation.updatePayload(
-                            localItem: localItem,
-                            currentRemoteItem: currentRemoteItem
-                        )
-                        actionMessage = "Publishing the reviewed GunnAire version of \(localItem.name) to QuickBooks..."
-                        liveAPI.updateItem(payload) { updateResult in
-                            DispatchQueue.main.async {
-                                switch updateResult {
-                                case .failure(let error):
-                                    markCatalogReconciliationFailure(localItem, error: error)
-                                case .success(let updatedItem):
-                                    applyApprovedQuickBooksItem(updatedItem, to: localItem)
-                                    if let index = items.firstIndex(where: { $0.Id == updatedItem.Id }) {
-                                        items[index] = updatedItem
-                                    }
-                                    finishCatalogReconciliation(
-                                        localItem,
-                                        message: "Published and reconciled \(updatedItem.Name) with QuickBooks."
-                                    )
-                                }
-                            }
-                        }
-                    } catch {
-                        markCatalogReconciliationFailure(localItem, error: error)
-                    }
-                }
-            }
-        }
-    }
-
-    private func finishCatalogReconciliation(_ item: Item, message: String) {
-        activeCatalogReconciliationID = nil
-        do {
-            try modelContext.save()
-            actionMessage = message
-        } catch {
-            item.quickBooksSyncStatus = "needs_attention"
-            item.quickBooksSyncDetail = "QuickBooks accepted the catalog update, but the local confirmation could not be saved: \(error.localizedDescription)"
-            actionMessage = item.quickBooksSyncDetail
-        }
-    }
-
-    private func markCatalogReconciliationFailure(_ item: Item, error: Error) {
-        activeCatalogReconciliationID = nil
-        item.quickBooksSyncStatus = "needs_attention"
-        item.quickBooksSyncDetail = error.localizedDescription
-        try? modelContext.save()
-        actionMessage = "Catalog reconciliation needs attention: \(error.localizedDescription)"
+        startCatalogWorkflow(entry.localItem, mode: .update(entry.remoteItem))
     }
 
     private func unambiguousLocalCustomer(for quickBooksCustomer: QuickBooksCustomer) -> Customer? {

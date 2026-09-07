@@ -11,6 +11,13 @@ follow-up; unchanged credential reloads preserve that identity. See
 [QBO_SYNC_WORKFLOW_LIFECYCLE.md](QBO_SYNC_WORKFLOW_LIFECYCLE.md) for current
 acceptance and the distinct remaining publication, Google, tombstone and
 server-authority gaps.
+The Management catalog approval/retry and reviewed reconciliation directions
+now use one captured, one-shot workflow; the shared invoice-line boundary
+preserves and rejects conflicting local item identities. See
+[QBO_CATALOG_WORKFLOW_LIFECYCLE.md](QBO_CATALOG_WORKFLOW_LIFECYCLE.md).
+The separate BillingDocumentsView customer/item/document publication callback
+chain remains active and still requires full lifecycle migration; it is not
+qualified by the Management service's acceptance.
 The ten-suite feature comparison is a coverage inventory, not proof of flawless
 end-to-end behavior. CloudKit/offline convergence, historical accounting,
 complete payment-event reconciliation, retained-context orchestration and

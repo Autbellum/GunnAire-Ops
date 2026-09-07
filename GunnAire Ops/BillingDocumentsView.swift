@@ -9344,11 +9344,7 @@ GunnAire
     }
 
     private func catalogItemsForDocumentPublication(_ documentItems: [Item]) -> [Item] {
-        var itemsByID = Dictionary(self.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for item in documentItems {
-            itemsByID[item.id] = item
-        }
-        return Array(itemsByID.values)
+        QuickBooksDocumentLinePublication.catalogIncluding(documentItems, storedItems: items)
     }
 
     private func ensureQuickBooksItems(

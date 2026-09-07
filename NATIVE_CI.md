@@ -6,6 +6,11 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
+The published resource-sync checkpoint 529fe26 passes all four hosted jobs:
+[native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728868) and
+[Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728884).
+This is exact-head evidence for that checkpoint, not subsequent catalog work.
+
 - **iPad native tests**: the complete `GunnAire OpsTests` target plus five
   serial interface journeys: direct Invoice launch, simple Mail actions,
   current customer statement generation, statement review-to-Invoices,

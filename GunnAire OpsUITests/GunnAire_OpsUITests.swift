@@ -6278,6 +6278,7 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-uiTestAuthenticatedAdmin",
             "-uiTestSeedCollectibleJob",
             "-uiTestSeedCatalogReconciliation",
+            "-uiTestForceQuickBooksConnected",
             "-GunnAirePendingAppRoute", "quickBooksManagement"
         ]
         app.launch()
@@ -6305,7 +6306,7 @@ final class GunnAire_OpsUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(publish.exists)
-        XCTAssertFalse(publish.isEnabled)
+        XCTAssertTrue(publish.isEnabled)
 
         XCTAssertTrue(useQuickBooks.exists)
         XCTAssertTrue(useQuickBooks.isEnabled)
@@ -6316,6 +6317,24 @@ final class GunnAire_OpsUITests: XCTestCase {
             object: nil
         )
         XCTAssertEqual(XCTWaiter.wait(for: [resolved], timeout: 3), .completed)
+    }
+
+    @MainActor
+    func testOfflineCatalogComparisonRequiresReconnectBeforeEitherDirection() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-uiTestSeedCollectibleJob", "-uiTestSeedCatalogReconciliation",
+            "-uiTestForceQuickBooksDisconnected", "-GunnAirePendingAppRoute", "quickBooksManagement"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        app.segmentedControls["QuickBooksWorkspacePicker"].buttons["Sales"].tap()
+        let useProvider = app.buttons["Use QuickBooks Version"]
+        for _ in 0..<12 where !useProvider.exists { app.swipeUp() }
+        XCTAssertTrue(useProvider.waitForExistence(timeout: 3))
+        XCTAssertFalse(useProvider.isEnabled)
+        XCTAssertFalse(app.buttons["Publish GunnAire Version"].isEnabled)
+        XCTAssertTrue(app.staticTexts["Sales price"].exists)
     }
 
     @MainActor

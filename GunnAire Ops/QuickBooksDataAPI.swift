@@ -3016,7 +3016,7 @@ enum QuickBooksCatalogSnapshotApplication {
     }
 }
 
-struct QuickBooksItemCreate: Codable {
+struct QuickBooksItemCreate: Codable, Equatable {
     let Name: String
     let ItemType: String
     let Description: String?
@@ -3037,8 +3037,8 @@ struct QuickBooksItemCreate: Codable {
 
 /// One local catalog identity owns one QuickBooks create operation across
 /// devices and retries. Query-before-create still performs reconciliation;
-/// the stable request ID closes the uncertain-response window without placing
-/// customer, item, or accounting detail in the URL.
+/// the stable request ID supports provider replay without placing business
+/// detail in the URL. It is not an indefinite cross-device dispatch journal.
 enum QuickBooksCatalogCreateOperation {
     static func requestID(for localItemID: UUID) -> String {
         "ga-item-\(localItemID.uuidString.lowercased())"

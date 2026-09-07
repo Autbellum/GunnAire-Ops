@@ -107,6 +107,12 @@ workflow lifecycle change.
 
 ## Remaining full-goal requirements
 
+Follow-up: Management catalog approval/retry, comparison and both reviewed
+reconciliation directions are addressed in
+[QBO_CATALOG_WORKFLOW_LIFECYCLE.md](QBO_CATALOG_WORKFLOW_LIFECYCLE.md).
+Its acceptance is distinct from this resource-sync checkpoint; the separate
+BillingDocumentsView catalog/document publication chain remains unqualified.
+
 This checkpoint covers the active QuickBooks Management resource-sync path,
 not every multi-step integration in the application. Customer/vendor/catalog
 publication, attachment delivery, Google archive/calendar orchestration and

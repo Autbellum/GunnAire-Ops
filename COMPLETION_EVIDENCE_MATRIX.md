@@ -1,3 +1,21 @@
+Catalog publication checkpoint, 2026-09-07: **903/903 logic tests pass on each
+of iPad Simulator and Mac Catalyst; 10/10 focused iPad journeys and the
+unsigned universal Mac Release build pass**. Management approval/retry and
+both reviewed reconciliation directions retain the original provider, run,
+item revision and model context. Confirmation edits, role loss, late results,
+duplicate identities and local-save failures are covered by 27 new tests.
+The shared invoice-line gate and Billing Documents catalog merge retain
+duplicate identities for explicit review. A field-item publication test proves
+the new QBO Item ID does not reprice the existing invoice snapshot. See
+[QBO_CATALOG_WORKFLOW_LIFECYCLE.md](QBO_CATALOG_WORKFLOW_LIFECYCLE.md) for exact
+results, retained paths, prior failed iterations and scope. The separate
+BillingDocumentsView customer/item/document publication callback chain remains
+active and unqualified end-to-end; it is the next lifecycle migration.
+Server-owned immutable publication intents, durable realm-scoped item mappings,
+inactive-item enumeration, signed CloudKit/offline and provider/platform
+acceptance also remain open. No merge, deployment, signing, physical install
+or live business mutation occurred.
+
 QBO sync lifecycle checkpoint, 2026-09-07: **876/876 logic tests pass on iPad
 and Mac Catalyst; 6/6 focused iPad interface journeys pass; universal optimized
 Mac Release succeeds**. The active QuickBooks Management resource sync captures
