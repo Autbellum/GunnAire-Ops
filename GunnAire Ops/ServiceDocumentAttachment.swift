@@ -443,7 +443,9 @@ final class ServiceDocumentAttachment {
     }
 
     func canUploadToQuickBooksInvoice(_ invoice: Invoice) -> Bool {
-        guard canLinkToQuickBooksInvoiceDocument,
+        guard invoice.customer != nil,
+            invoice.quickBooksIdentityReviewMessage == nil,
+            canLinkToQuickBooksInvoiceDocument,
             invoiceID == invoice.id &&
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
             customerMatches(invoice.customer),
@@ -454,7 +456,9 @@ final class ServiceDocumentAttachment {
     }
 
     func canBePendingQuickBooksInvoiceAttachment(for invoice: Invoice) -> Bool {
-        guard canLinkToQuickBooksInvoiceDocument,
+        guard invoice.customer != nil,
+            invoice.quickBooksIdentityReviewMessage == nil,
+            canLinkToQuickBooksInvoiceDocument,
             (invoiceID == nil || invoiceID == invoice.id) &&
             invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false &&
             customerMatches(invoice.customer),

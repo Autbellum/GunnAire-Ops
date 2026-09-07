@@ -17075,7 +17075,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func quickBooksLocalSyncLinksImportedInvoiceToMatchingServiceCall() async throws {
+    @Test func quickBooksLocalSyncDoesNotInferInvoiceJobFromDateAndAmount() async throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(
             for: schema,
@@ -17137,11 +17137,11 @@ struct GunnAire_OpsTests {
         let invoices = try context.fetch(FetchDescriptor<Invoice>())
         let importedInvoice = try #require(invoices.first { $0.quickBooksID == "QB-INV-1" })
 
-        #expect(importedInvoice.serviceCallID == call.id)
-        #expect(importedInvoice.serviceLocationID == serviceLocationID)
+        #expect(importedInvoice.serviceCallID == nil)
+        #expect(importedInvoice.serviceLocationID == nil)
         #expect(importedInvoice.siteAddress == "515 Imported Service Way")
-        #expect(call.linkedInvoiceID == importedInvoice.id)
-        #expect(call.status == .invoiced)
+        #expect(call.linkedInvoiceID == nil)
+        #expect(call.status != .invoiced)
         #expect(importedInvoice.quickBooksBalanceDue == 0)
         #expect(importedInvoice.status == "paid")
     }
@@ -17262,7 +17262,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func quickBooksLocalSyncLinksImportedEstimateToMatchingServiceCall() async throws {
+    @Test func quickBooksLocalSyncDoesNotInferEstimateJobFromDateAndAmount() async throws {
         let schema = GunnAireModelSchema.schema
         let container = try ModelContainer(
             for: schema,
@@ -17313,8 +17313,8 @@ struct GunnAire_OpsTests {
         let estimates = try context.fetch(FetchDescriptor<Estimate>())
         let importedEstimate = try #require(estimates.first { $0.quickBooksID == "QB-EST-LINK-1" })
 
-        #expect(importedEstimate.serviceCallID == call.id)
-        #expect(call.linkedEstimateID == importedEstimate.id)
+        #expect(importedEstimate.serviceCallID == nil)
+        #expect(call.linkedEstimateID == nil)
         #expect(importedEstimate.amount == 875)
         #expect(importedEstimate.siteAddress == "515 Imported Service Way")
     }
@@ -18623,7 +18623,7 @@ struct GunnAire_OpsTests {
         #expect(Invoice.mostResolvedStatus("", "unpaid") == "unpaid")
     }
 
-    @Test func invoiceDisplayDeduplicationPrefersPaidQuickBooksRecord() async throws {
+    @Test func invoiceDisplayPreservesIndependentLocalAndPaidQuickBooksRecords() async throws {
         let customer = Customer(name: "Display Customer")
         let serviceCallID = UUID()
         let localDuplicate = Invoice(
@@ -18644,12 +18644,11 @@ struct GunnAire_OpsTests {
 
         let displayed = Invoice.displayDeduplicated([localDuplicate, quickBooksPaid])
 
-        #expect(displayed.count == 1)
-        #expect(displayed.first === quickBooksPaid)
-        #expect(displayed.first?.normalizedStatus == "paid")
+        #expect(displayed.count == 2)
+        #expect(Set(displayed.map(\.id)) == Set([localDuplicate.id, quickBooksPaid.id]))
     }
 
-    @Test func invoiceDisplayDeduplicationCollapsesLocalAndQuickBooksCopiesForSameServiceCall() async throws {
+    @Test func invoiceDisplayPreservesIndependentPaidAndUnpaidInvoicesOnOneJob() async throws {
         let customer = Customer(name: "Display Customer")
         let serviceCallID = UUID()
         let localPaidCopy = Invoice(
@@ -18671,9 +18670,8 @@ struct GunnAire_OpsTests {
 
         let displayed = Invoice.displayDeduplicated([localPaidCopy, quickBooksUnpaidCopy])
 
-        #expect(displayed.count == 1)
-        #expect(displayed.first === localPaidCopy)
-        #expect(Invoice.resolvedStatus(for: displayed.first!, payments: []) == "paid")
+        #expect(displayed.count == 2)
+        #expect(Set(displayed.map(\.id)) == Set([localPaidCopy.id, quickBooksUnpaidCopy.id]))
     }
 
     @Test func billingInvoiceQueuesDoNotRepeatCollectionInvoicesInOverdueSection() async throws {
@@ -18721,7 +18719,7 @@ struct GunnAire_OpsTests {
         #expect(collectible.contains { $0.id == paidInvoice.id } == false)
     }
 
-    @Test func estimateDisplayDeduplicationPrefersQuickBooksRecord() async throws {
+    @Test func estimateDisplayPreservesIndependentEqualValueProposals() async throws {
         let customer = Customer(name: "Estimate Display Customer")
         let serviceCallID = UUID()
         let localDuplicate = Estimate(
@@ -18742,9 +18740,8 @@ struct GunnAire_OpsTests {
 
         let displayed = Estimate.displayDeduplicated([localDuplicate, quickBooksEstimate])
 
-        #expect(displayed.count == 1)
-        #expect(displayed.first === quickBooksEstimate)
-        #expect(displayed.first?.status == "accepted")
+        #expect(displayed.count == 2)
+        #expect(Set(displayed.map(\.id)) == Set([localDuplicate.id, quickBooksEstimate.id]))
     }
 
     @Test func invoicePaymentHistoryRowsLabelRefundsClearly() async throws {
@@ -25730,10 +25727,10 @@ struct GunnAire_OpsTests {
             QuickBooksInvoice.self,
             from: Data(#"{"Id":"qbo-invoice-81","DocNumber":"INV-81","CustomerRef":{"value":"customer-22","name":"Payment Customer"},"TotalAmt":125,"Balance":125}"#.utf8)
         )
-        let customer = Customer(name: "Payment Customer")
+        let customer = Customer(quickBooksID: "customer-22", name: "Payment Customer")
         let linkedInvoice = Invoice(
             customer: customer,
-            quickBooksID: " QBO-INVOICE-81 ",
+            quickBooksID: " qbo-invoice-81 ",
             lineItemSummary: "Service",
             amount: 125
         )
@@ -25768,7 +25765,7 @@ struct GunnAire_OpsTests {
             QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(
                 for: remoteInvoice,
                 in: [documentNumberLink]
-            ) === documentNumberLink
+            ) == nil
         )
         #expect(
             QuickBooksTrackedPaymentPolicy.linkedLocalInvoice(

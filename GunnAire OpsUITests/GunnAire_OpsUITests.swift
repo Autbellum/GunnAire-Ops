@@ -4698,6 +4698,30 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-uiTestSeedCollectibleJob", "-uiTestBillingIdentityConflict"
+        ]
+        app.launch()
+        // Navigate normally: a launch-argument UserDefaults override would
+        // permanently mask subsequent in-app route changes during this test.
+        revealSidebarDestination("Reports", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Business Reports"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Billing needs review"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Export CSV"].isEnabled)
+        let picker = app.segmentedControls["BusinessReportWorkspacePicker"]
+        picker.buttons["Operations"].tap()
+        XCTAssertTrue(app.staticTexts["Completed Jobs"].waitForExistence(timeout: 3))
+        picker.buttons["Overview"].tap()
+        app.buttons["Review Invoices"].tap()
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 2))
+    }
+
+    @MainActor
     func testAdministratorResolvesDoNotServiceFromCustomerRecordAndRestoresJobStart() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

@@ -137,6 +137,7 @@ struct BusinessReportSnapshot {
     let period: BusinessReportPeriod
     let interval: DateInterval
     let generatedAt: Date
+    let billingIdentityReviewMessage: String?
     let invoicedRevenue: Double
     let collectedRevenue: Double
     let openBalance: Double
@@ -229,8 +230,8 @@ enum BusinessReporting {
     ) -> BusinessReportSnapshot {
         let interval = period.interval(containing: now, calendar: calendar)
         let periodCalls = uniqueServiceCalls(serviceCalls.filter { interval.contains($0.scheduledDate) })
-        let periodInvoices = Invoice.displayDeduplicated(invoices).filter { interval.contains($0.createdAt) }
-        let periodEstimates = Estimate.displayDeduplicated(estimates).filter { interval.contains($0.createdAt) }
+        let periodInvoices = Invoice.displayDeduplicated(invoices.filter { interval.contains($0.createdAt) })
+        let periodEstimates = Estimate.displayDeduplicated(estimates.filter { interval.contains($0.createdAt) })
         let periodPayments = payments.filter { interval.contains($0.date) }
         let periodTimeEntries = timeEntries.filter { interval.contains($0.clockIn) && $0.clockOut != nil }
         let periodServiceRequests = uniqueServiceRequests(
@@ -465,6 +466,11 @@ enum BusinessReporting {
             period: period,
             interval: interval,
             generatedAt: now,
+            billingIdentityReviewMessage: (
+                invoices.contains { $0.quickBooksIdentityReviewMessage != nil } ||
+                QuickBooksBillingIdentity.hasAmbiguousMapping(invoices.map { ($0.id, $0.customer?.id, $0.quickBooksID) }) ||
+                QuickBooksBillingIdentity.hasAmbiguousMapping(estimates.map { ($0.id, $0.customer?.id, $0.quickBooksID) })
+            ) ? "Billing records have conflicting identities. Financial totals and CSV export are unavailable until the linked invoices or estimates are reviewed. Operational counts remain available." : nil,
             invoicedRevenue: invoicedRevenue,
             collectedRevenue: collectedRevenue,
             openBalance: openBalance,
@@ -727,6 +733,10 @@ enum BusinessReporting {
 
 enum BusinessReportCSV {
     static func render(_ snapshot: BusinessReportSnapshot) -> String {
+        if let message = snapshot.billingIdentityReviewMessage {
+            return [["Report status", "Billing review required"], ["Review", message]]
+                .map { $0.map(escape).joined(separator: ",") }.joined(separator: "\n") + "\n"
+        }
         var rows: [[String]] = [
             ["GunnAire Business Report", snapshot.period.displayName],
             ["Period Start", snapshot.interval.start.formatted(.iso8601)],

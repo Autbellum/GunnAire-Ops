@@ -349,29 +349,7 @@ final class Estimate {
     }
 
     private static func displayDedupeKey(for estimate: Estimate) -> String {
-        if let proposalGroupID = estimate.proposalGroupID,
-           let proposalOption = estimate.proposalOptionKind,
-           proposalOption != .standalone {
-            return "proposal:\(proposalGroupID.uuidString.lowercased()):\(proposalOption.rawValue)"
-        }
-        if estimate.parentEstimateID != nil {
-            // Change orders are immutable revisions. Equal totals on the same
-            // job are not evidence that two revisions are duplicates.
-            return "change-order:\(estimate.id.uuidString.lowercased())"
-        }
-        if let serviceCallID = estimate.serviceCallID {
-            return "call:\(serviceCallID.uuidString.lowercased()):\(String(format: "%.2f", estimate.amount))"
-        }
-        if let quickBooksID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !quickBooksID.isEmpty {
-            return "qb:\(quickBooksID.lowercased())"
-        }
-        guard let customer = estimate.customer else {
-            return "unresolved-customer:\(estimate.id.uuidString.lowercased())"
-        }
-        let customerKey = customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let day = Calendar.current.startOfDay(for: estimate.createdAt).timeIntervalSince1970
-        return "local:\(customerKey):\(String(format: "%.2f", estimate.amount)):\(Int(day))"
+        "customer:\(estimate.customer?.id.uuidString ?? "unresolved"):estimate:\(estimate.id.uuidString)"
     }
 
     private static func preferredDisplayEstimate(_ lhs: Estimate, _ rhs: Estimate) -> Estimate {

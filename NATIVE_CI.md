@@ -6,9 +6,10 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
-- **iPad native tests**: the complete `GunnAire OpsTests` target plus four
+- **iPad native tests**: the complete `GunnAire OpsTests` target plus five
   serial interface journeys: direct Invoice launch, simple Mail actions,
-  current customer statement generation, and statement review-to-Invoices.
+  current customer statement generation, statement review-to-Invoices,
+  and billing-identity review-to-Invoices with safe report export controls.
 - **Mac native tests**: the complete logic target on arm64 Mac Catalyst,
   followed by an unsigned optimized Release build. `lipo -verify_arch`
   requires both arm64 and x86_64 in the Release executable.
@@ -59,3 +60,10 @@ After pushing, inspect the exact commit's checks on the pull request. A local
 lint pass or earlier native acceptance result does not establish that the new
 hosted workflow passed. Keep both matrix jobs visible when one fails; do not
 add `continue-on-error` to hide failures.
+
+The first hosted run at `991b601` failed on QR decoding in the iPad job and
+argument ordering in the final Mac `lipo` command. The corrected workflow puts
+the input executable before the architecture list. Source QR margin tests and
+software rendering address the observed label issue; fresh hosted verification
+is still required. See [BILLING_IDENTITY_RECONCILIATION.md](BILLING_IDENTITY_RECONCILIATION.md)
+for reproduced failures, local acceptance, and remaining scope.

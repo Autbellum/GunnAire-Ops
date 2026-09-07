@@ -1,3 +1,17 @@
+Billing identity checkpoint, 2026-09-07: **829/829 logic tests pass on iPad
+and Mac Catalyst; 5/5 focused iPad interface journeys pass**. Independent
+invoice/estimate UUIDs remain visible; exact QBO/customer/lineage evidence
+replaces destructive name/date/amount merging. Conflicting invoice mappings
+preserve history and gate edits, collection, financial reports and statements.
+Equipment labels include an intrinsic QR quiet margin with deterministic decode
+regressions and verified single-page PDF layout. The native workflow's Mac
+architecture argument order is corrected; the earlier hosted run failed and
+new hosted acceptance remains distinct from these local passes. See
+[BILLING_IDENTITY_RECONCILIATION.md](BILLING_IDENTITY_RECONCILIATION.md).
+Complete payment balance reconciliation, administrator identity resolution,
+signed CloudKit/offline acceptance and platform/provider release gates remain.
+No merge, deployment, signing change or live business mutation occurred.
+
 Customer statement checkpoint, 2026-09-07: **811/811 logic tests pass on iPad
 and Mac Catalyst; 4/4 focused iPad UI tests pass; universal optimized Mac
 Release succeeds**. The prior historical

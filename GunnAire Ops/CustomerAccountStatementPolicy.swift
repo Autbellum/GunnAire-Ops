@@ -25,6 +25,9 @@ enum CustomerAccountStatementPolicy {
         let eligible = invoices.filter {
             $0.customer?.id == customer.id && $0.createdAt <= cutoff
         }
+        if QuickBooksBillingIdentity.hasAmbiguousMapping(eligible.map { ($0.id, $0.customer?.id, $0.quickBooksID) }) {
+            review("Distinct local invoices claim the same accounting identity. Review their QuickBooks mappings before creating a statement.")
+        }
         let groups = Dictionary(grouping: eligible, by: invoiceKey)
         let localIdentityGroups = Dictionary(grouping: eligible, by: \.id)
         if localIdentityGroups.values.contains(where: { Set($0.map(invoiceKey)).count > 1 }) {
@@ -42,8 +45,8 @@ enum CustomerAccountStatementPolicy {
                 review("An invoice has an invalid amount. Review it before creating a statement.")
                 continue
             }
-            if !isHistorical && invoice.paymentCollectionBlockedMessage != nil {
-                review("An invoice still needs its confirmed tax total. Finish its QuickBooks review before creating a statement.")
+            if !isHistorical, let message = invoice.paymentCollectionBlockedMessage {
+                review(message)
             }
             let replicaIDs = Set(replicas.map(\.id))
             var uniquePayments: [Payment] = []

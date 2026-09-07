@@ -290,8 +290,14 @@ final class Invoice {
         )
     }
 
+    var quickBooksIdentityReviewMessage: String? {
+        quickBooksSyncState == QuickBooksBillingIdentity.invoiceReviewState
+            ? QuickBooksBillingIdentity.invoiceReviewMessage : nil
+    }
+
     var paymentCollectionBlockedMessage: String? {
-        BillingTaxPolicy.customerCommitmentBlockedMessage(
+        if let message = quickBooksIdentityReviewMessage { return message }
+        return BillingTaxPolicy.customerCommitmentBlockedMessage(
             status: taxCalculationStatus,
             documentName: "invoice"
         )
@@ -394,7 +400,7 @@ final class Invoice {
     }
 
     var needsQuickBooksAttention: Bool {
-        quickBooksSyncState == "needs_attention"
+        quickBooksSyncState == "needs_attention" || quickBooksIdentityReviewMessage != nil
     }
 
     static func outstandingBalance(for invoice: Invoice, payments: [Payment]) -> Double {
@@ -473,29 +479,16 @@ final class Invoice {
     }
 
     private static func displayDedupeKey(for invoice: Invoice) -> String {
-        if let projectMilestoneID = invoice.projectMilestoneID {
-            return "milestone:\(projectMilestoneID.uuidString.lowercased())"
-        }
-        if let serviceCallID = invoice.serviceCallID {
-            return "call:\(serviceCallID.uuidString.lowercased()):\(String(format: "%.2f", invoice.amount))"
-        }
-        if let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !quickBooksID.isEmpty {
-            return "qb:\(quickBooksID.lowercased())"
-        }
-        guard let customer = invoice.customer else {
-            return "unresolved-customer:\(invoice.id.uuidString.lowercased())"
-        }
-        let customerKey = customer.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let day = Calendar.current.startOfDay(for: invoice.createdAt).timeIntervalSince1970
-        return "local:\(customerKey):\(String(format: "%.2f", invoice.amount)):\(Int(day))"
+        // Two draws, repairs, or drafts on one job are independent documents.
+        // Only replicas of the same durable local UUID may share a display row.
+        "customer:\(invoice.customer?.id.uuidString ?? "unresolved"):invoice:\(invoice.id.uuidString)"
     }
 
     private static func preferredDisplayInvoice(_ lhs: Invoice, _ rhs: Invoice) -> Invoice {
-        let lhsRank = rank(for: resolvedStatus(for: lhs, payments: []))
-        let rhsRank = rank(for: resolvedStatus(for: rhs, payments: []))
-        if lhsRank != rhsRank {
-            return rhsRank > lhsRank ? rhs : lhs
+        if lhs.quickBooksIdentityReviewMessage != nil { return lhs }
+        if rhs.quickBooksIdentityReviewMessage != nil { return rhs }
+        if lhs.quickBooksLastSyncedAt != rhs.quickBooksLastSyncedAt {
+            return (rhs.quickBooksLastSyncedAt ?? .distantPast) > (lhs.quickBooksLastSyncedAt ?? .distantPast) ? rhs : lhs
         }
         let lhsHasQuickBooks = lhs.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let rhsHasQuickBooks = rhs.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false

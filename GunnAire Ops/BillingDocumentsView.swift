@@ -852,35 +852,29 @@ struct BillingDocumentsView: View {
     }
 
     private var displayedEstimates: [Estimate] {
-        let displayEstimates = Estimate.displayDeduplicated(estimates)
-        guard !canViewFinancials else { return displayEstimates }
+        let resolved = estimates.filter { $0.customer != nil }
+        if canViewFinancials { return Estimate.displayDeduplicated(resolved) }
         guard canCollectFieldPayments else { return [] }
         let visibleCallIDs = visibleBillingServiceCallIDsForFieldUser
         let visibleEstimateIDs = visibleLinkedEstimateIDsForFieldUser
-        return displayEstimates.filter { estimate in
-            if let serviceCallID = estimate.serviceCallID, visibleCallIDs.contains(serviceCallID) {
-                return true
-            }
+        return Estimate.displayDeduplicated(resolved.filter { estimate in
+            if let serviceCallID = estimate.serviceCallID, visibleCallIDs.contains(serviceCallID) { return true }
             return visibleEstimateIDs.contains(estimate.id)
-        }
+        })
     }
 
     private var displayedInvoices: [Invoice] {
-        // CloudKit may briefly hydrate an invoice before its required customer
-        // relationship arrives. Keep that record in the store and surface a
-        // sync status, but never force-render the incomplete relationship.
-        let displayInvoices = Invoice.displayDeduplicated(invoices)
-            .filter { $0.customer != nil }
-        guard !canViewFinancials else { return displayInvoices }
+        // Authorize before coalescing replicas, so another user's row cannot
+        // suppress assigned field work. Keep unresolved CloudKit records saved.
+        let resolved = invoices.filter { $0.customer != nil }
+        if canViewFinancials { return Invoice.displayDeduplicated(resolved) }
         guard canCollectFieldPayments else { return [] }
         let visibleCallIDs = visibleBillingServiceCallIDsForFieldUser
         let visibleInvoiceIDs = visibleLinkedInvoiceIDsForFieldUser
-        return displayInvoices.filter { invoice in
-            if let serviceCallID = invoice.serviceCallID, visibleCallIDs.contains(serviceCallID) {
-                return true
-            }
+        return Invoice.displayDeduplicated(resolved.filter { invoice in
+            if let serviceCallID = invoice.serviceCallID, visibleCallIDs.contains(serviceCallID) { return true }
             return visibleInvoiceIDs.contains(invoice.id)
-        }
+        })
     }
 
     private var unresolvedInvoiceRelationshipCount: Int {
@@ -10912,6 +10906,7 @@ enum CatalogVendorSelection {
 
 enum BillingInvoiceMutationPolicy {
     static func blockedMessage(for invoice: Invoice, payments: [Payment]) -> String? {
+        if let message = invoice.quickBooksIdentityReviewMessage { return message }
         if invoice.isProjectProgressInvoice {
             return "Progress-invoice lines are locked to the approved milestone allocation. Correct the project plan before invoicing, or create a separate approved adjustment."
         }

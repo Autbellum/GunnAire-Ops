@@ -177,7 +177,7 @@ struct CustomerStatementCutoffTests {
     @Test func identicalInvoiceReplicasCollectTheirPaymentAliasesOnce() {
         let customer = Customer(name: "Invoice replicas")
         let invoice = Invoice(customer: customer, quickBooksID: "shared-invoice", quickBooksBalanceDue: 75, amount: 100)
-        let replica = Invoice(customer: customer, quickBooksID: "shared-invoice", quickBooksBalanceDue: 75,
+        let replica = Invoice(id: invoice.id, customer: customer, quickBooksID: "shared-invoice", quickBooksBalanceDue: 75,
             amount: 100, createdAt: invoice.createdAt)
         let payment = Payment(invoice: invoice, quickBooksID: "same-payment", amount: 25)
         let remote = Payment(invoice: replica, quickBooksID: "same-payment", amount: 25, date: payment.date)

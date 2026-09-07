@@ -203,6 +203,9 @@ enum QuickBooksInvoicePublicationRecovery {
         catalogItems: [Item],
         payments: [Payment]
     ) throws -> QuickBooksInvoicePublicationInputs {
+        if let message = invoice.quickBooksIdentityReviewMessage {
+            throw QuickBooksInvoicePublicationRecoveryError.protectedHistory(message)
+        }
         if invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
            let blockedMessage = BillingInvoiceMutationPolicy.blockedMessage(for: invoice, payments: payments) {
             throw QuickBooksInvoicePublicationRecoveryError.protectedHistory(blockedMessage)
@@ -1098,20 +1101,16 @@ enum QuickBooksTrackedPaymentPolicy {
         for quickBooksInvoice: QuickBooksInvoice,
         in localInvoices: [Invoice]
     ) -> Invoice? {
-        let quickBooksID = normalized(quickBooksInvoice.Id)
-        let documentNumber = normalized(quickBooksInvoice.DocNumber)
-        let matches = localInvoices.filter { localInvoice in
-            let localQuickBooksID = normalized(localInvoice.quickBooksID)
-            return !localQuickBooksID.isEmpty &&
-                (localQuickBooksID == quickBooksID ||
-                 (!documentNumber.isEmpty && localQuickBooksID == documentNumber))
+        let quickBooksID = QuickBooksBillingIdentity.identifier(quickBooksInvoice.Id)
+        let matches = localInvoices.filter {
+            quickBooksID != nil && QuickBooksBillingIdentity.identifier($0.quickBooksID) == quickBooksID
         }
-        guard matches.count == 1 else { return nil }
-        return matches[0]
-    }
-
-    private static func normalized(_ value: String?) -> String {
-        (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard matches.count == 1, let invoice = matches.first,
+              invoice.quickBooksIdentityReviewMessage == nil,
+              QuickBooksBillingIdentity.customerMatches(invoice.customer, reference: quickBooksInvoice.CustomerRef) else { return nil }
+        if let lineageID = QuickBooksInvoiceLineage.localInvoiceID(from: quickBooksInvoice.PrivateNote),
+           lineageID != invoice.id { return nil }
+        return invoice
     }
 }
 
