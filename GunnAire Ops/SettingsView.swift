@@ -40,6 +40,10 @@ struct SettingsView: View {
     @State private var isLoadingBackendReadiness = false
     @State private var backendReadinessMessage: String?
     @State private var showingBackendReadinessDetails = false
+    @State private var supplierConnectors: [SupplierConnectorReadiness] = []
+    @State private var isLoadingSupplierConnectors = false
+    @State private var supplierConnectorMessage: String?
+    @State private var showingSupplierConnectorDetails = false
     @State private var showingFieldFormTemplates = false
     @State private var showingCustomerPortalLinks = false
     @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness = .couldNotDetermine
@@ -292,10 +296,13 @@ struct SettingsView: View {
                             featureStatus("Fleet & Truck Readiness", systemImage: "car.2", detail: "Included in the Command Center")
                             featureStatus("Pricebook", systemImage: "list.bullet.rectangle", detail: "Included in estimates and invoices")
                             featureStatus("Good-Better-Best Estimates", systemImage: "square.stack.3d.up", detail: "Included in estimates")
-                            Button("Manage Field Form Templates") {
+                            Button {
                                 showingFieldFormTemplates = true
+                            } label: {
+                                Label("Manage Field Form Templates", systemImage: "list.clipboard")
                             }
                             .accessibilityIdentifier("ManageFieldFormTemplates")
+                            .accessibilityHint("Opens reusable service, repair, replacement, and maintenance forms")
                             settingsToggle("Photo & Document Capture", systemImage: "camera", isOn: $enablePhotoDocumentation)
                             featureStatus("Reporting Dashboard", systemImage: "chart.bar", detail: "Included in Command Center")
                         }
@@ -738,6 +745,68 @@ struct SettingsView: View {
         }
 
         if isAdminUser {
+            Section("Supplier Connections") {
+                Button {
+                    refreshSupplierConnectors()
+                } label: {
+                    Label(
+                        isLoadingSupplierConnectors ? "Checking Suppliers..." : "Refresh Supplier Connections",
+                        systemImage: "shippingbox.and.arrow.backward"
+                    )
+                }
+                .disabled(isLoadingSupplierConnectors || !GunnAireBackendService.isConfigured)
+                .accessibilityIdentifier("SupplierConnectionsRefreshButton")
+
+                if !GunnAireBackendService.isConfigured {
+                    Label("Shared server is not configured for this build.", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else if isLoadingSupplierConnectors && supplierConnectors.isEmpty {
+                    HStack {
+                        ProgressView()
+                        Text("Checking approved supplier adapters...")
+                    }
+                } else if supplierConnectors.isEmpty {
+                    Text("No supplier readiness record is available. Purchasing keeps manual portal, email, phone, and counter confirmation available.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    let readyCount = supplierConnectors.filter(\.isReady).count
+                    LabeledContent("Approved adapters") {
+                        Text(readyCount == 0 ? "Manual ordering" : "\(readyCount) ready")
+                            .foregroundStyle(readyCount == 0 ? Color.secondary : Color.green)
+                    }
+
+                    Text(readyCount == 0
+                         ? "Lennox, Johnstone, Carrier, and other electronic ordering remain off until their provider-approved setup is complete."
+                         : "Only server-approved adapters can transmit purchase orders; manual supplier confirmation remains available.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    DisclosureGroup("Review provider readiness", isExpanded: $showingSupplierConnectorDetails) {
+                        ForEach(supplierConnectors) { connector in
+                            supplierConnectorReadinessRow(connector)
+                        }
+                    }
+                    .accessibilityIdentifier("SupplierConnectionReadinessDisclosure")
+                }
+
+                if let supplierConnectorMessage {
+                    Label(supplierConnectorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
+                Text("Supplier account credentials stay on the approved server and are never stored in GunnAire Ops.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .task {
+                if supplierConnectors.isEmpty && supplierConnectorMessage == nil {
+                    refreshSupplierConnectors()
+                }
+            }
+
             Section("Shared Server Readiness") {
                 Button {
                     refreshBackendReadiness()
@@ -757,7 +826,7 @@ struct SettingsView: View {
                 } else if let backendReadiness {
                     LabeledContent("Overall") {
                         Label(
-                            backendReadiness.isReady ? "Ready" : "(backendReadiness.attentionCount) need attention",
+                            backendReadiness.isReady ? "Ready" : "\(backendReadiness.attentionCount) need attention",
                             systemImage: backendReadiness.isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
                         )
                         .foregroundStyle(backendReadiness.isReady ? .green : .orange)
@@ -770,7 +839,7 @@ struct SettingsView: View {
                         }
                     }
 
-                    Text("Checked (readinessCheckTime(backendReadiness.checkedAt)). A verified backup record proves the artifact passed integrity checks; operations must still retain a copy off-host.")
+                    Text("Checked \(readinessCheckTime(backendReadiness.checkedAt)). A verified backup record proves the artifact passed integrity checks; operations must still retain a copy off-host.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
@@ -936,6 +1005,88 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private func refreshSupplierConnectors() {
+        guard GunnAireBackendService.isConfigured, !isLoadingSupplierConnectors else { return }
+        isLoadingSupplierConnectors = true
+        supplierConnectorMessage = nil
+        Task {
+            do {
+                let connectors = try await GunnAireBackendService.fetchSupplierConnectors()
+                await MainActor.run {
+                    supplierConnectors = connectors
+                    supplierConnectorMessage = connectors.isEmpty
+                        ? "The server returned no supplier connection records. Manual ordering remains available."
+                        : nil
+                    isLoadingSupplierConnectors = false
+                }
+            } catch {
+                await MainActor.run {
+                    supplierConnectors = []
+                    supplierConnectorMessage = "Supplier readiness could not be loaded. Manual ordering remains available. \(error.localizedDescription)"
+                    isLoadingSupplierConnectors = false
+                }
+            }
+        }
+    }
+
+    private func supplierConnectorReadinessRow(_ connector: SupplierConnectorReadiness) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(connector.displayName)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(connector.statusLabel)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(connector.isReady ? .green : .secondary)
+            }
+
+            Text(connector.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let accessModel = connector.accessModelLabel,
+               let integrationProtocol = connector.integrationProtocolLabel {
+                Text("\(accessModel) · \(integrationProtocol)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !connector.capabilityLabels.isEmpty {
+                Text("Available scope: \(connector.capabilityLabels.joined(separator: ", "))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !connector.requirements.isEmpty, !connector.isReady {
+                DisclosureGroup("Setup requirements") {
+                    ForEach(Array(connector.requirements.enumerated()), id: \.offset) { _, requirement in
+                        Text("• \(requirement)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption2.weight(.semibold))
+            }
+
+            if let reviewedAt = connector.publicDocumentationReviewedAt,
+               !reviewedAt.isEmpty {
+                Text("Official information reviewed \(reviewedAt)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            if let urlText = connector.onboardingURL,
+               let url = URL(string: urlText),
+               !connector.isReady {
+                Link("Open official supplier information", destination: url)
+                    .font(.caption)
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("SupplierConnection-\(connector.kind.rawValue)")
     }
 
     private func backendReadinessRow(_ component: BackendReadinessComponent) -> some View {

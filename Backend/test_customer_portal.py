@@ -9,11 +9,12 @@ import urllib.error
 import urllib.request
 import uuid
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Iterator
-from urllib.parse import urlparse
+from typing import Callable, Iterator
+from urllib.parse import urlencode, urlparse
 from unittest import mock
 
 from Backend import gunnaire_backend as backend
@@ -79,6 +80,15 @@ class CustomerPortalTests(unittest.TestCase):
             "expiresInDays": 14,
         }
 
+    def portal_approval_payload(self) -> dict[str, object]:
+        return {
+            **self.portal_payload(),
+            "estimateID": str(uuid.uuid4()),
+            "estimateLabel": "Best <Comfort> Option",
+            "estimateAmount": 12_345.678,
+            "estimateRevision": "a" * 64,
+        }
+
     def request(
         self,
         base_url: str,
@@ -110,6 +120,223 @@ class CustomerPortalTests(unittest.TestCase):
             result = json.loads(response.read().decode("utf-8"))
         self.assertEqual(response.status, 201)
         return result
+
+    def submit_approval(self, base_url: str, token: str) -> str:
+        request = urllib.request.Request(
+            f"{base_url}/portal/{token}/estimate-response",
+            data=urlencode({"approvalName": "Alex Customer", "approvalConfirmed": "yes"}).encode(),
+            method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.read().decode()
+
+    @contextmanager
+    def pause_database_statement(
+        self,
+        matches: Callable[[str, tuple], bool],
+        *,
+        after_read: bool = False,
+    ) -> Iterator[tuple[threading.Event, threading.Event]]:
+        """Hold one request at a real SQLite boundary while another request commits."""
+        paused = threading.Event()
+        resume = threading.Event()
+
+        def pause() -> None:
+            paused.set()
+            if not resume.wait(timeout=10):
+                raise TimeoutError("Concurrent portal request did not resume")
+
+        class PausingConnection(sqlite3.Connection):
+            def execute(self, sql: str, parameters: tuple = ()):
+                should_pause = matches(sql, parameters) and not paused.is_set()
+                if should_pause and not after_read:
+                    pause()
+                cursor = super().execute(sql, parameters)
+                if should_pause and after_read:
+                    def fetchone():
+                        row = cursor.fetchone()
+                        pause()
+                        return row
+                    wrapped = mock.Mock(wraps=cursor)
+                    wrapped.fetchone.side_effect = fetchone
+                    return wrapped
+                return cursor
+
+        def connection() -> sqlite3.Connection:
+            result = sqlite3.connect(backend.DB_PATH, factory=PausingConnection)
+            result.row_factory = sqlite3.Row
+            return result
+
+        with mock.patch.object(backend, "db", side_effect=connection):
+            try:
+                yield paused, resume
+            finally:
+                resume.set()
+
+    def test_oversized_portal_amounts_return_validation_errors(self) -> None:
+        with self.running_server() as base_url:
+            for field in ("balanceDue", "estimateAmount"):
+                for amount in (10 ** 400, -(10 ** 400)):
+                    with self.subTest(field=field, sign=amount > 0):
+                        payload = {**self.portal_approval_payload(), field: amount}
+                        with self.assertRaises(urllib.error.HTTPError) as invalid:
+                            self.create_link(base_url, payload)
+                        self.assertEqual(invalid.exception.code, 400)
+            with backend.db() as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM customer_portal_links").fetchone()[0], 0)
+            self.create_link(base_url, self.portal_approval_payload())
+
+    def test_stale_resolution_cannot_overwrite_applied_approval(self) -> None:
+        with self.running_server() as base_url, ThreadPoolExecutor(max_workers=1) as requests:
+            created = self.create_link(base_url, self.portal_approval_payload())
+            token = urlparse(str(created["url"])).path.removeprefix("/portal/")
+            self.submit_approval(base_url, token)
+            link_id = str(created["id"])
+            with backend.db() as connection:
+                response_id = connection.execute(
+                    "SELECT estimate_response_id FROM customer_portal_links WHERE id = ?", (link_id,)
+                ).fetchone()[0]
+
+            def resolve(status: str, detail: str) -> dict[str, object]:
+                request = self.request(
+                    base_url, f"/api/customer-portal-links/{link_id}/estimate-response-resolution",
+                    method="POST", payload={"responseID": response_id, "status": status, "detail": detail},
+                )
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return json.loads(response.read())
+
+            with self.pause_database_statement(
+                lambda sql, args: "SET estimate_resolution_status" in sql and args[0] == "needs_attention"
+            ) as (paused, resume):
+                stale = requests.submit(resolve, "needs_attention", "Stale local estimate")
+                self.assertTrue(paused.wait(timeout=5))
+                applied = resolve("applied", "Imported exact customer approval")
+                resume.set()
+                with self.assertRaises(urllib.error.HTTPError) as conflict:
+                    stale.result(timeout=10)
+                self.assertEqual(conflict.exception.code, 409)
+
+            replayed = resolve("applied", "Later request must preserve original evidence")
+            for field in ("estimateResolutionStatus", "estimateResolutionDetail", "estimateResolvedAt", "estimateResolvedBy"):
+                self.assertEqual(replayed[field], applied[field])
+            with backend.db() as connection:
+                actions = connection.execute(
+                    "SELECT action FROM audit_events WHERE subject_id = ? AND action LIKE 'estimate-approval-%'",
+                    (link_id,),
+                ).fetchall()
+            self.assertEqual([row[0] for row in actions], ["estimate-approval-applied"])
+
+    def test_revocation_during_approval_or_replay_never_confirms_success(self) -> None:
+        with self.running_server() as base_url, ThreadPoolExecutor(max_workers=1) as requests:
+            for already_approved in (False, True):
+                with self.subTest(already_approved=already_approved):
+                    created = self.create_link(base_url, self.portal_approval_payload())
+                    link_id = str(created["id"])
+                    token = urlparse(str(created["url"])).path.removeprefix("/portal/")
+                    if already_approved:
+                        self.submit_approval(base_url, token)
+                    with self.pause_database_statement(
+                        lambda sql, args: "SELECT * FROM customer_portal_links WHERE token_hash" in sql,
+                        after_read=True,
+                    ) as (paused, resume):
+                        pending = requests.submit(self.submit_approval, base_url, token)
+                        self.assertTrue(paused.wait(timeout=5))
+                        with urllib.request.urlopen(self.request(
+                            base_url, f"/api/customer-portal-links/{link_id}", method="DELETE"
+                        ), timeout=5) as response:
+                            self.assertTrue(json.loads(response.read())["revoked"])
+                        resume.set()
+                        with self.assertRaises(urllib.error.HTTPError) as unavailable:
+                            pending.result(timeout=10)
+                        self.assertEqual(unavailable.exception.code, 404)
+                    with backend.db() as connection:
+                        stored = connection.execute(
+                            "SELECT * FROM customer_portal_links WHERE id = ?", (link_id,)
+                        ).fetchone()
+                    self.assertIsNotNone(stored["revoked_at"])
+                    self.assertEqual(stored["estimate_response_id"] is not None, already_approved)
+
+    def test_concurrent_applied_replay_preserves_first_resolution_and_single_audit(self) -> None:
+        with self.running_server() as base_url, ThreadPoolExecutor(max_workers=1) as requests:
+            created = self.create_link(base_url, self.portal_approval_payload())
+            link_id = str(created["id"])
+            token = urlparse(str(created["url"])).path.removeprefix("/portal/")
+            self.submit_approval(base_url, token)
+            with backend.db() as connection:
+                response_id = connection.execute(
+                    "SELECT estimate_response_id FROM customer_portal_links WHERE id = ?", (link_id,)
+                ).fetchone()[0]
+
+            def resolve(detail: str) -> dict[str, object]:
+                with urllib.request.urlopen(self.request(
+                    base_url, f"/api/customer-portal-links/{link_id}/estimate-response-resolution",
+                    method="POST", payload={"responseID": response_id, "status": "applied", "detail": detail},
+                ), timeout=10) as response:
+                    return json.loads(response.read())
+
+            with self.pause_database_statement(
+                lambda sql, args: "SET estimate_resolution_status" in sql and args[1] == "Second import"
+            ) as (paused, resume):
+                delayed = requests.submit(resolve, "Second import")
+                self.assertTrue(paused.wait(timeout=5))
+                first = resolve("First import")
+                resume.set()
+                self.assertEqual(delayed.result(timeout=10), first)
+            with backend.db() as connection:
+                count = connection.execute(
+                    "SELECT COUNT(*) FROM audit_events WHERE subject_id = ? AND action = 'estimate-approval-applied'",
+                    (link_id,),
+                ).fetchone()[0]
+            self.assertEqual(count, 1)
+
+    def test_resolution_and_audit_commit_together(self) -> None:
+        with self.running_server() as base_url:
+            created = self.create_link(base_url, self.portal_approval_payload())
+            link_id = str(created["id"])
+            token = urlparse(str(created["url"])).path.removeprefix("/portal/")
+            self.submit_approval(base_url, token)
+            with backend.db() as connection:
+                before = dict(connection.execute(
+                    "SELECT * FROM customer_portal_links WHERE id = ?", (link_id,)
+                ).fetchone())
+            handler = mock.Mock()
+            handler.read_json.return_value = {"responseID": before["estimate_response_id"], "status": "applied"}
+            handler.principal.return_value = {"email": self.admin_email}
+            with mock.patch.object(backend, "record_audit_event", side_effect=RuntimeError("Audit storage failed")):
+                with self.assertRaisesRegex(RuntimeError, "Audit storage failed"):
+                    backend.GunnAireBackendHandler.resolve_customer_portal_estimate_response(handler, link_id)
+            handler.write_json.assert_not_called()
+            with backend.db() as connection:
+                after = dict(connection.execute(
+                    "SELECT * FROM customer_portal_links WHERE id = ?", (link_id,)
+                ).fetchone())
+            self.assertEqual(after, before)
+
+    def test_expiry_during_approval_does_not_record_customer_consent(self) -> None:
+        with self.running_server() as base_url, ThreadPoolExecutor(max_workers=1) as requests:
+            created = self.create_link(base_url, self.portal_approval_payload())
+            token = urlparse(str(created["url"])).path.removeprefix("/portal/")
+            with self.pause_database_statement(
+                lambda sql, args: "SELECT * FROM customer_portal_links WHERE token_hash" in sql,
+                after_read=True,
+            ) as (paused, resume):
+                pending = requests.submit(self.submit_approval, base_url, token)
+                self.assertTrue(paused.wait(timeout=5))
+                with backend.db() as connection:
+                    connection.execute(
+                        "UPDATE customer_portal_links SET expires_at = ? WHERE id = ?",
+                        ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), created["id"]),
+                    )
+                resume.set()
+                with self.assertRaises(urllib.error.HTTPError) as unavailable:
+                    pending.result(timeout=10)
+                self.assertEqual(unavailable.exception.code, 404)
+            with backend.db() as connection:
+                row = connection.execute(
+                    "SELECT estimate_response_id FROM customer_portal_links WHERE id = ?", (created["id"],)
+                ).fetchone()
+            self.assertIsNone(row[0])
 
     def test_link_lifecycle_keeps_secret_server_side_and_tracks_non_authoritative_opens(self) -> None:
         with self.running_server() as base_url:
@@ -216,6 +443,14 @@ class CustomerPortalTests(unittest.TestCase):
                 {**base, "expiresInDays": True},
                 {**base, "customerName": ["not", "text"]},
                 {**base, "serviceCallID": None, "invoiceID": None},
+                {**base, "estimateID": str(uuid.uuid4())},
+                {
+                    **base,
+                    "estimateID": str(uuid.uuid4()),
+                    "estimateLabel": "Service estimate",
+                    "estimateAmount": 100,
+                    "estimateRevision": "not-a-digest",
+                },
                 ["not", "an", "object"],
             ]
         )
@@ -237,6 +472,126 @@ class CustomerPortalTests(unittest.TestCase):
             with backend.db() as connection:
                 count = connection.execute("SELECT COUNT(*) FROM customer_portal_links").fetchone()[0]
             self.assertEqual(count, 0)
+
+    def test_exact_estimate_approval_is_one_time_and_requires_admin_reconciliation(self) -> None:
+        with self.running_server() as base_url:
+            created = self.create_link(base_url, self.portal_approval_payload())
+            link_id = str(created["id"])
+            token = urlparse(str(created["url"])).path.removeprefix("/portal/")
+
+            with urllib.request.urlopen(
+                self.request(base_url, f"/portal/{token}", authenticated=False),
+                timeout=5,
+            ) as response:
+                page = response.read().decode("utf-8")
+                headers = response.headers
+            self.assertIn("Approve this estimate", page)
+            self.assertIn("Best &lt;Comfort&gt; Option", page)
+            self.assertIn("$12,345.68", page)
+            self.assertIn(f'action="/portal/{token}/estimate-response"', page)
+            self.assertIn("form-action 'self'", headers["Content-Security-Policy"])
+
+            invalid_form_data = urlencode(
+                {"approvalName": "Alex\nCustomer", "approvalConfirmed": "yes"}
+            ).encode("utf-8")
+            invalid_approval_request = urllib.request.Request(
+                f"{base_url}/portal/{token}/estimate-response",
+                data=invalid_form_data,
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with self.assertRaises(urllib.error.HTTPError) as invalid_name:
+                urllib.request.urlopen(invalid_approval_request, timeout=5)
+            self.assertEqual(invalid_name.exception.code, 400)
+
+            form_data = urlencode(
+                {"approvalName": "Alex <Customer>", "approvalConfirmed": "yes"}
+            ).encode("utf-8")
+            approval_request = urllib.request.Request(
+                f"{base_url}/portal/{token}/estimate-response",
+                data=form_data,
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with urllib.request.urlopen(approval_request, timeout=5) as response:
+                confirmation = response.read().decode("utf-8")
+            self.assertEqual(response.status, 200)
+            self.assertIn("Estimate approved", confirmation)
+            self.assertIn("Alex &lt;Customer&gt;", confirmation)
+            self.assertNotIn("Alex <Customer>", confirmation)
+
+            with backend.db() as connection:
+                stored = connection.execute(
+                    "SELECT * FROM customer_portal_links WHERE id = ?",
+                    (link_id,),
+                ).fetchone()
+            response_id = stored["estimate_response_id"]
+            first_response_time = stored["estimate_responded_at"]
+            self.assertIsNotNone(response_id)
+            self.assertEqual(stored["estimate_response_name"], "Alex <Customer>")
+            self.assertEqual(stored["estimate_resolution_status"], "pending")
+
+            replay_data = urlencode(
+                {"approvalName": "Changed Name", "approvalConfirmed": "yes"}
+            ).encode("utf-8")
+            replay_request = urllib.request.Request(
+                f"{base_url}/portal/{token}/estimate-response",
+                data=replay_data,
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            with urllib.request.urlopen(replay_request, timeout=5) as response:
+                replay_page = response.read().decode("utf-8")
+            self.assertIn("Alex &lt;Customer&gt;", replay_page)
+            self.assertNotIn("Changed Name", replay_page)
+            with backend.db() as connection:
+                replayed = connection.execute(
+                    "SELECT * FROM customer_portal_links WHERE id = ?",
+                    (link_id,),
+                ).fetchone()
+            self.assertEqual(replayed["estimate_response_id"], response_id)
+            self.assertEqual(replayed["estimate_responded_at"], first_response_time)
+
+            resolution = self.request(
+                base_url,
+                f"/api/customer-portal-links/{link_id}/estimate-response-resolution",
+                method="POST",
+                payload={"responseID": response_id, "status": "applied"},
+            )
+            with urllib.request.urlopen(resolution, timeout=5) as response:
+                applied = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(applied["estimateResolutionStatus"], "applied")
+            self.assertEqual(applied["estimateResponseID"], response_id)
+            self.assertNotIn("token", applied)
+            self.assertNotIn("tokenHash", applied)
+
+            with self.assertRaises(urllib.error.HTTPError) as downgrade:
+                urllib.request.urlopen(
+                    self.request(
+                        base_url,
+                        f"/api/customer-portal-links/{link_id}/estimate-response-resolution",
+                        method="POST",
+                        payload={
+                            "responseID": response_id,
+                            "status": "needs_attention",
+                            "detail": "Do not downgrade applied evidence",
+                        },
+                    ),
+                    timeout=5,
+                )
+            self.assertEqual(downgrade.exception.code, 409)
+
+            with self.assertRaises(urllib.error.HTTPError) as invalid_link_id:
+                urllib.request.urlopen(
+                    self.request(
+                        base_url,
+                        "/api/customer-portal-links/------------------------------------/estimate-response-resolution",
+                        method="POST",
+                        payload={"responseID": response_id, "status": "applied"},
+                    ),
+                    timeout=5,
+                )
+            self.assertEqual(invalid_link_id.exception.code, 400)
 
     def test_expired_or_corrupt_links_never_render_or_increment(self) -> None:
         with self.running_server() as base_url:
@@ -327,6 +682,16 @@ class CustomerPortalTests(unittest.TestCase):
                     f"/api/customer-portal-links/{link_id}",
                     method="DELETE",
                 ),
+                self.request(
+                    base_url,
+                    f"/api/customer-portal-links/{link_id}/estimate-response-resolution",
+                    method="POST",
+                    payload={
+                        "responseID": str(uuid.uuid4()),
+                        "status": "needs_attention",
+                        "detail": "Restricted",
+                    },
+                ),
             )
             for request in requests:
                 with self.assertRaises(urllib.error.HTTPError) as forbidden:
@@ -377,6 +742,13 @@ class CustomerPortalTests(unittest.TestCase):
             self.assertIn("opened_count", columns)
             self.assertEqual(columns["opened_count"]["dflt_value"], "0")
             self.assertIn("last_opened_at", columns)
+            for column in (
+                "estimate_id", "estimate_label", "estimate_amount", "estimate_revision",
+                "estimate_response_id", "estimate_response_name", "estimate_responded_at",
+                "estimate_resolution_status", "estimate_resolution_detail",
+                "estimate_resolved_at", "estimate_resolved_by",
+            ):
+                self.assertIn(column, columns)
 
 
 if __name__ == "__main__":

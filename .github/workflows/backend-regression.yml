@@ -1,3 +1,4 @@
+
 name: Backend regression
 
 on:
@@ -45,5 +46,11 @@ jobs:
       - name: Compile backend modules
         run: python -m compileall -q Backend gunnaire_backend.py
 
+      - name: Compile release and acceptance tools
+        run: python -m compileall -q Tools
+
       - name: Run complete backend suite
         run: python -m unittest discover -s Backend -p 'test_*.py' -v
+
+      - name: Run CloudKit, release, and signed-device tool suite
+        run: python -m unittest discover -s Tools -p 'test_*.py' -v

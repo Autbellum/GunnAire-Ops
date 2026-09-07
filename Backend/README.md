@@ -57,6 +57,22 @@ Apple identity exchange is available at `POST /api/auth/apple`. The token is ver
 
 After source `2026.08.28.13` is deployed, configure the primary App ID's Sign in with Apple server-to-server notification URL as `https://gunnaire-api.onrender.com/api/auth/apple/notifications`. The public endpoint accepts only Apple's exact JSON envelope, verifies the signed JWS against Apple's RS256 keys plus issuer, app audience, issue/event times, event ID, type, and subject, and idempotently processes `email-enabled`, `email-disabled`, `consent-revoked`, and `account-deleted`. Consent and deletion events revoke only Apple application sessions and their push registrations; delayed events older than a fresh Apple reauthorization cannot revoke that newer session. The raw JWS and private-relay address are not retained in the event ledger. Do not enter the URL in Apple Developer before the reviewed backend version is live and the endpoint is reachable over TLS 1.2 or later.
 
+## Company and CloudKit workspace identity
+
+Candidate `2026.09.06.20` adds a durable, server-owned company identity and
+`GET /api/workspace` / `POST /api/workspace/bind`. Both require current Apple or
+Google application sessions. Binding requires explicit ownership confirmation
+and an administrator authenticated within ten minutes; conflicting bindings
+cannot replace the original approval. Approval and its audit are atomic.
+The new company/binding tables must remain in database backups and code rollbacks.
+
+This is the server/native API contract stage, **not completed app-level tenant
+isolation**. Startup, legacy-store onboarding, Shortcuts and offline authorization
+must still be connected to the boundary before release. See
+[`CLOUDKIT_WORKSPACE_IDENTITY.md`](../CLOUDKIT_WORKSPACE_IDENTITY.md) for the exact
+contract, storage risks and required acceptance. No existing device or data set
+is automatically approved by this migration.
+
 ## Render deployment
 
 Deploy this directory as a Python **Web Service** with the start command:
@@ -151,11 +167,11 @@ export GUNNAIRE_CUSTOMER_PORTAL_BASE_URL="https://portal.gunnaire.com"
 export GUNNAIRE_CUSTOMER_PORTAL_MAX_DAYS=30
 ```
 
-An administrator can then create an expiring, revocable link from a job in GunnAire Ops. The link shows only the escaped appointment and linked-invoice snapshot provided at creation time. It cannot browse customer data, change scheduling, download files, or take a payment. The server requires valid customer email and UUID business references, rejects malformed/negative/non-finite amounts and non-integral expiry values, and accepts one normalized HTTPS origin without credentials, path, query, or fragment.
+An administrator can then create an expiring, revocable link from a job in GunnAire Ops. The link shows only the escaped appointment, linked-invoice summary, and—when explicitly selected—the exact pending-estimate label and amount provided at creation time. It cannot browse customer data, change scheduling, download files, or take a payment. The estimate option is all-or-none and is bound to the estimate UUID plus a SHA-256 revision digest created from the local customer/job/amount/line-item snapshot. The server requires valid customer email and UUID business references, rejects malformed/negative/non-finite amounts and non-integral expiry values, and accepts one normalized HTTPS origin without credentials, path, query, or fragment.
 
-Tokens are random, only their SHA-256 hashes are retained, capability URLs are redacted from access logs, and create/revoke actions enter the audit log. Public responses are non-cacheable and use CSP, frame, referrer, MIME, permissions, and cross-origin isolation headers. Successful opens increment non-sensitive management metadata; this is deliberately labeled **Opened**, not **Viewed** or **Read**, because email and security scanners may follow a link. Staff must still explicitly share the link; no email is sent automatically.
+Tokens are random, only their SHA-256 hashes are retained, capability URLs are redacted from access logs, and create/revoke actions enter the audit log. Public responses are non-cacheable and use CSP, frame, referrer, MIME, permissions, and cross-origin isolation headers. Successful opens increment non-sensitive management metadata; this is deliberately labeled **Opened**, not **Viewed** or **Read**, because email and security scanners may follow a link. A linked estimate may accept one named confirmation only; replay returns the original receipt rather than changing its identity. An administrator then imports that response into the exact CloudKit-backed estimate. The app revalidates the customer/job relationship, amount, option label, revision digest, link/response timestamps, and any existing approval evidence before applying it, and reports the server response as `applied` or `needs_attention`. An applied response cannot be downgraded. Staff must still explicitly share the link; no email is sent automatically.
 
-Before enabling it for customers, deploy the reviewed backend version, host the route on the exact configured HTTPS origin, publish a customer-facing privacy notice, add edge abuse/rate controls, and verify create/open/expiry/revocation from approved production accounts. Backend readiness reports the portal as needing attention while disabled, error for an unsafe origin, and ready only for a valid enabled HTTPS origin.
+Before enabling it for customers, deploy reviewed backend `2026.09.06.19` or newer, host the route on the exact configured HTTPS origin, publish a customer-facing privacy notice, add edge abuse/rate controls, and verify create/open/approval/reconciliation/expiry/revocation from approved production accounts. This candidate makes applied resolutions immutable across concurrent requests, commits their audit evidence atomically, and rechecks approval-link expiry and revocation. See `PORTAL_APPROVAL_REVIEW.md` for regression evidence. Backend readiness reports the portal as needing attention while disabled, error for an unsafe origin, and ready only for a valid enabled HTTPS origin.
 
 ## Customer financing handoff
 

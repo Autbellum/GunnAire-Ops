@@ -2,6 +2,57 @@ import Foundation
 import Combine
 import UIKit
 
+enum FieldPaymentVerificationOutcome: Equatable {
+    case settled(confirmedPayment: Double)
+    case partial(confirmedPayment: Double, balanceDue: Double)
+    case unchanged(balanceDue: Double)
+    case balanceChanged(balanceDue: Double)
+
+    static func resolve(
+        previousBalance: Double,
+        refreshedBalance: Double,
+        newlyLinkedPaymentAmount: Double
+    ) -> Self {
+        let previous = max(previousBalance, 0)
+        let refreshed = max(refreshedBalance, 0)
+        let confirmedPayment = max(newlyLinkedPaymentAmount, 0)
+        let difference = previous - refreshed
+
+        if difference > 0.009, confirmedPayment > 0.009 {
+            if refreshed <= 0.009 {
+                return .settled(confirmedPayment: confirmedPayment)
+            }
+            return .partial(confirmedPayment: confirmedPayment, balanceDue: refreshed)
+        }
+        if abs(difference) > 0.009 {
+            return .balanceChanged(balanceDue: refreshed)
+        }
+        return .unchanged(balanceDue: refreshed)
+    }
+
+    var statusMessage: String {
+        switch self {
+        case .settled(let confirmedPayment):
+            return "QuickBooks confirmed \(confirmedPayment.formatted(.currency(code: "USD"))) in newly linked payment records. This invoice is paid."
+        case .partial(let confirmedPayment, let balanceDue):
+            return "QuickBooks confirmed \(confirmedPayment.formatted(.currency(code: "USD"))) in newly linked payment records. \(balanceDue.formatted(.currency(code: "USD"))) remains due."
+        case .unchanged(let balanceDue):
+            return "QuickBooks still reports \(balanceDue.formatted(.currency(code: "USD"))) due. No new payment was confirmed; do not record the card again."
+        case .balanceChanged(let balanceDue):
+            return "QuickBooks now reports \(balanceDue.formatted(.currency(code: "USD"))) due, but no newly linked payment explains the balance change. Review the invoice before collecting again."
+        }
+    }
+
+    var confirmsCollection: Bool {
+        switch self {
+        case .settled, .partial:
+            return true
+        case .unchanged, .balanceChanged:
+            return false
+        }
+    }
+}
+
 /// Hands a payment-collection context from the office iPad or Mac to a company
 /// iPhone through Apple's Handoff. No card data, customer contact details, or
 /// payment credentials leave the originating device in the activity payload.
@@ -11,6 +62,7 @@ final class FieldPaymentHandoff: ObservableObject {
     static let requirementsDetail = "Handoff requires the nearby iPad or Mac and iPhone to use the same approved business Apple Account, with Wi-Fi, Bluetooth, and Handoff enabled."
     static let quickBooksTapToPayDetail = "For contactless payment, open the matching QuickBooks invoice in QuickBooks Mobile or GoPayment on the field iPhone. Intuit currently provides Tap to Pay on iPhone there, rather than as an embedded custom-app capture flow."
     static let quickBooksTapToPaySteps = [
+        "Before first use, a QuickBooks owner or company admin must enable Tap to Pay on iPhone in QuickBooks Mobile or GoPayment Settings. After setup, approved team members can collect.",
         "Open or install QuickBooks Mobile or GoPayment on this iPhone.",
         "Open Invoice payments from the app's Menu or Sales area.",
         "Find and select the invoice using the reference below.",
@@ -95,6 +147,27 @@ final class FieldPaymentHandoff: ObservableObject {
             return nil
         }
         return UUID(uuidString: rawID)
+    }
+
+    /// Stores a valid continuation at the application boundary so an iPhone
+    /// can receive Handoff before the technician has signed in. The payload is
+    /// still limited to an expiring local invoice identifier; `ContentView`
+    /// re-resolves the invoice and enforces the signed-in user's assignment and
+    /// role before it presents any customer or collection details.
+    @discardableResult
+    static func storeContinuationRoute(
+        from activity: NSUserActivity,
+        now: Date = Date()
+    ) -> Bool {
+        guard let invoiceID = invoiceID(from: activity, now: now) else {
+            return false
+        }
+        GunnAireAppIntentRouter.storePaymentCollectionRoute(
+            invoiceID,
+            prefersContactlessGuide: true,
+            expiresAt: activity.expirationDate
+        )
+        return true
     }
 
     static func invoiceReference(quickBooksID: String?, localID: UUID) -> String {

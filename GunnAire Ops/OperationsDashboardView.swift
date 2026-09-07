@@ -42,6 +42,32 @@ struct OperationsDashboardView: View {
 
     private let calendar = Calendar.current
 
+    private enum PriorityQueueAction {
+        case scheduleCall(UUID)
+        case buildInvoice(UUID)
+        case collectInvoice(UUID)
+        case schedule
+        case quickBooksSales
+        case invoices
+        case payments
+        case businessTasks
+        case timeOffRequests
+        case fleet
+    }
+
+    private struct PriorityQueueItem: Identifiable {
+        let id: String
+        let title: String
+        let subtitle: String
+        let value: String
+        let systemImage: String
+        let tint: Color
+        let actionTitle: String
+        let action: PriorityQueueAction
+        var accessibilityLabel: String? = nil
+        var accessibilityIdentifier: String? = nil
+    }
+
     init(showingCommandPalette: Binding<Bool>) {
         _showingCommandPalette = showingCommandPalette
     }
@@ -346,23 +372,185 @@ struct OperationsDashboardView: View {
             .reduce(0) { $0 + $1.amount }
     }
 
-    private var priorityItemCount: Int {
-        [
-            unassignedUpcomingCalls.first != nil,
-            readyToBillCalls.first != nil,
-            overdueInvoices.first != nil,
-            maintenanceAlerts.first != nil,
-            acceptedEstimateCalls.first != nil,
-            quickBooksAttentionInvoices.first != nil,
-            quickBooksAttentionPayments.first != nil,
-            followUpCalls.first != nil,
-            openBusinessTasks.first != nil,
-            pendingTimeOffRequests.first != nil,
-            fleetAttentionVehicles.first != nil,
-            upcomingCalls.first != nil
-        ]
-        .filter { $0 }
-        .count
+    private var priorityQueueItems: [PriorityQueueItem] {
+        var result: [PriorityQueueItem] = []
+
+        if let call = unassignedUpcomingCalls.first,
+           let customer = call.customer {
+            result.append(PriorityQueueItem(
+                id: "assign-\(call.id.uuidString)",
+                title: "Assign upcoming work",
+                subtitle: "\(customer.name) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))",
+                value: call.dispatchUrgency == .normal ? call.type.displayName : call.dispatchUrgency.displayName,
+                systemImage: "person.crop.circle.badge.plus",
+                tint: .blue,
+                actionTitle: "Open Schedule",
+                action: .scheduleCall(call.id)
+            ))
+        }
+
+        if canViewFinancials,
+           let call = readyToBillCalls.first,
+           let customer = call.customer {
+            result.append(PriorityQueueItem(
+                id: "invoice-\(call.id.uuidString)",
+                title: "Create invoice",
+                subtitle: "\(customer.name) • \(call.type.displayName)",
+                value: "Ready",
+                systemImage: "doc.badge.plus",
+                tint: .green,
+                actionTitle: "Build Invoice",
+                action: .buildInvoice(call.id)
+            ))
+        }
+
+        if canViewFinancials,
+           let invoice = overdueInvoices.first,
+           let customer = invoice.customer {
+            result.append(PriorityQueueItem(
+                id: "collect-\(invoice.id.uuidString)",
+                title: "Collect overdue balance",
+                subtitle: "\(customer.name) • \(invoice.createdAt.formatted(date: .abbreviated, time: .omitted))",
+                value: currency(outstandingBalance(for: invoice)),
+                systemImage: "creditcard.trianglebadge.exclamationmark",
+                tint: .red,
+                actionTitle: "Collect",
+                action: .collectInvoice(invoice.id)
+            ))
+        }
+
+        if let contract = maintenanceAlerts.first,
+           let customer = contract.customer {
+            result.append(PriorityQueueItem(
+                id: "maintenance-\(contract.id.uuidString)",
+                title: maintenanceTitle(for: contract),
+                subtitle: "\(customer.name) • \(contract.schedulePattern)",
+                value: contract.nextDate.formatted(date: .abbreviated, time: .omitted),
+                systemImage: "wrench.and.screwdriver",
+                tint: .orange,
+                actionTitle: "Schedule",
+                action: .schedule
+            ))
+        }
+
+        if canViewFinancials,
+           let call = acceptedEstimateCalls.first,
+           let customer = call.customer {
+            result.append(PriorityQueueItem(
+                id: "accepted-estimate-\(call.id.uuidString)",
+                title: "Approved work waiting",
+                subtitle: "\(customer.name) • estimate accepted",
+                value: estimate(for: call).map { currency($0.amount) } ?? "Accepted",
+                systemImage: "checkmark.seal",
+                tint: .green,
+                actionTitle: "Open Job",
+                action: .scheduleCall(call.id)
+            ))
+        }
+
+        if canViewFinancials,
+           let invoice = quickBooksAttentionInvoices.first,
+           let customer = invoice.customer {
+            result.append(PriorityQueueItem(
+                id: "qbo-invoice-\(invoice.id.uuidString)",
+                title: invoice.needsQuickBooksAttention ? "QuickBooks invoice needs attention" : "QuickBooks invoice pending",
+                subtitle: customer.name,
+                value: currency(invoice.amount),
+                systemImage: "doc.badge.arrow.up",
+                tint: invoice.needsQuickBooksAttention ? .red : .orange,
+                actionTitle: "Review",
+                action: operationsAccess.canManageQuickBooks ? .quickBooksSales : .invoices
+            ))
+        }
+
+        if canViewFinancials,
+           let payment = quickBooksAttentionPayments.first,
+           let invoice = payment.invoice,
+           let customer = invoice.customer {
+            result.append(PriorityQueueItem(
+                id: "qbo-payment-\(payment.id.uuidString)",
+                title: "QuickBooks payment sync",
+                subtitle: customer.name,
+                value: currency(payment.amount),
+                systemImage: "arrow.triangle.2.circlepath.circle",
+                tint: .red,
+                actionTitle: "Review",
+                action: .payments
+            ))
+        }
+
+        if let call = followUpCalls.first,
+           let customer = call.customer {
+            result.append(PriorityQueueItem(
+                id: "follow-up-\(call.id.uuidString)",
+                title: "Customer follow-up",
+                subtitle: followUpSubtitle(for: call),
+                value: customer.name,
+                systemImage: "arrow.uturn.forward.circle",
+                tint: Color.brandGold,
+                actionTitle: "Open",
+                action: .scheduleCall(call.id)
+            ))
+        }
+
+        if let task = openBusinessTasks.first {
+            result.append(PriorityQueueItem(
+                id: "business-task-\(task.id.uuidString)",
+                title: task.isOverdue() ? "Overdue team task" : "Team task",
+                subtitle: task.linkedRecordSummary ?? "Internal follow-up",
+                value: AppAccess.inferredDisplayName(fromEmail: task.assignedToEmail),
+                systemImage: task.priority.systemImage,
+                tint: task.isOverdue() || task.priority == .urgent ? .red : Color.brandGold,
+                actionTitle: "Review",
+                action: .businessTasks,
+                accessibilityIdentifier: "ReviewBusinessTask"
+            ))
+        }
+
+        if let request = pendingTimeOffRequests.first {
+            result.append(PriorityQueueItem(
+                id: "time-off-\(request.id.uuidString)",
+                title: "Time-off request",
+                subtitle: "\(request.technicianNameSnapshot) • capacity review required",
+                value: request.startsAt.formatted(date: .abbreviated, time: .omitted),
+                systemImage: "calendar.badge.clock",
+                tint: .orange,
+                actionTitle: "Review",
+                action: .timeOffRequests,
+                accessibilityLabel: "Time-off request, \(request.technicianNameSnapshot), capacity review required, \(request.startsAt.formatted(date: .abbreviated, time: .omitted)), Review",
+                accessibilityIdentifier: "ReviewTimeOffRequest"
+            ))
+        }
+
+        if let vehicle = fleetAttentionVehicles.first {
+            result.append(PriorityQueueItem(
+                id: "fleet-\(vehicle.id.uuidString)",
+                title: "Fleet readiness",
+                subtitle: "\(vehicle.unitNumber) • \(vehicle.assignedTechnicianName ?? "Unassigned")",
+                value: vehicle.readiness().title,
+                systemImage: "car.rear.and.tire.marks",
+                tint: vehicle.administrativeStatus == .outOfService ? .red : .orange,
+                actionTitle: "Review",
+                action: .fleet,
+                accessibilityIdentifier: "ReviewFleetReadiness"
+            ))
+        }
+
+        if let call = upcomingCalls.first,
+           let customer = call.customer {
+            result.append(PriorityQueueItem(
+                id: "upcoming-\(call.id.uuidString)",
+                title: "Next scheduled job",
+                subtitle: "\(customer.name) • \(call.type.displayName)",
+                value: call.scheduledDate.formatted(date: .omitted, time: .shortened),
+                systemImage: "clock.badge.checkmark",
+                tint: Color.brandGold,
+                actionTitle: "Open",
+                action: .scheduleCall(call.id)
+            ))
+        }
+
+        return result
     }
 
     private var dispatchWindowCalls: [ServiceCall] {
@@ -379,7 +567,9 @@ struct OperationsDashboardView: View {
                 if $0.scheduledDate != $1.scheduledDate {
                     return $0.scheduledDate < $1.scheduledDate
                 }
-                return $0.customer.name.localizedCaseInsensitiveCompare($1.customer.name) == .orderedAscending
+                let lhsName = $0.customer?.name ?? ""
+                let rhsName = $1.customer?.name ?? ""
+                return lhsName.localizedCaseInsensitiveCompare(rhsName) == .orderedAscending
             }
     }
 
@@ -506,6 +696,7 @@ struct OperationsDashboardView: View {
                     } label: {
                         Label("Find", systemImage: "magnifyingglass")
                     }
+                    .accessibilityLabel("Search Command Center")
                     .accessibilityIdentifier("CommandCenterToolbarFindButton")
                     .tint(Color.brandGold)
                 }
@@ -583,6 +774,7 @@ struct OperationsDashboardView: View {
             Label("Find", systemImage: "magnifyingglass")
                 .frame(maxWidth: .infinity)
         }
+        .accessibilityLabel("Find customers and work from Command Center")
         .accessibilityIdentifier("CommandCenterQuickFindButton")
 
         if operationsAccess.canOpenSchedule {
@@ -592,6 +784,7 @@ struct OperationsDashboardView: View {
                 Label("Schedule", systemImage: "calendar.badge.clock")
                     .frame(maxWidth: .infinity)
             }
+            .accessibilityLabel("Open schedule from Command Center")
         }
 
         Button {
@@ -608,6 +801,7 @@ struct OperationsDashboardView: View {
                 Label("Collect", systemImage: "creditcard")
                     .frame(maxWidth: .infinity)
             }
+            .accessibilityLabel("Open payment collection from Command Center")
         }
 
         if operationsAccess.canOpenSync {
@@ -710,175 +904,53 @@ struct OperationsDashboardView: View {
 
     private var priorityQueueSection: some View {
         dashboardSection(title: "Priority Queue", systemImage: "list.bullet.clipboard") {
-            if priorityItemCount == 0 {
+            let items = priorityQueueItems
+            if items.isEmpty {
                 emptyState("No priority work is waiting.")
             } else {
-                if let call = unassignedUpcomingCalls.first {
+                // A homogeneous collection avoids the deeply nested conditional
+                // ViewBuilder metadata that exhausted the physical iPad's
+                // SwiftUI/AttributeGraph recursion guard.
+                ForEach(items) { item in
                     priorityRow(
-                        title: "Assign upcoming work",
-                        subtitle: "\(call.customer.name) • \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))",
-                        value: call.dispatchUrgency == .normal ? call.type.displayName : call.dispatchUrgency.displayName,
-                        systemImage: "person.crop.circle.badge.plus",
-                        tint: .blue,
-                        actionTitle: "Open Schedule"
+                        title: item.title,
+                        subtitle: item.subtitle,
+                        value: item.value,
+                        systemImage: item.systemImage,
+                        tint: item.tint,
+                        actionTitle: item.actionTitle,
+                        accessibilityLabel: item.accessibilityLabel
                     ) {
-                        GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
+                        performPriorityQueueAction(item.action)
                     }
-                }
-
-                if canViewFinancials, let call = readyToBillCalls.first {
-                    priorityRow(
-                        title: "Create invoice",
-                        subtitle: "\(call.customer.name) • \(call.type.displayName)",
-                        value: "Ready",
-                        systemImage: "doc.badge.plus",
-                        tint: .green,
-                        actionTitle: "Build Invoice"
-                    ) {
-                        GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
-                    }
-                }
-
-                if canViewFinancials, let invoice = overdueInvoices.first {
-                    priorityRow(
-                        title: "Collect overdue balance",
-                        subtitle: "\(invoice.customer.name) • \(invoice.createdAt.formatted(date: .abbreviated, time: .omitted))",
-                        value: currency(outstandingBalance(for: invoice)),
-                        systemImage: "creditcard.trianglebadge.exclamationmark",
-                        tint: .red,
-                        actionTitle: "Collect"
-                    ) {
-                        GunnAireAppIntentRouter.storePaymentCollectionRoute(invoice.id)
-                    }
-                }
-
-                if let contract = maintenanceAlerts.first {
-                    priorityRow(
-                        title: maintenanceTitle(for: contract),
-                        subtitle: "\(contract.customer.name) • \(contract.schedulePattern)",
-                        value: contract.nextDate.formatted(date: .abbreviated, time: .omitted),
-                        systemImage: "wrench.and.screwdriver",
-                        tint: .orange,
-                        actionTitle: "Schedule"
-                    ) {
-                        GunnAireAppIntentRouter.store(.schedule)
-                    }
-                }
-
-                if canViewFinancials, let call = acceptedEstimateCalls.first {
-                    priorityRow(
-                        title: "Approved work waiting",
-                        subtitle: "\(call.customer.name) • estimate accepted",
-                        value: estimate(for: call).map { currency($0.amount) } ?? "Accepted",
-                        systemImage: "checkmark.seal",
-                        tint: .green,
-                        actionTitle: "Open Job"
-                    ) {
-                        GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
-                    }
-                }
-
-                if canViewFinancials, let invoice = quickBooksAttentionInvoices.first {
-                    priorityRow(
-                        title: invoice.needsQuickBooksAttention ? "QuickBooks invoice needs attention" : "QuickBooks invoice pending",
-                        subtitle: invoice.customer.name,
-                        value: currency(invoice.amount),
-                        systemImage: "doc.badge.arrow.up",
-                        tint: invoice.needsQuickBooksAttention ? .red : .orange,
-                        actionTitle: "Review"
-                    ) {
-                        if operationsAccess.canManageQuickBooks {
-                            GunnAireAppIntentRouter.storeQuickBooksRoute(workspace: .sales)
-                        } else {
-                            GunnAireAppIntentRouter.store(.invoices)
-                        }
-                    }
-                }
-
-                if canViewFinancials, let payment = quickBooksAttentionPayments.first {
-                    priorityRow(
-                        title: "QuickBooks payment sync",
-                        subtitle: payment.invoice.customer.name,
-                        value: currency(payment.amount),
-                        systemImage: "arrow.triangle.2.circlepath.circle",
-                        tint: .red,
-                        actionTitle: "Review"
-                    ) {
-                        GunnAireAppIntentRouter.store(.payments)
-                    }
-                }
-
-                if let call = followUpCalls.first {
-                    priorityRow(
-                        title: "Customer follow-up",
-                        subtitle: followUpSubtitle(for: call),
-                        value: call.customer.name,
-                        systemImage: "arrow.uturn.forward.circle",
-                        tint: Color.brandGold,
-                        actionTitle: "Open"
-                    ) {
-                        GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
-                    }
-                }
-
-                if let task = openBusinessTasks.first {
-                    priorityRow(
-                        title: task.isOverdue() ? "Overdue team task" : "Team task",
-                        subtitle: task.linkedRecordSummary ?? "Internal follow-up",
-                        value: AppAccess.inferredDisplayName(fromEmail: task.assignedToEmail),
-                        systemImage: task.priority.systemImage,
-                        tint: task.isOverdue() || task.priority == .urgent ? .red : Color.brandGold,
-                        actionTitle: "Review"
-                    ) {
-                        showingBusinessTasks = true
-                    }
-                    .accessibilityIdentifier("ReviewBusinessTask")
-                }
-
-                if let request = pendingTimeOffRequests.first {
-                    priorityRow(
-                        title: "Time-off request",
-                        subtitle: "\(request.technicianNameSnapshot) • capacity review required",
-                        value: request.startsAt.formatted(date: .abbreviated, time: .omitted),
-                        systemImage: "calendar.badge.clock",
-                        tint: .orange,
-                        actionTitle: "Review"
-                    ) {
-                        showingTimeOffRequests = true
-                    }
-                    .accessibilityLabel(
-                        "Time-off request, \(request.technicianNameSnapshot), capacity review required, \(request.startsAt.formatted(date: .abbreviated, time: .omitted)), Review"
-                    )
-                    .accessibilityIdentifier("ReviewTimeOffRequest")
-                }
-
-                if let vehicle = fleetAttentionVehicles.first {
-                    priorityRow(
-                        title: "Fleet readiness",
-                        subtitle: "\(vehicle.unitNumber) • \(vehicle.assignedTechnicianName ?? "Unassigned")",
-                        value: vehicle.readiness().title,
-                        systemImage: "car.rear.and.tire.marks",
-                        tint: vehicle.administrativeStatus == .outOfService ? .red : .orange,
-                        actionTitle: "Review"
-                    ) {
-                        showingFleetWorkspace = true
-                    }
-                    .accessibilityIdentifier("ReviewFleetReadiness")
-                }
-
-                if let call = upcomingCalls.first {
-                    priorityRow(
-                        title: "Next scheduled job",
-                        subtitle: "\(call.customer.name) • \(call.type.displayName)",
-                        value: call.scheduledDate.formatted(date: .omitted, time: .shortened),
-                        systemImage: "clock.badge.checkmark",
-                        tint: Color.brandGold,
-                        actionTitle: "Open"
-                    ) {
-                        GunnAireAppIntentRouter.storeScheduleCallRoute(call.id)
-                    }
+                    .accessibilityIdentifier(item.accessibilityIdentifier ?? "PriorityQueue-\(item.id)")
                 }
             }
+        }
+    }
+
+    private func performPriorityQueueAction(_ action: PriorityQueueAction) {
+        switch action {
+        case .scheduleCall(let id):
+            GunnAireAppIntentRouter.storeScheduleCallRoute(id)
+        case .buildInvoice(let id):
+            GunnAireAppIntentRouter.storeDocumentationRoute(id)
+        case .collectInvoice(let id):
+            GunnAireAppIntentRouter.storePaymentCollectionRoute(id)
+        case .schedule:
+            GunnAireAppIntentRouter.store(.schedule)
+        case .quickBooksSales:
+            GunnAireAppIntentRouter.storeQuickBooksRoute(workspace: .sales)
+        case .invoices:
+            GunnAireAppIntentRouter.store(.invoices)
+        case .payments:
+            GunnAireAppIntentRouter.store(.payments)
+        case .businessTasks:
+            showingBusinessTasks = true
+        case .timeOffRequests:
+            showingTimeOffRequests = true
+        case .fleet:
+            showingFleetWorkspace = true
         }
     }
 
@@ -1027,7 +1099,9 @@ struct OperationsDashboardView: View {
                 if !unassignedUpcomingCalls.isEmpty {
                     summaryStrip(
                         title: "\(unassignedUpcomingCalls.count) unassigned job\(unassignedUpcomingCalls.count == 1 ? "" : "s") this week",
-                        subtitle: unassignedUpcomingCalls.prefix(2).map { $0.customer.name }.joined(separator: ", "),
+                        subtitle: unassignedUpcomingCalls.prefix(2)
+                            .compactMap { $0.customer?.name }
+                            .joined(separator: ", "),
                         systemImage: "person.slash",
                         tint: .blue
                     ) {
@@ -1447,7 +1521,7 @@ struct OperationsDashboardView: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text(call.customer.name)
+                        Text(call.customer?.name ?? "Customer link pending")
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                         Text(call.type.displayName)
@@ -1486,12 +1560,14 @@ struct OperationsDashboardView: View {
                 } label: {
                     Label("Open", systemImage: "arrow.right.circle")
                 }
+                .accessibilityLabel(dispatchActionAccessibilityLabel("Open schedule", for: call))
 
                 Button {
                     GunnAireAppIntentRouter.storeDocumentationRoute(call.id)
                 } label: {
                     Label("Docs", systemImage: "doc.text")
                 }
+                .accessibilityLabel(dispatchActionAccessibilityLabel("Open documents", for: call))
 
                 if operationsAccess.canManageDispatch,
                    call.assignedTechnician == nil,
@@ -1507,6 +1583,7 @@ struct OperationsDashboardView: View {
                     } label: {
                         Label("Collect", systemImage: "creditcard")
                     }
+                    .accessibilityLabel(dispatchActionAccessibilityLabel("Collect payment", for: call))
                     .tint(.green)
                 }
             }
@@ -1518,6 +1595,10 @@ struct OperationsDashboardView: View {
         .accessibilityIdentifier("CommandCenterDispatchJob-\(call.id.uuidString)")
     }
 
+    private func dispatchActionAccessibilityLabel(_ action: String, for call: ServiceCall) -> String {
+        "\(action) for \(call.customer?.name ?? "customer link pending"), \(call.type.displayName), \(call.scheduledDate.formatted(date: .abbreviated, time: .shortened))"
+    }
+
     private func priorityRow(
         title: String,
         subtitle: String,
@@ -1525,6 +1606,7 @@ struct OperationsDashboardView: View {
         systemImage: String,
         tint: Color,
         actionTitle: String,
+        accessibilityLabel: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         HStack(alignment: .center, spacing: 12) {
@@ -1556,6 +1638,7 @@ struct OperationsDashboardView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .tint(Color.brandGold)
+                    .accessibilityLabel(accessibilityLabel ?? "\(actionTitle): \(title). \(subtitle)")
             }
         }
         .padding(12)
@@ -1592,6 +1675,7 @@ struct OperationsDashboardView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .tint(tint)
+                .accessibilityLabel("\(status) \(title). \(detail)")
         }
     }
 
@@ -1683,7 +1767,7 @@ struct OperationsDashboardView: View {
                     AppAccess.normalizedEmail(entry.userEmail) == AppAccess.normalizedEmail(technician.contactInfo)
                 }
                 let detail = nextJob.map {
-                    "Next: \($0.customer.name) at \($0.scheduledDate.formatted(date: .omitted, time: .shortened))"
+                    "Next: \($0.customer?.name ?? "customer link pending") at \($0.scheduledDate.formatted(date: .omitted, time: .shortened))"
                 } ?? "\(weekJobs.count) jobs this week"
                 return TechnicianLoad(
                     id: technician.id,
@@ -1743,7 +1827,7 @@ struct OperationsDashboardView: View {
 
     private func dispatchDetail(for call: ServiceCall) -> String {
         let technician = call.assignedTechnician?.name ?? "Unassigned"
-        let address = (call.siteAddress ?? call.customer.address)?
+        let address = (call.siteAddress ?? call.customer?.address)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let addressLabel = address?.isEmpty == false ? address! : "No service address"
         return "\(technician) • \(addressLabel)"
@@ -1751,7 +1835,7 @@ struct OperationsDashboardView: View {
 
     private func dispatchRiskReasons(for call: ServiceCall) -> [String] {
         var reasons: [String] = []
-        let address = (call.siteAddress ?? call.customer.address)?
+        let address = (call.siteAddress ?? call.customer?.address)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         if call.assignedTechnician == nil {
@@ -1794,7 +1878,7 @@ struct OperationsDashboardView: View {
             invoice: invoice,
             payments: dashboardPayments.filter { payment in
                 guard let invoice else { return false }
-                return payment.invoice.id == invoice.id
+                return payment.invoice?.id == invoice.id
             },
             attachments: attachments.filter { $0.serviceCallID == call.id },
             fieldFormTemplates: fieldFormTemplates,
@@ -1837,7 +1921,7 @@ struct OperationsDashboardView: View {
         let technicianLabel = AppAccess.scheduleLabel(for: technician)
         let qualification = technician.qualification(for: call.equipmentType)
         let qualificationSuffix = qualification.assignmentNotice.map { " • \($0)" } ?? ""
-        let areaMatch = technician.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
+        let areaMatch = technician.serviceAreaMatch(for: call.siteAddress ?? call.customer?.address)
         let areaSuffix = areaMatch == .covered ? "" : " • \(areaMatch.dispatchDetail.lowercased())"
         guard let nextStart = nextAvailableStart(for: technician, call: call) else {
             let scheduleSuffix = TechnicianWorkShiftPolicy.hasConfiguredSchedule(
@@ -1887,9 +1971,9 @@ struct OperationsDashboardView: View {
 
         if let nextStart, nextStart > originalStart {
             call.scheduledDate = nextStart
-            dispatchMessage = "\(call.customer.name) assigned to \(technician.name) and moved to \(nextStart.formatted(date: .abbreviated, time: .shortened))."
+            dispatchMessage = "\(call.customer?.name ?? "Customer") assigned to \(technician.name) and moved to \(nextStart.formatted(date: .abbreviated, time: .shortened))."
         } else {
-            dispatchMessage = "\(call.customer.name) assigned to \(technician.name)."
+            dispatchMessage = "\(call.customer?.name ?? "Customer") assigned to \(technician.name)."
         }
         let assignment = previousTechnician.map { "Reassigned from \($0) to \(technician.name)." } ?? "Assigned to \(technician.name)."
         let moved = call.scheduledDate != originalStart
@@ -1925,7 +2009,7 @@ struct OperationsDashboardView: View {
             DispatchQueue.main.async {
                 switch result {
                 case .success:
-                    dispatchMessage = "\(call.customer.name) calendar update published."
+                    dispatchMessage = "\(call.customer?.name ?? "Customer") calendar update published."
                 case .failure(let error):
                     dispatchMessage = "Calendar update failed: \(error.localizedDescription)"
                 }
@@ -1944,8 +2028,8 @@ struct OperationsDashboardView: View {
                 if lhsQualification.dispatchRank != rhsQualification.dispatchRank {
                     return lhsQualification.dispatchRank < rhsQualification.dispatchRank
                 }
-                let lhsArea = lhs.0.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
-                let rhsArea = rhs.0.serviceAreaMatch(for: call.siteAddress ?? call.customer.address)
+                let lhsArea = lhs.0.serviceAreaMatch(for: call.siteAddress ?? call.customer?.address)
+                let rhsArea = rhs.0.serviceAreaMatch(for: call.siteAddress ?? call.customer?.address)
                 if lhsArea != rhsArea {
                     return lhsArea < rhsArea
                 }
@@ -2161,7 +2245,7 @@ private struct OperationsCommandPalette: View {
         guard !query.isEmpty else { return Array(source.prefix(6)) }
         return source
             .filter {
-                $0.customer.name.localizedCaseInsensitiveContains(query) ||
+                $0.customer?.name.localizedCaseInsensitiveContains(query) == true ||
                 $0.type.rawValue.localizedCaseInsensitiveContains(query) ||
                 $0.status.rawValue.localizedCaseInsensitiveContains(query) ||
                 ($0.siteAddress?.localizedCaseInsensitiveContains(query) ?? false) ||
@@ -2177,7 +2261,7 @@ private struct OperationsCommandPalette: View {
         guard !query.isEmpty else { return Array(source.prefix(6)) }
         return source
             .filter {
-                $0.customer.name.localizedCaseInsensitiveContains(query) ||
+                $0.customer?.name.localizedCaseInsensitiveContains(query) == true ||
                 $0.status.localizedCaseInsensitiveContains(query) ||
                 $0.lineItemSummary.localizedCaseInsensitiveContains(query) ||
                 ($0.quickBooksID?.localizedCaseInsensitiveContains(query) ?? false)
@@ -2192,7 +2276,7 @@ private struct OperationsCommandPalette: View {
         guard !query.isEmpty else { return Array(source.prefix(4)) }
         return source
             .filter {
-                $0.customer.name.localizedCaseInsensitiveContains(query) ||
+                $0.customer?.name.localizedCaseInsensitiveContains(query) == true ||
                 $0.status.localizedCaseInsensitiveContains(query) ||
                 $0.lineItemSummary.localizedCaseInsensitiveContains(query) ||
                 ($0.quickBooksID?.localizedCaseInsensitiveContains(query) ?? false)
@@ -2304,7 +2388,7 @@ private struct OperationsCommandPalette: View {
             Section("Jobs") {
                 ForEach(matchingServiceCalls) { call in
                     commandButton(
-                        "\(call.customer.name) • \(call.type.displayName)",
+                        "\(call.customer?.name ?? "Customer link pending") • \(call.type.displayName)",
                         detail: "\(call.scheduledDate.formatted(date: .abbreviated, time: .shortened)) • \(call.status.rawValue.capitalized)",
                         systemImage: "wrench.and.screwdriver"
                     ) {
@@ -2322,7 +2406,7 @@ private struct OperationsCommandPalette: View {
             Section("Invoices") {
                 ForEach(matchingInvoices) { invoice in
                     commandButton(
-                        "\(invoice.customer.name) • \(invoice.amount.formatted(.currency(code: "USD")))",
+                        "\(invoice.customer?.name ?? "Customer link pending") • \(invoice.amount.formatted(.currency(code: "USD")))",
                         detail: "\(invoice.status.capitalized) • \(invoice.createdAt.formatted(date: .abbreviated, time: .omitted))",
                         systemImage: "doc.text"
                     ) {
@@ -2340,7 +2424,7 @@ private struct OperationsCommandPalette: View {
             Section("Estimates") {
                 ForEach(matchingEstimates) { estimate in
                     commandButton(
-                        "\(estimate.customer.name) • \(estimate.amount.formatted(.currency(code: "USD")))",
+                        "\(estimate.customer?.name ?? "Customer link pending") • \(estimate.amount.formatted(.currency(code: "USD")))",
                         detail: "\(estimate.status.capitalized) • \(estimate.createdAt.formatted(date: .abbreviated, time: .omitted))",
                         systemImage: "doc.text.magnifyingglass"
                     ) {
@@ -2362,7 +2446,7 @@ private struct OperationsCommandPalette: View {
             Section("Recent Payments") {
                 ForEach(recentPayments) { payment in
                     commandButton(
-                        "\(payment.invoice.customer.name) • \(payment.amount.formatted(.currency(code: "USD")))",
+                        "\(payment.invoice?.customer?.name ?? "Invoice link pending") • \(payment.amount.formatted(.currency(code: "USD")))",
                         detail: "\(payment.method.capitalized) • \(payment.date.formatted(date: .abbreviated, time: .omitted))",
                         systemImage: payment.needsQuickBooksAttention ? "exclamationmark.arrow.triangle.2.circlepath" : "checkmark.circle"
                     ) {

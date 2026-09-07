@@ -1,6 +1,6 @@
 # GunnAire backend operations runbook
 
-Last verified: 2026-08-30
+Last source verification: 2026-09-06 (production observations below retain their original dates)
 
 This runbook covers the shared GunnAire service at
 `https://gunnaire-api.onrender.com`. It does not authorize accounting changes,
@@ -16,6 +16,49 @@ credential rotation, production restores, or customer communications.
 - Proposed recovery time objective: 4 hours. This is not proven until a timed
   restore drill is completed by the deployment owner.
 
+## 2026-09-06 source review follow-up
+
+Candidate `2026.09.06.20` in PR #18 includes portal approval concurrency,
+revocation/expiry, and oversized-amount fixes from `.19`, plus the company and
+CloudKit workspace API contract. The original `.19` verification passed 77/77
+Backend and 37/37 Tools tests. The `.20` suite adds ten workspace tests; current
+local verification passes the complete 87/87 Backend and 37/37 Tools suites. See
+`PORTAL_APPROVAL_REVIEW.md` and `CLOUDKIT_WORKSPACE_IDENTITY.md` for evidence and
+the native storage-boundary work still required before company isolation is fixed.
+The older PR #17 overlaps this branch and lacks these follow-up fixes; reconcile
+the overlap before selecting a deployment candidate.
+
+## 2026-09-05 production pre-deployment reconciliation
+
+- Production is healthy on `2026.09.02.17`; reviewed candidate
+  `2026.09.03.18` remains undeployed.
+- Pull request [#17](https://github.com/Autbellum/GunnAire-Ops/pull/17) is open,
+  mergeable, and clean at exact head
+  `4273294dc3e0bf0ab71ddd2fa2e286965a3fdbc3`. Its two commits change exactly
+  four reviewed files. GitHub **Backend regression** run
+  [34001403596](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34001403596)
+  passed the complete Backend and Tools suites on Python 3.13 and 3.14.
+- Render follows `main`; merging PR #17 is the production deployment trigger
+  and remains paused for deployment-owner confirmation.
+- The production SQLite file is present and `PRAGMA quick_check` returns `ok`.
+- `/var/data/backup_status.json` records a manifest-verified backup at
+  `2026-09-04T15:57:54.482894+00:00`: database 229,376 bytes, two document
+  artifacts, and 272,103 total bytes. Only the first 12 characters of its
+  artifact ID (`70b8b21eef4f`) were retained in release evidence.
+- Render also shows a daily provider snapshot from 2026-09-04, seven-day
+  snapshot retention, and prior-code deployment rollback.
+- The backup marker proves local verification, not off-host custody. No
+  independent encrypted off-host copy or completed restore drill has yet been
+  demonstrated, so the proposed RPO/RTO remain unapproved.
+- Candidate `.18` adds eleven nullable columns to `customer_portal_links`; it
+  does not delete a table, column, or existing row. If code rollback is needed,
+  leave those additive columns in place. Database restore is not part of a
+  routine rollback for this candidate.
+- Exact evidence is
+  `/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-05/backend-deployment-preflight-2026090503.json`
+  (SHA-256
+  `463fdd8bdb5ae17da363a213854e8c059205655b027b3af303c05c4d855865d0`).
+
 ## Release verification
 
 1. Run the read-only local release preflight against the exact current-source
@@ -23,9 +66,9 @@ credential rotation, production restores, or customer communications.
 
    ```sh
    python3 Tools/release_preflight.py \
-     --archive "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083012 Current Source).xcarchive" \
-     --mac-app "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083012 Current Source Mac Catalyst).app" \
-     --mac-result "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/Verification/GunnAire Ops 1.0 (2026083012 Current Source Mac Catalyst).xcresult" \
+     --archive "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083101 Current Source).xcarchive" \
+     --mac-app "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083101 Current Source Mac Catalyst).app" \
+     --mac-result "/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-08-30/GunnAire Ops 1.0 (2026083101 Current Source Mac Catalyst).xcresult" \
      --cloudkit-development-export /Users/gunnaire/Downloads/cloudkit-development-11.ckdb \
      --cloudkit-production-export /Users/gunnaire/Downloads/cloudkit-production-7.ckdb
    ```
@@ -36,7 +79,7 @@ credential rotation, production restores, or customer communications.
    login scope, the exact universal Mac Catalyst Release app/result, privacy
    manifests, hardened runtime, release configuration, QBO/Google OAuth
    identifiers, app/dSYM UUIDs, binary hygiene, and the exact additive CloudKit
-   delta including record system fields and security grants. Build 3012's exact
+   delta including record system fields and security grants. Build 3101's exact
    local run passes 61 checks with four expected warnings and zero failures.
    Development-signing warnings are expected until the Apple
    Distribution private key is installed. Use
@@ -48,24 +91,38 @@ credential rotation, production restores, or customer communications.
    python3 -m unittest discover -s Backend -p 'test_*.py' -v
    ```
 
-   Source `2026.08.30.15` has 69 expected tests. A different count requires
-   review before deployment even when the discovered subset is green.
-   The same suite must pass in the **Backend regression** GitHub workflow on
-   Python 3.13 and the production-aligned Python 3.14 job. A green workflow is
-   evidence for the reviewed commit; it does not itself authorize Render to
-   deploy that commit.
+   Then run the CloudKit, release, and signed-device tooling regression:
+
+   ```sh
+   python3 -m unittest discover -s Tools -p 'test_*.py' -v
+   ```
+
+   Source `2026.09.06.20` has 87 expected backend tests. A different count
+   requires review before deployment even when the discovered subset is green.
+   The complete Tools suite has 37 tests. Both suites must pass in the
+   **Backend regression** GitHub workflow on Python 3.13 and the
+   production-aligned Python 3.14 job. The established status-check names remain
+   unchanged even though each job now runs both suites. The workflow has
+   read-only repository contents permission and performs no online probe,
+   CloudKit promotion, accounting/payment mutation, device installation, or
+   provider call. A green workflow is evidence for the reviewed commit; it does
+   not itself authorize Render to deploy that commit.
 4. Record the current GitHub commit, `/health` response, and deployment ID.
    Confirm a recent verified off-host backup exists before a release that adds
    database tables. The `.12` Apple identity tables, `.13` supplier-attempt
    table/indexes, and `.15` Accounts Payable configuration columns are additive;
-   rolling code back does not require deleting them or restoring the database.
+   `.18` adds eleven nullable customer-portal columns; `.20` adds
+   `company_identity` and `cloudkit_workspace_bindings`. Preserve these identity
+   tables and approvals in backups and during code rollback. Rolling code back
+   does not require deleting them or restoring the database.
 5. Do not push release source directly to `main`. The repository's secret-free
    **Backend regression / Python 3.13** and **Backend regression / Python
    3.14** checks have unfiltered pull-request and push-to-`main` triggers.
    Ref-scoped concurrency intentionally cancels an older in-progress run when
    a newer commit supersedes it, so completed checks prove the exact current
-   ref head rather than every superseded commit. Merge commit `3df24b5` proves
-   both jobs succeed on that exact `main` head. The main branch should also have
+   ref head rather than every superseded commit. Reviewed PR 15 merged as
+   `9f5636116c304f307e81980f095d70045d213c7e` after both jobs passed on source
+   head `71ac9490cd89808c5a70a29d7e0c9dae520238a3`. The main branch should also have
    an active GitHub ruleset requiring a pull
    request, resolved review conversations, an up-to-date branch, and both
    successful GitHub Actions checks, with deletion and force pushes blocked and
@@ -78,7 +135,7 @@ credential rotation, production restores, or customer communications.
    part of a routine code deploy.
 6. After the authorized deployment, rerun the same preflight with `--online`.
    Confirm `/health` returns HTTP 200 and exact `serviceVersion`
-   `2026.08.30.15`.
+   `2026.09.06.20`.
 7. Confirm the new public Apple route is present without fabricating an Apple
    event or storing data:
 

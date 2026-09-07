@@ -75,6 +75,29 @@ enum QuickBooksQueryPagination {
     }
 }
 
+struct QuickBooksRetryContext: Equatable {
+    let realmID: String?
+    let environment: String
+}
+
+enum QuickBooksRateLimitRetryPolicy {
+    /// A 429 retry is the same logical request, so it must retain the original
+    /// Intuit request ID, URL, and body. Rebuilding mutation requests
+    /// would generate a new idempotency key and could create a duplicate write.
+    /// Only authorization may change after token refresh, within the same company.
+    static func requestForRetry(
+        _ preparedRequest: URLRequest,
+        accessToken: String,
+        originalContext: QuickBooksRetryContext,
+        currentContext: QuickBooksRetryContext
+    ) -> URLRequest? {
+        guard originalContext == currentContext, !accessToken.isEmpty else { return nil }
+        var request = preparedRequest
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+}
+
 enum QuickBooksUploadResponsePolicy {
     static func attachmentID(from data: Data) throws -> String {
         guard !data.isEmpty else {
@@ -636,15 +659,37 @@ final class QuickBooksDataAPI: ObservableObject {
         let type: T.Type
     }
 
+    private var retryContext: QuickBooksRetryContext {
+        QuickBooksRetryContext(realmID: realmID, environment: currentEnvironment)
+    }
+
+    private func requestWithCurrentAuthorization(
+        _ request: URLRequest?,
+        originalContext: QuickBooksRetryContext
+    ) -> URLRequest? {
+        guard let request, let tokens else { return nil }
+        return QuickBooksRateLimitRetryPolicy.requestForRetry(
+            request,
+            accessToken: tokens.accessToken,
+            originalContext: originalContext,
+            currentContext: retryContext
+        )
+    }
+
     private func performAuthorizedDecodingRequest<T: Decodable>(
         _ requestBuilder: @escaping () -> URLRequest?,
         decode type: T.Type,
         completion: @escaping (Result<T, Error>) -> Void,
-        attempt: Int = 0
+        attempt: Int = 0,
+        preparedRequest: URLRequest? = nil,
+        originalContext: QuickBooksRetryContext? = nil
     ) {
         let typeBox = DecodableTypeBox(type: type)
         refreshTokensIfNeeded { ok in
-            guard ok, let request = requestBuilder() else {
+            let context = originalContext ?? self.retryContext
+            guard ok, let request = self.requestWithCurrentAuthorization(
+                preparedRequest ?? requestBuilder(), originalContext: context
+            ) else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
@@ -652,7 +697,14 @@ final class QuickBooksDataAPI: ObservableObject {
             URLSession.shared.dataTask(with: request) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                        self.performAuthorizedDecodingRequest(requestBuilder, decode: typeBox.type, completion: completion, attempt: attempt + 1)
+                        self.performAuthorizedDecodingRequest(
+                            requestBuilder,
+                            decode: typeBox.type,
+                            completion: completion,
+                            attempt: attempt + 1,
+                            preparedRequest: request,
+                            originalContext: context
+                        )
                     }
                     return
                 }
@@ -751,7 +803,9 @@ final class QuickBooksDataAPI: ObservableObject {
         _ requestBuilder: @escaping () -> URLRequest?,
         decode type: T.Type,
         completion: @escaping (Result<T, Error>) -> Void,
-        attempt: Int = 0
+        attempt: Int = 0,
+        preparedRequest: URLRequest? = nil,
+        originalContext: QuickBooksRetryContext? = nil
     ) {
         if let scopeError = paymentsScopeReadinessError() {
             completion(.failure(scopeError))
@@ -759,7 +813,10 @@ final class QuickBooksDataAPI: ObservableObject {
         }
         let typeBox = DecodableTypeBox(type: type)
         refreshTokensIfNeeded { ok in
-            guard ok, let request = requestBuilder() else {
+            let context = originalContext ?? self.retryContext
+            guard ok, let request = self.requestWithCurrentAuthorization(
+                preparedRequest ?? requestBuilder(), originalContext: context
+            ) else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
@@ -767,7 +824,14 @@ final class QuickBooksDataAPI: ObservableObject {
             URLSession.shared.dataTask(with: request) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                        self.performPaymentsDecodingRequest(requestBuilder, decode: typeBox.type, completion: completion, attempt: attempt + 1)
+                        self.performPaymentsDecodingRequest(
+                            requestBuilder,
+                            decode: typeBox.type,
+                            completion: completion,
+                            attempt: attempt + 1,
+                            preparedRequest: request,
+                            originalContext: context
+                        )
                     }
                     return
                 }
@@ -824,10 +888,27 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
-    func createCustomer(_ customer: QuickBooksCustomerCreate, completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void) {
+    func createCustomer(
+        _ customer: QuickBooksCustomerCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void
+    ) {
         let body = try? JSONEncoder().encode(customer)
+        let normalizedRequestID = requestID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let queryItems = normalizedRequestID?.isEmpty == false
+            ? [URLQueryItem(name: "requestid", value: normalizedRequestID)]
+            : []
         performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "customer", method: "POST", body: body, contentType: "application/json") },
+            {
+                self.authorizedRequest(
+                    path: "customer",
+                    queryItems: queryItems,
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
             decode: QuickBooksCustomerResponse.self
         ) { result in
             completion(result.flatMap {
@@ -837,6 +918,53 @@ final class QuickBooksDataAPI: ObservableObject {
                     entity: "customer"
                 )
             })
+        }
+    }
+
+    /// Reconciles a complete customer snapshot before creating. Callers may
+    /// provide one already-paginated snapshot for a bulk sync so the operation
+    /// remains safe without issuing one full QBO query per local customer.
+    func recoverOrCreateCustomer(
+        _ draft: QuickBooksCustomerCreateDraft,
+        remoteCustomers: [QuickBooksCustomer]? = nil,
+        completion: @escaping (Result<QuickBooksCustomer, Error>) -> Void
+    ) {
+        let recoverOrCreate: ([QuickBooksCustomer]) -> Void = { customers in
+            do {
+                if let existing = try QuickBooksCustomerCreateOperation.matchingRemoteCustomer(
+                    for: draft,
+                    in: customers
+                ) {
+                    completion(.success(existing))
+                    return
+                }
+            } catch {
+                completion(.failure(error))
+                return
+            }
+
+            self.createCustomer(
+                QuickBooksCustomerCreateOperation.payload(for: draft),
+                requestID: QuickBooksCustomerCreateOperation.requestID(
+                    for: draft.localCustomerID
+                ),
+                completion: completion
+            )
+        }
+
+        if let remoteCustomers {
+            recoverOrCreate(remoteCustomers)
+            return
+        }
+        fetchCustomers { result in
+            switch result {
+            case .success(let customers):
+                recoverOrCreate(customers)
+            case .failure(let error):
+                // A failed read cannot prove that a prior create was rejected.
+                // Never start another duplicate-prone create in that state.
+                completion(.failure(error))
+            }
         }
     }
 
@@ -872,10 +1000,27 @@ final class QuickBooksDataAPI: ObservableObject {
         }
     }
 
-    func createItem(_ item: QuickBooksItemCreate, completion: @escaping (Result<QuickBooksItem, Error>) -> Void) {
+    func createItem(
+        _ item: QuickBooksItemCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksItem, Error>) -> Void
+    ) {
         let body = try? JSONEncoder().encode(item)
+        let normalizedRequestID = requestID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let queryItems = normalizedRequestID?.isEmpty == false
+            ? [URLQueryItem(name: "requestid", value: normalizedRequestID)]
+            : []
         performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "item", method: "POST", body: body, contentType: "application/json") },
+            {
+                self.authorizedRequest(
+                    path: "item",
+                    queryItems: queryItems,
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
             decode: QuickBooksItemResponse.self
         ) { result in
             completion(result.flatMap {
@@ -1194,10 +1339,27 @@ final class QuickBooksDataAPI: ObservableObject {
         )
     }
 
-    func createVendor(_ vendor: QuickBooksVendorCreate, completion: @escaping (Result<QuickBooksVendor, Error>) -> Void) {
+    func createVendor(
+        _ vendor: QuickBooksVendorCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksVendor, Error>) -> Void
+    ) {
         let body = try? JSONEncoder().encode(vendor)
+        let normalizedRequestID = requestID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let queryItems = normalizedRequestID?.isEmpty == false
+            ? [URLQueryItem(name: "requestid", value: normalizedRequestID)]
+            : []
         performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "vendor", method: "POST", body: body, contentType: "application/json") },
+            {
+                self.authorizedRequest(
+                    path: "vendor",
+                    queryItems: queryItems,
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
             decode: QuickBooksVendorResponse.self
         ) { result in
             completion(result.flatMap {
@@ -1207,6 +1369,53 @@ final class QuickBooksDataAPI: ObservableObject {
                     entity: "vendor"
                 )
             })
+        }
+    }
+
+    /// Reconciles a complete vendor snapshot before creating. A caller may
+    /// provide an already-paginated snapshot so a bulk publication performs
+    /// one complete QBO read instead of one read per local vendor.
+    func recoverOrCreateVendor(
+        _ draft: QuickBooksVendorCreateDraft,
+        remoteVendors: [QuickBooksVendor]? = nil,
+        completion: @escaping (Result<QuickBooksVendor, Error>) -> Void
+    ) {
+        let recoverOrCreate: ([QuickBooksVendor]) -> Void = { vendors in
+            do {
+                if let existing = try QuickBooksVendorCreateOperation.matchingRemoteVendor(
+                    for: draft,
+                    in: vendors
+                ) {
+                    completion(.success(existing))
+                    return
+                }
+            } catch {
+                completion(.failure(error))
+                return
+            }
+
+            self.createVendor(
+                QuickBooksVendorCreateOperation.payload(for: draft),
+                requestID: QuickBooksVendorCreateOperation.requestID(
+                    for: draft.localVendorID
+                ),
+                completion: completion
+            )
+        }
+
+        if let remoteVendors {
+            recoverOrCreate(remoteVendors)
+            return
+        }
+        fetchVendors { result in
+            switch result {
+            case .success(let vendors):
+                recoverOrCreate(vendors)
+            case .failure(let error):
+                // A failed read cannot prove that a prior create was rejected.
+                // Never begin another duplicate-prone create in that state.
+                completion(.failure(error))
+            }
         }
     }
 
@@ -1248,10 +1457,27 @@ final class QuickBooksDataAPI: ObservableObject {
         )
     }
 
-    func createPayment(_ payment: QuickBooksPaymentCreate, completion: @escaping (Result<QuickBooksPayment, Error>) -> Void) {
+    func createPayment(
+        _ payment: QuickBooksPaymentCreate,
+        requestID: String? = nil,
+        completion: @escaping (Result<QuickBooksPayment, Error>) -> Void
+    ) {
         let body = try? JSONEncoder().encode(payment)
+        let normalizedRequestID = requestID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let queryItems = normalizedRequestID?.isEmpty == false
+            ? [URLQueryItem(name: "requestid", value: normalizedRequestID)]
+            : []
         performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "payment", method: "POST", body: body, contentType: "application/json") },
+            {
+                self.authorizedRequest(
+                    path: "payment",
+                    queryItems: queryItems,
+                    method: "POST",
+                    body: body,
+                    contentType: "application/json"
+                )
+            },
             decode: QuickBooksPaymentResponse.self
         ) { result in
             completion(result.flatMap {
@@ -1261,6 +1487,53 @@ final class QuickBooksDataAPI: ObservableObject {
                     entity: "payment"
                 )
             })
+        }
+    }
+
+    /// Requires a complete accounting-Payment snapshot before create. The
+    /// local Payment UUID is embedded as a non-PII marker and reused as the
+    /// Intuit request ID so an accepted response that was lost can be linked
+    /// on retry instead of creating a second payment against the invoice.
+    func recoverOrCreatePayment(
+        _ draft: QuickBooksAccountingPaymentDraft,
+        remotePayments: [QuickBooksPayment]? = nil,
+        completion: @escaping (Result<QuickBooksPayment, Error>) -> Void
+    ) {
+        let recoverOrCreate: ([QuickBooksPayment]) -> Void = { payments in
+            do {
+                if let existing = try QuickBooksAccountingPaymentCreateOperation.matchingRemotePayment(
+                    for: draft,
+                    in: payments
+                ) {
+                    completion(.success(existing))
+                    return
+                }
+                let payload = try QuickBooksAccountingPaymentCreateOperation.payload(for: draft)
+                self.createPayment(
+                    payload,
+                    requestID: QuickBooksAccountingPaymentCreateOperation.requestID(
+                        for: draft.localPaymentID
+                    ),
+                    completion: completion
+                )
+            } catch {
+                completion(.failure(error))
+            }
+        }
+
+        if let remotePayments {
+            recoverOrCreate(remotePayments)
+        } else {
+            fetchPayments { result in
+                switch result {
+                case .success(let payments):
+                    recoverOrCreate(payments)
+                case .failure(let error):
+                    // Never create after an incomplete or failed read; doing
+                    // so would reopen the duplicate-payment window.
+                    completion(.failure(error))
+                }
+            }
         }
     }
 
@@ -1381,14 +1654,6 @@ final class QuickBooksDataAPI: ObservableObject {
             { self.authorizedPaymentsRequest(path: "charges", method: "POST", body: body, contentType: "application/json") },
             completion: completion
         )
-    }
-
-    func fetchCards(
-        completion: @escaping (Result<[QuickBooksPaymentsCardRecord], Error>) -> Void
-    ) {
-        // QuickBooks Payments cards are customer-scoped. Use fetchCards(forCustomerID:) or
-        // fetchCards(forCustomerIDs:) when a QBO customer ID is available.
-        completion(.success([]))
     }
 
     func fetchCards(
@@ -1531,8 +1796,7 @@ final class QuickBooksDataAPI: ObservableObject {
         note: String? = nil,
         attachToEntityType: QuickBooksAttachableEntityType? = nil,
         attachToEntityID: String? = nil,
-        completion: @escaping (Result<String, Error>) -> Void,
-        attempt: Int = 0
+        completion: @escaping (Result<String, Error>) -> Void
     ) {
         let attachableReferences: [QuickBooksAttachableReference]
         if let attachToEntityType, let attachToEntityID, !attachToEntityID.isEmpty {
@@ -1552,8 +1816,7 @@ final class QuickBooksDataAPI: ObservableObject {
             fileURL: fileURL,
             note: note,
             attachableReferences: attachableReferences,
-            completion: completion,
-            attempt: attempt
+            completion: completion
         )
     }
 
@@ -1561,8 +1824,7 @@ final class QuickBooksDataAPI: ObservableObject {
         fileURL: URL,
         note: String? = nil,
         attachableReferences: [QuickBooksAttachableReference],
-        completion: @escaping (Result<String, Error>) -> Void,
-        attempt: Int = 0
+        completion: @escaping (Result<String, Error>) -> Void
     ) {
         refreshTokensIfNeeded { ok in
             guard ok else {
@@ -1608,16 +1870,32 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
 
+            self.performUploadDocumentRequest(request, completion: completion, originalContext: self.retryContext)
+        }
+    }
+
+    private func performUploadDocumentRequest(
+        _ preparedRequest: URLRequest,
+        completion: @escaping (Result<String, Error>) -> Void,
+        attempt: Int = 0,
+        originalContext: QuickBooksRetryContext
+    ) {
+        refreshTokensIfNeeded { ok in
+            guard ok, let request = self.requestWithCurrentAuthorization(
+                preparedRequest, originalContext: originalContext
+            ) else {
+                completion(.failure(QBError.unauthorized))
+                return
+            }
             URLSession.shared.dataTask(with: request) { data, response, error in
-                    if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
-                        DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                            self.uploadDocument(
-                                fileURL: fileURL,
-                                note: note,
-                                attachableReferences: attachableReferences,
-                                completion: completion,
-                                attempt: attempt + 1
-                            )
+                if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                        self.performUploadDocumentRequest(
+                            request,
+                            completion: completion,
+                            attempt: attempt + 1,
+                            originalContext: originalContext
+                        )
                     }
                     return
                 }
@@ -1762,14 +2040,19 @@ private extension QuickBooksDataAPI {
     func performPaymentsTokenRequest(
         _ requestBuilder: @escaping () -> URLRequest?,
         completion: @escaping (Result<QuickBooksPaymentsTokenResponse, Error>) -> Void,
-        attempt: Int = 0
+        attempt: Int = 0,
+        preparedRequest: URLRequest? = nil,
+        originalContext: QuickBooksRetryContext? = nil
     ) {
         if let scopeError = paymentsScopeReadinessError() {
             completion(.failure(scopeError))
             return
         }
         refreshTokensIfNeeded { ok in
-            guard ok, let request = requestBuilder() else {
+            let context = originalContext ?? self.retryContext
+            guard ok, let request = self.requestWithCurrentAuthorization(
+                preparedRequest ?? requestBuilder(), originalContext: context
+            ) else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
@@ -1777,7 +2060,13 @@ private extension QuickBooksDataAPI {
             URLSession.shared.dataTask(with: request) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                        self.performPaymentsTokenRequest(requestBuilder, completion: completion, attempt: attempt + 1)
+                        self.performPaymentsTokenRequest(
+                            requestBuilder,
+                            completion: completion,
+                            attempt: attempt + 1,
+                            preparedRequest: request,
+                            originalContext: context
+                        )
                     }
                     return
                 }
@@ -1814,14 +2103,19 @@ private extension QuickBooksDataAPI {
     func performPaymentsChargeRequest(
         _ requestBuilder: @escaping () -> URLRequest?,
         completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void,
-        attempt: Int = 0
+        attempt: Int = 0,
+        preparedRequest: URLRequest? = nil,
+        originalContext: QuickBooksRetryContext? = nil
     ) {
         if let scopeError = paymentsScopeReadinessError() {
             completion(.failure(scopeError))
             return
         }
         refreshTokensIfNeeded { ok in
-            guard ok, let request = requestBuilder() else {
+            let context = originalContext ?? self.retryContext
+            guard ok, let request = self.requestWithCurrentAuthorization(
+                preparedRequest ?? requestBuilder(), originalContext: context
+            ) else {
                 completion(.failure(QBError.unauthorized))
                 return
             }
@@ -1829,7 +2123,13 @@ private extension QuickBooksDataAPI {
             URLSession.shared.dataTask(with: request) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
                     DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
-                        self.performPaymentsChargeRequest(requestBuilder, completion: completion, attempt: attempt + 1)
+                        self.performPaymentsChargeRequest(
+                            requestBuilder,
+                            completion: completion,
+                            attempt: attempt + 1,
+                            preparedRequest: request,
+                            originalContext: context
+                        )
                     }
                     return
                 }
@@ -2263,6 +2563,147 @@ struct QuickBooksCustomerCreate: Codable {
     let BillAddr: QuickBooksAddress?
 }
 
+struct QuickBooksCustomerCreateDraft: Equatable {
+    let localCustomerID: UUID
+    let displayName: String
+    let phone: String?
+    let email: String?
+    let billingAddress: String?
+}
+
+enum QuickBooksCustomerCreateOperationError: LocalizedError, Equatable {
+    case invalidName
+    case conflictingRemoteIdentity(String)
+    case ambiguousRemoteIdentity(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidName:
+            "Enter a customer name before publishing to QuickBooks."
+        case .conflictingRemoteIdentity(let name):
+            "QuickBooks already has \(name) with conflicting contact information. Review the customer records before creating another."
+        case .ambiguousRemoteIdentity(let name):
+            "More than one QuickBooks customer matches \(name), and the contact information does not identify one safely. Reconcile the duplicates before retrying."
+        }
+    }
+}
+
+/// One durable local customer owns one QuickBooks create operation across
+/// invoice, payment, customer-directory, and accounting-console retries. A
+/// complete QBO query runs before create so a prior accepted-but-unacknowledged
+/// response or an existing compatible customer can be recovered without a
+/// duplicate. Contact conflicts and ambiguity always require human review.
+enum QuickBooksCustomerCreateOperation {
+    static func draft(for customer: Customer) -> QuickBooksCustomerCreateDraft {
+        QuickBooksCustomerCreateDraft(
+            localCustomerID: customer.id,
+            displayName: customer.name,
+            phone: trimmed(customer.phone),
+            email: trimmed(customer.email),
+            billingAddress: trimmed(customer.address)
+        )
+    }
+
+    static func requestID(for localCustomerID: UUID) -> String {
+        "ga-customer-\(localCustomerID.uuidString.lowercased())"
+    }
+
+    static func payload(for draft: QuickBooksCustomerCreateDraft) -> QuickBooksCustomerCreate {
+        QuickBooksCustomerCreate(
+            DisplayName: draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines),
+            PrimaryPhone: trimmed(draft.phone).map { QuickBooksPhoneNumber(FreeFormNumber: $0) },
+            PrimaryEmailAddr: trimmed(draft.email).map { QuickBooksEmailAddress(Address: $0) },
+            BillAddr: trimmed(draft.billingAddress).map { QuickBooksAddress(Line1: $0) }
+        )
+    }
+
+    static func matchingRemoteCustomer(
+        for draft: QuickBooksCustomerCreateDraft,
+        in remoteCustomers: [QuickBooksCustomer]
+    ) throws -> QuickBooksCustomer? {
+        let normalizedName = normalizedText(draft.displayName)
+        guard !normalizedName.isEmpty else {
+            throw QuickBooksCustomerCreateOperationError.invalidName
+        }
+        let namedCandidates = remoteCustomers.filter {
+            normalizedText($0.DisplayName) == normalizedName
+        }
+        guard !namedCandidates.isEmpty else { return nil }
+
+        let compatibleCandidates = namedCandidates.filter {
+            !hasContactConflict(draft: draft, remote: $0)
+        }
+        guard !compatibleCandidates.isEmpty else {
+            throw QuickBooksCustomerCreateOperationError.conflictingRemoteIdentity(
+                draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        if namedCandidates.count == 1, let onlyCandidate = compatibleCandidates.first {
+            return onlyCandidate
+        }
+
+        let evidencedCandidates = compatibleCandidates.filter {
+            hasMatchingContactEvidence(draft: draft, remote: $0)
+        }
+        guard evidencedCandidates.count == 1, let exact = evidencedCandidates.first else {
+            throw QuickBooksCustomerCreateOperationError.ambiguousRemoteIdentity(
+                draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        return exact
+    }
+
+    private static func hasContactConflict(
+        draft: QuickBooksCustomerCreateDraft,
+        remote: QuickBooksCustomer
+    ) -> Bool {
+        conflicts(normalizedEmail(draft.email), normalizedEmail(remote.PrimaryEmailAddr?.Address)) ||
+        conflicts(normalizedPhone(draft.phone), normalizedPhone(remote.PrimaryPhone?.FreeFormNumber)) ||
+        conflicts(normalizedText(draft.billingAddress), normalizedText(remote.BillAddr?.Line1))
+    }
+
+    private static func hasMatchingContactEvidence(
+        draft: QuickBooksCustomerCreateDraft,
+        remote: QuickBooksCustomer
+    ) -> Bool {
+        matches(normalizedEmail(draft.email), normalizedEmail(remote.PrimaryEmailAddr?.Address)) ||
+        matches(normalizedPhone(draft.phone), normalizedPhone(remote.PrimaryPhone?.FreeFormNumber)) ||
+        matches(normalizedText(draft.billingAddress), normalizedText(remote.BillAddr?.Line1))
+    }
+
+    private static func conflicts(_ local: String, _ remote: String) -> Bool {
+        !local.isEmpty && !remote.isEmpty && local != remote
+    }
+
+    private static func matches(_ local: String, _ remote: String) -> Bool {
+        !local.isEmpty && local == remote
+    }
+
+    private static func normalizedEmail(_ value: String?) -> String {
+        trimmed(value)?.lowercased() ?? ""
+    }
+
+    private static func normalizedPhone(_ value: String?) -> String {
+        var digits = (value ?? "").filter(\.isNumber)
+        if digits.count == 11, digits.first == "1" {
+            digits.removeFirst()
+        }
+        return digits
+    }
+
+    private static func normalizedText(_ value: String?) -> String {
+        (value ?? "")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased()
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        let result = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result?.isEmpty == false ? result : nil
+    }
+}
+
 struct QuickBooksCustomerResponse: Codable {
     let Customer: QuickBooksCustomer
 }
@@ -2321,6 +2762,44 @@ struct QuickBooksItem: Codable, Identifiable {
     }
 }
 
+/// Applies the provider-owned portion of a QuickBooks catalog record while
+/// preserving GunnAire-only operating metadata such as truck-stock controls,
+/// vendor part numbers, purchase links, and flat-rate package definitions.
+/// A missing optional provider value is authoritative: it clears a stale local
+/// value instead of allowing the app to claim the record is synchronized while
+/// still displaying data that was removed in QuickBooks.
+enum QuickBooksCatalogSnapshotApplication {
+    static func apply(
+        _ quickBooksItem: QuickBooksItem,
+        to item: Item,
+        at date: Date = Date()
+    ) {
+        item.quickBooksID = normalizedOptionalText(quickBooksItem.Id)
+        item.quickBooksSyncStatus = "synced"
+        item.quickBooksSyncDetail = nil
+        item.quickBooksLastSyncedAt = date
+        item.applyQuickBooksCatalogAvailability(quickBooksItem.Active ?? true)
+        item.name = quickBooksItem.Name
+        if let itemType = normalizedOptionalText(quickBooksItem.ItemType) {
+            item.itemTypeRawValue = itemType
+        }
+        item.unitPrice = quickBooksItem.UnitPrice ?? 0
+        item.purchaseCost = quickBooksItem.PurchaseCost
+        item.isTaxable = quickBooksItem.Taxable ?? false
+        item.itemDescription = normalizedOptionalText(quickBooksItem.Description)
+        item.sku = normalizedOptionalText(quickBooksItem.Sku)
+        item.purchaseDescription = normalizedOptionalText(quickBooksItem.PurchaseDesc)
+        item.preferredVendorName = normalizedOptionalText(quickBooksItem.PrefVendorRef?.name)
+        item.preferredVendorQuickBooksID = normalizedOptionalText(quickBooksItem.PrefVendorRef?.value)
+    }
+
+    private static func normalizedOptionalText(_ value: String?) -> String? {
+        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !normalized.isEmpty else { return nil }
+        return normalized
+    }
+}
+
 struct QuickBooksItemCreate: Codable {
     let Name: String
     let ItemType: String
@@ -2340,6 +2819,40 @@ struct QuickBooksItemCreate: Codable {
     }
 }
 
+/// One local catalog identity owns one QuickBooks create operation across
+/// devices and retries. Query-before-create still performs reconciliation;
+/// the stable request ID closes the uncertain-response window without placing
+/// customer, item, or accounting detail in the URL.
+enum QuickBooksCatalogCreateOperation {
+    static func requestID(for localItemID: UUID) -> String {
+        "ga-item-\(localItemID.uuidString.lowercased())"
+    }
+
+    static func payload(
+        for item: Item,
+        incomeAccountRef: QuickBooksReference,
+        expenseAccountRef: QuickBooksReference?
+    ) -> QuickBooksItemCreate {
+        QuickBooksItemCreate(
+            Name: item.name,
+            ItemType: item.itemType.rawValue,
+            Description: item.itemDescription,
+            Sku: item.sku,
+            PurchaseDesc: item.purchaseDescription ?? item.itemDescription,
+            UnitPrice: item.unitPrice,
+            PurchaseCost: item.purchaseCost,
+            Taxable: item.isTaxable,
+            IncomeAccountRef: incomeAccountRef,
+            ExpenseAccountRef: expenseAccountRef,
+            PrefVendorRef: item.preferredVendorQuickBooksID.flatMap { quickBooksID in
+                quickBooksID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil
+                    : QuickBooksReference(value: quickBooksID, name: item.preferredVendorName)
+            }
+        )
+    }
+}
+
 struct QuickBooksItemUpdate: Codable {
     let Id: String
     let SyncToken: String
@@ -2352,6 +2865,7 @@ struct QuickBooksItemUpdate: Codable {
     let PurchaseCost: Double
     let Taxable: Bool
     let PrefVendorRef: QuickBooksReference?
+    let Active: Bool
 
     init(
         Id: String,
@@ -2363,7 +2877,8 @@ struct QuickBooksItemUpdate: Codable {
         UnitPrice: Double,
         PurchaseCost: Double,
         Taxable: Bool,
-        PrefVendorRef: QuickBooksReference?
+        PrefVendorRef: QuickBooksReference?,
+        Active: Bool = true
     ) {
         self.Id = Id
         self.SyncToken = SyncToken
@@ -2376,6 +2891,7 @@ struct QuickBooksItemUpdate: Codable {
         self.PurchaseCost = PurchaseCost
         self.Taxable = Taxable
         self.PrefVendorRef = PrefVendorRef
+        self.Active = Active
     }
 }
 
@@ -2961,6 +3477,173 @@ struct QuickBooksVendorCreate: Codable {
     let PrimaryPhone: QuickBooksPhoneNumber?
 }
 
+struct QuickBooksVendorCreateDraft: Equatable {
+    let localVendorID: UUID
+    let displayName: String
+    let email: String?
+    let phone: String?
+}
+
+enum QuickBooksVendorCreateOperationError: LocalizedError, Equatable {
+    case invalidName
+    case conflictingRemoteIdentity(String)
+    case ambiguousRemoteIdentity(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidName:
+            "Enter a vendor name before publishing to QuickBooks."
+        case .conflictingRemoteIdentity(let name):
+            "QuickBooks already has \(name) with conflicting contact information. Review the vendor records before creating another."
+        case .ambiguousRemoteIdentity(let name):
+            "More than one QuickBooks vendor matches \(name), and the contact information does not identify one safely. Reconcile the duplicates before retrying."
+        }
+    }
+}
+
+/// One durable local vendor owns one QBO create operation across purchasing,
+/// pricebook sourcing, Bills, Vendor Credits, and accounting-console retries.
+/// Contact conflicts and ambiguity always require human review.
+enum QuickBooksVendorCreateOperation {
+    static func draft(for vendor: Vendor) -> QuickBooksVendorCreateDraft {
+        let contacts = parsedContactInfo(vendor.contactInfo)
+        return QuickBooksVendorCreateDraft(
+            localVendorID: vendor.id,
+            displayName: vendor.name,
+            email: contacts.email,
+            phone: contacts.phone
+        )
+    }
+
+    static func requestID(for localVendorID: UUID) -> String {
+        "ga-vendor-\(localVendorID.uuidString.lowercased())"
+    }
+
+    static func payload(for draft: QuickBooksVendorCreateDraft) -> QuickBooksVendorCreate {
+        QuickBooksVendorCreate(
+            DisplayName: draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines),
+            PrimaryEmailAddr: trimmed(draft.email).map { QuickBooksEmailAddress(Address: $0) },
+            PrimaryPhone: trimmed(draft.phone).map { QuickBooksPhoneNumber(FreeFormNumber: $0) }
+        )
+    }
+
+    static func storedContactInfo(email: String?, phone: String?) -> String? {
+        let combined = [trimmed(email), trimmed(phone)]
+            .compactMap { $0 }
+            .joined(separator: " • ")
+        return combined.isEmpty ? nil : combined
+    }
+
+    static func matchingRemoteVendor(
+        for draft: QuickBooksVendorCreateDraft,
+        in remoteVendors: [QuickBooksVendor]
+    ) throws -> QuickBooksVendor? {
+        let normalizedName = normalizedText(draft.displayName)
+        guard !normalizedName.isEmpty else {
+            throw QuickBooksVendorCreateOperationError.invalidName
+        }
+        let namedCandidates = remoteVendors.filter {
+            normalizedText($0.DisplayName) == normalizedName
+        }
+        guard !namedCandidates.isEmpty else { return nil }
+
+        let compatibleCandidates = namedCandidates.filter {
+            !hasContactConflict(draft: draft, remote: $0)
+        }
+        guard !compatibleCandidates.isEmpty else {
+            throw QuickBooksVendorCreateOperationError.conflictingRemoteIdentity(
+                draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        if namedCandidates.count == 1, let onlyCandidate = compatibleCandidates.first {
+            return onlyCandidate
+        }
+
+        let evidencedCandidates = compatibleCandidates.filter {
+            hasMatchingContactEvidence(draft: draft, remote: $0)
+        }
+        guard evidencedCandidates.count == 1, let exact = evidencedCandidates.first else {
+            throw QuickBooksVendorCreateOperationError.ambiguousRemoteIdentity(
+                draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        return exact
+    }
+
+    private static func parsedContactInfo(_ value: String?) -> (email: String?, phone: String?) {
+        let parts = (value ?? "")
+            .split(separator: "•", omittingEmptySubsequences: true)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let email = parts.first { $0.contains("@") }
+        let phone = parts.first { part in
+            part != email && part.contains(where: \.isNumber)
+        }
+        return (trimmed(email), trimmed(phone))
+    }
+
+    private static func hasContactConflict(
+        draft: QuickBooksVendorCreateDraft,
+        remote: QuickBooksVendor
+    ) -> Bool {
+        conflicts(normalizedEmail(draft.email), normalizedEmail(remote.PrimaryEmailAddr?.Address)) ||
+        conflicts(normalizedPhone(draft.phone), normalizedPhone(remote.PrimaryPhone?.FreeFormNumber))
+    }
+
+    private static func hasMatchingContactEvidence(
+        draft: QuickBooksVendorCreateDraft,
+        remote: QuickBooksVendor
+    ) -> Bool {
+        matches(normalizedEmail(draft.email), normalizedEmail(remote.PrimaryEmailAddr?.Address)) ||
+        matches(normalizedPhone(draft.phone), normalizedPhone(remote.PrimaryPhone?.FreeFormNumber))
+    }
+
+    private static func conflicts(_ local: String, _ remote: String) -> Bool {
+        !local.isEmpty && !remote.isEmpty && local != remote
+    }
+
+    private static func matches(_ local: String, _ remote: String) -> Bool {
+        !local.isEmpty && local == remote
+    }
+
+    private static func normalizedEmail(_ value: String?) -> String {
+        trimmed(value)?.lowercased() ?? ""
+    }
+
+    private static func normalizedPhone(_ value: String?) -> String {
+        var digits = (value ?? "").filter(\.isNumber)
+        if digits.count == 11, digits.first == "1" {
+            digits.removeFirst()
+        }
+        return digits
+    }
+
+    private static func normalizedText(_ value: String?) -> String {
+        (value ?? "")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased()
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        let result = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result?.isEmpty == false ? result : nil
+    }
+}
+
+enum QuickBooksVendorPublicationRecovery {
+    static func queuedVendors(from vendors: [Vendor]) -> [Vendor] {
+        vendors
+            .filter {
+                $0.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+                !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            .sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+}
+
 struct QuickBooksVendorResponse: Codable {
     let Vendor: QuickBooksVendor
 }
@@ -3076,6 +3759,31 @@ struct QuickBooksPayment: Codable, Identifiable {
     }
 }
 
+enum QuickBooksPaymentAllocation {
+    static func amountsByInvoiceID(for payment: QuickBooksPayment) -> [String: Double] {
+        (payment.Line ?? []).reduce(into: [:]) { allocations, line in
+            guard line.Amount.isFinite, line.Amount > 0 else { return }
+            let invoiceIDs = Set(
+                (line.LinkedTxn ?? [])
+                    .filter { $0.TxnType.caseInsensitiveCompare("Invoice") == .orderedSame }
+                    .map { $0.TxnId.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+            // A QuickBooks payment normally provides one invoice link per line.
+            // If a provider response makes one line ambiguous, fail closed rather
+            // than inventing an allocation that could overstate an invoice payment.
+            guard let invoiceID = invoiceIDs.first, invoiceIDs.count == 1 else { return }
+            allocations[invoiceID, default: 0] += line.Amount
+        }
+    }
+
+    static func amountApplied(by payment: QuickBooksPayment, toInvoiceID invoiceID: String) -> Double {
+        let expectedInvoiceID = invoiceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !expectedInvoiceID.isEmpty else { return 0 }
+        return amountsByInvoiceID(for: payment)[expectedInvoiceID] ?? 0
+    }
+}
+
 struct QuickBooksPaymentCreate: Codable {
     let CustomerRef: QuickBooksReference?
     let TotalAmt: Double
@@ -3084,6 +3792,162 @@ struct QuickBooksPaymentCreate: Codable {
     let Line: [QuickBooksPaymentLine]?
     let PaymentMethodRef: QuickBooksReference?
     let CreditCardPayment: QuickBooksCreditCardPayment?
+}
+
+struct QuickBooksAccountingPaymentDraft {
+    let localPaymentID: UUID
+    let payment: QuickBooksPaymentCreate
+}
+
+enum QuickBooksAccountingPaymentCreateOperationError: LocalizedError, Equatable {
+    case invalidCustomer
+    case invalidInvoice
+    case invalidAmount
+    case conflictingRemotePayment
+    case ambiguousRemotePayment
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidCustomer:
+            "The local payment needs a linked QuickBooks customer before publication. No QuickBooks payment was created."
+        case .invalidInvoice:
+            "The local payment must apply to exactly one linked QuickBooks invoice. No QuickBooks payment was created."
+        case .invalidAmount:
+            "The local payment amount must be greater than zero before publication. No QuickBooks payment was created."
+        case .conflictingRemotePayment:
+            "QuickBooks already has this GunnAire payment identity with different customer, invoice, or amount evidence. Reconcile it before retrying; no payment was created."
+        case .ambiguousRemotePayment:
+            "More than one QuickBooks payment carries this GunnAire payment identity. Reconcile the duplicates before retrying; no payment was created."
+        }
+    }
+}
+
+/// One durable local Payment owns one QBO accounting-Payment operation across
+/// manual collection, processor follow-up, and retry. A marker in PrivateNote
+/// makes an accepted-but-unacknowledged response recoverable after a complete
+/// paginated read; conflicting or duplicated marker evidence always fails
+/// closed rather than issuing another financial write.
+enum QuickBooksAccountingPaymentCreateOperation {
+    private static let markerPrefix = "GunnAire payment ID: "
+    private static let privateNoteLimit = 4_000
+
+    static func requestID(for localPaymentID: UUID) -> String {
+        "ga-payment-\(localPaymentID.uuidString.lowercased())"
+    }
+
+    static func marker(for localPaymentID: UUID) -> String {
+        "\(markerPrefix)\(localPaymentID.uuidString.lowercased())"
+    }
+
+    static func payload(for draft: QuickBooksAccountingPaymentDraft) throws -> QuickBooksPaymentCreate {
+        _ = try expectedEvidence(for: draft.payment)
+        let marker = marker(for: draft.localPaymentID)
+        let existingNote = trimmed(draft.payment.PrivateNote)
+        let note: String
+        if existingNote?
+            .split(whereSeparator: \.isNewline)
+            .contains(where: { normalizedText(String($0)) == normalizedText(marker) }) == true {
+            note = existingNote ?? marker
+        } else if let existingNote {
+            let allowedExistingCount = max(privateNoteLimit - marker.count - 1, 0)
+            note = "\(String(existingNote.prefix(allowedExistingCount)))\n\(marker)"
+        } else {
+            note = marker
+        }
+
+        return QuickBooksPaymentCreate(
+            CustomerRef: draft.payment.CustomerRef,
+            TotalAmt: draft.payment.TotalAmt,
+            PrivateNote: note,
+            PaymentRefNum: draft.payment.PaymentRefNum,
+            Line: draft.payment.Line,
+            PaymentMethodRef: draft.payment.PaymentMethodRef,
+            CreditCardPayment: draft.payment.CreditCardPayment
+        )
+    }
+
+    static func matchingRemotePayment(
+        for draft: QuickBooksAccountingPaymentDraft,
+        in remotePayments: [QuickBooksPayment]
+    ) throws -> QuickBooksPayment? {
+        let expected = try expectedEvidence(for: draft.payment)
+        let expectedMarker = normalizedText(marker(for: draft.localPaymentID))
+        let candidates = remotePayments.filter { payment in
+            markerLines(in: payment.PrivateNote).contains(expectedMarker)
+        }
+
+        guard !candidates.isEmpty else { return nil }
+        guard candidates.count == 1, let candidate = candidates.first else {
+            throw QuickBooksAccountingPaymentCreateOperationError.ambiguousRemotePayment
+        }
+
+        let remoteCustomerID = normalizedIdentifier(candidate.CustomerRef?.value)
+        let remoteInvoiceIDs = invoiceIDs(in: candidate.Line)
+        let remoteAmountCents = cents(candidate.TotalAmt)
+        guard remoteCustomerID == expected.customerID,
+              remoteInvoiceIDs == Set([expected.invoiceID]),
+              remoteAmountCents == expected.amountCents else {
+            throw QuickBooksAccountingPaymentCreateOperationError.conflictingRemotePayment
+        }
+        return candidate
+    }
+
+    private static func expectedEvidence(
+        for payment: QuickBooksPaymentCreate
+    ) throws -> (customerID: String, invoiceID: String, amountCents: Int64) {
+        let customerID = normalizedIdentifier(payment.CustomerRef?.value)
+        guard !customerID.isEmpty else {
+            throw QuickBooksAccountingPaymentCreateOperationError.invalidCustomer
+        }
+        let linkedInvoiceIDs = invoiceIDs(in: payment.Line)
+        guard linkedInvoiceIDs.count == 1, let invoiceID = linkedInvoiceIDs.first else {
+            throw QuickBooksAccountingPaymentCreateOperationError.invalidInvoice
+        }
+        guard let amountCents = cents(payment.TotalAmt), amountCents > 0 else {
+            throw QuickBooksAccountingPaymentCreateOperationError.invalidAmount
+        }
+        return (customerID, invoiceID, amountCents)
+    }
+
+    private static func markerLines(in note: String?) -> Set<String> {
+        Set(
+            (note ?? "")
+                .split(whereSeparator: \.isNewline)
+                .map { normalizedText(String($0)) }
+                .filter { $0.hasPrefix(normalizedText(markerPrefix)) }
+        )
+    }
+
+    private static func invoiceIDs(in lines: [QuickBooksPaymentLine]?) -> Set<String> {
+        Set(
+            (lines ?? [])
+                .flatMap { $0.LinkedTxn ?? [] }
+                .filter { normalizedText($0.TxnType) == "invoice" }
+                .map { normalizedIdentifier($0.TxnId) }
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    private static func cents(_ amount: Double) -> Int64? {
+        guard amount.isFinite else { return nil }
+        return Int64((amount * 100).rounded())
+    }
+
+    private static func normalizedIdentifier(_ value: String?) -> String {
+        (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func normalizedText(_ value: String?) -> String {
+        (value ?? "")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased()
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        let result = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result?.isEmpty == false ? result : nil
+    }
 }
 
 struct QuickBooksPaymentResponse: Codable {
