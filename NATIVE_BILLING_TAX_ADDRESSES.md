@@ -106,6 +106,28 @@ prerequisite writes, and changes during provider reads. All provider requests
 use fixtures. The fresh model-context test is not signed CloudKit convergence,
 cold-launch/device acceptance or a claim that account sharing is complete.
 
+## Publication checkpoint and next dependency
+
+Source is published as `12ee89abc6adc2ee2e568ff2f6118b83b1913803` on open,
+unmerged PR #18. Workflow commit `a66dc855a64499ead361c0c2bb03403d05df5600`
+adds the passing review journey as the seventeenth hosted iPad selector.
+The fetched workflow bytes match the local file and actionlint passes.
+Final local source/test hashes are retained in `SOURCE_SHA256.txt` in the
+evidence directory. These commits do not merge or deploy the application.
+
+Current-source review establishes the next dependency concretely:
+`QuickBooksBillingWorkflow.prepareCustomer` accepts a preexisting local QBO ID,
+and its item loop skips already-linked items. The server's
+`billing_publications.BillingPublisher.mappings` instead requires matching shared
+customer and catalog rows; invoice update additionally requires its shared
+document mapping. Consequently, merely substituting `BillingPublicationClient`
+would break existing imported/legacy customer, item and invoice workflows.
+Next implementation must supply reviewed, tenant-scoped legacy link adoption
+and original-attempt/approval recovery, then switch the actual buttons. It must
+not create replacement customers/items/invoices or reprice sold lines to satisfy
+those prerequisites. This is an observed source dependency, not an external
+account blocker or a reason to reduce the full-app objective.
+
 ## Remaining full-app requirements
 
 This removes an address-capture prerequisite; it does **not** claim that native

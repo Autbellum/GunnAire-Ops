@@ -6,10 +6,21 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
-The native job-authority candidate adds two in-job Field Billing journeys:
+Current workflow `a66dc85` selects **seventeen** iPad interface journeys.
+It adds tax-address entry/cancellation, unchanged sold-price confirmation and
+saved-invoice reopening on the original job, from source `12ee89a`. Final local
+qualification is 1159 logic tests per native platform, five selected iPad UI
+journeys and unsigned universal Mac Release. Exact evidence and remaining
+native-to-server cutover requirements:
+[NATIVE_BILLING_TAX_ADDRESSES.md](NATIVE_BILLING_TAX_ADDRESSES.md).
+The workflow-only diff adds one selector and passes actionlint. Its hosted
+checks were started; no completed current-head result is inferred from earlier
+green checks.
+
+The preceding job-authority candidate added two in-job Field Billing journeys:
 saved-crew conflict confirmation with return to the original job, and
 read-only recovery of accepted access without another assignment POST.
-The candidate workflow therefore selects sixteen iPad interface journeys.
+That preceding workflow selected sixteen iPad interface journeys.
 Exact implementation and final local acceptance:
 [NATIVE_JOB_BILLING_AUTHORITY.md](NATIVE_JOB_BILLING_AUTHORITY.md).
 Published HTTP/client head `12382ae` passes all four hosted jobs:
