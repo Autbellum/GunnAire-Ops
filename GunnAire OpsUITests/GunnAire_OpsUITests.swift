@@ -3858,6 +3858,58 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testNativeBillingReviewCancelsUnsentProposalAndReturnsToOriginalInvoice() throws {
+        try exerciseNativeBillingReview(recover: false)
+    }
+
+    @MainActor
+    func testNativeBillingReviewRecoversAcceptedInvoiceWithoutPublishingAgain() throws {
+        try exerciseNativeBillingReview(recover: true)
+    }
+
+    @MainActor
+    private func exerciseNativeBillingReview(recover: Bool) throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
+            "-uiTestSeedCollectibleJob", "-uiTestNativeBillingReview", "-GunnAirePendingAppRoute", "invoices"]
+        if recover { app.launchArguments.append("-uiTestNativeBillingAccepted") }
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
+        let review = app.buttons["BillingReview-\(screenshotInvoiceID)"]
+        if !review.exists {
+            let customer = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Blue Ridge Dental")).firstMatch
+            for _ in 0..<8 where !customer.exists || !customer.isHittable { app.swipeUp() }
+            XCTAssertTrue(customer.waitForExistence(timeout: 4)); customer.tap()
+        }
+        for _ in 0..<8 where !review.exists || !review.isHittable { app.swipeUp() }
+        XCTAssertTrue(review.waitForExistence(timeout: 4)); review.tap()
+        XCTAssertTrue(app.navigationBars["Billing Review"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["BillingReviewStatus"].waitForExistence(timeout: 4))
+        XCTAssertFalse(app.staticTexts["CustomerRef"].exists)
+        XCTAssertFalse(app.staticTexts["connectionRevision"].exists)
+        if recover {
+            app.buttons["BillingReviewRecover"].tap()
+            let message = app.staticTexts["BillingReviewMessage"]
+            XCTAssertTrue(message.waitForExistence(timeout: 4))
+            XCTAssertTrue(message.label.contains("recovered without another publication"))
+            XCTAssertFalse(app.buttons["BillingReviewPublish"].exists)
+        } else {
+            let cancel = app.buttons["BillingReviewCancel"]
+            XCTAssertTrue(cancel.waitForExistence(timeout: 4)); cancel.tap()
+            let message = app.staticTexts["BillingReviewMessage"]
+            XCTAssertTrue(message.waitForExistence(timeout: 4))
+            XCTAssertTrue(message.label.contains("No QuickBooks record was deleted"))
+        }
+        let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        evidence.name = recover ? "Billing - recover original accepted invoice" : "Billing - cancel only unsent proposal"
+        evidence.lifetime = .keepAlways; add(evidence)
+        app.navigationBars["Billing Review"].buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 4))
+        XCTAssertTrue(review.waitForExistence(timeout: 4))
+    }
+
+    @MainActor
     func testExistingQuickBooksLinkReviewCancelsAndReturnsToManagement() throws {
         try exerciseExistingQuickBooksLinks(lostReply: false)
     }

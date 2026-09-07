@@ -3470,6 +3470,7 @@ GunnAire
                                                 .font(.caption2)
                                                 .foregroundColor(.secondary)
                                         }
+                                        BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
                                         Button("Create Invoice") {
                                             createInvoiceFromEstimate(estimate)
                                         }
@@ -3568,6 +3569,7 @@ GunnAire
                                                 .font(.caption2)
                                                 .foregroundColor(.green)
                                         }
+                                        BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
                                         if canEditInvoice(invoice) {
                                             Button("Edit Line Items") {
                                                 beginEditingInvoice(invoice)
@@ -3624,8 +3626,8 @@ GunnAire
                                             Text(invoice.amount, format: .currency(code: "USD"))
                                         }
                                     }
+                                    .accessibilityIdentifier("InvoiceDisclosure-\(invoice.id.uuidString)")
                                 }
-                                .accessibilityIdentifier("InvoiceDisclosure-\(invoice.id.uuidString)")
                                 .padding(.vertical, 4)
                             }
                         }
@@ -4052,6 +4054,13 @@ GunnAire
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                        }
+                        if selectedJobStage == .billing {
+                            if let invoice = currentJobInvoice {
+                                BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
+                            } else if let estimate = currentJobEstimate {
+                                BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+                            }
                         }
                         jobMaterialsSection(for: call)
                     }

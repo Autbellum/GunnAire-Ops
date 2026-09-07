@@ -201,20 +201,30 @@ def document_values(value, kind, operation):
 
 
 def validated_request(payload):
-    required = {"companyID", "realmID", "environment", "documentType", "localDocumentID", "localCustomerID", "operation", "document"}
-    job_fields = {"serviceCallID", "assignmentRevision"}
-    if not isinstance(payload, dict) or set(payload) not in (required, required | job_fields):
+    required = {"companyID", "realmID", "environment", "documentType", "localDocumentID", "localCustomerID", "operation", "document", "connectionRevision"}
+    shapes = (required, required | {"serviceCallID"}, required | {"serviceCallID", "assignmentRevision"})
+    if not isinstance(payload, dict) or set(payload) not in (*shapes, *(shape | {"draftRevision"} for shape in shapes)):
         raise failure("invalid_request", "Use the supported billing publication fields only.", 400)
+    epoch = payload["connectionRevision"]
+    if not isinstance(epoch, str) or not re.fullmatch(r"[0-9a-f]{64}", epoch):
+        raise failure("invalid_request", "Refresh the original billing connection before preparing a proposal.", 400)
     kind, operation = payload["documentType"], payload["operation"]
     if (kind not in ("Invoice", "Estimate") or operation not in ("create", "update")
             or (kind == "Estimate" and operation != "create") or payload["environment"] not in ("sandbox", "production")):
         raise failure("invalid_request", "Choose a supported billing operation and environment.", 400)
-    job = {}
+    job = {"connection_revision": epoch}
+    if "draftRevision" in payload:
+        revision = payload["draftRevision"]
+        if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision):
+            raise failure("invalid_request", "Retain the original native draft revision.", 400)
+        job["draft_revision"] = revision
     if "serviceCallID" in payload:
-        revision = payload["assignmentRevision"]
-        if type(revision) is not int or not 1 <= revision <= 2147483647:
-            raise failure("invalid_request", "Use the original server-approved assignment revision.", 400)
-        job = {"service_call_id": canonical_uuid(payload["serviceCallID"]), "assignment_revision": revision}
+        job["service_call_id"] = canonical_uuid(payload["serviceCallID"])
+        if "assignmentRevision" in payload:
+            revision = payload["assignmentRevision"]
+            if type(revision) is not int or not 1 <= revision <= 2147483647:
+                raise failure("invalid_request", "Use the original server-approved assignment revision.", 400)
+            job["assignment_revision"] = revision
     return {"company_id": canonical_uuid(payload["companyID"]), "realm_id": reference(payload["realmID"]),
             "environment": payload["environment"], "document_type": kind, "operation": operation,
             "local_document_id": canonical_uuid(payload["localDocumentID"]), "local_customer_id": canonical_uuid(payload["localCustomerID"]),
@@ -268,6 +278,8 @@ class BillingPublisher:
         if grant is None or grant["realm_id"] != intent["realm_id"] or grant["environment"] != intent["environment"]:
             raise failure("provider_changed", "Reconnect the original QuickBooks company.")
         fingerprint = grant_fingerprint(grant)
+        if "connection_revision" in intent.keys() and intent["connection_revision"] != billing_assignments.connection_revision(fingerprint):
+            raise failure("grant_changed", "Keep the original proposal. Review billing after reconnecting QuickBooks.")
         if require_grant and fingerprint != intent["grant_fingerprint"]:
             raise failure("grant_changed", "Review the original attempt after reconnecting QuickBooks.")
         allowed = office_role(actor["role"], intent["document_type"])
@@ -297,13 +309,18 @@ class BillingPublisher:
             raise failure("review_required", "Keep the saved draft. Confirm current job billing access or ask the office to review it.", 403)
         return actor, {**dict(grant), "grant_fingerprint": fingerprint, "billing_authority": authority}
 
-    def approve_draft(self, session_id, payload, technician_email):
+    def approve_draft(self, session_id, payload, technician_email, *, original_attempt=None):
         intent = validated_request(payload)
         if not isinstance(technician_email, str) or technician_email != technician_email.strip().lower():
             raise failure("invalid_request", "Choose an active field technician.", 400)
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
             actor, context = self.authorize(connection, session_id, intent, require_grant=False, office_only=True)
+            if original_attempt is not None:
+                original = self.record(connection, original_attempt)
+                self.authorize(connection, session_id, original, office_only=True)
+                if original["state"] != "reserved" or original["payload_hash"] != digest(intent) or original["actor_email"] != technician_email:
+                    raise failure("proposal_changed", "Only the exact original never-sent proposal can be approved.")
             user = connection.execute("SELECT * FROM users WHERE email=?", (technician_email,)).fetchone()
             if user is None or not user["is_active"] or user["role"] != "Field Technician":
                 raise failure("invalid_request", "Choose an active field technician.", 400)
@@ -522,7 +539,9 @@ class BillingPublisher:
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = self.record(connection, identifier)
-            actor, _ = self.authorize(connection, session_id, row)
+            actor = self.actor(connection, session_id)
+            office = office_role(actor["role"], row["document_type"])
+            actor, _ = self.authorize(connection, session_id, row, require_grant=not office, office_only=office)
             if row["state"] != "reserved":
                 raise failure("publication_pending", "Only a never-sent billing proposal can be cancelled.")
             connection.execute("UPDATE billing_publications SET state='cancelled',updated_at=? WHERE id=?", (self.now().isoformat(), identifier))

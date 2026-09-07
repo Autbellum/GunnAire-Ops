@@ -6,7 +6,22 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
-Current workflow `d34b9a8` selects **twenty** iPad interface journeys. It adds
+The native billing publication candidate selects **twenty-two** iPad interface
+journeys, adding cancellation of an unsent proposal and read-only recovery of
+an accepted invoice without publishing again. Final local acceptance passes
+1191 logic tests per native platform, four selected iPad journeys (1195 total),
+366 Backend tests, 37 Tools tests and the unsigned optimized universal Mac
+Release with verified arm64/x86_64 architectures. Six final iPad screenshots
+were visually inspected; the account-email footer remains hidden. Scope,
+backend-first rollout and evidence are recorded in
+[NATIVE_BILLING_PUBLICATION.md](NATIVE_BILLING_PUBLICATION.md).
+The two new selectors require their own exact-head hosted qualification; local
+success and preceding-head green checks are not substitutes.
+
+Preceding head `9821668` passes all four hosted jobs:
+[Native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34153343592) and
+[Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34153343582).
+Its workflow `d34b9a8` selects **twenty** iPad interface journeys. It adds
 existing-QBO-link cancellation, lost-confirmation GET recovery and cancellation
 after reconnection, from source `2c69aa7`. Final local acceptance passes 1174
 logic tests per native platform, seven selected iPad journeys, 349 Backend,
@@ -101,7 +116,7 @@ The published resource-sync checkpoint 529fe26 passes all four hosted jobs:
 [Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728884).
 This is exact-head evidence for that checkpoint, not subsequent catalog work.
 
-- **iPad native tests**: the complete `GunnAire OpsTests` target plus twenty
+- **iPad native tests**: the complete `GunnAire OpsTests` target plus twenty-two
   serial interface journeys: direct Invoice launch, simple Mail actions,
   current customer statement generation, statement review-to-Invoices,
   billing-identity review-to-Invoices with safe report export controls,
@@ -113,7 +128,9 @@ This is exact-head evidence for that checkpoint, not subsequent catalog work.
   recovery/unsent cancellation with return to the customer record, and
   original job-access recovery and displayed-revision crew confirmation,
   retained tax-address review, and existing-link cancellation, original-decision
-  GET recovery and safe cancellation after QuickBooks reconnection.
+  GET recovery and safe cancellation after QuickBooks reconnection, plus native
+  billing unsent-proposal cancellation and accepted-invoice read-only recovery
+  with return to the original invoice.
 - **Mac native tests**: the complete logic target on arm64 Mac Catalyst,
   followed by an unsigned optimized Release build. `lipo -verify_arch`
   requires both arm64 and x86_64 in the Release executable.

@@ -5,7 +5,7 @@ import Testing
 
 @MainActor
 struct QuickBooksBillingWorkflowTests {
-    @MainActor private final class Fixture {
+    @MainActor final class Fixture {
         let context: ModelContext
         let customer: Customer
         let item: Item
@@ -19,12 +19,14 @@ struct QuickBooksBillingWorkflowTests {
         var customers: [[String: Any]] = []
         var remoteItems: [[String: Any]] = []
         var customerPublisher: CustomerPublicationBoundary.Transport?
+        var billingPublisher: BillingPublicationClient?
+        var billingJournal: BillingNativeJournalStore?
         var beforeResponse: ((URLRequest) throws -> Void)?
         var transformDocument: (([String: Any]) -> [String: Any])?
         lazy var api = QuickBooksDataAPI(testTokens: .init(accessToken: "billing-fixture", expiration: .distantFuture),
             realmID: "billing-realm", environment: Config.QuickBooks.environment,
             catalogCompanyID: UUID(uuidString: "10000000-0000-4000-8000-000000000001"),
-            customerPublisher: customerPublisher) { [unowned self] request in
+            customerPublisher: customerPublisher, billingPublisher: billingPublisher) { [unowned self] request in
                 self.requests.append(request)
                 try self.beforeResponse?(request)
                 return try self.reply(request)
@@ -50,6 +52,7 @@ struct QuickBooksBillingWorkflowTests {
                 context: context, api: api, lifecycle: owner,
                 validateAccess: { if !self.authorized { throw QuickBooksBillingWorkflowError.accessDenied } },
                 validateCatalogAccess: { if !self.catalogAuthorized { throw CompanyWorkspaceFailure.administratorRequired } },
+                billingJournal: billingJournal,
                 save: save)
         }
 

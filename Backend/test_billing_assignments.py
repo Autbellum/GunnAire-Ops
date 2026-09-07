@@ -142,7 +142,8 @@ class BillingAssignmentTests(BillingFixture, unittest.TestCase):
 
     def test_server_roster_not_client_job_claim_authorizes_field_work(self):
         self.expect("review_required", lambda: self.publish(self.field_payload(), "Field Technician"))
-        for change in ({"serviceCallID": self.job_id}, {"assignmentRevision": 1}, {"serviceCallID": self.job_id, "assignmentRevision": True}):
+        self.expect("review_required", lambda: self.publish(self.payload(serviceCallID=self.job_id), "Field Technician"))
+        for change in ({"assignmentRevision": 1}, {"serviceCallID": self.job_id, "assignmentRevision": True}):
             self.expect("invalid_request", lambda: self.publish(self.payload(**change), "Field Technician"))
         self.save_assignment()
         self.expect("review_required", lambda: self.publish(self.field_payload(revision=2), "Field Technician"))

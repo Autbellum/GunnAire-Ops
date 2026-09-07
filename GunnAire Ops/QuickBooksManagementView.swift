@@ -1893,6 +1893,8 @@ struct QuickBooksManagementView: View {
                                             .foregroundStyle(Color.primaryBlack)
                                             .disabled(!isAuthenticated || activeLocalEstimatePublicationID != nil)
 
+                                            BillingPublicationReviewLink(document: .estimate(estimate), context: modelContext)
+
                                             if let call = localServiceCall(for: estimate) {
                                                 Button("Open Job Billing") {
                                                     GunnAireAppIntentRouter.storeInvoiceBuilderRoute(call.id)
@@ -1966,6 +1968,8 @@ struct QuickBooksManagementView: View {
                                             .tint(Color.brandGold)
                                             .foregroundStyle(Color.primaryBlack)
                                             .disabled(!isAuthenticated || activeLocalInvoicePublicationID != nil)
+
+                                            BillingPublicationReviewLink(document: .invoice(invoice), context: modelContext)
 
                                             if let call = localServiceCall(for: invoice) {
                                                 Button("Open Job Billing") {

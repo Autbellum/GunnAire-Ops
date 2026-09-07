@@ -1,5 +1,15 @@
 # Shared billing HTTP and assigned-job authority — 2026.09.07.26
 
+**Native cutover follow-up (2026.09.07.29):** the primary native invoice/estimate
+publisher and local-document retry queue now consume this shared authority.
+Original-proposal persistence, recovery/approval navigation, exact mapped reads,
+mandatory publication `connectionRevision`, optional native `draftRevision` and
+office job-only requests are documented in
+[NATIVE_BILLING_PUBLICATION.md](NATIVE_BILLING_PUBLICATION.md).
+That follow-up supersedes the earlier button-cutover gap and paired-field
+requirement below. The rest of this document records the original HTTP stage;
+full-suite/CloudKit/production acceptance remains open.
+
 **Native dispatch follow-up:** candidate `2026.09.07.27` adds mandatory opaque
 `connectionRevision` to job-assignment writes and both response envelopes.
 Add/Edit Job and dispatch-board assignment now stage durable, encrypted local

@@ -26,7 +26,7 @@ struct BillingPublicationClientTests {
                 .init(Amount: price, DetailType: "SalesItemLineDetail", Description: "Repair labor",
                       SalesItemLineDetail: .init(ItemRef: .init(value: "I1", name: nil), Qty: 1, UnitPrice: price,
                                                 TaxCodeRef: .init(value: taxable ? "TAX" : "NON", name: nil)))
-              ], TxnDate: date), serviceCallID: job, assignmentRevision: 1)
+              ], TxnDate: date), connectionRevision: String(repeating: "a", count: 64), serviceCallID: job, assignmentRevision: 1)
     }
 
     private func record(kind: BillingPublicationDocumentKind = .invoice, state: String = "confirmed", changes: [String: Any] = [:]) -> [String: Any] {
@@ -104,8 +104,11 @@ struct BillingPublicationClientTests {
     @Test func partialOrInvalidAssignmentCannotBeClaimedByRequest() throws {
         var value = request()
         value.assignmentRevision = nil
-        #expect(throws: BillingPublicationError.invalidProposal) { try value.validate() }
+        try value.validate() // Office drafts retain the job without inventing a roster revision.
         value.assignmentRevision = 0
+        #expect(throws: BillingPublicationError.invalidProposal) { try value.validate() }
+        value.assignmentRevision = 1
+        value.serviceCallID = nil
         #expect(throws: BillingPublicationError.invalidProposal) { try value.validate() }
     }
 

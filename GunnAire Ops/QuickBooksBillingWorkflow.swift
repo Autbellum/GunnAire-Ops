@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import CryptoKit
 
 enum QuickBooksBillingWorkflowError: LocalizedError, Equatable {
     case busy, accessDenied, changed, customerConflict, remoteIdentity, remoteLines, paidRemoteInvoice, saveFailed
@@ -244,11 +245,14 @@ final class QuickBooksBillingWorkflow {
     private var started = false
     private var completed = false
     private(set) var attemptedWrite = false
+    private let billingJournal: BillingNativeJournalStore
+    private(set) var sharedPublication: BillingNativePublication?
 
     init(document: QuickBooksBillingDocument, context: ModelContext, api: QuickBooksDataAPI,
          lifecycle: QuickBooksSyncLifecycle,
          validateAccess: (() throws -> Void)? = nil,
          validateCatalogAccess: (() throws -> Void)? = nil,
+         billingJournal: BillingNativeJournalStore? = nil,
          save: @escaping (ModelContext) throws -> Void = { try $0.save() }) throws {
         guard lifecycle.activeID == nil else { throw QuickBooksBillingWorkflowError.busy }
         guard let customer = document.customer else { throw QuickBooksBillingWorkflowError.changed }
@@ -259,6 +263,7 @@ final class QuickBooksBillingWorkflow {
         actorEmail = AppIdentity.currentEmail
         customerID = customer.quickBooksID
         self.save = save
+        self.billingJournal = billingJournal ?? .device
         self.validateCatalogAccess = validateCatalogAccess ?? { try QuickBooksSyncAccessPolicy.validate(context: context) }
         validateDocument = document.validation(context: context)
         try validateDocument()
@@ -307,7 +312,7 @@ final class QuickBooksBillingWorkflow {
             items.filter { $0.id == snapshot.catalogItemID }.count == 1 &&
             snapshot.quantity.isFinite && snapshot.quantity > 0 && snapshot.unitPrice.isFinite && snapshot.unitPrice >= 0
         }) else { throw QuickBooksBillingWorkflowError.changed }
-        if !completed, case .invoice(let invoice) = document,
+        if api.billingPublicationClient == nil, !completed, case .invoice(let invoice) = document,
            invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
            let reason = BillingInvoiceMutationPolicy.blockedMessage(for: invoice,
                 payments: try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil }) {
@@ -320,6 +325,34 @@ final class QuickBooksBillingWorkflow {
         started = true
         return try await run.perform {
             try self.check()
+            if let client = self.api.billingPublicationClient {
+                let journal = try self.makeSharedPublication(client)
+                self.sharedPublication = journal
+                let revision = try self.billingDraftRevision()
+                if let pending = journal.journal.pending,
+                   !pending.settled || pending.draftRevision == revision {
+                    let response = try await journal.recover(revision: revision)
+                    return try self.applySharedConfirmation(invoice: response.invoice, estimate: response.estimate, recovered: true)
+                }
+                if let original = try await journal.original(customerID: self.customer.id) {
+                    if journal.journal.pending == nil, original.proposal.draftRevision == revision {
+                        try journal.adoptOriginal(original, revision: revision)
+                        if [.sending, .unknown, .confirmed].contains(original.publication.state) {
+                            let result = try await journal.recover(revision: revision)
+                            return try self.applySharedConfirmation(invoice: result.invoice, estimate: result.estimate, recovered: true)
+                        }
+                    }
+                    if [.reserved, .sending, .unknown].contains(original.publication.state) { throw BillingNativeError.pending }
+                    let localProviderID: String?
+                    switch self.document {
+                    case .invoice(let value): localProviderID = value.quickBooksID
+                    case .estimate(let value): localProviderID = value.quickBooksID
+                    }
+                    if original.proposal.draftRevision != nil, localProviderID?.isEmpty != false {
+                        throw BillingNativeError.originalDraft
+                    }
+                }
+            }
             // Check before any prerequisite customer/catalog write. Taxable
             // drafts remain offline-editable, but incomplete tax context cannot
             // be published using a guessed or inherited customer address.
@@ -347,8 +380,175 @@ final class QuickBooksBillingWorkflow {
                 }
             }
             try self.check()
-            return try await self.publishDocument()
+            if let shared = self.sharedPublication { return try await self.publishSharedDocument(shared) }
+            return try await self.publishDocument() // Isolated legacy fixtures only.
         }
+    }
+
+    private func makeSharedPublication(_ client: BillingPublicationClient) throws -> BillingNativePublication {
+        guard let companyID = run.workflow.companyID, let realmID = run.workflow.realmID else { throw BillingPublicationError.accessRequired }
+        let actor = AppAccess.normalizedEmail(actorEmail)
+        let scope = BillingNativeJournalScope(document: .init(companyID: companyID, realmID: realmID,
+            environment: run.workflow.environment, documentType: document.label == "Invoice" ? .invoice : .estimate,
+            localDocumentID: document.id), actorEmail: actor.isEmpty && GunnAireCloudKit.usesTestDatabase ? "fixture@example.invalid" : actor)
+        return try .init(scope: scope, client: client, workflow: run.workflow, store: billingJournal) { [weak self] in
+            guard let self else { throw CancellationError() }
+            try self.check()
+        }
+    }
+
+    func openSharedReview() throws -> BillingNativePublication {
+        try check()
+        if let sharedPublication { return sharedPublication }
+        guard let client = api.billingPublicationClient else { throw BillingPublicationError.unavailable }
+        let value = try makeSharedPublication(client)
+        sharedPublication = value
+        return value
+    }
+
+    var canApproveSharedDraft: Bool {
+        guard let email = actorEmail, let users = try? context.fetch(FetchDescriptor<AppUser>()),
+              let role = users.first(where: { AppAccess.normalizedEmail($0.email) == AppAccess.normalizedEmail(email) && $0.isActive })?.role else { return false }
+        switch document {
+        case .invoice: return role == .admin || role == .accounting
+        case .estimate: return role == .admin || role == .dispatcher
+        }
+    }
+
+    func resumeOriginalFromReview() async throws -> Outcome {
+        let shared = try openSharedReview()
+        guard let pending = shared.journal.pending, pending.draftRevision == (try billingDraftRevision()) else { throw BillingNativeError.originalDraft }
+        try check()
+        if case .invoice(let invoice) = document,
+           let reason = BillingInvoiceMutationPolicy.blockedMessage(for: invoice,
+               payments: try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil }) {
+            throw QuickBooksInvoicePublicationRecoveryError.protectedHistory(reason)
+        }
+        attemptedWrite = true
+        let result = try await shared.submitOriginal()
+        return try applySharedConfirmation(invoice: result.invoice, estimate: result.estimate, recovered: false)
+    }
+
+    func recoverOriginalFromReview() async throws -> Outcome {
+        let shared = try openSharedReview()
+        let result = try await shared.recover(revision: billingDraftRevision())
+        return try applySharedConfirmation(invoice: result.invoice, estimate: result.estimate, recovered: true)
+    }
+
+    /// Durable draft identity excludes fields owned by synchronization (tax,
+    /// sync messages and balance), but includes the sold snapshot, customer,
+    /// location, dates, approvals, signatures and payment history.
+    func billingDraftRevision() throws -> String {
+        var values: [String?] = [document.label, document.id.uuidString, customer.id.uuidString,
+            document.serviceCallID?.uuidString, document.snapshotJSON]
+        func date(_ value: Date?) -> String? { value.map { String($0.timeIntervalSince1970) } }
+        switch document {
+        case .invoice(let value):
+            values += [value.serviceLocationID?.uuidString, value.siteAddress, value.notes, value.workTypeRaw, value.status,
+                date(value.createdAt), QuickBooksDateOnly.string(from: value.effectiveDueDate()),
+                value.customerSignatureName, value.customerSignatureImageBase64, date(value.customerSignedAt),
+                date(value.finalizedAt), value.completionNotes, value.projectMilestoneID?.uuidString,
+                value.projectMilestoneTitle, value.projectContractAmount.map(String.init(describing:)),
+                value.projectBillingPercent.map(String.init(describing:))]
+        case .estimate(let value):
+            values += [value.serviceLocationID?.uuidString, value.siteAddress, value.notes, date(value.createdAt), value.status,
+                value.scheduledServiceCallID?.uuidString, value.parentEstimateID?.uuidString,
+                value.proposalGroupID?.uuidString, value.changeOrderReason, value.proposalOption,
+                value.customerApprovedByName, value.customerApprovalMethodRaw, value.customerApprovalReference,
+                value.customerApprovalRecordedByEmail, value.customerApprovalSignatureImageBase64, date(value.customerApprovedAt)]
+        }
+        let payments = try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice?.id == document.id }.sorted { $0.id.uuidString < $1.id.uuidString }
+        for payment in payments {
+            values += [payment.id.uuidString, String(payment.amount), String(payment.isRefund), payment.providerPaymentStatus,
+                       payment.quickBooksID, payment.quickBooksChargeID]
+        }
+        return SHA256.hash(data: try JSONEncoder().encode(values)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func publishSharedDocument(_ shared: BillingNativePublication) async throws -> Outcome {
+        let scope = shared.scope.document
+        let evidence = try await shared.client.context(scope, customerID: customer.id, jobID: document.serviceCallID, workflow: run.workflow)
+        try check()
+        guard evidence.customerProviderID == customerID else { throw BillingNativeError.mapping }
+        let catalog = try context.fetch(FetchDescriptor<Item>())
+        let tax = try BillingTaxAddressContext.forPublication(document)
+        let proposal: BillingPublicationProposal
+        let operation: BillingPublicationOperation
+        switch document {
+        case .invoice(let invoice):
+            let inputs = try QuickBooksInvoicePublicationRecovery.publicationInputs(for: invoice, catalogItems: catalog,
+                payments: context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil })
+            let localID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let localID, !localID.isEmpty, localID != evidence.providerID { throw BillingNativeError.mapping }
+            if (localID?.isEmpty ?? true), let existing = evidence.invoice {
+                guard QuickBooksBillingLineEvidence.matches(expected: inputs.lines, reported: existing.Line) else { throw QuickBooksBillingWorkflowError.remoteLines }
+                return try applySharedConfirmation(invoice: existing, estimate: nil, recovered: true)
+            }
+            if let reason = BillingInvoiceMutationPolicy.blockedMessage(for: invoice,
+                payments: try context.fetch(FetchDescriptor<Payment>()).filter { $0.invoice != nil }) {
+                throw QuickBooksInvoicePublicationRecoveryError.protectedHistory(reason)
+            }
+            operation = evidence.providerID == nil ? .create : .update
+            if let existing = evidence.invoice {
+                guard let balance = existing.Balance, abs(balance - existing.TotalAmt) <= 0.009 else { throw QuickBooksBillingWorkflowError.paidRemoteInvoice }
+            }
+            proposal = .init(CustomerRef: inputs.customerRef, Line: inputs.lines,
+                TxnDate: evidence.invoice?.TxnDate ?? QuickBooksDateOnly.string(from: invoice.createdAt),
+                DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
+                PrivateNote: BillingPublicationProposal.userNote(inputs.privateNote), BillEmail: inputs.billEmail,
+                ShipAddr: tax?.service, ShipFromAddr: tax?.origin, ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true,
+                Id: evidence.providerID, SyncToken: evidence.invoice?.SyncToken, sparse: operation == .update ? true : nil)
+        case .estimate(let estimate):
+            let inputs = try QuickBooksEstimatePublicationRecovery.publicationInputs(for: estimate, catalogItems: catalog)
+            let localID = estimate.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let localID, !localID.isEmpty, localID != evidence.providerID { throw BillingNativeError.mapping }
+            if let existing = evidence.estimate {
+                guard QuickBooksBillingLineEvidence.matches(expected: inputs.lines, reported: existing.Line) else { throw QuickBooksBillingWorkflowError.remoteLines }
+                return try applySharedConfirmation(invoice: nil, estimate: existing, recovered: true)
+            }
+            operation = .create
+            proposal = .init(CustomerRef: inputs.customerRef, Line: inputs.lines, TxnDate: QuickBooksDateOnly.string(from: estimate.createdAt),
+                PrivateNote: BillingPublicationProposal.userNote(inputs.privateNote), BillEmail: inputs.billEmail,
+                ShipAddr: tax?.service, ShipFromAddr: tax?.origin, ApplyTaxAfterDiscount: estimate.documentDiscount == nil ? nil : true)
+        }
+        let request = BillingPublicationRequest(companyID: scope.companyID, realmID: scope.realmID, environment: scope.environment,
+            documentType: scope.documentType, localDocumentID: document.id, localCustomerID: customer.id, operation: operation,
+            document: proposal, connectionRevision: evidence.connectionRevision, serviceCallID: document.serviceCallID,
+            assignmentRevision: evidence.authority == "assigned" ? evidence.assignment?.revision : nil,
+            draftRevision: try billingDraftRevision())
+        try shared.prepare(request, revision: billingDraftRevision())
+        attemptedWrite = true
+        let result = try await shared.submitOriginal()
+        return try applySharedConfirmation(invoice: result.invoice, estimate: result.estimate, recovered: false)
+    }
+
+    private func applySharedConfirmation(invoice remoteInvoice: QuickBooksInvoice?, estimate remoteEstimate: QuickBooksEstimate?, recovered: Bool) throws -> Outcome {
+        try check()
+        let restore = document.syncRestoration()
+        let outcome: Outcome
+        switch document {
+        case .invoice(let value):
+            guard let remote = remoteInvoice, remoteEstimate == nil else { throw BillingPublicationError.invalidResponse }
+            try validateRemote(id: remote.Id, customerID: remote.CustomerRef.value, expectedID: value.quickBooksID)
+            value.quickBooksID = remote.Id
+            let taxIssue = value.applyQuickBooksTaxResult(total: remote.TotalAmt, reportedTax: remote.TxnTaxDetail?.TotalTax)
+            value.quickBooksSyncStatus = taxIssue == nil ? "synced" : "needs_attention"; value.quickBooksSyncDetail = taxIssue
+            let balance = QuickBooksBalanceReconciliation.apply(remote, to: value)
+            outcome = .init(message: taxIssue != nil || !balance ? "Invoice linked. Review its tax or balance before collecting payment."
+                : recovered ? "Original QuickBooks invoice recovered without another publication." : "Invoice saved and synced to QuickBooks.", recovered: recovered, invoice: remote)
+        case .estimate(let value):
+            guard let remote = remoteEstimate, remoteInvoice == nil else { throw BillingPublicationError.invalidResponse }
+            try validateRemote(id: remote.Id, customerID: remote.CustomerRef.value, expectedID: value.quickBooksID)
+            value.quickBooksID = remote.Id
+            let issue = value.applyQuickBooksTaxResult(total: remote.TotalAmt, reportedTax: remote.TxnTaxDetail?.TotalTax)
+            outcome = .init(message: issue != nil ? "Estimate linked. Review its tax total."
+                : recovered ? "Original QuickBooks estimate recovered without another publication." : "Estimate saved and synced to QuickBooks.", recovered: recovered, estimate: remote)
+        }
+        do { try saveDocumentConfirmation(recovered: recovered) } catch { restore(); throw error }
+        validateDocument = document.validation(context: context)
+        completed = true
+        if sharedPublication?.journal.pending?.publicationID != nil { try sharedPublication?.settle(revision: billingDraftRevision()) }
+        return outcome
     }
 
     private func prepareCustomer() async throws {

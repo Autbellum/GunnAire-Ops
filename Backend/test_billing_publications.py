@@ -88,7 +88,11 @@ class BillingFixture:
         return role.lower().replace(" ", ".") + "@example.invalid"
 
     def payload(self, **changes):
+        with backend.db() as connection:
+            grant = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+            epoch = billing.billing_assignments.connection_revision(billing.grant_fingerprint(grant))
         return {"companyID": self.company, "realmID": "realm", "environment": "sandbox", "documentType": "Invoice",
+            "connectionRevision": epoch,
             "localDocumentID": self.local_id, "localCustomerID": self.customer_id, "operation": "create",
             "document": {"CustomerRef": {"value": "C1", "name": "Taylor Customer"}, "TxnDate": "2026-09-07",
                 "PrivateNote": "Repair saved from the original field draft.", "DueDate": "2026-10-07",

@@ -1,5 +1,11 @@
 # Shared billing engine — initial stage and HTTP follow-up
 
+**2026.09.07.29 follow-up:** the primary native publication actions now use the
+engine with durable original-proposal recovery and exact office price approval.
+See [NATIVE_BILLING_PUBLICATION.md](NATIVE_BILLING_PUBLICATION.md) for the current
+boundary, rollout order and remaining paths. Earlier stage statements below are
+historical and do not qualify deployment or full-app completion.
+
 Current candidate **2026.09.07.26** exposes the engine through authenticated
 HTTP, adds revisioned server job authority and a typed native client. See
 [QBO_BILLING_HTTP_CONTRACT.md](QBO_BILLING_HTTP_CONTRACT.md) for the current

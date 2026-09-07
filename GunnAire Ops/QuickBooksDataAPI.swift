@@ -140,6 +140,7 @@ final class QuickBooksDataAPI: ObservableObject {
     private let persistsCredentials: Bool
     let catalogPublicationTransport: CatalogPublicationBoundary.Transport?
     let customerPublicationTransport: CustomerPublicationBoundary.Transport?
+    let billingPublicationClient: BillingPublicationClient?
     let catalogRecoveryTransport: (UUID) async throws -> CatalogPublicationResponse
     private let catalogFixtureCompanyID: UUID?
     private struct WorkflowScope: Sendable {
@@ -160,6 +161,7 @@ final class QuickBooksDataAPI: ObservableObject {
         persistsCredentials = true
         catalogPublicationTransport = GunnAireBackendService.publishCatalog
         customerPublicationTransport = GunnAireBackendService.publishCustomer
+        billingPublicationClient = GunnAireBackendService.billingPublicationClient
         catalogRecoveryTransport = GunnAireBackendService.recoverCatalogPublication
         catalogFixtureCompanyID = nil
         loadTokens()
@@ -173,6 +175,7 @@ final class QuickBooksDataAPI: ObservableObject {
          catalogCompanyID: UUID? = nil,
          catalogPublisher: CatalogPublicationBoundary.Transport? = nil,
          customerPublisher: CustomerPublicationBoundary.Transport? = nil,
+         billingPublisher: BillingPublicationClient? = nil,
          catalogRecovery: @escaping (UUID) async throws -> CatalogPublicationResponse = { _ in throw CatalogPublicationError.unavailable },
          transport: @escaping WorkspaceProviderOperation.Transport) {
         precondition(GunnAireCloudKit.usesTestDatabase)
@@ -180,6 +183,7 @@ final class QuickBooksDataAPI: ObservableObject {
         persistsCredentials = false
         catalogPublicationTransport = catalogPublisher
         customerPublicationTransport = customerPublisher
+        billingPublicationClient = billingPublisher
         catalogRecoveryTransport = catalogRecovery
         catalogFixtureCompanyID = catalogCompanyID
         tokens = testTokens

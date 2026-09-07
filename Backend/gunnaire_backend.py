@@ -32,19 +32,20 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
-    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, qbo_link_adoption
+    from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications, billing_native, qbo_link_adoption
     from Backend.billing_provider import BillingQBOProvider
 except ModuleNotFoundError:
     import payment_attempts  # Direct launch from the Backend directory.
     import catalog_publications
     import customer_publications
     import billing_publications
+    import billing_native
     import qbo_link_adoption
     from billing_provider import BillingQBOProvider
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.07.28"
+SERVICE_VERSION = "2026.09.07.29"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -5841,17 +5842,25 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             db, lambda context, authorize: BillingQBOProvider(context, authorize, qbo_authorized_bearer),
             encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
         )
+        native = billing_native.NativeBilling(publisher)
         session_id = self._application_session_id
         assignments = parsed.path == "/api/job-billing-assignments"
         suffix = parsed.path.removeprefix("/api/billing-publications")
         parts = suffix[1:].split("/") if suffix.startswith("/") else []
         try:
-            if method == "GET" and (assignments or not suffix):
+            if method == "GET" and (assignments or not suffix or parts == ["context"]):
                 query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
                 if any(len(value) != 1 for value in query.values()):
                     raise billing_publications.failure("invalid_query", "Choose one original job or billing document.", 400)
                 query = {key: values[0] for key, values in query.items()}
-                result = publisher.assignments.read(session_id, query) if assignments else publisher.list_for_document(session_id, query)
+                if assignments:
+                    result = publisher.assignments.read(session_id, query)
+                elif parts == ["context"]:
+                    result = native.context(session_id, query)
+                else:
+                    result = publisher.list_for_document(session_id, query)
+            elif method == "GET" and len(parts) == 1 and not parsed.query:
+                result = native.proposal(session_id, parts[0])
             elif method == "POST" and not parsed.query:
                 # Reject duplicate keys/nonfinite JSON before hashing a durable
                 # intent; different decoders must not see different proposals.
@@ -5874,6 +5883,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     result = publisher.publish(session_id, payload)
                 elif parts == ["approve"] and isinstance(payload, dict) and set(payload) == {"proposal", "technicianEmail"}:
                     result = {"id": publisher.approve_draft(session_id, payload["proposal"], payload["technicianEmail"])}
+                elif len(parts) == 2 and parts[1] == "approve":
+                    result = native.approve_original(session_id, parts[0], payload)
                 elif len(parts) == 2 and isinstance(payload, dict) and not payload:
                     identifier, action = parts
                     if action == "recover":

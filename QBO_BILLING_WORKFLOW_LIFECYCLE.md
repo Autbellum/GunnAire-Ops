@@ -1,5 +1,11 @@
 # QBO billing publication lifecycle
 
+**Shared-service cutover:** candidate 2026.09.07.29 replaces the production
+direct-provider document path below with immutable server publication and
+original-attempt recovery. Existing customer/item preparation and guarded file
+follow-up remain. See [NATIVE_BILLING_PUBLICATION.md](NATIVE_BILLING_PUBLICATION.md)
+for exact scope and qualification; the original lifecycle checkpoint follows.
+
 ## Scope and current status
 
 Implementation checkpoint, September 7, 2026. Final native tests and the

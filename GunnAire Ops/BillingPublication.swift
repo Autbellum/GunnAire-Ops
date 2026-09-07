@@ -81,7 +81,7 @@ struct BillingPublicationProposal: Codable {
     }
 }
 
-struct BillingPublicationRequest: Encodable {
+struct BillingPublicationRequest: Codable {
     let companyID: UUID
     let realmID: String
     let environment: String
@@ -90,8 +90,10 @@ struct BillingPublicationRequest: Encodable {
     let localCustomerID: UUID
     let operation: BillingPublicationOperation
     let document: BillingPublicationProposal
+    var connectionRevision: String
     var serviceCallID: UUID?
     var assignmentRevision: Int?
+    var draftRevision: String?
 
     var scope: BillingDocumentScope {
         .init(companyID: companyID, realmID: realmID, environment: environment,
@@ -102,7 +104,9 @@ struct BillingPublicationRequest: Encodable {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let date = QuickBooksDateOnly.date(from: document.TxnDate, calendar: calendar)
-        guard (serviceCallID == nil) == (assignmentRevision == nil),
+        guard JobBillingAssignmentSnapshot.validConnectionRevision(connectionRevision),
+              draftRevision.map(JobBillingAssignmentSnapshot.validConnectionRevision) ?? true,
+              assignmentRevision == nil || serviceCallID != nil,
               assignmentRevision.map({ (1...2_147_483_647).contains($0) }) ?? true,
               !document.CustomerRef.value.isEmpty, !document.Line.isEmpty, document.Line.count <= 750,
               document.CurrencyRef.value == "USD", document.TxnDate.count == 10,
@@ -123,7 +127,7 @@ struct BillingPublicationRequest: Encodable {
     }
 }
 
-struct BillingPublicationRecord: Decodable, Identifiable {
+struct BillingPublicationRecord: Codable, Identifiable {
     let id: UUID
     let companyID: UUID
     let realmID: String
@@ -193,7 +197,7 @@ struct BillingPublicationResponse: Decodable {
         }
     }
 
-    private static func money(_ value: Double) -> Decimal? {
+    static func money(_ value: Double) -> Decimal? {
         guard value.isFinite, value >= 0, value <= 99_999_999_999,
               var number = Decimal(string: String(value), locale: Locale(identifier: "en_US_POSIX")) else { return nil }
         var rounded = Decimal.zero
@@ -244,7 +248,7 @@ struct JobBillingAssignmentSnapshot: Codable, Equatable {
     let assignment: JobBillingAssignment?
     let connectionRevision: String
 
-    static func validConnectionRevision(_ value: String) -> Bool {
+    nonisolated static func validConnectionRevision(_ value: String) -> Bool {
         value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 
@@ -364,6 +368,40 @@ struct BillingPublicationClient {
         try result.validate(scope, customerID: customerID)
         guard result.id == id, result.state == .cancelled else { throw BillingPublicationError.invalidResponse }
         return result
+    }
+
+    func context(_ scope: BillingDocumentScope, customerID: UUID, jobID: UUID?,
+                 workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws -> BillingNativeContext {
+        try scope.validate(workflow)
+        var query = scope.query + [.init(name: "localCustomerID", value: customerID.uuidString.lowercased())]
+        if let jobID { query.append(.init(name: "serviceCallID", value: jobID.uuidString.lowercased())) }
+        let result = try await perform(BillingNativeContext.self, path: path("/api/billing-publications/context", query), workflow: workflow)
+        try result.validate(scope, customerID: customerID, jobID: jobID)
+        return result
+    }
+
+    func original(_ id: UUID, scope: BillingDocumentScope, customerID: UUID,
+                  workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws -> BillingOriginalProposal {
+        try scope.validate(workflow)
+        let result = try await perform(BillingOriginalProposal.self,
+            path: "/api/billing-publications/\(id.uuidString.lowercased())", workflow: workflow)
+        try result.publication.validate(scope, customerID: customerID)
+        try result.proposal.validate()
+        guard result.publication.id == id, result.proposal.scope == scope,
+              result.proposal.localCustomerID == customerID, result.proposal.operation == result.publication.operation else {
+            throw BillingPublicationError.invalidResponse
+        }
+        return result
+    }
+
+    func approveOriginal(_ original: BillingOriginalProposal,
+                         workflow: QuickBooksDataAPI.CapturedWorkspaceWorkflow) async throws {
+        struct Request: Encodable { let proposal: BillingPublicationRequest }
+        try original.proposal.scope.validate(workflow); try original.proposal.validate()
+        guard original.publication.state == .reserved else { throw BillingPublicationError.reviewRequired }
+        _ = try await perform(ApprovalEnvelope.self,
+            path: "/api/billing-publications/\(original.publication.id.uuidString.lowercased())/approve",
+            body: encode(Request(proposal: original.proposal)), workflow: workflow)
     }
 
     func approve(_ request: BillingPublicationRequest, technicianEmail: String,
