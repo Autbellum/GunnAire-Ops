@@ -89,6 +89,31 @@ enum QuickBooksDocumentLinePublicationError: LocalizedError, Equatable {
 /// reuse an ambiguous QBO Item ID, or publish a different total than the local
 /// customer document.
 enum QuickBooksDocumentLinePublication {
+    static func validateSnapshotTotals(snapshotJSON: String?, expectedSubtotal: Double) throws {
+        let snapshots = CatalogLineItemSnapshot.decoded(from: snapshotJSON)
+        guard !snapshots.isEmpty else { throw QuickBooksDocumentLinePublicationError.missingCatalogSnapshot }
+        var gross = 0.0
+        for line in snapshots {
+            let extended = line.unitPrice * line.quantity
+            guard line.quantity.isFinite, line.quantity > 0, line.unitPrice.isFinite, line.unitPrice >= 0,
+                  extended.isFinite, extended >= 0 else {
+                throw QuickBooksDocumentLinePublicationError.invalidLineAmount(line.name)
+            }
+            gross += extended
+        }
+        var total = gross
+        if let discount = CatalogLineItemSnapshot.documentDiscount(from: snapshotJSON) {
+            guard let amount = discount.amount(for: gross) else {
+                throw QuickBooksDocumentLinePublicationError.invalidDocumentDiscount
+            }
+            total -= amount
+        }
+        guard currencyCents(expectedSubtotal) != nil, currencyCents(expectedSubtotal) == currencyCents(total) else {
+            throw QuickBooksDocumentLinePublicationError.amountMismatch(expected: expectedSubtotal, mapped: total)
+        }
+    }
+
+
     /// Retain conflicting model identities for validation. Merging by UUID
     /// would hide the very duplicates the publication boundary must reject.
     static func catalogIncluding(_ documentItems: [Item], storedItems: [Item]) -> [Item] {
@@ -177,7 +202,7 @@ enum QuickBooksDocumentLinePublication {
     private static func currencyCents(_ amount: Double) -> Int64? {
         guard amount.isFinite,
               amount >= 0,
-              amount <= Double(Int64.max) / 100 else { return nil }
+              (amount * 100).rounded() < Double(Int64.max) else { return nil }
         return Int64((amount * 100).rounded())
     }
 }
@@ -325,8 +350,11 @@ enum QuickBooksEstimatePublicationRecovery {
             catalogItems: catalogItems
         )
 
+        let notes = [estimate.notes, estimate.changeOrderReason.map { "Change order reason: \($0)" }]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }.joined(separator: "\n")
         let adjustedNote = BillingPriceAdjustmentAudit.quickBooksPrivateNote(
-            existing: estimate.notes,
+            existing: notes.isEmpty ? nil : notes,
             snapshotJSON: estimate.catalogSnapshotJSON
         )
         let discountedNote = BillingDocumentDiscountAudit.quickBooksPrivateNote(
@@ -1200,6 +1228,7 @@ struct QuickBooksManagementView: View {
     @State private var activeEmailInvoiceID: String?
     @State private var activeLocalEstimatePublicationID: UUID?
     @State private var activeLocalInvoicePublicationID: UUID?
+    @State private var billingPublicationLifecycles: [String: QuickBooksSyncLifecycle] = [:]
     @State private var activePricebookReviewID: UUID?
     @State private var activeCatalogPublicationID: UUID?
     @State private var activeCatalogReconciliationID: UUID?
@@ -3258,6 +3287,10 @@ struct QuickBooksManagementView: View {
                     }
                 }
                 .onDisappear {
+                    for owner in billingPublicationLifecycles.values { owner.cancel() }
+                    billingPublicationLifecycles.removeAll()
+                    activeLocalInvoicePublicationID = nil
+                    activeLocalEstimatePublicationID = nil
                     catalogLifecycle.cancel()
                     catalogTask?.cancel()
                     catalogTask = nil
@@ -4792,309 +4825,73 @@ struct QuickBooksManagementView: View {
     }
 
     private func retryLocalEstimatePublication(_ estimate: Estimate) {
-        guard isAuthenticated else {
-            actionMessage = "Reconnect QuickBooks before retrying local estimate publication."
-            return
-        }
         guard activeLocalEstimatePublicationID == nil else { return }
-
-        let inputs: QuickBooksEstimatePublicationInputs
-        do {
-            inputs = try QuickBooksEstimatePublicationRecovery.publicationInputs(
-                for: estimate,
-                catalogItems: localCatalogItems
-            )
-        } catch {
-            actionMessage = error.localizedDescription
-            return
-        }
-
-        activeLocalEstimatePublicationID = estimate.id
-        actionMessage = "Checking QuickBooks for \(estimate.customer.name)'s estimate before publishing..."
-        liveAPI.fetchEstimates { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .failure(let error):
-                    activeLocalEstimatePublicationID = nil
-                    actionMessage = "QuickBooks estimate reconciliation failed, so no new estimate was created: \(error.localizedDescription)"
-                case .success(let remoteEstimates):
-                    do {
-                        if let recovered = try QuickBooksEstimatePublicationRecovery.matchingRemoteEstimate(
-                            for: estimate,
-                            in: remoteEstimates
-                        ) {
-                            completeLocalEstimatePublication(
-                                .success(recovered),
-                                localEstimate: estimate,
-                                recoveredExisting: true
-                            )
-                            return
-                        }
-                    } catch {
-                        activeLocalEstimatePublicationID = nil
-                        actionMessage = error.localizedDescription
-                        return
-                    }
-
-                    let payload = QuickBooksEstimateCreate(
-                        CustomerRef: inputs.customerRef,
-                        Line: inputs.lines,
-                        PrivateNote: inputs.privateNote,
-                        BillEmail: inputs.billEmail,
-                        ShipAddr: inputs.shipAddress,
-                        GlobalTaxCalculation: "TaxExcluded",
-                        ApplyTaxAfterDiscount: estimate.documentDiscount == nil ? nil : true
-                    )
-                    liveAPI.createEstimate(payload) { createResult in
-                        DispatchQueue.main.async {
-                            completeLocalEstimatePublication(
-                                createResult,
-                                localEstimate: estimate,
-                                recoveredExisting: false
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func completeLocalEstimatePublication(
-        _ result: Result<QuickBooksEstimate, Error>,
-        localEstimate: Estimate,
-        recoveredExisting: Bool
-    ) {
-        defer { activeLocalEstimatePublicationID = nil }
-        switch result {
-        case .failure(let error):
-            actionMessage = "QuickBooks estimate publication failed: \(error.localizedDescription)"
-        case .success(let quickBooksEstimate):
-            localEstimate.quickBooksID = quickBooksEstimate.Id
-            let taxIssue = localEstimate.applyQuickBooksTaxResult(
-                total: quickBooksEstimate.TotalAmt,
-                reportedTax: quickBooksEstimate.TxnTaxDetail?.TotalTax
-            )
-            if let index = estimates.firstIndex(where: { $0.Id == quickBooksEstimate.Id }) {
-                estimates[index] = quickBooksEstimate
-            } else {
-                estimates.insert(quickBooksEstimate, at: 0)
-            }
-
-            if let call = localServiceCall(for: localEstimate) {
-                let actor = AppIdentity.currentEmail
-                ServiceCallActivity.record(
-                    for: call,
-                    action: recoveredExisting ? "QuickBooks estimate link recovered" : "QuickBooks estimate published",
-                    detail: "QuickBooks estimate \(quickBooksEstimate.DocNumber ?? quickBooksEstimate.Id) confirmed from the local publication queue.",
-                    actorEmail: actor,
-                    in: modelContext
-                )
-            }
-
-            do {
-                try modelContext.save()
-                if let taxIssue {
-                    actionMessage = "QuickBooks confirmed the estimate, but its tax total needs review: \(taxIssue)"
-                } else {
-                    actionMessage = recoveredExisting
-                        ? "Existing QuickBooks estimate recovered without creating a duplicate."
-                        : "Estimate created and confirmed in QuickBooks."
-                }
-            } catch {
-                actionMessage = "QuickBooks confirmed the estimate, but its local link could not be saved: \(error.localizedDescription)"
-            }
-        }
+        retryBillingPublication(.estimate(estimate))
     }
 
     private func retryLocalInvoicePublication(_ invoice: Invoice) {
-        guard isAuthenticated else {
-            actionMessage = "Reconnect QuickBooks before retrying local invoice publication."
-            return
-        }
         guard activeLocalInvoicePublicationID == nil else { return }
+        retryBillingPublication(.invoice(invoice))
+    }
 
-        let inputs: QuickBooksInvoicePublicationInputs
-        do {
-            inputs = try QuickBooksInvoicePublicationRecovery.publicationInputs(
-                for: invoice,
-                catalogItems: localCatalogItems,
-                payments: localPayments
-            )
-        } catch {
-            markLocalInvoicePublicationFailure(invoice, error: error)
-            actionMessage = error.localizedDescription
+    private func retryBillingPublication(_ document: QuickBooksBillingDocument) {
+        guard isAuthenticated else {
+            actionMessage = "Reconnect QuickBooks before retrying publication."
             return
         }
-
-        activeLocalInvoicePublicationID = invoice.id
-        actionMessage = "Retrying QuickBooks publication for \(invoice.customer.name)..."
-
-        if let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !quickBooksID.isEmpty {
-            quickBooksDataAPI.fetchInvoice(id: quickBooksID) { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .failure(let error):
-                        markLocalInvoicePublicationFailure(invoice, error: error)
-                        actionMessage = "QuickBooks invoice refresh failed: \(error.localizedDescription)"
-                        activeLocalInvoicePublicationID = nil
-                    case .success(let currentInvoice):
-                        guard let syncToken = currentInvoice.SyncToken?.trimmingCharacters(in: .whitespacesAndNewlines),
-                              !syncToken.isEmpty else {
-                            let error = QuickBooksDataAPI.QBError.missingSyncToken(entity: "invoice \(quickBooksID)")
-                            markLocalInvoicePublicationFailure(invoice, error: error)
-                            actionMessage = error.localizedDescription
-                            activeLocalInvoicePublicationID = nil
-                            return
-                        }
-                        let payload = QuickBooksInvoiceUpdate(
-                            Id: quickBooksID,
-                            SyncToken: syncToken,
-                            CustomerRef: inputs.customerRef,
-                            Line: inputs.lines,
-                            PrivateNote: inputs.privateNote,
-                            BillEmail: inputs.billEmail,
-                            ShipAddr: inputs.shipAddress,
-                            DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
-                            GlobalTaxCalculation: "TaxExcluded",
-                            ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true
-                        )
-                        quickBooksDataAPI.updateInvoice(payload) { updateResult in
-                            DispatchQueue.main.async {
-                                completeLocalInvoicePublication(updateResult, localInvoice: invoice, wasUpdate: true)
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            let payload = QuickBooksInvoiceCreate(
-                CustomerRef: inputs.customerRef,
-                Line: inputs.lines,
-                PrivateNote: inputs.privateNote,
-                BillEmail: inputs.billEmail,
-                ShipAddr: inputs.shipAddress,
-                DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
-                GlobalTaxCalculation: "TaxExcluded",
-                ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true
-            )
-            quickBooksDataAPI.fetchInvoices { fetchResult in
-                DispatchQueue.main.async {
-                    switch fetchResult {
-                    case .failure(let error):
-                        markLocalInvoicePublicationFailure(invoice, error: error)
-                        actionMessage = "QuickBooks invoice reconciliation failed, so no duplicate-prone create was attempted: \(error.localizedDescription)"
-                        activeLocalInvoicePublicationID = nil
-                    case .success(let remoteInvoices):
-                        do {
-                            if let recovered = try QuickBooksInvoicePublicationRecovery.matchingRemoteInvoice(
-                                for: invoice,
-                                in: remoteInvoices
-                            ) {
-                                completeLocalInvoicePublication(
-                                    .success(recovered),
-                                    localInvoice: invoice,
-                                    wasUpdate: false,
-                                    recoveredExisting: true
-                                )
-                                return
-                            }
-                        } catch {
-                            markLocalInvoicePublicationFailure(invoice, error: error)
-                            actionMessage = error.localizedDescription
-                            activeLocalInvoicePublicationID = nil
-                            return
-                        }
-
-                        quickBooksDataAPI.createInvoice(
-                            payload,
-                            requestID: QuickBooksInvoiceLineage.createRequestID(for: invoice)
-                        ) { result in
-                            DispatchQueue.main.async {
-                                completeLocalInvoicePublication(
-                                    result,
-                                    localInvoice: invoice,
-                                    wasUpdate: false
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func completeLocalInvoicePublication(
-        _ result: Result<QuickBooksInvoice, Error>,
-        localInvoice: Invoice,
-        wasUpdate: Bool,
-        recoveredExisting: Bool = false
-    ) {
-        defer { activeLocalInvoicePublicationID = nil }
-        switch result {
-        case .failure(let error):
-            markLocalInvoicePublicationFailure(localInvoice, error: error)
-            actionMessage = "QuickBooks invoice publication failed: \(error.localizedDescription)"
-        case .success(let quickBooksInvoice):
-            localInvoice.quickBooksID = quickBooksInvoice.Id
-            localInvoice.quickBooksBalanceDue = quickBooksInvoice.Balance
-            if let rawDueDate = quickBooksInvoice.DueDate,
-               let dueDate = QuickBooksDateOnly.date(from: rawDueDate) {
-                localInvoice.dueDate = dueDate
-            }
-            let taxIssue = localInvoice.applyQuickBooksTaxResult(
-                total: quickBooksInvoice.TotalAmt,
-                reportedTax: quickBooksInvoice.TxnTaxDetail?.TotalTax
-            )
-            localInvoice.quickBooksSyncStatus = taxIssue == nil ? "synced" : "needs_attention"
-            localInvoice.quickBooksSyncDetail = taxIssue
-            localInvoice.quickBooksLastSyncedAt = Date()
-
-            if let call = localServiceCall(for: localInvoice) {
-                let actor = AppIdentity.currentEmail
-                ServiceCallActivity.record(
-                    for: call,
-                    action: recoveredExisting
-                        ? "QuickBooks invoice link recovered"
-                        : (wasUpdate ? "QuickBooks invoice republished" : "QuickBooks invoice published"),
-                    detail: recoveredExisting
-                        ? "Recovered QuickBooks invoice \(quickBooksInvoice.DocNumber ?? quickBooksInvoice.Id) by its GunnAire operation marker without creating another transaction."
-                        : "QuickBooks invoice \(quickBooksInvoice.DocNumber ?? quickBooksInvoice.Id) confirmed from the local publication queue.",
-                    actorEmail: actor,
-                    in: modelContext
-                )
-            }
-
-            if let index = invoices.firstIndex(where: { $0.Id == quickBooksInvoice.Id }) {
-                invoices[index] = quickBooksInvoice
-            } else {
-                invoices.insert(quickBooksInvoice, at: 0)
-            }
-            saveLocalInvoicePublicationState()
-            if let taxIssue {
-                actionMessage = "QuickBooks confirmed the invoice, but its tax total needs review: \(taxIssue)"
-            } else {
-                actionMessage = recoveredExisting
-                    ? "Existing QuickBooks invoice recovered without creating a duplicate."
-                    : (wasUpdate
-                        ? "Invoice line items updated and confirmed in QuickBooks."
-                        : "Invoice created and confirmed in QuickBooks.")
-            }
-        }
-    }
-
-    private func markLocalInvoicePublicationFailure(_ invoice: Invoice, error: Error) {
-        invoice.quickBooksSyncStatus = "needs_attention"
-        invoice.quickBooksSyncDetail = error.localizedDescription
-        saveLocalInvoicePublicationState()
-    }
-
-    private func saveLocalInvoicePublicationState() {
+        let owner = QuickBooksSyncLifecycle()
+        let key = "\(document.label)-\(document.id)"
+        guard billingPublicationLifecycles[key] == nil else { return }
         do {
-            try modelContext.save()
-        } catch {
-            actionMessage = "QuickBooks responded, but the local publication state could not be saved: \(error.localizedDescription)"
-        }
+            let workflow = try QuickBooksBillingWorkflow(document: document, context: modelContext,
+                api: quickBooksDataAPI, lifecycle: owner,
+                validateAccess: { try QuickBooksSyncAccessPolicy.validate(context: modelContext) })
+            billingPublicationLifecycles[key] = owner
+            switch document {
+            case .invoice: activeLocalInvoicePublicationID = document.id
+            case .estimate: activeLocalEstimatePublicationID = document.id
+            }
+            actionMessage = "Checking the saved document in QuickBooks..."
+            Task { @MainActor in
+                defer {
+                    owner.finish(workflow.run)
+                    if billingPublicationLifecycles[key] === owner {
+                        billingPublicationLifecycles.removeValue(forKey: key)
+                        switch document {
+                        case .invoice: activeLocalInvoicePublicationID = nil
+                        case .estimate: activeLocalEstimatePublicationID = nil
+                        }
+                    }
+                }
+                do {
+                    try await workflow.run.perform {
+                        await accountingConfigurationStore.refresh(realmID: workflow.run.workflow.realmID,
+                            environment: workflow.run.workflow.environment, validate: workflow.check)
+                    }
+                    let outcome = try await workflow.execute(configuration: accountingConfigurationStore.configuration(
+                        for: workflow.run.workflow.realmID, environment: workflow.run.workflow.environment))
+                    try workflow.check()
+                    if let remote = outcome.invoice {
+                        if let index = invoices.firstIndex(where: { $0.Id == remote.Id }) { invoices[index] = remote }
+                        else { invoices.insert(remote, at: 0) }
+                    }
+                    if let remote = outcome.estimate {
+                        if let index = estimates.firstIndex(where: { $0.Id == remote.Id }) { estimates[index] = remote }
+                        else { estimates.insert(remote, at: 0) }
+                    }
+                    actionMessage = outcome.message
+                    do { try await workflow.uploadLinkedAttachments() }
+                    catch { actionMessage = outcome.message + " Supporting files remain pending: " + error.localizedDescription }
+                } catch {
+                    do { try workflow.recordFailure(error) }
+                    catch QuickBooksBillingWorkflowError.saveFailed {
+                        actionMessage = QuickBooksBillingWorkflowError.saveFailed.localizedDescription
+                        return
+                    } catch { /* Do not stamp changed models with a late failure. */ }
+                    actionMessage = workflow.failureMessage(error)
+                }
+            }
+        } catch { actionMessage = error.localizedDescription }
     }
 
     private func quickBooksCustomer(for estimate: QuickBooksEstimate) -> QuickBooksCustomer? {

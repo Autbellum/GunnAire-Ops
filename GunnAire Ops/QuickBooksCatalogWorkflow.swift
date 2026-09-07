@@ -97,6 +97,7 @@ final class QuickBooksCatalogWorkflow {
     private let configuration: BackendQuickBooksAccountingConfiguration?
     private let save: (ModelContext) throws -> Void
     private(set) var attemptedWrite = false
+    private(set) var committedRevision: QuickBooksCatalogItemRevision?
     private var started = false
 
     init(item: Item, context: ModelContext, api: QuickBooksDataAPI,
@@ -149,7 +150,7 @@ final class QuickBooksCatalogWorkflow {
         }
     }
 
-    func execute() async throws -> Outcome {
+    func execute(configuration: BackendQuickBooksAccountingConfiguration? = nil) async throws -> Outcome {
         guard !started else { throw QuickBooksCatalogWorkflowError.busy }
         started = true
         let evidence: (QuickBooksItem, Bool) = try await run.perform {
@@ -161,7 +162,7 @@ final class QuickBooksCatalogWorkflow {
                 if let existing = try PricebookReviewPublication.matchingRemoteItem(for: self.item, in: remoteItems) {
                     return (existing, false)
                 }
-                guard let configuration = self.configuration,
+                guard let configuration = configuration ?? self.configuration,
                       configuration.matches(realmID: self.run.workflow.realmID,
                                             environment: self.run.workflow.environment),
                       let income = QuickBooksItemAccountResolver.incomeAccountRef(
@@ -234,6 +235,7 @@ final class QuickBooksCatalogWorkflow {
                 throw QuickBooksCatalogWorkflowError.saveFailed
             }
         }
+        committedRevision = QuickBooksCatalogItemRevision(item)
         return Outcome(remote: remote, link: link, created: evidence.1)
     }
 

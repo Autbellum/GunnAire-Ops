@@ -1188,10 +1188,12 @@ final class QuickBooksDataAPI: ObservableObject {
         )
     }
 
-    func createEstimate(_ estimate: QuickBooksEstimateCreate, completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
+    func createEstimate(_ estimate: QuickBooksEstimateCreate, requestID: String? = nil,
+                        completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
         let body = try? JSONEncoder().encode(estimate)
+        let queryItems = requestID.map { [URLQueryItem(name: "requestid", value: $0)] } ?? []
         performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "estimate", method: "POST", body: body, contentType: "application/json") },
+            { self.authorizedRequest(path: "estimate", queryItems: queryItems, method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksEstimateResponse.self
         ) { result in
             completion(result.flatMap {
@@ -2578,6 +2580,7 @@ struct QuickBooksAddress: Codable {
 
 struct QuickBooksLineItem: Codable {
     let Amount: Double
+    let hasExplicitAmount: Bool
     let DetailType: String
     let Description: String?
     let SalesItemLineDetail: QuickBooksSalesItemLineDetail
@@ -2591,6 +2594,7 @@ struct QuickBooksLineItem: Codable {
         DiscountLineDetail: QuickBooksDiscountLineDetail? = nil
     ) {
         self.Amount = Amount
+        self.hasExplicitAmount = true
         self.DetailType = DetailType
         self.Description = Description
         self.SalesItemLineDetail = SalesItemLineDetail
@@ -2623,13 +2627,17 @@ struct QuickBooksLineItem: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         if let amount = try? container.decode(Double.self, forKey: .Amount) {
             Amount = amount
+            hasExplicitAmount = amount.isFinite
         } else if let amount = try? container.decode(Int.self, forKey: .Amount) {
             Amount = Double(amount)
+            hasExplicitAmount = true
         } else if let amount = try? container.decode(String.self, forKey: .Amount),
                   let parsed = Double(amount) {
             Amount = parsed
+            hasExplicitAmount = parsed.isFinite
         } else {
             Amount = 0
+            hasExplicitAmount = false
         }
         DetailType = try container.decode(String.self, forKey: .DetailType)
         Description = try container.decodeIfPresent(String.self, forKey: .Description)
@@ -3187,6 +3195,7 @@ struct QuickBooksEstimate: Codable, Identifiable {
     let ShipAddr: QuickBooksAddress?
     let PrivateNote: String?
     let TxnTaxDetail: QuickBooksTxnTaxDetail?
+    let Line: [QuickBooksLineItem]?
 
     var id: String { Id }
 
@@ -3200,7 +3209,8 @@ struct QuickBooksEstimate: Codable, Identifiable {
         EmailStatus: String? = nil,
         ShipAddr: QuickBooksAddress? = nil,
         PrivateNote: String? = nil,
-        TxnTaxDetail: QuickBooksTxnTaxDetail? = nil
+        TxnTaxDetail: QuickBooksTxnTaxDetail? = nil,
+        Line: [QuickBooksLineItem]? = nil
     ) {
         self.Id = Id
         self.DocNumber = DocNumber
@@ -3212,6 +3222,7 @@ struct QuickBooksEstimate: Codable, Identifiable {
         self.ShipAddr = ShipAddr
         self.PrivateNote = PrivateNote
         self.TxnTaxDetail = TxnTaxDetail
+        self.Line = Line
     }
 }
 
@@ -3252,6 +3263,10 @@ enum QuickBooksEstimateLineage {
     private static let proposalGroupPrefix = "GunnAire Proposal Group:"
     private static let proposalOptionPrefix = "GunnAire Proposal Option:"
     private static let recommendationPrefix = "GunnAire Recommended Option:"
+
+    static func createRequestID(for estimate: Estimate) -> String {
+        "ga-estimate-\(estimate.id.uuidString.lowercased())"
+    }
 
     static func operationMarker(for estimate: Estimate) -> String {
         "\(estimateIDPrefix) \(estimate.id.uuidString.uppercased())"
@@ -3410,11 +3425,12 @@ struct QuickBooksInvoice: Codable, Identifiable {
     let EmailStatus: String?
     let ShipAddr: QuickBooksAddress?
     let TxnTaxDetail: QuickBooksTxnTaxDetail?
+    let Line: [QuickBooksLineItem]?
 
     var id: String { Id }
 
     private enum CodingKeys: String, CodingKey {
-        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, DueDate, PrivateNote, BillEmail, EmailStatus, ShipAddr, TxnTaxDetail
+        case Id, SyncToken, DocNumber, CustomerRef, TotalAmt, Balance, TxnDate, DueDate, PrivateNote, BillEmail, EmailStatus, ShipAddr, TxnTaxDetail, Line
     }
 
     init(from decoder: Decoder) throws {
@@ -3438,6 +3454,7 @@ struct QuickBooksInvoice: Codable, Identifiable {
         EmailStatus = try container.decodeIfPresent(String.self, forKey: .EmailStatus)
         ShipAddr = try container.decodeIfPresent(QuickBooksAddress.self, forKey: .ShipAddr)
         TxnTaxDetail = try container.decodeIfPresent(QuickBooksTxnTaxDetail.self, forKey: .TxnTaxDetail)
+        Line = try container.decodeIfPresent([QuickBooksLineItem].self, forKey: .Line)
     }
 
     private static func decodeFlexibleDouble(_ container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> Double? {

@@ -1,3 +1,23 @@
+Billing publication checkpoint, 2026-09-07: **939/939 logic tests pass on each
+of iPad Simulator and Mac Catalyst; 6/6 selected iPad journeys pass**.
+Billing Documents and the Management retry queue now share one captured
+customer → approved items → invoice/estimate → confirmation workflow. Current
+known role/assignment, original provider/context, immutable sold prices, exact
+remote identity/lines, unpaid-update evidence, model replacement/deletion and
+local-save failure are checked. Supporting-file follow-up retains the same
+workflow and stores attachment-reference evidence. Thirty-six new tests cover
+these boundaries; unresolved CloudKit payment links and the currency-conversion
+boundary no longer crash the invoice edit gate. See
+[QBO_BILLING_WORKFLOW_LIFECYCLE.md](QBO_BILLING_WORKFLOW_LIFECYCLE.md) for exact
+evidence and remaining scope. The unsigned optimized universal Mac Release
+build passes and both arm64 and x86_64 are verified.
+The preceding 705d77e head passes all four hosted jobs. This source still needs
+its own hosted checks. Server-owned accounting intents/dispatch, durable
+uncertain-upload recovery, other provider workflows, signed CloudKit/offline
+convergence, approved embedded Tap to Pay, and physical/provider/platform
+acceptance remain open. No merge, deployment, signing/entitlement change,
+physical install or live business mutation occurred.
+
 Catalog publication checkpoint, 2026-09-07: **903/903 logic tests pass on each
 of iPad Simulator and Mac Catalyst; 10/10 focused iPad journeys and the
 unsigned universal Mac Release build pass**. Management approval/retry and

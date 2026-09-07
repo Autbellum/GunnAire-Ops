@@ -6,6 +6,12 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
+The catalog checkpoint 705d77e also passes all four hosted jobs:
+[native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34097348815) and
+[backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34097348890).
+The billing workflow migration requires its own new-head hosted acceptance;
+see [QBO_BILLING_WORKFLOW_LIFECYCLE.md](QBO_BILLING_WORKFLOW_LIFECYCLE.md).
+
 The published resource-sync checkpoint 529fe26 passes all four hosted jobs:
 [native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728868) and
 [Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728884).

@@ -95,7 +95,7 @@ struct BillingDocumentsView: View {
     @State private var actionMessage = ""
     @State private var isCreatingDocument = false
     @State private var isImportingQuickBooksItems = false
-    @State private var syncingEstimateIDs: Set<UUID> = []
+    @State private var billingSyncLifecycles: [String: QuickBooksSyncLifecycle] = [:]
     @State private var didLoadInitialContext = false
     @State private var didAttemptInitialCatalogImport = false
     @State private var openInvoiceAfterEstimateCreation = false
@@ -1891,6 +1891,14 @@ GunnAire
 
     @ViewBuilder
     var body: some View {
+        billingBody.onDisappear {
+            for owner in billingSyncLifecycles.values { owner.cancel() }
+            billingSyncLifecycles.removeAll()
+        }
+    }
+
+    @ViewBuilder
+    private var billingBody: some View {
         if let invoice = requestedInitialCloseoutInvoice {
             AnyView(
                 RecordInvoicePaymentView(
@@ -7507,13 +7515,35 @@ GunnAire
     private func publishCatalogItemIfPossible(_ item: Item) {
         guard !item.requiresPricebookReview, !item.isCatalogArchived else { return }
         guard isQuickBooksConnected, itemNeedsQuickBooksSync(item) else { return }
-        prepareQuickBooksItemsForDocument([item]) { result in
-            switch result {
-            case .success:
-                actionMessage = "Added \(item.name) and synced it to QuickBooks."
-            case .failure(let error):
-                actionMessage = "Added \(item.name) locally. QuickBooks publish is pending: \(error.localizedDescription)"
+        let key = "item-\(item.id)"
+        guard billingSyncLifecycles[key] == nil else { return }
+        let owner = QuickBooksSyncLifecycle()
+        do {
+            let workflow = try QuickBooksCatalogWorkflow(item: item, context: modelContext, api: liveAPI,
+                lifecycle: owner, mode: .publish, configuration: accountingConfiguration)
+            billingSyncLifecycles[key] = owner
+            Task { @MainActor in
+                defer {
+                    owner.finish(workflow.run)
+                    if billingSyncLifecycles[key] === owner { billingSyncLifecycles.removeValue(forKey: key) }
+                }
+                do {
+                    try await workflow.run.perform {
+                        await accountingConfigurationStore.refresh(realmID: workflow.run.workflow.realmID,
+                            environment: workflow.run.workflow.environment, validate: workflow.checkItem)
+                    }
+                    let outcome = try await workflow.execute(configuration: accountingConfigurationStore.configuration(
+                        for: workflow.run.workflow.realmID, environment: workflow.run.workflow.environment))
+                    actionMessage = outcome.link == .synchronized
+                        ? "Item saved and synced to QuickBooks."
+                        : "Item saved and linked to QuickBooks. Review the pricebook differences before updating either version."
+                } catch {
+                    try? workflow.recordFailure(error)
+                    actionMessage = workflow.failureMessage(error)
+                }
             }
+        } catch {
+            actionMessage = "Item saved locally. QuickBooks publish is pending: \(error.localizedDescription)"
         }
     }
 
@@ -7528,15 +7558,6 @@ GunnAire
         } catch {
             actionMessage = "QuickBooks sync saved remotely, but the app could not save the updated local IDs: \(error.localizedDescription)"
         }
-    }
-
-    private func markQuickBooksCatalogSyncFailure(for items: [Item], error: Error) {
-        let detail = error.localizedDescription
-        for item in items where itemNeedsQuickBooksSync(item) {
-            item.quickBooksSyncStatus = "needs_attention"
-            item.quickBooksSyncDetail = detail
-        }
-        saveQuickBooksSyncState()
     }
 
     private func loadEstimateIntoBuilder(_ estimate: Estimate, announce: Bool = true) {
@@ -8898,132 +8919,7 @@ GunnAire
     }
 
     private func syncEstimateIfNeeded(_ estimate: Estimate, customer: Customer, items: [Item]) {
-        guard isQuickBooksConnected else { return }
-        guard syncingEstimateIDs.insert(estimate.id).inserted else { return }
-        ensureQuickBooksDocumentInputs(customer: customer, items: items) { result in
-            switch result {
-            case .failure(let error):
-                syncingEstimateIDs.remove(estimate.id)
-                actionMessage = "Estimate saved locally. QuickBooks sync failed: \(error.localizedDescription)"
-            case .success(let syncedItems):
-                let lines: [QuickBooksLineItem]
-                do {
-                    lines = try QuickBooksDocumentLinePublication.lines(
-                        snapshotJSON: estimate.catalogSnapshotJSON,
-                        expectedSubtotal: estimate.subtotalAmount,
-                        catalogItems: catalogItemsForDocumentPublication(syncedItems)
-                    )
-                } catch {
-                    syncingEstimateIDs.remove(estimate.id)
-                    actionMessage = "Estimate saved locally. QuickBooks sync stopped: \(error.localizedDescription)"
-                    return
-                }
-                let payload = QuickBooksEstimateCreate(
-                    CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
-                    Line: lines,
-                    PrivateNote: quickBooksPrivateNote(for: estimate),
-                    BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
-                    ShipAddr: estimate.siteAddress.flatMap(nilIfBlank).map { QuickBooksAddress(Line1: $0) },
-                    GlobalTaxCalculation: "TaxExcluded",
-                    ApplyTaxAfterDiscount: estimate.documentDiscount == nil ? nil : true
-                )
-                liveAPI.fetchEstimates { fetchResult in
-                    DispatchQueue.main.async {
-                        switch fetchResult {
-                        case .failure(let error):
-                            syncingEstimateIDs.remove(estimate.id)
-                            actionMessage = "Estimate saved locally. QuickBooks reconciliation failed, so no duplicate-prone create was attempted: \(error.localizedDescription)"
-                        case .success(let remoteEstimates):
-                            do {
-                                if let recovered = try QuickBooksEstimatePublicationRecovery.matchingRemoteEstimate(
-                                    for: estimate,
-                                    in: remoteEstimates
-                                ) {
-                                    finishQuickBooksEstimateSync(
-                                        .success(recovered),
-                                        estimate: estimate,
-                                        recoveredExisting: true
-                                    )
-                                    return
-                                }
-                            } catch {
-                                syncingEstimateIDs.remove(estimate.id)
-                                actionMessage = error.localizedDescription
-                                return
-                            }
-
-                            liveAPI.createEstimate(payload) { apiResult in
-                                DispatchQueue.main.async {
-                                    finishQuickBooksEstimateSync(
-                                        apiResult,
-                                        estimate: estimate,
-                                        recoveredExisting: false
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func finishQuickBooksEstimateSync(
-        _ result: Result<QuickBooksEstimate, Error>,
-        estimate: Estimate,
-        recoveredExisting: Bool
-    ) {
-        syncingEstimateIDs.remove(estimate.id)
-        switch result {
-        case .success(let quickBooksEstimate):
-            estimate.quickBooksID = quickBooksEstimate.Id
-            let taxIssue = estimate.applyQuickBooksTaxResult(
-                total: quickBooksEstimate.TotalAmt,
-                reportedTax: quickBooksEstimate.TxnTaxDetail?.TotalTax
-            )
-            saveQuickBooksSyncState()
-            syncLinkedEstimateAttachmentsToQuickBooks(estimate)
-            if let taxIssue {
-                actionMessage = "Estimate is linked to QuickBooks, but its tax total needs review: \(taxIssue)"
-            } else {
-                actionMessage = recoveredExisting
-                    ? "Existing QuickBooks estimate recovered without creating a duplicate."
-                    : "Estimate created and synced to QuickBooks."
-            }
-        case .failure(let error):
-            actionMessage = "Estimate saved locally. QuickBooks sync failed: \(error.localizedDescription)"
-        }
-    }
-
-    private func quickBooksPrivateNote(for estimate: Estimate) -> String? {
-        let entries = [
-            estimate.notes?.trimmingCharacters(in: .whitespacesAndNewlines),
-            estimate.changeOrderReason.map { "Change order reason: \($0)" }
-        ]
-        .compactMap { $0 }
-        .filter { !$0.isEmpty }
-        let adjustedNote = BillingPriceAdjustmentAudit.quickBooksPrivateNote(
-            existing: entries.isEmpty ? nil : entries.joined(separator: "\n"),
-            snapshotJSON: estimate.catalogSnapshotJSON
-        )
-        let discountedNote = BillingDocumentDiscountAudit.quickBooksPrivateNote(
-            existing: adjustedNote,
-            snapshotJSON: estimate.catalogSnapshotJSON
-        )
-        return QuickBooksEstimateLineage.appendingLineage(to: discountedNote, for: estimate)
-    }
-
-    private func quickBooksPrivateNote(for invoice: Invoice) -> String? {
-        QuickBooksInvoiceLineage.appendingLineage(
-            to: BillingDocumentDiscountAudit.quickBooksPrivateNote(
-                existing: BillingPriceAdjustmentAudit.quickBooksPrivateNote(
-                    existing: invoice.accountingPrivateNote,
-                    snapshotJSON: invoice.catalogSnapshotJSON
-                ),
-                snapshotJSON: invoice.catalogSnapshotJSON
-            ),
-            for: invoice
-        )
+        publishBillingDocument(.estimate(estimate))
     }
 
     private func syncInvoiceIfNeeded(_ invoice: Invoice, customer: Customer, items: [Item]) {
@@ -9033,374 +8929,56 @@ GunnAire
             saveQuickBooksSyncState()
             return
         }
-        ensureQuickBooksDocumentInputs(customer: customer, items: items) { result in
-            switch result {
-            case .failure(let error):
-                markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
-            case .success(let syncedItems):
-                let lines: [QuickBooksLineItem]
-                do {
-                    lines = try QuickBooksDocumentLinePublication.lines(
-                        snapshotJSON: invoice.catalogSnapshotJSON,
-                        expectedSubtotal: invoice.subtotalAmount,
-                        catalogItems: catalogItemsForDocumentPublication(syncedItems)
-                    )
-                } catch {
-                    markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                    actionMessage = "Invoice saved locally. QuickBooks sync stopped: \(error.localizedDescription)"
-                    return
-                }
-                if let quickBooksID = invoice.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !quickBooksID.isEmpty {
-                    updateQuickBooksInvoice(
-                        invoice,
-                        quickBooksID: quickBooksID,
-                        customer: customer,
-                        lines: lines
-                    )
-                } else {
-                    createQuickBooksInvoice(invoice, customer: customer, lines: lines)
-                }
-            }
-        }
+        publishBillingDocument(.invoice(invoice))
     }
 
-    private func createQuickBooksInvoice(
-        _ invoice: Invoice,
-        customer: Customer,
-        lines: [QuickBooksLineItem]
-    ) {
-        let payload = QuickBooksInvoiceCreate(
-            CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
-            Line: lines,
-            PrivateNote: quickBooksPrivateNote(for: invoice),
-            BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
-            ShipAddr: invoice.siteAddress.flatMap(nilIfBlank).map { QuickBooksAddress(Line1: $0) },
-            DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
-            GlobalTaxCalculation: "TaxExcluded",
-            ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true
-        )
-        liveAPI.fetchInvoices { fetchResult in
-            DispatchQueue.main.async {
-                switch fetchResult {
-                case .failure(let error):
-                    markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                    actionMessage = "Invoice saved locally. QuickBooks reconciliation failed, so no duplicate-prone create was attempted: \(error.localizedDescription)"
-                case .success(let remoteInvoices):
-                    do {
-                        if let recovered = try QuickBooksInvoicePublicationRecovery.matchingRemoteInvoice(
-                            for: invoice,
-                            in: remoteInvoices
-                        ) {
-                            applyQuickBooksInvoiceSync(recovered, to: invoice)
-                            syncLinkedServiceReportsToQuickBooks(invoice)
-                            actionMessage = invoice.needsQuickBooksAttention
-                                ? "Existing QuickBooks invoice recovered, but its tax total needs review: \(invoice.quickBooksSyncDetail ?? "Refresh the invoice in QuickBooks.")"
-                                : "Existing QuickBooks invoice recovered without creating a duplicate."
-                            return
-                        }
-                    } catch {
-                        markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                        actionMessage = error.localizedDescription
-                        return
-                    }
-
-                    liveAPI.createInvoice(
-                        payload,
-                        requestID: QuickBooksInvoiceLineage.createRequestID(for: invoice)
-                    ) { apiResult in
-                        DispatchQueue.main.async {
-                            switch apiResult {
-                            case .success(let quickBooksInvoice):
-                                applyQuickBooksInvoiceSync(quickBooksInvoice, to: invoice)
-                                syncLinkedServiceReportsToQuickBooks(invoice)
-                                actionMessage = invoice.needsQuickBooksAttention
-                                    ? "Invoice is linked to QuickBooks, but its tax total needs review: \(invoice.quickBooksSyncDetail ?? "Refresh the invoice in QuickBooks.")"
-                                    : "Invoice created and synced to QuickBooks."
-                            case .failure(let error):
-                                markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                                actionMessage = "Invoice saved locally. QuickBooks sync failed: \(error.localizedDescription)"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func updateQuickBooksInvoice(
-        _ invoice: Invoice,
-        quickBooksID: String,
-        customer: Customer,
-        lines: [QuickBooksLineItem]
-    ) {
-        liveAPI.fetchInvoice(id: quickBooksID) { fetchResult in
-            DispatchQueue.main.async {
-                switch fetchResult {
-                case .failure(let error):
-                    markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                    actionMessage = "Invoice updated locally. QuickBooks refresh failed: \(error.localizedDescription)"
-                case .success(let currentQuickBooksInvoice):
-                    guard let syncToken = currentQuickBooksInvoice.SyncToken?.trimmingCharacters(in: .whitespacesAndNewlines),
-                          !syncToken.isEmpty else {
-                        let error = QuickBooksDataAPI.QBError.missingSyncToken(entity: "invoice \(quickBooksID)")
-                        markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                        actionMessage = "Invoice updated locally. \(error.localizedDescription)"
-                        return
-                    }
-                    let payload = QuickBooksInvoiceUpdate(
-                        Id: quickBooksID,
-                        SyncToken: syncToken,
-                        CustomerRef: QuickBooksReference(value: customer.quickBooksID ?? "", name: customer.name),
-                        Line: lines,
-                        PrivateNote: quickBooksPrivateNote(for: invoice),
-                        BillEmail: customer.email.flatMap { $0.isEmpty ? nil : QuickBooksEmailAddress(Address: $0) },
-                        ShipAddr: invoice.siteAddress.flatMap(nilIfBlank).map { QuickBooksAddress(Line1: $0) },
-                        DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
-                        GlobalTaxCalculation: "TaxExcluded",
-                        ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true
-                    )
-                    liveAPI.updateInvoice(payload) { updateResult in
-                        DispatchQueue.main.async {
-                            switch updateResult {
-                            case .success(let quickBooksInvoice):
-                                applyQuickBooksInvoiceSync(quickBooksInvoice, to: invoice)
-                                syncLinkedServiceReportsToQuickBooks(invoice)
-                                actionMessage = invoice.needsQuickBooksAttention
-                                    ? "Invoice lines reached QuickBooks, but the tax total needs review: \(invoice.quickBooksSyncDetail ?? "Refresh the invoice in QuickBooks.")"
-                                    : "Invoice line items updated and synced to QuickBooks."
-                            case .failure(let error):
-                                markQuickBooksInvoiceSyncFailure(invoice, error: error)
-                                actionMessage = "Invoice updated locally. QuickBooks update failed: \(error.localizedDescription)"
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func applyQuickBooksInvoiceSync(_ quickBooksInvoice: QuickBooksInvoice, to invoice: Invoice) {
-        invoice.quickBooksID = quickBooksInvoice.Id
-        invoice.quickBooksBalanceDue = quickBooksInvoice.Balance
-        if let rawDueDate = quickBooksInvoice.DueDate,
-           let dueDate = QuickBooksDateOnly.date(from: rawDueDate) {
-            invoice.dueDate = dueDate
-        }
-        let taxIssue = invoice.applyQuickBooksTaxResult(
-            total: quickBooksInvoice.TotalAmt,
-            reportedTax: quickBooksInvoice.TxnTaxDetail?.TotalTax
-        )
-        invoice.quickBooksSyncStatus = taxIssue == nil ? "synced" : "needs_attention"
-        invoice.quickBooksSyncDetail = taxIssue
-        invoice.quickBooksLastSyncedAt = Date()
-        saveQuickBooksSyncState()
-    }
-
-    private func markQuickBooksInvoiceSyncFailure(_ invoice: Invoice, error: Error) {
-        invoice.quickBooksSyncStatus = "needs_attention"
-        invoice.quickBooksSyncDetail = error.localizedDescription
-        saveQuickBooksSyncState()
-    }
-
-    private func ensureQuickBooksDocumentInputs(
-        customer: Customer,
-        items: [Item],
-        completion: @escaping (Result<[Item], Error>) -> Void
-    ) {
-        ensureQuickBooksCustomer(customer) { customerResult in
-            switch customerResult {
-            case .failure(let error):
-                completion(.failure(error))
-            case .success:
-                prepareQuickBooksItemsForDocument(items, completion: completion)
-            }
-        }
-    }
-
-    private func ensureQuickBooksCustomer(_ customer: Customer, completion: @escaping (Result<Void, Error>) -> Void) {
-        if let quickBooksID = customer.quickBooksID, !quickBooksID.isEmpty {
-            completion(.success(()))
+    private func publishBillingDocument(_ document: QuickBooksBillingDocument) {
+        guard isQuickBooksConnected else { return }
+        let key = "\(document.label)-\(document.id)"
+        guard billingSyncLifecycles[key] == nil else {
+            actionMessage = QuickBooksBillingWorkflowError.busy.localizedDescription
             return
         }
-
-        liveAPI.recoverOrCreateCustomer(
-            QuickBooksCustomerCreateOperation.draft(for: customer)
-        ) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let quickBooksCustomer):
-                    customer.quickBooksID = quickBooksCustomer.Id
-                    saveQuickBooksSyncState()
-                    completion(.success(()))
-                case .failure(let error):
-                    completion(.failure(error))
-                }
-            }
-        }
-    }
-
-    private func prepareQuickBooksItemsForDocument(
-        _ items: [Item],
-        completion: @escaping (Result<[Item], Error>) -> Void
-    ) {
+        let owner = QuickBooksSyncLifecycle()
         do {
-            try QuickBooksCatalogMappingIntegrity.validateDocumentItems(items, against: self.items)
-        } catch {
-            QuickBooksCatalogMappingIntegrity.markConflictsForReview(in: self.items)
-            saveQuickBooksSyncState()
-            completion(.failure(error))
-            return
-        }
-        if let item = items.first(where: \.requiresPricebookReview) {
-            completion(.failure(PricebookPublicationError.reviewRequired(item.name)))
-            return
-        }
-        if let item = items.first(where: \.isCatalogArchived) {
-            completion(.failure(PricebookPublicationError.archived(item.name)))
-            return
-        }
-        guard items.contains(where: itemNeedsQuickBooksSync) else {
-            completion(.success(items))
-            return
-        }
-
-        Task { @MainActor in
-            await accountingConfigurationStore.refresh(
-                realmID: liveAPI.realmID,
-                environment: Config.QuickBooks.environment
-            )
-            let accountingConfiguration = self.accountingConfiguration
-            liveAPI.fetchItems { result in
-                DispatchQueue.main.async {
-                switch result {
-                case .failure(let error):
-                    markQuickBooksCatalogSyncFailure(for: items.filter(itemNeedsQuickBooksSync), error: error)
-                    completion(.failure(error))
-                case .success(let quickBooksItems):
-                    for item in items where itemNeedsQuickBooksSync(item) {
-                        do {
-                            if let quickBooksItem = try PricebookReviewPublication.matchingRemoteItem(
-                                for: item,
-                                in: quickBooksItems
-                            ) {
-                                try QuickBooksCatalogMappingIntegrity.validateAssignment(
-                                    of: quickBooksItem.Id,
-                                    to: item,
-                                    in: self.items
-                                )
-                                let shouldStageReactivation = item.isAvailableForNewWork && quickBooksItem.Active == false
-                                applyQuickBooksItem(quickBooksItem, to: item)
-                                if shouldStageReactivation {
-                                    item.restoreToPricebook(by: currentUserEmail)
-                                    saveQuickBooksSyncState()
-                                    completion(.failure(PricebookPublicationError.inactiveQuickBooksMatch(item.name)))
-                                    return
-                                }
-                            }
-                        } catch {
-                            markQuickBooksCatalogSyncFailure(for: [item], error: error)
-                            completion(.failure(error))
-                            return
-                        }
-                    }
-
-                    let remainingLocalItems = items.filter(itemNeedsQuickBooksSync)
-                    guard !remainingLocalItems.isEmpty else {
-                        saveQuickBooksSyncState()
-                        completion(.success(items))
-                        return
-                    }
-
-                    guard let incomeAccountRef = QuickBooksItemAccountResolver.incomeAccountRef(
-                        from: quickBooksItems,
-                        configuration: accountingConfiguration
-                    ) else {
-                        let error = QuickBooksDataAPI.QBError.missingDefaultIncomeAccountRef
-                        markQuickBooksCatalogSyncFailure(for: remainingLocalItems, error: error)
-                        completion(.failure(error))
-                        return
-                    }
-
-                    ensureQuickBooksItems(
-                        items,
-                        index: 0,
-                        incomeAccountRef: incomeAccountRef,
-                        expenseAccountRef: QuickBooksItemAccountResolver.configuredExpenseAccountRef(
-                            configuration: accountingConfiguration
-                        ),
-                        synced: [],
-                        completion: completion
-                    )
+            // Capture synchronously, before Task scheduling can adopt another account.
+            let workflow = try QuickBooksBillingWorkflow(document: document, context: modelContext,
+                api: liveAPI, lifecycle: owner)
+            billingSyncLifecycles[key] = owner
+            Task { @MainActor in
+                defer {
+                    owner.finish(workflow.run)
+                    if billingSyncLifecycles[key] === owner { billingSyncLifecycles.removeValue(forKey: key) }
                 }
+                do {
+                    try await workflow.run.perform {
+                        await accountingConfigurationStore.refresh(realmID: workflow.run.workflow.realmID,
+                            environment: workflow.run.workflow.environment, validate: workflow.check)
+                    }
+                    let configuration = accountingConfigurationStore.configuration(for: workflow.run.workflow.realmID,
+                        environment: workflow.run.workflow.environment)
+                    let outcome = try await workflow.execute(configuration: configuration)
+                    actionMessage = outcome.message
+                    do { try await workflow.uploadLinkedAttachments() }
+                    catch {
+                        actionMessage = outcome.message + " Supporting files remain pending: " + error.localizedDescription
+                    }
+                } catch {
+                    do { try workflow.recordFailure(error) }
+                    catch QuickBooksBillingWorkflowError.saveFailed {
+                        actionMessage = QuickBooksBillingWorkflowError.saveFailed.localizedDescription
+                        return
+                    } catch { /* A changed workspace/model must not receive a late failure. */ }
+                    actionMessage = workflow.failureMessage(error)
                 }
             }
+        } catch {
+            actionMessage = document.label + " saved locally. " + error.localizedDescription
         }
     }
 
     private func itemNeedsQuickBooksSync(_ item: Item) -> Bool {
         item.quickBooksID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
-    }
-
-    private func catalogItemsForDocumentPublication(_ documentItems: [Item]) -> [Item] {
-        QuickBooksDocumentLinePublication.catalogIncluding(documentItems, storedItems: items)
-    }
-
-    private func ensureQuickBooksItems(
-        _ items: [Item],
-        index: Int,
-        incomeAccountRef: QuickBooksReference,
-        expenseAccountRef: QuickBooksReference?,
-        synced: [Item],
-        completion: @escaping (Result<[Item], Error>) -> Void
-    ) {
-        guard index < items.count else {
-            completion(.success(synced))
-            return
-        }
-
-        let item = items[index]
-        if let quickBooksID = item.quickBooksID, !quickBooksID.isEmpty {
-            ensureQuickBooksItems(
-                items,
-                index: index + 1,
-                incomeAccountRef: incomeAccountRef,
-                expenseAccountRef: expenseAccountRef,
-                synced: synced + [item],
-                completion: completion
-            )
-            return
-        }
-
-        let payload = QuickBooksCatalogCreateOperation.payload(
-            for: item,
-            incomeAccountRef: incomeAccountRef,
-            expenseAccountRef: expenseAccountRef
-        )
-        liveAPI.createItem(
-            payload,
-            requestID: QuickBooksCatalogCreateOperation.requestID(for: item.id)
-        ) { result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let quickBooksItem):
-                    applyQuickBooksItem(quickBooksItem, to: item)
-                    saveQuickBooksSyncState()
-                    ensureQuickBooksItems(
-                        items,
-                        index: index + 1,
-                        incomeAccountRef: incomeAccountRef,
-                        expenseAccountRef: expenseAccountRef,
-                        synced: synced + [item],
-                        completion: completion
-                    )
-                case .failure(let error):
-                    markQuickBooksCatalogSyncFailure(for: [item], error: error)
-                    completion(.failure(error))
-                }
-            }
-        }
     }
 
     @discardableResult
@@ -10923,7 +10501,7 @@ enum BillingInvoiceMutationPolicy {
             return "This invoice is finalized or customer-signed. Create an approved adjustment instead of changing its line items."
         }
 
-        let relatedPayments = payments.filter { $0.invoice.id == invoice.id }
+        let relatedPayments = payments.filter { $0.invoice?.id == invoice.id }
         let netPaymentAmount = relatedPayments.reduce(0.0) { partial, payment in
             partial + (payment.isRefund ? -payment.amount : payment.amount)
         }
