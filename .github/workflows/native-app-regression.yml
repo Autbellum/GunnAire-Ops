@@ -54,6 +54,7 @@ jobs:
               testMailWorkspaceUsesASimpleInboxInterface \
               testCustomerAccountStatementGeneratesFromTheExistingFilesWorkspace \
               testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices \
+              testCatalogPublicationReviewCancelsOnlyAnUnsentProposalAndReturnsToCatalog \
               testUnreconciledStatementExplainsReviewAndHandsOffToInvoices; do
               selectors+=("-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/$test")
             done
