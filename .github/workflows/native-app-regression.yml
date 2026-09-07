@@ -63,6 +63,9 @@ jobs:
               testJobBillingReviewUsesSavedCrewAndReturnsToTheSameJob \
               testJobBillingReviewRecoversLostReplyWithoutAnotherApproval \
               testTaxAddressReviewKeepsDraftPricesAndReturnsToBilling \
+              testExistingQuickBooksLinkReviewCancelsAndReturnsToManagement \
+              testExistingQuickBooksLinkReviewRecoversConfirmedDecisionWithoutAnotherPost \
+              testExistingQuickBooksLinkReviewCancelsAfterReconnection \
               testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices \
               testCatalogPublicationReviewCancelsOnlyAnUnsentProposalAndReturnsToCatalog \
               testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs \
