@@ -1,8 +1,8 @@
 """Shared invoice/estimate publication engine.
 
-Staged backend component: not exposed through HTTP or used by native clients yet.
-Provider writes require a current office role, or an exact office-reviewed draft
-grant for a technician. No device-supplied job assignment establishes authority.
+Provider writes require a current office role, an exact reviewed draft grant,
+or a server-recorded job assignment with current pricebook evidence. No device-
+supplied job assignment establishes authority. Native cutover remains separate.
 Unknown outcomes never authorize another send. No payment, email, void or delete.
 """
 from __future__ import annotations
@@ -16,9 +16,11 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 try:
+    from Backend import billing_assignments
     from Backend.catalog_publications import canonical, failure, scope
     from Backend.payment_attempts import AttemptError, canonical_uuid, grant_fingerprint, reference
 except ModuleNotFoundError:
+    import billing_assignments
     from catalog_publications import canonical, failure, scope
     from payment_attempts import AttemptError, canonical_uuid, grant_fingerprint, reference
 
@@ -55,6 +57,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS billing_active_draft_grant ON billing_draft_gr
 
 
 def initialize_schema(connection):
+    billing_assignments.initialize_schema(connection)
     for statement in SCHEMA.split(";"):
         if statement.strip():
             connection.execute(statement)
@@ -199,16 +202,23 @@ def document_values(value, kind, operation):
 
 def validated_request(payload):
     required = {"companyID", "realmID", "environment", "documentType", "localDocumentID", "localCustomerID", "operation", "document"}
-    if not isinstance(payload, dict) or set(payload) != required:
+    job_fields = {"serviceCallID", "assignmentRevision"}
+    if not isinstance(payload, dict) or set(payload) not in (required, required | job_fields):
         raise failure("invalid_request", "Use the supported billing publication fields only.", 400)
     kind, operation = payload["documentType"], payload["operation"]
     if (kind not in ("Invoice", "Estimate") or operation not in ("create", "update")
             or (kind == "Estimate" and operation != "create") or payload["environment"] not in ("sandbox", "production")):
         raise failure("invalid_request", "Choose a supported billing operation and environment.", 400)
+    job = {}
+    if "serviceCallID" in payload:
+        revision = payload["assignmentRevision"]
+        if type(revision) is not int or not 1 <= revision <= 2147483647:
+            raise failure("invalid_request", "Use the original server-approved assignment revision.", 400)
+        job = {"service_call_id": canonical_uuid(payload["serviceCallID"]), "assignment_revision": revision}
     return {"company_id": canonical_uuid(payload["companyID"]), "realm_id": reference(payload["realmID"]),
             "environment": payload["environment"], "document_type": kind, "operation": operation,
             "local_document_id": canonical_uuid(payload["localDocumentID"]), "local_customer_id": canonical_uuid(payload["localCustomerID"]),
-            "document": document_values(payload["document"], kind, operation)}
+            "document": document_values(payload["document"], kind, operation), **job}
 
 
 def digest(intent):
@@ -235,6 +245,7 @@ class BillingPublisher:
     def __init__(self, database, provider_factory, encrypt, decrypt, audit, now=None):
         self.database, self.provider_factory, self.encrypt, self.decrypt, self.audit = database, provider_factory, encrypt, decrypt, audit
         self.now = now or (lambda: datetime.now(timezone.utc))
+        self.assignments = billing_assignments.JobBillingAssignments(database, self.actor, encrypt, decrypt, audit, self.now)
 
     def actor(self, connection, session_id):
         actor = connection.execute("SELECT s.*,u.role,u.is_active FROM auth_sessions s JOIN users u ON u.email=s.email WHERE s.id=?", (session_id,)).fetchone()
@@ -260,6 +271,7 @@ class BillingPublisher:
         if require_grant and fingerprint != intent["grant_fingerprint"]:
             raise failure("grant_changed", "Review the original attempt after reconnecting QuickBooks.")
         allowed = office_role(actor["role"], intent["document_type"])
+        authority = "office" if allowed else None
         if not allowed and not office_only and actor["role"] == "Field Technician":
             hash_value = intent["payload_hash"] if "payload_hash" in intent.keys() else digest(intent)
             grants = connection.execute("""SELECT g.*,u.role,u.is_active FROM billing_draft_grants g JOIN users u ON u.email=g.approved_by
@@ -274,10 +286,16 @@ class BillingPublisher:
                 except (TypeError, ValueError):
                     allowed = False
                 if allowed:
+                    authority = "reviewed"
                     break
+            if not allowed:
+                proposal = self.intent(intent) if "payload_ciphertext" in intent.keys() else intent
+                allowed = self.assignments.authorize_field(connection, actor, proposal, fingerprint)
+                if allowed:
+                    authority = "assigned"
         if not allowed:
-            raise failure("review_required", "Keep the saved draft. Current office approval is required for this billing action.", 403)
-        return actor, {**dict(grant), "grant_fingerprint": fingerprint}
+            raise failure("review_required", "Keep the saved draft. Confirm current job billing access or ask the office to review it.", 403)
+        return actor, {**dict(grant), "grant_fingerprint": fingerprint, "billing_authority": authority}
 
     def approve_draft(self, session_id, payload, technician_email):
         intent = validated_request(payload)
@@ -303,6 +321,7 @@ class BillingPublisher:
             return identifier
 
     def revoke_draft(self, session_id, identifier):
+        identifier = canonical_uuid(identifier)
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM billing_draft_grants WHERE id=?", (canonical_uuid(identifier),)).fetchone()
@@ -382,6 +401,7 @@ class BillingPublisher:
                     return dict(row)
             self.document_mapping(connection, intent)
             self.payment_boundary(connection, intent)
+            self.assignments.bind_document(connection, intent)
             identifier, now = str(uuid.uuid4()), self.now().isoformat()
             request_id = "ga-" + (intent["document_type"].lower() if intent["operation"] == "create" else "update") + "-" + (intent["local_document_id"] if intent["operation"] == "create" else identifier)
             connection.execute("INSERT INTO billing_publications VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'reserved',NULL,?,?,?)",
@@ -399,12 +419,17 @@ class BillingPublisher:
             self.intent(row)
             return dict(row), context
 
-    def claim(self, session_id, identifier):
+    def claim(self, session_id, identifier, *, catalog_evidence=None, checked_at=None):
+        identifier = canonical_uuid(identifier)
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = self.record(connection, identifier)
-            actor, _ = self.authorize(connection, session_id, row)
+            actor, context = self.authorize(connection, session_id, row)
             intent = self.intent(row)
+            if context["billing_authority"] == "assigned":
+                if checked_at is None or not timedelta(0) <= self.now() - checked_at <= timedelta(seconds=30):
+                    raise failure("price_review", "Refresh the original pricebook evidence before publishing this draft.")
+                verify_field_prices(intent["document"], catalog_evidence)
             self.mappings(connection, intent)
             if row["state"] != "reserved":
                 raise failure("publication_pending", "The original billing request cannot be sent again.")
@@ -428,6 +453,7 @@ class BillingPublisher:
         return document
 
     def confirm(self, session_id, identifier, remote, *, original_attempt):
+        identifier = canonical_uuid(identifier)
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = self.record(connection, identifier)
@@ -450,6 +476,7 @@ class BillingPublisher:
             return {"publication": self.public(self.record(connection, identifier)), "document": public_document(remote)}
 
     def run(self, session_id, identifier, *, allow_send=False):
+        identifier = canonical_uuid(identifier)
         row, context = self.check(session_id, identifier)
         provider = self.provider_factory(context, lambda: self.check(session_id, identifier))
         document = self.payload(row)
@@ -473,10 +500,12 @@ class BillingPublisher:
                 return self.confirm(session_id, identifier, matches[0], original_attempt=row["state"] != "reserved")
         if row["state"] != "reserved" or not allow_send:
             raise failure("provider_unconfirmed", "The original accounting request remains unconfirmed. No new request was sent.")
-        provider.preflight(document)
+        checked_at = self.now()
+        catalog_evidence = provider.preflight(document)
         self.check(session_id, identifier)
         try:
-            remote = provider.write(row["document_type"], document, row["request_id"], lambda: self.claim(session_id, identifier))
+            remote = provider.write(row["document_type"], document, row["request_id"],
+                                    lambda: self.claim(session_id, identifier, catalog_evidence=catalog_evidence, checked_at=checked_at))
             return self.confirm(session_id, identifier, remote, original_attempt=True)
         except Exception:
             # Preserve any consumed permit even if the client loses its role,
@@ -489,6 +518,7 @@ class BillingPublisher:
         return self.run(session_id, self.reserve(session_id, payload)["id"], allow_send=True)
 
     def cancel(self, session_id, identifier):
+        identifier = canonical_uuid(identifier)
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = self.record(connection, identifier)
@@ -499,11 +529,80 @@ class BillingPublisher:
             self.audit(actor["email"], "cancel", "billing-publication", identifier, connection=connection)
             return {"publication": self.public(self.record(connection, identifier))}
 
+    def list_for_document(self, session_id, payload):
+        required = {"companyID", "realmID", "environment", "documentType", "localDocumentID"}
+        if not isinstance(payload, dict) or set(payload) not in (required, required | {"cursor"}) or payload.get("documentType") not in ("Invoice", "Estimate"):
+            raise failure("invalid_query", "Choose one billing document in its original workspace.", 400)
+        intent = billing_assignments.request_scope({**payload, "serviceCallID": payload["localDocumentID"]})
+        intent.update(document_type=payload["documentType"], local_document_id=intent.pop("service_call_id"))
+        with self.database() as connection:
+            actor, _ = self.assignments.context(connection, session_id, intent)
+            if not office_role(actor["role"], intent["document_type"]) and actor["role"] != "Field Technician":
+                raise failure("access_denied", "Current billing access is required.", 403)
+            parameters = document_scope(intent)
+            predicate = ""
+            if "cursor" in payload:
+                try:
+                    if not isinstance(payload["cursor"], str) or not 1 <= len(payload["cursor"]) <= 2048:
+                        raise ValueError()
+                    checkpoint = json.loads(self.decrypt(payload["cursor"]) or "")
+                    if not isinstance(checkpoint, dict) or set(checkpoint) != {"scope", "id"} or checkpoint["scope"] != list(parameters):
+                        raise ValueError()
+                    cursor_id = canonical_uuid(checkpoint["id"])
+                except (ValueError, TypeError, AttemptError):
+                    raise failure("invalid_query", "Refresh the original document's review list.", 400) from None
+                cursor = connection.execute("SELECT * FROM billing_publications WHERE id=? AND company_id=? AND realm_id=? AND environment=? AND document_type=? AND local_document_id=?",
+                                            (cursor_id, *parameters)).fetchone()
+                if cursor is None:
+                    raise failure("invalid_query", "Refresh the original document's review list.", 400)
+                predicate = " AND (created_at < ? OR (created_at = ? AND id < ?))"
+                parameters += (cursor["created_at"], cursor["created_at"], cursor["id"])
+            rows = connection.execute("SELECT * FROM billing_publications WHERE company_id=? AND realm_id=? AND environment=? AND document_type=? AND local_document_id=?" + predicate + " ORDER BY created_at DESC,id DESC LIMIT 51", parameters).fetchall()
+            visible = []
+            for row in rows[:50]:
+                if actor["role"] == "Field Technician":
+                    try:
+                        self.authorize(connection, session_id, row)
+                    except AttemptError as error:
+                        if error.status == 403 or error.code in ("grant_changed", "provider_changed"):
+                            continue
+                        raise
+                visible.append(self.public(row))
+            # Opaque, scope-bound pagination lets a technician pass inaccessible
+            # history without exposing another crew's attempt identifiers.
+            cursor = self.encrypt(canonical({"scope": list(document_scope(intent)), "id": rows[49]["id"]})) if len(rows) > 50 else None
+            return {"publications": visible, "nextCursor": cursor}
+
     @staticmethod
     def public(row):
         return {key: row[column] for key, column in (("id", "id"), ("companyID", "company_id"), ("realmID", "realm_id"),
             ("environment", "environment"), ("documentType", "document_type"), ("localDocumentID", "local_document_id"),
+            ("localCustomerID", "local_customer_id"), ("operation", "operation"),
             ("state", "state"), ("providerID", "provider_id"), ("updatedAt", "updated_at"))}
+
+
+def verify_field_prices(document, evidence):
+    """Authorize sold values, never replace them with today's catalog prices.
+
+Only the fixed-origin server provider supplies this evidence. Price exceptions,
+discounts and missing tax evidence use an exact office-reviewed draft grant.
+"""
+    if not isinstance(evidence, dict):
+        raise failure("price_review", "Current pricebook evidence is required for field billing.")
+    for line in document["Line"]:
+        if line["DetailType"] != "SalesItemLineDetail":
+            raise failure("price_review", "Keep the saved discount and ask the office to approve this exact draft.")
+        sold = line["SalesItemLineDetail"]
+        item = evidence.get(sold["ItemRef"]["value"])
+        try:
+            valid = (isinstance(item, dict) and item.get("Id") == sold["ItemRef"]["value"]
+                     and item.get("Active") is True and item.get("Type") in ("Service", "NonInventory", "Inventory")
+                     and type(item.get("Taxable")) is bool and number(item.get("UnitPrice"), places=5) == number(sold["UnitPrice"], places=5)
+                     and sold["TaxCodeRef"]["value"] == ("TAX" if item["Taxable"] else "NON"))
+        except AttemptError:
+            valid = False
+        if not valid:
+            raise failure("price_review", "Keep the price already sold. Review the current pricebook or request approval for this exact draft.")
 
 
 def verify_unpaid_update(document, remote):

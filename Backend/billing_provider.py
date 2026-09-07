@@ -1,7 +1,7 @@
-"""Fixed-origin QBO adapter for the staged shared billing engine.
+"""Fixed-origin QBO adapter for shared billing publication.
 
-No HTTP application route instantiates this adapter yet. Credentials are supplied
-by the existing server grant-refresh callback, never by an application payload.
+Credentials are supplied by the existing server grant-refresh callback, never
+by an application payload. Current catalog evidence authorizes field prices.
 """
 from __future__ import annotations
 
@@ -151,10 +151,13 @@ class BillingQBOProvider:
             for address in (origin, destination):
                 if not isinstance(address, dict) or not all(isinstance(address.get(key), str) and address[key].strip() for key in ("Line1", "City", "CountrySubDivisionCode", "PostalCode")):
                     raise failure("tax_review", "Confirm the sale origin and service address for automated tax.")
+        evidence = {}
         for identifier in sorted({line["SalesItemLineDetail"]["ItemRef"]["value"] for line in document["Line"] if line["DetailType"] == "SalesItemLineDetail"}):
             item = self.read("Item", identifier)
             if item.get("Active") is not True or item.get("Type") not in ("Service", "NonInventory", "Inventory"):
                 raise failure("item_review", "Review the sold item's current accounting status.")
+            evidence[identifier] = {key: item[key] for key in ("Id", "Active", "Type", "UnitPrice", "Taxable") if key in item}
+        return evidence
 
     def write(self, kind, document, request_id, before_send):
         if kind not in ("Invoice", "Estimate") or not isinstance(document, dict) or not callable(before_send):

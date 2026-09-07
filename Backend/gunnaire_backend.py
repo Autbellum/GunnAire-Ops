@@ -33,15 +33,17 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 try:
     from Backend import payment_attempts, catalog_publications, customer_publications, billing_publications
+    from Backend.billing_provider import BillingQBOProvider
 except ModuleNotFoundError:
     import payment_attempts  # Direct launch from the Backend directory.
     import catalog_publications
     import customer_publications
     import billing_publications
+    from billing_provider import BillingQBOProvider
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.07.25"
+SERVICE_VERSION = "2026.09.07.26"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -3503,6 +3505,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/customer-publications" or parsed.path.startswith("/api/customer-publications/"):
             self.handle_customer_publication(parsed, method="GET")
             return
+        if parsed.path == "/api/billing-publications" or parsed.path.startswith("/api/billing-publications/") or parsed.path == "/api/job-billing-assignments":
+            self.handle_billing_publication(parsed, method="GET")
+            return
         if parsed.path == "/api/workspace":
             if not self.require_application_session():
                 return
@@ -3701,6 +3706,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/customer-publications" or parsed.path.startswith("/api/customer-publications/"):
             self.handle_customer_publication(parsed, method="POST")
+            return
+        if parsed.path == "/api/billing-publications" or parsed.path.startswith("/api/billing-publications/") or parsed.path == "/api/job-billing-assignments":
+            self.handle_billing_publication(parsed, method="POST")
             return
         if parsed.path == "/api/workspace/bind":
             if not self.require_application_session() or not self.require_admin():
@@ -5768,6 +5776,70 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 ).fetchone()
         record_audit_event(actor, "cancel", "field-payment", assignment_id)
         self.write_json({"assignment": field_payment_assignment_record(row)})
+
+    def handle_billing_publication(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        publisher = billing_publications.BillingPublisher(
+            db, lambda context, authorize: BillingQBOProvider(context, authorize, qbo_authorized_bearer),
+            encrypt_catalog_payload, decrypt_catalog_payload, record_audit_event,
+        )
+        session_id = self._application_session_id
+        assignments = parsed.path == "/api/job-billing-assignments"
+        suffix = parsed.path.removeprefix("/api/billing-publications")
+        parts = suffix[1:].split("/") if suffix.startswith("/") else []
+        try:
+            if method == "GET" and (assignments or not suffix):
+                query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+                if any(len(value) != 1 for value in query.values()):
+                    raise billing_publications.failure("invalid_query", "Choose one original job or billing document.", 400)
+                query = {key: values[0] for key, values in query.items()}
+                result = publisher.assignments.read(session_id, query) if assignments else publisher.list_for_document(session_id, query)
+            elif method == "POST" and not parsed.query:
+                # Reject duplicate keys/nonfinite JSON before hashing a durable
+                # intent; different decoders must not see different proposals.
+                def unique_object(pairs):
+                    result = {}
+                    for key, value in pairs:
+                        if key in result:
+                            raise ValueError()
+                        result[key] = value
+                    return result
+
+                def invalid_constant(value):
+                    raise ValueError()
+
+                payload = json.loads(self.read_limited_body(1024 * 1024).decode("utf-8"),
+                                     object_pairs_hook=unique_object, parse_constant=invalid_constant)
+                if assignments:
+                    result = publisher.assignments.save(session_id, payload)
+                elif not suffix:
+                    result = publisher.publish(session_id, payload)
+                elif parts == ["approve"] and isinstance(payload, dict) and set(payload) == {"proposal", "technicianEmail"}:
+                    result = {"id": publisher.approve_draft(session_id, payload["proposal"], payload["technicianEmail"])}
+                elif len(parts) == 2 and isinstance(payload, dict) and not payload:
+                    identifier, action = parts
+                    if action == "recover":
+                        result = publisher.run(session_id, identifier)
+                    elif action == "cancel":
+                        result = publisher.cancel(session_id, identifier)
+                    else:
+                        raise billing_publications.failure("invalid_action", "Choose recover or cancel for the original attempt.", 400)
+                elif len(parts) == 3 and parts[0] == "draft-grants" and parts[2] == "revoke" and isinstance(payload, dict) and not payload:
+                    publisher.revoke_draft(session_id, parts[1])
+                    result = {"id": payment_attempts.canonical_uuid(parts[1]), "revoked": True}
+                else:
+                    raise billing_publications.failure("invalid_request", "Use the supported billing action fields only.", 400)
+            else:
+                raise billing_publications.failure("not_found", "Billing action not found.", 404)
+            self.write_json(result)
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError, TypeError):
+            self.write_json({"error": "Invalid billing request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json({"error": "Billing storage is unavailable. Keep the original draft and attempt for review.",
+                             "code": "storage_unavailable"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
 
     def handle_customer_publication(self, parsed, *, method):
         if not self.require_application_session():

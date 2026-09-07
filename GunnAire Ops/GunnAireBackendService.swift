@@ -804,6 +804,10 @@ enum GunnAireBackendService {
         return .unavailable
     }
 
+    static var billingPublicationClient: BillingPublicationClient {
+        .init { path, method, body in try await send(path: path, method: method, body: body) }
+    }
+
     private struct CatalogPublicationList: Decodable { let publications: [CatalogPublicationRecord] }
 
     static func publishCatalog(_ request: CatalogPublicationRequest) async throws -> CatalogPublicationResponse {

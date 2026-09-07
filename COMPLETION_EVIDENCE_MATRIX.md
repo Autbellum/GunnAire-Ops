@@ -1,4 +1,18 @@
-Staged billing engine checkpoint, 2026-09-07: **60/60 focused engine/adapter,
+Billing HTTP/assigned-job checkpoint, 2026-09-07: **100/100 focused, 316/316 Backend
+and 37/37 Tools tests pass**. The loopback HTTP → real server publisher/adapter →
+fixture transport round trip verifies assigned-field publication and original
+recovery without another POST to QBO. Tests cover CAS roster races, encrypted
+backup/restore, stale replay/reconnection, revoked permission immediately before
+dispatch, current catalog-price evidence, opaque scoped pagination and UUID-case
+mutation safety. Typed native requests are implemented and **1120/1120 logic tests
+pass per native platform, with 2/2 selected iPad Invoice/Mail UI regressions**.
+Evidence and scope are recorded in [QBO_BILLING_HTTP_CONTRACT.md](QBO_BILLING_HTTP_CONTRACT.md).
+**Native billing buttons, automatic schedule authority/offline edits, and review
+navigation are not yet migrated.** Tax address collection and scalable legacy
+mapping remain requirements before that cutover, not reasons to drop field use.
+No deployment, live provider write, signing or CloudKit promotion is claimed.
+
+Prior staged billing engine checkpoint, 2026-09-07: **60/60 focused engine/adapter,
 276/276 Backend and 37/37 Tools tests pass**. A fixture round trip exercises
 the shared publisher, actual fixed-origin adapter, confirmation and replay;
 backup/restore and concurrent invoice/payment reservation tests also pass.

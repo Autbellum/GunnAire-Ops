@@ -1,6 +1,13 @@
-# Shared billing engine — staged candidate 2026.09.07.25
+# Shared billing engine — initial stage and HTTP follow-up
 
-## Status and full-goal boundary
+Current candidate **2026.09.07.26** exposes the engine through authenticated
+HTTP, adds revisioned server job authority and a typed native client. See
+[QBO_BILLING_HTTP_CONTRACT.md](QBO_BILLING_HTTP_CONTRACT.md) for the current
+contract and acceptance. The original stage below is retained as historical
+evidence. Native billing buttons still need migration; the HTTP-only gap below
+is superseded, not the remaining native/CloudKit/provider acceptance work.
+
+## Initial 2026.09.07.25 status and full-goal boundary
 
 This is a necessary backend implementation stage, **not a completed native
 invoice/estimate migration**. `BillingPublisher` and `BillingQBOProvider` are
@@ -116,7 +123,7 @@ settings. A future explicit customer-send/payment-link workflow needs its own
 consent, authorization, options and duplicate-delivery tests before native
 cutover; online collection is not declared complete by suppressing auto-send.
 
-## Verification
+## Initial-stage verification
 
 Final local verification: **60/60 focused billing engine/adapter tests,
 276/276 complete Backend tests, 37/37 Tools tests**, zero failures/skips.

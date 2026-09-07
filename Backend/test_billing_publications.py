@@ -19,7 +19,7 @@ from Backend import billing_provider
 from Backend import payment_attempts
 
 
-class BillingPublicationTests(unittest.TestCase):
+class BillingFixture:
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         root = Path(self.directory.name)
@@ -28,7 +28,7 @@ class BillingPublicationTests(unittest.TestCase):
         self.settings.start()
         backend.initialize_database()
         self.customer_id, self.local_id, self.item_id = (str(uuid.uuid4()) for _ in range(3))
-        self.remotes, self.writes, self.sessions = [], [], {}
+        self.remotes, self.writes, self.sessions, self.tokens = [], [], {}, {}
         self.before_read, self.before_write, self.after_write = lambda: None, lambda: None, lambda remote: remote
         self.preflight = mock.Mock()
         with backend.db() as connection:
@@ -41,6 +41,7 @@ class BillingPublicationTests(unittest.TestCase):
                 connection.execute("INSERT INTO users VALUES (?,?,1,?,?)", (email, role, backend.utc_now(), backend.utc_now()))
         for role in ("Admin", "Accounting", "Dispatcher", "Field Technician", "Standard"):
             token = backend.create_app_session(self.email(role), "google", "fixture")[0]
+            self.tokens[role] = token
             with backend.db() as connection:
                 self.sessions[role] = connection.execute("SELECT id FROM auth_sessions WHERE token_hash=?", (backend.app_session_token_hash(token),)).fetchone()[0]
         fixture = self
@@ -63,8 +64,9 @@ class BillingPublicationTests(unittest.TestCase):
                 return copy.deepcopy(values[0])
 
             def preflight(self, document):
-                fixture.preflight(document)
+                evidence = fixture.preflight(document)
                 self.authorize()
+                return copy.deepcopy(evidence)
 
             def write(self, kind, document, request_id, before_send):
                 fixture.before_write()
@@ -133,6 +135,7 @@ class BillingPublicationTests(unittest.TestCase):
             "invoiceID": self.local_id, "invoiceQuickBooksID": "D1", "customerQuickBooksID": "C1",
             "amountCents": 100, "rail": "card", "kind": "charge", **changes}
 
+class BillingPublicationTests(BillingFixture, unittest.TestCase):
     def test_create_once_with_stable_identity_date_and_explicit_no_send_flags(self):
         first, replay = self.publish(), self.publish()
         self.assertEqual(len(self.writes), 1)

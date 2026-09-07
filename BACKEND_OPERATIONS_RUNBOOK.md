@@ -16,7 +16,23 @@ credential rotation, production restores, or customer communications.
 - Proposed recovery time objective: 4 hours. This is not proven until a timed
   restore drill is completed by the deployment owner.
 
-## 2026-09-07 staged billing engine
+## 2026-09-07 billing HTTP and job authority
+
+Candidate **2026.09.07.26** exposes the shared publisher/recovery engine over
+authenticated HTTP and adds revisioned dispatcher/admin job assignments.
+Preserve `billing_job_assignments`, `billing_assignment_mutations` and
+`billing_job_documents` along with all earlier billing/payment tables and the
+original encryption key. Roster changes/revocations use compare-and-set,
+stable operation identities and atomic audits. Never erase a revocation or
+replay a stale offline assignment over a newer dispatcher decision.
+
+Current local backend acceptance: 316 Backend and 37 Tools tests. Typed native
+requests are implemented, but native billing/schedule buttons have not switched.
+Read `QBO_BILLING_HTTP_CONTRACT.md` before any deployment or native cutover;
+structured tax addresses, legacy mappings and natural recovery/offline handoffs
+remain required. No live QBO request, customer send, merge or deployment occurred.
+
+## Prior 2026-09-07 staged billing engine
 
 Candidate **2026.09.07.25** adds `billing_publications`,
 `billing_entity_mappings`, `billing_draft_grants` and indexes. The engine/adapter

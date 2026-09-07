@@ -1,4 +1,17 @@
-Billing engine stage, September 7, 2026: candidate 2026.09.07.25 implements
+Billing HTTP follow-up, September 7, 2026: candidate 2026.09.07.26 now exposes
+the shared engine through authenticated publish/recover/cancel/approve routes.
+Revisioned dispatcher/admin job authority permits assigned technicians' ordinary
+pricebook lines and retains exact-draft review for price exceptions. Stale
+offline roster edits cannot overwrite newer assignments. A typed native client
+checks original scope and returned identity without direct-provider fallback.
+**Existing native billing buttons and schedule writes have not switched yet.**
+Backend acceptance is 100 focused and 316 full tests, plus 37 Tools tests.
+Native acceptance passes 1120 logic tests per platform and two iPad UI regressions.
+Evidence and required address/mapping/offline/recovery handoffs:
+[QBO_BILLING_HTTP_CONTRACT.md](QBO_BILLING_HTTP_CONTRACT.md). This is concrete
+integration progress, not full-suite or signed CloudKit acceptance.
+
+Prior billing engine stage, September 7, 2026: candidate 2026.09.07.25 implements
 encrypted immutable invoice/estimate proposals, server role/exact-draft approval,
 one-time dispatch, original-attempt recovery, invoice/payment exclusion and
 explicit save-versus-send separation. **It is not exposed by HTTP or used by

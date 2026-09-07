@@ -63,6 +63,23 @@ class BillingProviderTests(unittest.TestCase):
         self.bearer.assert_not_called()
         self.send.assert_not_called()
 
+    def test_preflight_returns_only_provider_verified_field_price_evidence(self):
+        self.item.update(UnitPrice=189, Taxable=False, PurchaseCost=50, PrivateNote="not-for-field-authorization")
+        self.send.side_effect = self.preflight_transport
+        evidence = self.api.preflight(self.document)
+        self.assertEqual(evidence, {"I1": {"Id": "I1", "Active": True, "Type": "Service", "UnitPrice": 189, "Taxable": False}})
+        billing.verify_field_prices(self.document, evidence)
+        self.assertNotIn("PurchaseCost", json.dumps(evidence))
+        self.item["UnitPrice"] = 200
+        self.assertEqual(evidence["I1"]["UnitPrice"], 189)
+
+    def test_omitted_optional_item_price_or_tax_is_not_assumed_for_field_authority(self):
+        self.send.side_effect = self.preflight_transport
+        evidence = self.api.preflight(self.document)
+        with self.assertRaises(billing.AttemptError) as caught:
+            billing.verify_field_prices(self.document, evidence)
+        self.assertEqual(caught.exception.code, "price_review")
+
     def test_original_draft_claim_immediately_precedes_post_after_refresh(self):
         events = []
         self.bearer.side_effect = lambda *args: events.append("refresh") or "fixture-bearer"
