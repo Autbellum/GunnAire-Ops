@@ -53,6 +53,7 @@ jobs:
               testInvoiceWorkspaceOpensWithoutTerminating \
               testMailWorkspaceUsesASimpleInboxInterface \
               testCustomerAccountStatementGeneratesFromTheExistingFilesWorkspace \
+              testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices \
               testUnreconciledStatementExplainsReviewAndHandsOffToInvoices; do
               selectors+=("-only-testing:GunnAire OpsUITests/GunnAire_OpsUITests/$test")
             done
@@ -90,8 +91,9 @@ jobs:
             ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO build 2>&1 |
             tee "$RUNNER_TEMP/native-results/release.log"
-          xcrun lipo -verify_arch arm64 x86_64 \
-            "$RUNNER_TEMP/native-derived/Build/Products/Release-maccatalyst/GunnAire Ops.app/Contents/MacOS/GunnAire Ops"
+          xcrun lipo \
+            "$RUNNER_TEMP/native-derived/Build/Products/Release-maccatalyst/GunnAire Ops.app/Contents/MacOS/GunnAire Ops" \
+            -verify_arch arm64 x86_64
 
       - name: Retain native test evidence
         if: always()
@@ -101,4 +103,3 @@ jobs:
           path: ${{ runner.temp }}/native-results/
           if-no-files-found: warn
           retention-days: 7
-
