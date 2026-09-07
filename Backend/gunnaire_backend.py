@@ -47,7 +47,7 @@ except ModuleNotFoundError:
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.07.30"
+SERVICE_VERSION = "2026.09.07.31"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -5951,8 +5951,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                     result = service.start(session_id, payload)
                 elif parsed.path == "/api/google/connection/disconnect" and isinstance(payload, dict) and set(payload) == {"companyID", "grantID"}:
                     result = service.disconnect(session_id, payload["companyID"], payload["grantID"])
-                elif parsed.path.startswith("/api/google/authorizations/") and parsed.path.endswith("/cancel") and payload == {}:
-                    result = service.cancel(session_id, parsed.path.removeprefix("/api/google/authorizations/").removesuffix("/cancel"))
+                elif parsed.path.startswith("/api/google/authorizations/") and parsed.path.endswith("/cancel") and isinstance(payload, dict):
+                    result = service.cancel(session_id, parsed.path.removeprefix("/api/google/authorizations/").removesuffix("/cancel"),
+                        None if payload == {} else payload)
                 else:
                     raise google_connections.invalid()
             else:
@@ -5968,10 +5969,14 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
     def handle_google_callback(self, parsed):
         # The state binds this public callback to the initiating approved session.
         # No provider errors, tokens, scope strings, emails or codes are rendered.
+        redirect = None
         try:
             result = self.google_connection_service().callback(parsed.query)
             message = "Google connection saved. Close this tab and return to GunnAire Ops." if result["state"] == "connected" else "Google connection was not approved. Return to GunnAire Ops to continue."
-            status = 200
+            # Fixed native handoff contains only the original request ID. The
+            # app must recover its authenticated server outcome, not trust URL data.
+            redirect = "gunnaireops://oauth/google/connection?attemptID=" + google_connections.identifier(result["id"])
+            status = 303
         except google_connections.ConnectionError as error:
             message, status = "Google connection could not be completed. Return to GunnAire Ops to check the original request.", error.status
         except Exception:
@@ -5980,6 +5985,8 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        if redirect:
+            self.send_header("Location", redirect)
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")

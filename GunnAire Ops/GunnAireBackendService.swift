@@ -1543,6 +1543,25 @@ enum GunnAireBackendService {
         )
     }
 
+    static func googleConnectionRequest(path: String, method: String, body: Data?) async throws -> Data {
+        guard let identity = CompanyWorkspaceSession.current else { throw GoogleServerConnectionError.access }
+        let request = try makeRequest(path: path, method: method, body: body)
+        let bearer = request.value(forHTTPHeaderField: "Authorization") ?? ""
+        guard bearer.hasPrefix("Bearer "), CompanyWorkspaceSession.digest(String(bearer.dropFirst(7))) == identity.tokenFingerprint,
+              request.value(forHTTPHeaderField: "X-GunnAire-Google-ID-Token") == nil else { throw GoogleServerConnectionError.access }
+        let generation = CompanyWorkspaceAccessController.shared.generation
+        let session = URLSession(configuration: .ephemeral, delegate: GoogleConnectionNoRedirect(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let (data, response) = try await session.data(for: request)
+        guard CompanyWorkspaceSession.current == identity, CompanyWorkspaceAccessController.shared.generation == generation,
+              CompanyWorkspaceAccessController.shared.authorizedContainer != nil else { throw GoogleServerConnectionError.access }
+        guard let http = response as? HTTPURLResponse, data.count <= 32768 else { throw GoogleServerConnectionError.invalid }
+        guard (200..<300).contains(http.statusCode) else {
+            throw GunnAireBackendError.server(statusCode: http.statusCode, message: "Google connection request was not confirmed.")
+        }
+        return data
+    }
+
     private static func send(
         path: String,
         method: String,

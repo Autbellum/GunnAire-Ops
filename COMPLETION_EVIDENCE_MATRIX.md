@@ -1,3 +1,22 @@
+Native Google access checkpoint, 2026-09-07: a compact Settings → Sync → Google
+access page now uses the company-owned OAuth service, device-only original
+request journals, scoped callback/status verification, partial-grant display,
+cancel-before-prepare tombstones and exact-grant disconnect recovery. Final
+acceptance passes 1,244 native logic tests per platform, five selected iPad
+journeys, Backend 405 and Tools 37. The final iPad page was visually inspected;
+it has normal Back navigation and no account-email footer. The service contract,
+retained failures/fixes, qualification and rollout gates are recorded in
+[NATIVE_GOOGLE_ACCESS.md](NATIVE_GOOGLE_ACCESS.md). Actual Mail/Calendar/Drive
+server transport cutover, shared outbox/received-message archival and live
+provider consent remain required. Existing device connections are preserved,
+not evidence of completed shared synchronization. Full-suite, CloudKit, QBO,
+Tap to Pay, supplier and distribution requirements remain open.
+
+Hosted qualification is separate: preceding head `f082074` passes Backend/Mac,
+but its existing tax-address UI test fails on incomplete typed input before save.
+Three unchanged local repetitions pass; the hosted cause remains unconfirmed.
+No failure gate or assertion is weakened. Fresh exact-head CI is required.
+
 Server Google connection checkpoint, 2026-09-07: backend candidate
 **2026.09.07.30** implements single-use, company/user-bound web OAuth, encrypted
 offline credentials, stable Google subject binding, scope-aware server-only

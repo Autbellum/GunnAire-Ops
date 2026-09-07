@@ -46,6 +46,7 @@ struct SettingsView: View {
     @State private var showingSupplierConnectorDetails = false
     @State private var showingFieldFormTemplates = false
     @State private var showingCustomerPortalLinks = false
+    @State private var showingGoogleServerAccess = false
     @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness = .couldNotDetermine
 
     @AppStorage("companyName") private var companyName = "GunnAire"
@@ -583,6 +584,10 @@ struct SettingsView: View {
                 CustomerPortalLinkManagerView()
                     .tint(Color.brandGold)
             }
+            .navigationDestination(isPresented: $showingGoogleServerAccess) {
+                GoogleServerAccessView(context: modelContext)
+                    .tint(Color.brandGold)
+            }
             .fullScreenCover(isPresented: $showingSplashLaunchSimulation) {
                 SplashLaunchSimulationSheet()
             }
@@ -632,7 +637,7 @@ struct SettingsView: View {
         Section(isAdminUser ? "Administrator Sync Accounts" : "Sync Accounts") {
             Text(isAdminUser
                  ? "QuickBooks and Google sync are configured from this screen."
-                 : "Shared integrations are managed by an administrator. Your login uses the company sync connection.")
+                 : "An administrator manages shared QuickBooks access. Google access belongs to your own approved business login.")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -702,7 +707,7 @@ struct SettingsView: View {
         }
 
         Section("Google") {
-            connectionStatusRow(title: "Status", isConnected: isGoogleAuthenticated)
+            connectionStatusRow(title: "On this device", isConnected: isGoogleAuthenticated)
 
             if googleAuth.googleDriveAuthorizationState == .ready {
                 Label("Calendar, Gmail, and per-file Drive archive access confirmed.", systemImage: "checkmark.shield")
@@ -714,6 +719,11 @@ struct SettingsView: View {
                     .foregroundColor(
                         googleAuth.googleDriveAuthorizationState == .disconnected ? .secondary : .orange
                     )
+            }
+
+            if let role = currentUserRole, role != .standard {
+                Button("Manage Google Access") { showingGoogleServerAccess = true }
+                    .accessibilityIdentifier("ManageGoogleServerAccess")
             }
 
             if isAdminUser {

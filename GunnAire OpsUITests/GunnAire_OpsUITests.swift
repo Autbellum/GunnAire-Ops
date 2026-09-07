@@ -2013,6 +2013,82 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    private func openGoogleAccess(in app: XCUIApplication) {
+        let settings = app.buttons["Settings"]
+        if !settings.waitForExistence(timeout: 3) {
+            let sidebar = app.buttons["GunnAire Ops"]
+            XCTAssertTrue(sidebar.waitForExistence(timeout: 3)); sidebar.tap()
+        }
+        XCTAssertTrue(settings.waitForExistence(timeout: 3)); settings.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 3))
+        app.segmentedControls.firstMatch.buttons["Sync"].tap()
+        let manage = app.buttons["ManageGoogleServerAccess"]
+        for _ in 0..<5 {
+            if manage.isHittable { break }
+            app.collectionViews["SettingsForm"].swipeUp()
+        }
+        XCTAssertTrue(waitForHittable(manage)); manage.tap()
+        XCTAssertTrue(app.navigationBars["Google Access"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
+    func testGoogleAccessRecoversOriginalApprovalAfterRelaunchAndReturnsToSettings() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launchEnvironment["GUNNAIRE_GOOGLE_ACCESS_FIXTURE"] = UUID().uuidString
+        app.launch()
+        openGoogleAccess(in: app)
+        XCTAssertTrue(app.buttons["GoogleSharedAccessCancel"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["GoogleSharedAccessApprove"].exists)
+        app.terminate(); app.launch()
+        openGoogleAccess(in: app)
+        let cancel = app.buttons["GoogleSharedAccessCancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 3)); cancel.tap()
+        for _ in 0..<3 {
+            if app.buttons["GoogleSharedAccessApprove"].isHittable { break }
+            app.collectionViews["GoogleSharedAccessForm"].swipeUp()
+        }
+        XCTAssertTrue(app.buttons["GoogleSharedAccessApprove"].waitForExistence(timeout: 3))
+        XCTAssertFalse(cancel.exists)
+        app.navigationBars["Google Access"].buttons["Settings"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["ManageGoogleServerAccess"].exists)
+        app.buttons["ManageGoogleServerAccess"].tap()
+        XCTAssertTrue(app.navigationBars["Google Access"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["GoogleSharedAccessRefresh"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["GoogleSharedAccessRefresh"].isEnabled)
+        XCTAssertFalse(app.buttons["GoogleSharedAccessCancel"].exists)
+    }
+
+    @MainActor
+    func testGoogleAccessShowsOnlyConfirmedPermissionsWithoutTechnicalDetails() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launchEnvironment["GUNNAIRE_GOOGLE_ACCESS_FIXTURE"] = UUID().uuidString
+        app.launchEnvironment["GUNNAIRE_GOOGLE_ACCESS_MODE"] = "connected"
+        app.launch()
+        openGoogleAccess(in: app)
+        XCTAssertTrue(app.staticTexts["Approval saved"].waitForExistence(timeout: 3))
+        for (feature, value) in [("mail", "Approved"), ("calendar", "Not approved"), ("drive", "Not approved")] {
+            let row = app.descendants(matching: .any).matching(identifier: "GoogleSharedFeature-" + feature).firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 3))
+            XCTAssertEqual(row.value as? String, value)
+        }
+        XCTAssertFalse(app.buttons["GoogleSharedAccessCancel"].exists)
+        for forbidden in ["access_token", "client_secret", "oauth2", "@gunnaire.com", "fixture@example.invalid"] {
+            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", forbidden)).firstMatch.exists)
+        }
+        waitForSystemBannerToClear(beforeCapturing: "Google access")
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = "Google access - confirmed permissions without technical details"
+        attachment.lifetime = .keepAlways; add(attachment)
+        app.navigationBars["Google Access"].buttons["Settings"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 3))
+    }
+
+    @MainActor
     func testAdministratorSettingsKeepsServerReadinessFocusedAndDiscoverable() throws {
         let app = XCUIApplication()
         app.launchArguments = [

@@ -209,7 +209,16 @@ class GoogleConnections:
         company = identifier(company)
         with self.database() as connection:
             actor = self.authorize(connection, session_id, company)
-            return self.public_grant(self.grant(connection, company, actor["email"]))
+            pending = connection.execute("SELECT * FROM google_oauth_attempts WHERE company_id=? AND actor_email=? AND state IN ('pending','exchanging') ORDER BY created_at DESC LIMIT 1",
+                (company, actor["email"])).fetchone()
+            return {**self.public_grant(self.grant(connection, company, actor["email"])),
+                "companyID": company, "actorEmail": actor["email"],
+                "pendingAttempt": self.public_attempt(pending) if pending else None}
+
+    def public_attempt(self, row):
+        state = "expired" if row["state"] in ("pending", "exchanging") and timestamp(row["expires_at"]) <= self.now() else row["state"]
+        return {"id": row["id"], "state": state, "grantID": row["grant_id"],
+            "companyID": row["company_id"], "actorEmail": row["actor_email"], "features": json.loads(row["features_json"])}
 
     def attempt_status(self, session_id, attempt_id):
         with self.database() as connection:
@@ -217,8 +226,7 @@ class GoogleConnections:
             if row is None:
                 raise ConnectionError("not_found", "Google connection request not found.", 404)
             self.authorize(connection, session_id, row["company_id"], owner=row["actor_email"])
-            state = "expired" if row["state"] in ("pending", "exchanging") and timestamp(row["expires_at"]) <= self.now() else row["state"]
-            return {"id": row["id"], "state": state, "grantID": row["grant_id"]}
+            return self.public_attempt(row)
 
     def start(self, session_id, payload):
         self.configured()
@@ -263,7 +271,8 @@ class GoogleConnections:
             "access_type": "offline", "prompt": "consent", "include_granted_scopes": "true", "state": secret["state"],
             "nonce": secret["nonce"], "login_hint": actor["email"], "hd": self.allowed_domain,
             "code_challenge_method": "S256", "code_challenge": base64.urlsafe_b64encode(hashlib.sha256(secret["verifier"].encode()).digest()).decode().rstrip("=")}
-        return {"id": attempt_id, "state": "pending", "authorizationURL": AUTH_URL + "?" + urllib.parse.urlencode(query)}
+        return {"id": attempt_id, "companyID": company, "actorEmail": actor["email"], "state": "pending",
+            "authorizationURL": AUTH_URL + "?" + urllib.parse.urlencode(query)}
 
     def validate_tokens(self, tokens, *, old=None):
         def token(value):
@@ -378,13 +387,36 @@ class GoogleConnections:
                 (grant["id"] if grant else None) != row["baseline_grant_id"]):
             raise ConnectionError("request_changed", "The original Google connection changed. Reconnect from the app.")
 
-    def cancel(self, session_id, attempt_id):
+    def cancel(self, session_id, attempt_id, payload=None):
+        attempt_id = identifier(attempt_id)
+        if payload is not None:
+            if not isinstance(payload, dict) or set(payload) != {"companyID", "features"}:
+                raise invalid()
+            company, features = identifier(payload["companyID"]), payload["features"]
+            if (not isinstance(features, list) or not 1 <= len(features) <= len(FEATURE_SCOPES) or
+                    any(not isinstance(x, str) or x not in FEATURE_SCOPES for x in features) or len(set(features)) != len(features)):
+                raise invalid()
         with self.database() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute("SELECT * FROM google_oauth_attempts WHERE id=?", (identifier(attempt_id),)).fetchone()
+            row = connection.execute("SELECT * FROM google_oauth_attempts WHERE id=?", (attempt_id,)).fetchone()
             if row is None:
-                raise ConnectionError("not_found", "Google connection request not found.", 404)
+                if payload is None:
+                    raise ConnectionError("not_found", "Google connection request not found.", 404)
+                actor = self.authorize(connection, session_id, company)
+                if connection.execute("SELECT COUNT(*) FROM google_oauth_attempts WHERE company_id=? AND actor_email=? AND created_at>?",
+                        (company, actor["email"], (self.now() - timedelta(hours=1)).isoformat())).fetchone()[0] >= 30:
+                    raise ConnectionError("rate_limited", "Too many Google connection requests. Try again later.", 429)
+                # A cancellation may arrive before a delayed prepare POST. A
+                # permanent tombstone prevents that original ID from reviving.
+                connection.execute("INSERT INTO google_oauth_attempts VALUES (?,?,?,?,?,?,?,?,NULL,'cancelled',NULL,NULL,?,?)",
+                    (attempt_id, company, actor["email"], session_id, self.client_id, self.redirect_uri,
+                     canonical(sorted(features)), hashlib.sha256(secrets.token_bytes(48)).hexdigest(),
+                     self.now().isoformat(), self.now().isoformat()))
+                self.audit(actor["email"], "cancel", "google-connection", attempt_id, connection=connection)
+                row = connection.execute("SELECT * FROM google_oauth_attempts WHERE id=?", (attempt_id,)).fetchone()
             self.authorize(connection, session_id, row["company_id"], owner=row["actor_email"])
+            if payload is not None and (row["company_id"] != company or json.loads(row["features_json"]) != sorted(features)):
+                raise ConnectionError("request_changed", "Cancel the original Google connection request.")
             if row["state"] in ("pending", "exchanging"):
                 connection.execute("UPDATE google_oauth_attempts SET state='cancelled',secrets_ciphertext=NULL WHERE id=?", (row["id"],))
                 self.audit(row["actor_email"], "cancel", "google-connection", row["id"], connection=connection)

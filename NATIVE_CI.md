@@ -6,6 +6,22 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
+The native Google access candidate adds two journeys, bringing the iPad
+selection to **twenty-nine**: original approval recovery/cancellation across
+relaunch with return to Settings, and exact partial-permission display without
+technical details. The final-source local suites pass 1,244 logic tests per
+platform and five selected iPad journeys. Backend passes 405 and Tools 37.
+Evidence, rollout boundaries and remaining Google feature migration:
+[NATIVE_GOOGLE_ACCESS.md](NATIVE_GOOGLE_ACCESS.md). Workflow publication and
+exact-head hosted CI are tracked separately; earlier green checks do not prove
+the candidate's hosted acceptance.
+
+Preceding head `f082074` passes Backend and Mac, but the hosted iPad
+tax-address journey fails before save when its typed street value is incomplete.
+Three unchanged local repetitions pass; the cause remains unconfirmed. Preserve
+the full-address/save/reopen assertions and require new exact-head hosted checks.
+The retained failure and reproduction are detailed in `NATIVE_GOOGLE_ACCESS.md`.
+
 The Mail draft-recovery candidate selects **twenty-seven** iPad journeys.
 The three additions verify complete draft/attachment retention across relaunch,
 an uncertain send remaining read-only with a handoff to Sent after relaunch,

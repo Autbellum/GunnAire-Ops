@@ -1,5 +1,13 @@
 # Server-owned Google connection
 
+Native integration follow-up: candidate **2026.09.07.31** adds scoped response
+metadata, discovery of the actor's original pending request, cancel-before-prepare
+tombstones and a fixed native callback handoff. The actual Settings journey,
+durable recovery contract and current qualification are documented in
+[NATIVE_GOOGLE_ACCESS.md](NATIVE_GOOGLE_ACCESS.md). The .30 checkpoint below
+is historical evidence, not the new native source's test result. Shared Google
+feature transports and production provider acceptance remain required.
+
 Candidate backend **2026.09.07.30**, September 7, 2026. This implements the
 server OAuth/credential authority required for shared Google workflows. It does
 not yet migrate the native Mail/Calendar/Drive transports, implement the shared

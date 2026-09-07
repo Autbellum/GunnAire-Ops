@@ -460,7 +460,7 @@ class GoogleConnectionTests(unittest.TestCase):
             req = urllib.request.Request(f"http://127.0.0.1:{server.server_port}" + route, headers=headers,
                 data=payload if isinstance(payload, bytes) else json.dumps(payload).encode() if payload is not None else None)
             try:
-                response = urllib.request.urlopen(req, timeout=5)
+                response = urllib.request.build_opener(google.NoRedirect).open(req, timeout=5)
             except urllib.error.HTTPError as error:
                 response = error
             with response:
@@ -478,13 +478,17 @@ class GoogleConnectionTests(unittest.TestCase):
                 self.assertEqual(headers["Cache-Control"], "no-store")
                 self.query = urllib.parse.parse_qs(urllib.parse.urlsplit(json.loads(body)["authorizationURL"]).query)
                 code, headers, body = request(google.CALLBACK_PATH + "?" + self.callback_query())
-                self.assertEqual(code, 200)
+                self.assertEqual(code, 303)
+                self.assertEqual(headers["Location"], "gunnaireops://oauth/google/connection?attemptID=" + self.request_payload["id"])
                 self.assertIn("connection saved", body)
                 self.assertEqual(headers["Referrer-Policy"], "no-referrer")
                 self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
                 self.assertNotIn("fixture-authorization-code", str(logged.call_args_list))
                 self.assertNotIn(self.query["state"][0], str(logged.call_args_list))
                 self.assertNotIn("@", body)
+                code, headers, _ = request(google.CALLBACK_PATH + "?state=invalid&code=private")
+                self.assertEqual(code, 400)
+                self.assertNotIn("Location", headers)
                 code, _, body = request(route, token=self.tokens["Admin"])
                 self.assertEqual(code, 200)
                 self.assertNotIn("token", body)
@@ -497,6 +501,50 @@ class GoogleConnectionTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             worker.join(5)
+
+    def test_status_and_attempt_metadata_are_scoped_and_discover_original_pending(self):
+        empty = self.service.status(self.admin, self.company)
+        self.assertEqual(empty["companyID"], self.company)
+        self.assertEqual(empty["actorEmail"], "admin@example.invalid")
+        self.assertIsNone(empty["pendingAttempt"])
+        self.start()
+        result = self.service.status(self.admin, self.company)
+        attempt = result["pendingAttempt"]
+        self.assertEqual(attempt, self.service.attempt_status(self.admin, self.request_payload["id"]))
+        self.assertEqual(attempt["companyID"], self.company)
+        self.assertEqual(attempt["actorEmail"], "admin@example.invalid")
+        self.assertEqual(attempt["features"], ["mail"])
+        self.assertIsNone(self.service.status(self.sessions["Accounting"], self.company)["pendingAttempt"])
+        self.assertNotIn("authorizationURL", json.dumps(result))
+        self.assertNotIn(self.query["state"][0], json.dumps(result))
+
+    def test_cancel_before_delayed_prepare_creates_permanent_original_id_tombstone(self):
+        payload = {"companyID": self.company, "features": ["mail"]}
+        result = self.service.cancel(self.admin, self.request_payload["id"], payload)
+        self.assertEqual(result["state"], "cancelled")
+        self.assertEqual(self.service.cancel(self.admin, self.request_payload["id"], payload), result)
+        self.assert_code("request_finished", self.start)
+        with backend.db() as connection:
+            self.assertIsNone(connection.execute("SELECT secrets_ciphertext FROM google_oauth_attempts").fetchone()[0])
+        self.assertEqual(self.calls, [])
+
+    def test_cancel_payload_cannot_switch_scope_features_or_original_owner(self):
+        self.start()
+        for payload in ({"companyID": str(uuid.uuid4()), "features": ["mail"]}, {"companyID": self.company, "features": ["drive"]}):
+            self.assert_code("request_changed", lambda: self.service.cancel(self.admin, self.request_payload["id"], payload))
+        payload = {"companyID": self.company, "features": ["mail"]}
+        self.assert_code("access_required", lambda: self.service.cancel(self.sessions["Accounting"], self.request_payload["id"], payload))
+        for features in ([], ["all"], ["mail", "mail"], [["mail"]], True):
+            self.assert_code("invalid_request", lambda: self.service.cancel(self.admin, self.request_payload["id"], {**payload, "features": features}))
+        self.assertEqual(self.service.attempt_status(self.admin, self.request_payload["id"])["state"], "pending")
+
+    def test_cancel_tombstones_are_rate_bounded_without_blocking_existing_cancellation(self):
+        self.start()
+        payload = {"companyID": self.company, "features": ["mail"]}
+        for _ in range(29):
+            self.service.cancel(self.admin, str(uuid.uuid4()), payload)
+        self.assert_code("rate_limited", lambda: self.service.cancel(self.admin, str(uuid.uuid4()), payload))
+        self.assertEqual(self.service.cancel(self.admin, self.request_payload["id"], payload)["state"], "cancelled")
 
 
 class GoogleTransportTests(unittest.TestCase):
