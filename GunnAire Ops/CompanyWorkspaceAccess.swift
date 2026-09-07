@@ -231,6 +231,11 @@ final class CompanyWorkspaceAccessController: ObservableObject {
         return activeLease?.binding.companyID
     }
 
+    var verifiedRole: AppUserRole? {
+        guard authorizedContainer != nil, let user = activeLease?.user, user.isActive else { return nil }
+        return AppUserRole(rawValue: user.role)
+    }
+
     func invalidate(accountChanged: Bool = false, reason: CompanyWorkspaceFailure = .signIn, preserveCachedLease: Bool = false) {
         generation = UUID()
         refreshTask?.task.cancel()

@@ -5,6 +5,12 @@ payment-rail/timestamp and navigation issues. The ongoing implementation and
 explicit remaining internal work are recorded in
 [BILLING_IDENTITY_RECONCILIATION.md](BILLING_IDENTITY_RECONCILIATION.md) and
 [QBO_BALANCE_RECONCILIATION.md](QBO_BALANCE_RECONCILIATION.md).
+The active QuickBooks Management orchestration now retains its initiating
+workspace/provider/run through pages, mappings, local saves and webhook
+follow-up; unchanged credential reloads preserve that identity. See
+[QBO_SYNC_WORKFLOW_LIFECYCLE.md](QBO_SYNC_WORKFLOW_LIFECYCLE.md) for current
+acceptance and the distinct remaining publication, Google, tombstone and
+server-authority gaps.
 The ten-suite feature comparison is a coverage inventory, not proof of flawless
 end-to-end behavior. CloudKit/offline convergence, historical accounting,
 complete payment-event reconciliation, retained-context orchestration and

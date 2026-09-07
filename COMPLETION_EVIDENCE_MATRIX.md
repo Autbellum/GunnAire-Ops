@@ -1,3 +1,20 @@
+QBO sync lifecycle checkpoint, 2026-09-07: **876/876 logic tests pass on iPad
+and Mac Catalyst; 6/6 focused iPad interface journeys pass; universal optimized
+Mac Release succeeds**. The active QuickBooks Management resource sync captures
+its workspace/provider/run before Task scheduling and retains it through
+pagination, accounting mappings, local saves and webhook follow-up. Run
+supersession, cancellation and current known administrator access are rechecked;
+stored method links use exact provider/customer identities. Identical saved
+credential reloads no longer cancel a valid run; real connection changes still
+do. The 27 new tests cover these boundaries and mapping-response races.
+See [QBO_SYNC_WORKFLOW_LIFECYCLE.md](QBO_SYNC_WORKFLOW_LIFECYCLE.md) for exact
+retained evidence and limits. The previous published head ba5617f passes all
+four hosted jobs, not a substitute for new-head acceptance. Other publication,
+Google and attachment orchestrations, event-specific deletion/void reconciliation,
+server-owned provider authority, payment/ledger completeness, signed CloudKit
+and provider/platform acceptance remain open. No merge, deployment, signing
+change, physical install or live business mutation occurred.
+
 QBO balance checkpoint, 2026-09-07: **849/849 logic tests pass on iPad and
 Mac Catalyst; 6/6 focused iPad interface journeys pass; universal optimized
 Mac Release succeeds**. Imported payment subsets no longer invent an invoice

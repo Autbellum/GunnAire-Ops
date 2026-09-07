@@ -30,9 +30,20 @@ struct CompanyWorkspaceOperationStamp: Equatable {
 final class WorkspaceProviderOperation {
     typealias Transport = (URLRequest) async throws -> (Data, URLResponse)
     private let isCurrent: () -> Bool
+    private let parent: WorkspaceProviderOperation?
     private(set) var mayHaveReachedProvider = false
 
-    init(isCurrent: @escaping () -> Bool) { self.isCurrent = isCurrent }
+    init(isCurrent: @escaping () -> Bool) {
+        self.isCurrent = isCurrent
+        parent = nil
+    }
+
+    /// Add a run/role lifetime without losing the initiating provider identity
+    /// or the uncertain-write evidence of an enclosing operation.
+    init(parent: WorkspaceProviderOperation, isCurrent: @escaping () -> Bool) {
+        self.parent = parent
+        self.isCurrent = isCurrent
+    }
 
     static func capture(
         requiresWorkspace: Bool = true,
@@ -55,7 +66,12 @@ final class WorkspaceProviderOperation {
     }
 
     var failure: WorkspaceProviderAccessError? {
-        isCurrent() ? nil : .changed(mayHaveReachedProvider: mayHaveReachedProvider)
+        guard parent?.failure != nil || !isCurrent() else { return nil }
+        return .changed(mayHaveReachedProvider: combinedSentRisk)
+    }
+
+    private var combinedSentRisk: Bool {
+        mayHaveReachedProvider || parent?.combinedSentRisk == true
     }
 
     func check() throws {

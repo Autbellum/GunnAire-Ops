@@ -101,6 +101,11 @@ it is not represented as a hosted pass before a new run completes.
 
 ## Remaining work
 
+The subsequent [sync lifecycle checkpoint](QBO_SYNC_WORKFLOW_LIFECYCLE.md)
+adds retained workspace/provider/run checks across the active QuickBooks
+Management resource sync, including mappings, saves and webhook follow-up.
+Other multi-step integration paths still need equivalent qualification.
+
 This does not yet establish a dated accounting ledger, full historical
 statements, changed/deleted/reallocated payment tombstones, ACH settlement and
 return handling, administrator conflict resolution, or atomic cross-resource

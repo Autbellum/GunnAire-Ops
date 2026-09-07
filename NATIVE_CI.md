@@ -84,3 +84,10 @@ no decoded value. Native device scanner behavior is unchanged; no test is
 skipped. Both hosted failing payloads and the local CPU failing payload are
 deterministic software-decoder fixtures. This change requires a fresh hosted
 run and does not prove physical camera/Vision scanning.
+
+At `ba5617f`, [native run 34091222075](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34091222075)
+passes both iPad and Mac jobs, including the hosted QR regression and universal
+Release architecture check. [Backend run 34091222082](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34091222082)
+also passes Python 3.13 and 3.14. This is exact-head hosted evidence for the
+balance/QR checkpoint, not a blanket qualification of later source changes
+or production release readiness.

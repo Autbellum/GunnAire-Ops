@@ -347,7 +347,6 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     func loadTokens() {
-        connectionGeneration = UUID()
         guard persistsCredentials else { return }
         if let payload = try? KeychainStore.loadCodable(QuickBooksKeychainPayload.self, account: keychainAccount) {
             guard savedPayloadMatchesCurrentConfiguration(payload) else {
@@ -358,18 +357,23 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
 
-            tokens = payload.tokens
-            storedEnvironment = payload.environment ?? Config.QuickBooks.environment
-            storedScopeSignature = payload.scopeSignature
             let keychainRealmID = payload.realmID.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !keychainRealmID.isEmpty {
-                storedRealmID = keychainRealmID
-            } else {
-                storedRealmID = UserDefaults.standard.string(forKey: realmIDKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+            applyLoadedSession(payload.tokens,
+                realmID: keychainRealmID.isEmpty
+                    ? UserDefaults.standard.string(forKey: realmIDKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    : keychainRealmID,
+                environment: payload.environment ?? Config.QuickBooks.environment,
+                scopeSignature: payload.scopeSignature)
             return
         }
 
+        // A missing/unreadable saved session invalidates in-memory operations.
+        // Do not delete Keychain data just because it is temporarily unavailable.
+        if tokens != nil { connectionGeneration = UUID() }
+        tokens = nil
+        storedRealmID = nil
+        storedEnvironment = nil
+        storedScopeSignature = nil
         if UserDefaults.standard.data(forKey: legacyTokenStorageKey) != nil {
             // Do not migrate a refresh credential from UserDefaults. It will be
             // replaced by a server-encrypted QBO connection on the next sign-in.
@@ -378,6 +382,27 @@ final class QuickBooksDataAPI: ObservableObject {
             clearTokens(clearAuthorizationFailure: false)
         }
     }
+
+    private func applyLoadedSession(_ loaded: QuickBooksOAuthTokens, realmID: String?,
+                                    environment: String, scopeSignature: String?) {
+        let unchanged = tokens?.accessToken == loaded.accessToken &&
+            tokens?.expiration == loaded.expiration && storedRealmID == realmID &&
+            storedEnvironment == environment && storedScopeSignature == scopeSignature
+        if !unchanged { connectionGeneration = UUID() }
+        tokens = loaded
+        storedRealmID = realmID
+        storedEnvironment = environment
+        storedScopeSignature = scopeSignature
+    }
+
+    #if DEBUG
+    func reloadSavedSessionForTesting(_ loaded: QuickBooksOAuthTokens, realmID: String,
+                                     environment: String? = nil, scopeSignature: String? = nil) {
+        precondition(!persistsCredentials && GunnAireCloudKit.usesTestDatabase)
+        applyLoadedSession(loaded, realmID: realmID, environment: environment ?? currentEnvironment,
+                           scopeSignature: scopeSignature ?? storedScopeSignature)
+    }
+    #endif
 
     func clearTokens(clearAuthorizationFailure: Bool = true) {
         connectionGeneration = UUID()
@@ -672,7 +697,48 @@ final class QuickBooksDataAPI: ObservableObject {
     func withWorkspaceOperation<T>(
         _ body: (WorkspaceProviderOperation) async throws -> T
     ) async throws -> T {
-        let operation = try captureProviderOperation()
+        try await captureWorkspaceWorkflow().perform(body)
+    }
+
+    /// Capture synchronously at the user action, before scheduling a Task.
+    /// This handle cannot adopt a replacement connection while waiting to run.
+    struct CapturedWorkspaceWorkflow {
+        fileprivate let api: QuickBooksDataAPI
+        fileprivate let operation: WorkspaceProviderOperation
+        let realmID: String?
+        let environment: String
+        let companyID: UUID?
+
+        var successfulSyncDateKey: String? {
+            guard let companyID, let realmID, !realmID.isEmpty else { return nil }
+            return "GunnAireQBOConfirmedSync.\(companyID.uuidString).\(environment.lowercased()).\(realmID)"
+        }
+
+        func check() throws { try operation.check() }
+
+        func perform<T>(_ body: (WorkspaceProviderOperation) async throws -> T) async throws -> T {
+            try await api.performCapturedWorkspaceOperation(operation, body: body)
+        }
+    }
+
+    func captureWorkspaceWorkflow(isCurrent: (() -> Bool)? = nil) throws -> CapturedWorkspaceWorkflow {
+        let original = try captureProviderOperation()
+        let operation = isCurrent.map { WorkspaceProviderOperation(parent: original, isCurrent: $0) } ?? original
+        return CapturedWorkspaceWorkflow(api: self, operation: operation,
+                                  realmID: realmID, environment: currentEnvironment,
+                                  companyID: CompanyWorkspaceAccessController.shared.verifiedCompanyID)
+    }
+
+    private func performCapturedWorkspaceOperation<T>(
+        _ operation: WorkspaceProviderOperation,
+        body: (WorkspaceProviderOperation) async throws -> T
+    ) async throws -> T {
+        if let current = Self.workflowScope {
+            try current.operation.check()
+            guard current.owner == ObjectIdentifier(self) else {
+                throw WorkspaceProviderAccessError.changed(mayHaveReachedProvider: current.operation.mayHaveReachedProvider)
+            }
+        }
         let scope = WorkflowScope(owner: ObjectIdentifier(self), operation: operation)
         return try await Self.$workflowScope.withValue(scope) {
             try operation.check()

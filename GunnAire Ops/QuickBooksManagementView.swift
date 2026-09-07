@@ -1160,10 +1160,12 @@ struct QuickBooksManagementView: View {
     @State private var newlyCreatedLocalVendors: [Vendor] = []
 
     @State private var isLoading = false
+    @State private var syncLifecycle = QuickBooksSyncLifecycle()
+    @State private var resourceSyncTask: Task<Void, Never>?
     @State private var statusMessage = "Connect QuickBooks in Settings to start live sync."
     @State private var actionMessage: String?
     @State private var syncResourceStatuses: [QuickBooksSyncResourceStatus] = Self.defaultSyncResourceStatuses
-    @State private var lastSuccessfulSyncAt: Date? = UserDefaults.standard.object(forKey: "QuickBooksLastSuccessfulSyncAt") as? Date
+    @State private var lastSuccessfulSyncAt: Date?
     @State private var lastSyncStartedAt: Date?
     @State private var activeEmailEstimateID: String?
     @State private var activeEmailInvoiceID: String?
@@ -1194,7 +1196,6 @@ struct QuickBooksManagementView: View {
     @State private var invoiceSearchText = ""
     @State private var selectedWorkspace: QuickBooksManagementWorkspace = .overview
     @State private var quickBooksWebhookEvents: [BackendQuickBooksWebhookEvent] = []
-    @State private var activeSyncWebhookEventIDs: Set<String> = []
     @State private var isLoadingWebhookEvents = false
     @State private var webhookStatusMessage: String?
     @State private var showWebhookEventDetails = false
@@ -3209,13 +3210,6 @@ struct QuickBooksManagementView: View {
                         return
                     }
                     #endif
-                    Task { await loadQuickBooksWebhookEvents() }
-                    Task {
-                        await accountingConfigurationStore.refresh(
-                            realmID: accountingConfigurationRealmID,
-                            environment: quickBooksDataAPI.currentEnvironment
-                        )
-                    }
                     if isAuthenticated {
                         syncAllQuickBooksData()
                     } else if !quickBooksConfigReady {
@@ -3224,169 +3218,220 @@ struct QuickBooksManagementView: View {
                         statusMessage = "QuickBooks is not connected. Open Settings to authenticate."
                     }
                 }
+                .onDisappear {
+                    syncLifecycle.cancel()
+                    resourceSyncTask?.cancel()
+                    resourceSyncTask = nil
+                    isLoading = false
+                }
             }
         }
     }
 
     private func syncAllQuickBooksData() {
         guard isAuthenticated else {
-            statusMessage = quickBooksConfigReady
-                ? "QuickBooks is not connected. Open Settings to authenticate."
-                : "QuickBooks client credentials are missing on this Mac. Add them in Config/Local.xcconfig, then reconnect QuickBooks."
+            statusMessage = "QuickBooks is not connected. Open Settings to authenticate."
             return
         }
 
+        let context = modelContext
+        let syncRun: QuickBooksSyncRun
+        do {
+            // Capture before the Task can be scheduled in a different session.
+            syncRun = try syncLifecycle.begin(api: quickBooksDataAPI) {
+                try QuickBooksSyncAccessPolicy.validate(context: context)
+            }
+        } catch {
+            statusMessage = "QuickBooks sync is unavailable. \(error.localizedDescription)"
+            return
+        }
+        resourceSyncTask?.cancel()
+        clearQuickBooksSyncSnapshot()
+        lastSuccessfulSyncAt = syncRun.workflow.successfulSyncDateKey.flatMap {
+            UserDefaults.standard.object(forKey: $0) as? Date
+        }
         isLoading = true
         actionMessage = nil
         quickBooksReconnectRequired = false
         lastSyncStartedAt = Date()
-        activeSyncWebhookEventIDs = Set(quickBooksWebhookEvents.map(\.id))
         resetSyncStatusesForRun()
-        statusMessage = "Syncing customers, catalog, accounts, estimates, invoices, sales receipts, bills, purchases, vendors, payments, payment methods, stored cards, and deposits from QuickBooks..."
+        statusMessage = "Refreshing QuickBooks…"
 
-        QuickBooksDataAPI.shared.refreshTokensIfNeeded { tokenReady in
-            guard tokenReady else {
-                let detail = QuickBooksDataAPI.shared.lastRefreshFailureDetail
-                    ?? "Reconnect QuickBooks. The saved token could not be refreshed."
-                isLoading = false
-                quickBooksReconnectRequired = true
-                markAllSyncStatusesFailed(detail)
-                statusMessage = "QuickBooks reconnect required. \(detail)"
-                return
+        resourceSyncTask = Task { @MainActor in
+            defer {
+                if syncLifecycle.finish(syncRun) {
+                    isLoading = false
+                    resourceSyncTask = nil
+                }
             }
-
-            runQuickBooksResourceSync()
+            do {
+                try await syncRun.perform {
+                    let tokenReady = await quickBooksDataAPI.refreshSessionIfPossible()
+                    try syncRun.check()
+                    guard tokenReady else {
+                        quickBooksReconnectRequired = true
+                        throw QuickBooksDataAPI.QBError.unauthorized
+                    }
+                    let events = try await loadQuickBooksWebhookEvents(syncRun)
+                    try await runQuickBooksResourceSync(syncRun, context: context,
+                                                       webhookEventIDs: events.map(\.id))
+                }
+            } catch {
+                guard syncLifecycle.isCurrent(syncRun) else { return }
+                clearQuickBooksSyncSnapshot()
+                let message = error is CancellationError
+                    ? "QuickBooks sync stopped. Saved work has been retained."
+                    : error.localizedDescription
+                markAllSyncStatusesFailed(message)
+                statusMessage = "QuickBooks sync stopped. \(message)"
+            }
         }
     }
 
-    private func runQuickBooksResourceSync() {
-        Task { @MainActor in
-            var failures: [String] = []
+    private func clearQuickBooksSyncSnapshot() {
+        customers = []; items = []; accounts = []; estimates = []; invoices = []
+        bills = []; vendorCredits = []; purchases = []; vendors = []; payments = []
+        salesReceipts = []; deposits = []; paymentMethods = []; storedCards = []
+        paymentReceipts = [:]; quickBooksWebhookEvents = []
+        isLoadingWebhookEvents = false
+        lastSuccessfulSyncAt = nil
+    }
 
-            @MainActor
-            func run<T>(
-                id: String,
-                required: Bool,
-                fetch: (@escaping (Result<[T], Error>) -> Void) -> Void,
-                apply: @escaping ([T]) -> Void
-            ) async -> Bool {
-                guard !quickBooksReconnectRequired else {
-                    return false
-                }
+    private func runQuickBooksResourceSync(_ syncRun: QuickBooksSyncRun, context: ModelContext,
+                                            webhookEventIDs: [String]) async throws {
+        var failures: [String] = []
 
-                updateSyncStatus(id: id, state: .syncing, detail: "Loading...", count: nil)
-                let result: Result<[T], Error> = await withCheckedContinuation { continuation in
-                    fetch { result in
-                        DispatchQueue.main.async {
-                            continuation.resume(returning: result)
-                        }
-                    }
-                }
-
-                switch result {
-                case .success(let records):
-                    apply(records)
-                    updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
-                    return true
-                case .failure(let error):
-                    let message = userFacingQuickBooksMessage(for: error)
-                    if let qbError = error as? QuickBooksDataAPI.QBError,
-                       qbError.requiresReconnect {
-                        quickBooksReconnectRequired = true
-                        updateSyncStatus(id: id, state: .failed, detail: message, count: nil)
-                        markPendingSyncStatusesFailed("Reconnect QuickBooks. The saved QuickBooks session was rejected before this resource could sync.")
-                    } else {
-                        updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
-                    }
-                    let prefix = syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
-                    failures.append("\(prefix): \(message)")
-                    return !quickBooksReconnectRequired
-                }
+        @MainActor
+        func run<T>(
+            id: String,
+            required: Bool,
+            fetch: (@escaping (Result<[T], Error>) -> Void) -> Void,
+            apply: @escaping ([T]) -> Void
+        ) async throws -> Bool {
+            try syncRun.check()
+            guard !quickBooksReconnectRequired else {
+                return false
             }
 
-            guard await run(id: "customers", required: true, fetch: liveAPI.fetchCustomers, apply: { records in
-                customers = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
-            }) else { finishQuickBooksResourceSync(with: failures); return }
-
-            guard await run(id: "catalog", required: true, fetch: liveAPI.fetchItems, apply: { records in
-                items = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
-            }) else { finishQuickBooksResourceSync(with: failures); return }
-
-            guard await run(id: "accounts", required: true, fetch: { completion in
-                quickBooksDataAPI.fetchAccounts(completion: completion)
-            }, apply: { records in
-                accounts = records.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-            }) else { finishQuickBooksResourceSync(with: failures); return }
-
-            await accountingConfigurationStore.refresh(
-                realmID: accountingConfigurationRealmID,
-                environment: quickBooksDataAPI.currentEnvironment,
-                force: true
-            )
-            if accountingConfiguration != nil {
-                updateSyncStatus(
-                    id: "mappings",
-                    state: .success,
-                    detail: "Loaded realm-specific accounting defaults.",
-                    count: 6
-                )
-            } else {
-                updateSyncStatus(
-                    id: "mappings",
-                    state: .warning,
-                    detail: accountingConfigurationStore.statusMessage
-                        ?? "An administrator must choose accounting defaults for this company.",
-                    count: 0
-                )
+            updateSyncStatus(id: id, state: .syncing, detail: "Loading...", count: nil)
+            let result: Result<[T], Error>
+            do {
+                result = .success(try await syncRun.receive(fetch))
+            } catch {
+                try syncRun.check()
+                result = .failure(error)
             }
+            try syncRun.check()
 
-            guard await run(id: "estimates", required: true, fetch: liveAPI.fetchEstimates, apply: { records in estimates = records }) else { finishQuickBooksResourceSync(with: failures); return }
-            guard await run(id: "bills", required: true, fetch: liveAPI.fetchBills, apply: { records in bills = records }) else { finishQuickBooksResourceSync(with: failures); return }
-            guard await run(id: "vendorCredits", required: true, fetch: liveAPI.fetchVendorCredits, apply: { records in vendorCredits = records }) else { finishQuickBooksResourceSync(with: failures); return }
-            guard await run(id: "purchases", required: true, fetch: liveAPI.fetchPurchases, apply: { records in purchases = records }) else { finishQuickBooksResourceSync(with: failures); return }
-
-            guard await run(id: "vendors", required: true, fetch: liveAPI.fetchVendors, apply: { records in
-                vendors = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
-            }) else { finishQuickBooksResourceSync(with: failures); return }
-
-            guard await run(id: "payments", required: true, fetch: liveAPI.fetchPayments, apply: { records in payments = records }) else { finishQuickBooksResourceSync(with: failures); return }
-            // Read balances after payment activity, rather than replacing them
-            // with arithmetic over an earlier or incomplete payment response.
-            guard await run(id: "invoices", required: true, fetch: liveAPI.fetchInvoices, apply: { records in invoices = records }) else { finishQuickBooksResourceSync(with: failures); return }
-
-            guard await run(id: "paymentMethods", required: true, fetch: liveAPI.fetchPaymentMethods, apply: { records in
-                paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
-            }) else { finishQuickBooksResourceSync(with: failures); return }
-
-            if QuickBooksDataAPI.shared.canUseQuickBooksPaymentsAPI {
-                guard await run(id: "storedCards", required: false, fetch: { completion in
-                    liveAPI.fetchCards(forCustomerIDs: customers.map(\.Id), completion: completion)
-                }, apply: { records in
-                    storedCards = records
-                    reconcileStoredPaymentMethodReferences(records)
-                }) else { finishQuickBooksResourceSync(with: failures); return }
-            } else if Config.QuickBooks.enablePaymentsScope {
-                storedCards = []
-                updateSyncStatus(
-                    id: "storedCards",
-                    state: .warning,
-                    detail: "Skipped because this QuickBooks token is not authorized for \(Config.QuickBooks.paymentsScope). Accounting sync remains active.",
-                    count: 0
-                )
-            } else {
-                updateSyncStatus(
-                    id: "storedCards",
-                    state: .warning,
-                    detail: "Skipped because QB_ENABLE_PAYMENTS_SCOPE is off for Accounting-only login.",
-                    count: 0
-                )
+            switch result {
+            case .success(let records):
+                try syncRun.commit { apply(records) }
+                try syncRun.markSucceeded(id)
+                updateSyncStatus(id: id, state: .success, detail: "Loaded \(records.count) records.", count: records.count)
+                return true
+            case .failure(let error):
+                let message = userFacingQuickBooksMessage(for: error)
+                if let qbError = error as? QuickBooksDataAPI.QBError,
+                   qbError.requiresReconnect {
+                    quickBooksReconnectRequired = true
+                    updateSyncStatus(id: id, state: .failed, detail: message, count: nil)
+                    markPendingSyncStatusesFailed("Reconnect QuickBooks. The saved QuickBooks session was rejected before this resource could sync.")
+                } else {
+                    updateSyncStatus(id: id, state: required ? .failed : .warning, detail: message, count: nil)
+                }
+                let prefix = syncResourceStatuses.first(where: { $0.id == id })?.name ?? id
+                failures.append("\(prefix): \(message)")
+                return !quickBooksReconnectRequired
             }
-
-            guard await run(id: "salesReceipts", required: true, fetch: liveAPI.fetchSalesReceipts, apply: { records in salesReceipts = records }) else { finishQuickBooksResourceSync(with: failures); return }
-            guard await run(id: "deposits", required: true, fetch: liveAPI.fetchDeposits, apply: { records in deposits = records }) else { finishQuickBooksResourceSync(with: failures); return }
-
-            finishQuickBooksResourceSync(with: failures)
         }
+
+        guard try await run(id: "customers", required: true, fetch: liveAPI.fetchCustomers, apply: { records in
+            customers = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
+        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+
+        guard try await run(id: "catalog", required: true, fetch: liveAPI.fetchItems, apply: { records in
+            items = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
+        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+
+        guard try await run(id: "accounts", required: true, fetch: { completion in
+            quickBooksDataAPI.fetchAccounts(completion: completion)
+        }, apply: { records in
+            accounts = records.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+
+        await accountingConfigurationStore.refresh(
+            realmID: syncRun.workflow.realmID,
+            environment: syncRun.workflow.environment,
+            force: true,
+            validate: { try syncRun.check() }
+        )
+        try syncRun.check()
+        if accountingConfiguration != nil {
+            updateSyncStatus(
+                id: "mappings",
+                state: .success,
+                detail: "Loaded realm-specific accounting defaults.",
+                count: 6
+            )
+        } else {
+            updateSyncStatus(
+                id: "mappings",
+                state: .warning,
+                detail: accountingConfigurationStore.statusMessage
+                    ?? "An administrator must choose accounting defaults for this company.",
+                count: 0
+            )
+        }
+
+        guard try await run(id: "estimates", required: true, fetch: liveAPI.fetchEstimates, apply: { records in estimates = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        guard try await run(id: "bills", required: true, fetch: liveAPI.fetchBills, apply: { records in bills = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        guard try await run(id: "vendorCredits", required: true, fetch: liveAPI.fetchVendorCredits, apply: { records in vendorCredits = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        guard try await run(id: "purchases", required: true, fetch: liveAPI.fetchPurchases, apply: { records in purchases = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+
+        guard try await run(id: "vendors", required: true, fetch: liveAPI.fetchVendors, apply: { records in
+            vendors = records.sorted { $0.DisplayName.localizedCaseInsensitiveCompare($1.DisplayName) == .orderedAscending }
+        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+
+        guard try await run(id: "payments", required: true, fetch: liveAPI.fetchPayments, apply: { records in payments = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        // Read balances after payment activity, rather than replacing them
+        // with arithmetic over an earlier or incomplete payment response.
+        guard try await run(id: "invoices", required: true, fetch: liveAPI.fetchInvoices, apply: { records in invoices = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+
+        guard try await run(id: "paymentMethods", required: true, fetch: liveAPI.fetchPaymentMethods, apply: { records in
+            paymentMethods = records.sorted { $0.Name.localizedCaseInsensitiveCompare($1.Name) == .orderedAscending }
+        }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+
+        if !syncRun.successfulResourceIDs.contains("customers") {
+            storedCards = []
+            updateSyncStatus(id: "storedCards", state: .warning,
+                detail: "Refresh customers before loading their stored payment methods.", count: 0)
+        } else if quickBooksDataAPI.canUseQuickBooksPaymentsAPI {
+            guard try await run(id: "storedCards", required: false, fetch: { completion in
+                liveAPI.fetchCards(forCustomerIDs: customers.map(\.Id), completion: completion)
+            }, apply: { records in
+                storedCards = records
+            }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        } else if Config.QuickBooks.enablePaymentsScope {
+            storedCards = []
+            updateSyncStatus(
+                id: "storedCards",
+                state: .warning,
+                detail: "Skipped because this QuickBooks token is not authorized for \(Config.QuickBooks.paymentsScope). Accounting sync remains active.",
+                count: 0
+            )
+        } else {
+            updateSyncStatus(
+                id: "storedCards",
+                state: .warning,
+                detail: "Skipped because QB_ENABLE_PAYMENTS_SCOPE is off for Accounting-only login.",
+                count: 0
+            )
+        }
+
+        guard try await run(id: "salesReceipts", required: true, fetch: liveAPI.fetchSalesReceipts, apply: { records in salesReceipts = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+        guard try await run(id: "deposits", required: true, fetch: liveAPI.fetchDeposits, apply: { records in deposits = records }) else { try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures); return }
+
+        try await finishQuickBooksResourceSync(syncRun, context: context, webhookEventIDs: webhookEventIDs, with: failures)
     }
 
     private func createCustomer(name: String, email: String?, phone: String?) {
@@ -4822,25 +4867,23 @@ struct QuickBooksManagementView: View {
         return nameMatches.count == 1 ? nameMatches[0] : nil
     }
 
-    private func reconcileStoredPaymentMethodReferences(_ cards: [QuickBooksPaymentsCardRecord]) {
+    private func reconcileStoredPaymentMethodReferences(_ cards: [QuickBooksPaymentsCardRecord], context: ModelContext) throws {
         let reconciledAt = Date()
         let referencesByCustomerID = Dictionary(
             grouping: cards.compactMap { $0.storedPaymentMethodReference(updatedAt: reconciledAt) },
             by: \.providerCustomerID
         )
+        let savedCustomers = try context.fetch(FetchDescriptor<Customer>())
         for quickBooksCustomer in customers {
-            guard let localCustomer = unambiguousLocalCustomer(for: quickBooksCustomer) else { continue }
+            let matches = savedCustomers.filter { $0.quickBooksID == quickBooksCustomer.Id }
+            guard matches.count == 1, let localCustomer = matches.first else { continue }
             localCustomer.reconcileQuickBooksStoredPaymentMethods(
                 referencesByCustomerID[quickBooksCustomer.Id] ?? [],
                 providerCustomerID: quickBooksCustomer.Id,
                 reconciledAt: reconciledAt
             )
         }
-        do {
-            try modelContext.save()
-        } catch {
-            actionMessage = "Stored cards loaded, but their safe customer links could not be saved. Retry Sync before relying on payment-method readiness."
-        }
+        try context.save()
     }
 
     private func localInvoice(for quickBooksInvoice: QuickBooksInvoice) -> Invoice? {
@@ -5368,80 +5411,93 @@ struct QuickBooksManagementView: View {
         syncResourceStatuses[index].updatedAt = Date()
     }
 
-    private func finishQuickBooksResourceSync(with failures: [String]) {
-        isLoading = false
-
+    private func finishQuickBooksResourceSync(_ syncRun: QuickBooksSyncRun, context: ModelContext,
+                                              webhookEventIDs: [String], with failures: [String]) async throws {
+        try syncRun.check()
         guard !quickBooksReconnectRequired else {
-            let company = QuickBooksDataAPI.shared.lastRejectedRealmID
-                ?? QuickBooksDataAPI.shared.realmID
-                ?? "the selected QuickBooks company"
-            let environment = QuickBooksDataAPI.shared.lastRejectedEnvironment
-                ?? QuickBooksDataAPI.shared.currentEnvironment
-            statusMessage = "QuickBooks authorization needs reconnect. Open Settings, disconnect and reconnect QuickBooks with a company admin, confirm company \(company) authorized the \(environment) app, then retry sync."
-            actionMessage = failures.first ?? "QuickBooks rejected the saved app session. The app cleared the rejected token so the next sync starts from a fresh reconnect."
+            statusMessage = "Reconnect QuickBooks in Settings before syncing again."
+            actionMessage = failures.first
             return
         }
 
         var completedFailures = failures
-        let successfulResources = Set(syncResourceStatuses.filter { $0.state == .success }.map(\.id))
+        let successfulResources = syncRun.successfulResourceIDs
         do {
-            try QuickBooksLocalSync.importSnapshot(
-                customers: QuickBooksSnapshotImportPolicy.records(customers, resource: "customers", successfulResourceIDs: successfulResources),
-                items: QuickBooksSnapshotImportPolicy.records(items, resource: "catalog", successfulResourceIDs: successfulResources),
-                estimates: QuickBooksSnapshotImportPolicy.records(estimates, resource: "estimates", successfulResourceIDs: successfulResources),
-                invoices: QuickBooksSnapshotImportPolicy.records(invoices, resource: "invoices", successfulResourceIDs: successfulResources),
-                payments: QuickBooksSnapshotImportPolicy.records(payments, resource: "payments", successfulResourceIDs: successfulResources),
-                vendors: QuickBooksSnapshotImportPolicy.records(vendors, resource: "vendors", successfulResourceIDs: successfulResources),
-                into: modelContext
-            )
+            try syncRun.commit {
+                try QuickBooksLocalSync.importSnapshot(
+                    customers: QuickBooksSnapshotImportPolicy.records(customers, resource: "customers", successfulResourceIDs: successfulResources),
+                    items: QuickBooksSnapshotImportPolicy.records(items, resource: "catalog", successfulResourceIDs: successfulResources),
+                    estimates: QuickBooksSnapshotImportPolicy.records(estimates, resource: "estimates", successfulResourceIDs: successfulResources),
+                    invoices: QuickBooksSnapshotImportPolicy.records(invoices, resource: "invoices", successfulResourceIDs: successfulResources),
+                    payments: QuickBooksSnapshotImportPolicy.records(payments, resource: "payments", successfulResourceIDs: successfulResources),
+                    vendors: QuickBooksSnapshotImportPolicy.records(vendors, resource: "vendors", successfulResourceIDs: successfulResources),
+                    into: context
+                )
+                if successfulResources.contains("storedCards") {
+                    try reconcileStoredPaymentMethodReferences(storedCards, context: context)
+                }
+            }
         } catch {
+            try syncRun.check()
             completedFailures.append("Local app sync: \(error.localizedDescription)")
         }
 
+        try syncRun.check()
         if completedFailures.isEmpty {
             let now = Date()
             lastSuccessfulSyncAt = now
-            UserDefaults.standard.set(now, forKey: "QuickBooksLastSuccessfulSyncAt")
-            statusMessage = "All QuickBooks features synced successfully. Loaded \(customers.count) customers, \(items.count) catalog items, \(estimates.count) estimates, \(invoices.count) invoices, \(salesReceipts.count) sales receipts, \(bills.count) bills, \(purchases.count) purchases, \(vendors.count) vendors, \(payments.count) payments, \(paymentMethods.count) payment methods, \(storedCards.count) stored cards, and \(deposits.count) deposits."
-            let acknowledgedEventIDs = Array(activeSyncWebhookEventIDs)
-            activeSyncWebhookEventIDs.removeAll()
-            if !acknowledgedEventIDs.isEmpty {
-                Task { await acknowledgeQuickBooksWebhookEvents(acknowledgedEventIDs) }
+            if let key = syncRun.workflow.successfulSyncDateKey {
+                UserDefaults.standard.set(now, forKey: key)
+            }
+            statusMessage = "QuickBooks data refreshed. Review any accounting or payment warnings below."
+            if !webhookEventIDs.isEmpty {
+                try await acknowledgeQuickBooksWebhookEvents(webhookEventIDs, syncRun: syncRun)
             }
         } else {
-            statusMessage = "QuickBooks sync incomplete. Required features must sync successfully.\n" + completedFailures.joined(separator: "\n")
+            statusMessage = "QuickBooks sync incomplete.\n" + completedFailures.joined(separator: "\n")
         }
     }
 
     @MainActor
-    private func loadQuickBooksWebhookEvents() async {
+    private func loadQuickBooksWebhookEvents(_ syncRun: QuickBooksSyncRun) async throws -> [BackendQuickBooksWebhookEvent] {
+        try syncRun.check()
         guard GunnAireBackendService.isConfigured else {
             webhookStatusMessage = "Shared-server change alerts are not configured."
-            return
+            return []
         }
         isLoadingWebhookEvents = true
-        defer { isLoadingWebhookEvents = false }
+        defer {
+            if syncLifecycle.isCurrent(syncRun) { isLoadingWebhookEvents = false }
+        }
         do {
-            quickBooksWebhookEvents = try await GunnAireBackendService.fetchQuickBooksWebhookEvents()
-            webhookStatusMessage = quickBooksWebhookEvents.isEmpty
-                ? "No pending QuickBooks changes reported by the server."
-                : nil
+            let events = try await syncRun.perform {
+                try await GunnAireBackendService.fetchQuickBooksWebhookEvents()
+            }
+            try syncRun.commit { quickBooksWebhookEvents = events }
+            webhookStatusMessage = events.isEmpty
+                ? "No pending QuickBooks changes reported by the server." : nil
+            return events
         } catch {
+            try syncRun.check()
             webhookStatusMessage = "QuickBooks change alerts need attention in Shared Server Readiness."
+            return []
         }
     }
 
     @MainActor
-    private func acknowledgeQuickBooksWebhookEvents(_ eventIDs: [String]) async {
+    private func acknowledgeQuickBooksWebhookEvents(_ eventIDs: [String], syncRun: QuickBooksSyncRun) async throws {
         do {
-            try await GunnAireBackendService.acknowledgeQuickBooksWebhookEvents(ids: eventIDs)
-            quickBooksWebhookEvents.removeAll { eventIDs.contains($0.id) }
+            try await syncRun.perform {
+                try await GunnAireBackendService.acknowledgeQuickBooksWebhookEvents(ids: eventIDs)
+            }
+            try syncRun.commit { quickBooksWebhookEvents.removeAll { eventIDs.contains($0.id) } }
             webhookStatusMessage = quickBooksWebhookEvents.isEmpty
-                ? "All QuickBooks changes included in the successful sync are reconciled."
+                ? "Changes included in this sync were acknowledged."
                 : "New QuickBooks changes arrived during sync. Run sync again to include them."
-            await loadQuickBooksWebhookEvents()
+            _ = try await loadQuickBooksWebhookEvents(syncRun)
         } catch {
-            webhookStatusMessage = "QuickBooks data synced, but the server change queue could not be cleared. Refresh and try again."
+            try syncRun.check()
+            webhookStatusMessage = "QuickBooks data synced, but change alerts could not be acknowledged. Refresh and try again."
         }
     }
 
