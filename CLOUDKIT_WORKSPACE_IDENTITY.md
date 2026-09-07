@@ -1,24 +1,28 @@
 # Company CloudKit workspace boundary — 2026-09-06
 
-Status: server contract and native client contract implemented; **runtime storage
-enforcement is still open**. This is not a claim that PR #18's company-isolation
-finding is fixed. Nothing has been deployed, rebound, or migrated in production.
+Status: server contract, native startup/store gate, explicit onboarding,
+Shortcuts gate, backend-request checks and bounded offline lease implemented.
+**End-to-end company isolation and signed-device acceptance remain open.**
+Nothing has been deployed, rebound, or migrated in production. Deploy and verify
+backend `2026.09.06.20` before distributing this native candidate; older backends
+do not implement the required workspace proof and intentionally cannot unlock it.
 
 ## Confirmed failure and scope
 
-`OperationalDataContinuity.workspaceAccess` currently treats a nonempty local
-store as sufficient for staff and bypasses the check for administrators.
-`ContentView.refreshCompanyOperationalRecordState` only counts records. Neither
-proves the records belong to the authenticated business.
+`OperationalDataContinuity.workspaceAccess` previously treated a nonempty local
+store as sufficient for staff and bypassed the check for administrators.
+`ContentView.refreshCompanyOperationalRecordState` only counted records. Neither
+proved the records belonged to the authenticated business. Both heuristics are
+removed in this candidate; administrator status does not bypass store proof.
 
-There are additional paths outside that screen gate:
+The entry paths identified during review were:
 
 - `GunnAire_OpsApp.buildStartupState` attaches CloudKit and creates starter data
   before application authentication.
 - `LoginView` reads and writes user/technician models before workspace validation.
 - `GunnAireIntentStore` independently opens the same store for Shortcuts entities.
 - ContentView starts upload retries, maintenance and payment polling on appearance.
-- `CKAccountChanged` currently refreshes a notice, without invalidating data access.
+- `CKAccountChanged` refreshed a notice without invalidating data access.
 
 The fix must cover those paths; adding a sidebar warning alone is insufficient.
 
@@ -66,34 +70,86 @@ The Swift client decodes these contracts, rejects ambiguous/malformed bindings,
 separates Development and Production, and verifies approval response fields
 against the submitted request. No current login path invokes approval implicitly.
 
-## Required native integration (not yet implemented)
+## Implemented native boundary
 
-1. Identify the actual signed CloudKit environment and current iCloud record ID
-   before attaching operational mirroring. Do not infer environment from QBO or
-   accept a caller-selected company as authentication.
-2. Persist a workspace marker with the operational replica, containing the exact
-   company, replica, container, environment and scoped account digest. Validate
-   every marker; conflicting markers fail closed. Data without a marker is
-   unverified, even for administrators.
-3. Provide explicit, recently authenticated administrator onboarding for a new
-   or legacy store. Preserve the existing store and unsynced records. Review
-   ownership before adopting it; never silently relabel a populated store.
-4. Put the boundary before operational ModelContainer attachment, model-backed
-   login writes, ContentView creation, Shortcuts queries, exports and background
-   sync. A company/CloudKit account change must invalidate in-flight access and
-   prevent uploading the old company's work with the new credentials.
-5. Bind any offline authorization cache to the backend origin, company, exact
-   staff session/role, replica, CloudKit account and environment. Define bounded
-   validity, revocation recovery, and account-change handling; a cache hit alone
-   cannot prove the currently selected iCloud account. Preserve saved field work
-   even when identity cannot currently be verified.
-6. Isolate company-specific caches, pending Handoff routes and provider work.
-   Retire the record-count heuristic only after every entry path uses the real
-   boundary. Role restrictions continue to apply inside an approved workspace.
+`CompanyWorkspaceAccessController` is the single owner of the operational
+ModelContainer. Normal startup displays login/workspace verification without
+opening it. Login exchanges identity only; verified user and starter-template
+writes occur after workspace proof. Shortcuts/entity queries obtain that same
+authorized container and await an in-progress proof instead of independently
+opening the database. Debug-only isolated fixtures and CloudKit acceptance
+probes remain separate and are compiled out of Release.
+
+Before opening the store, the app obtains a current opaque Apple/Google business
+session, the deployed backend's company/binding/user, and the current CloudKit
+user record. It validates the environment from an embedded provisioning profile
+or verified StoreKit AppTransaction for store distribution. It never guesses
+from Debug/Release, QBO environment, or mere receipt-file presence. Profile
+entitlements are an allowlist, not a replacement for signed-artifact validation;
+the distribution pipeline must independently verify the actual code-signature
+CloudKit entitlement agrees. No automatic StoreKit refresh/login prompt is used.
+
+The device-only Keychain registration contains backend origin, the complete
+immutable binding, and the actual SQLite `NSStoreUUIDKey`. The UUID is read via
+read-only Core Data metadata before ModelContainer attachment. This replaces
+the proposed new CloudKit model marker: it does not add a record type, change
+the operational schema, or require schema promotion for this local anchor.
+A copied/restored foreign database with a different UUID is denied to staff
+and administrators. This anchor does not attest the contents of a maliciously
+modified SQLite file; data-integrity or compromised-device attestation is not
+claimed.
+
+An existing unregistered store requires explicit, default-off administrator
+ownership confirmation and the backend's fresh-session approval. A registered
+store cannot be relabeled through onboarding. A new empty device can create its
+local replica only after matching an already approved backend/account binding.
+No existing records, store files or registrations are deleted by denial,
+logout, expiry or account change.
+
+The cached lease binds the full business session (including token fingerprint,
+email and expiry), origin, company, role, replica, account and environment.
+It expires at the earlier of session expiry and 24 hours after server proof.
+Offline fallback is limited to transport failure; HTTP denial, malformed data,
+changed company/account and missing registration never fall back. The app must
+still obtain the current CloudKit identity. If Apple cannot provide it offline,
+the gate preserves saved work but does not expose it. Cold offline availability
+on signed devices is consequently an explicit acceptance requirement.
+
+A deadline task and foreground/system-clock checks remove the mounted workspace
+when access expires or the session changes. Concurrent app/Shortcut checks share
+one proof task. Late proofs cannot reopen a replaced/revoked session.
+`CKAccountChanged` invalidates access centrally and requires a process restart.
+Pending Handoff/Shortcut routes are cleared on invalidation. Changed server
+roles advance the access generation and recreate operational navigation, closing
+old sheets. Backend business requests check this generation and session before
+send and after response; only identity establishment and captured-session
+logout/push-device cleanup are exempt. Endpoint classification is relative to
+the API, so a configured URL path prefix does not turn login into a gated call.
+
+## Remaining isolation and operational acceptance
+
+- Audit direct Google/QuickBooks request callbacks, retries and retained model
+  contexts against the same access generation. The own-backend request gate is
+  implemented; it is not proof that every direct provider callback is covered.
+- Prove the lifetime of SwiftData/Core Data mirroring after an account change
+  and queued writes on a physical device. Removing UI/container references does
+  not by itself prove that internal mirroring has drained or detached.
+- Review locally synchronized role records and the legacy primary-admin email
+  special case against the current backend role. The gate requires an active
+  known server role but is not a complete role-enforcement audit.
+- Verify exact signed Development and Production environments, first approval,
+  retained populated/empty stores, revoked access, unsynced work retention,
+  restoration/reinstallation, and CloudKit convergence on the company iPad/Mac.
+- Preserve device-only registrations and company tables during recovery. A
+  replacement device or lost Keychain registration needs an explicit data review;
+  do not remove or overwrite saved records to make onboarding succeed.
+- Employee-owned independent iCloud accounts and switching between distinct
+  businesses need a sharing/tenant migration design. This candidate retains
+  the approved company-owned-account topology and does not claim to solve them.
 
 ## Verification and release acceptance
 
-Current local verification: 87/87 backend tests, 37/37 release/tool tests, and
+Retained contract-stage verification: 87/87 backend tests, 37/37 release/tool tests, and
 721/721 M5 13-inch iPad Simulator logic tests, all with zero failures. The three
 new native contract tests passed first in isolation, followed by the entire
 logic suite against that build. Mac Catalyst Debug builds successfully. The
@@ -110,12 +166,33 @@ rollback, and missing-identity recovery without silently reassigning a replica.
 Native contract tests cover Codable compatibility, environment separation,
 missing/duplicate/foreign/malformed bindings, and explicit ownership encoding.
 
-Remaining runtime acceptance must demonstrate: populated foreign store denied to
-staff **and** admin; unbound legacy store preserved; correct empty and populated
-replicas admitted only after proof; account/backend switches locked before data
-or uploads escape; no Shortcut/entity/sheet/background bypass; safe offline work
-on an approved device; pending unsynced work retained on revocation; and verified
-CloudKit convergence on the physical company iPad and Mac.
+Runtime fixture coverage now exercises populated foreign-store denial for staff
+and admin, retained legacy data and explicit confirmation, empty approved-device
+creation, account/origin/company mismatch, SQLite metadata stability, offline
+lease boundaries, HTTP-denial behavior, concurrent checks, late-session results,
+clock rollback, expiry without navigation, permission changes and revocation.
+Current-source local verification: **743/743 logic tests and 6/6 UI journeys**
+on the 13-inch M5 iPad Simulator (iOS 26.2), zero failures or skipped tests.
+The six journeys cover the mismatched-workspace gate and sign-out recovery,
+all primary admin destinations, existing-invoice line-item editing, direct
+Invoice launch, reachable field-payment Handoff, and simple Mail actions.
+These UI journeys use isolated fixtures and do not contact live providers.
+The logic suite includes 22 runtime workspace tests plus three contract tests.
+
+Mac Catalyst Debug and optimized Release builds both succeed for arm64/x86_64.
+Both retain the pre-existing Xcode Metal-toolchain search-path linker warning;
+neither records a source compiler error. Release startup compiles without the
+debug-only early-store path. No distribution signing or physical installation
+was performed. The simulator emits a LinkDaemon AppShortcut-parameter refresh
+diagnostic in the unsigned test host; the passing entity/policy tests do not
+claim signed Siri/Shortcuts discovery acceptance.
+
+Retained result:
+`/Users/gunnaire/Downloads/GunnAire Ops Releases/2026-09-06/Company Workspace iPad Logic and Navigation.xcresult`.
+Companion logs in that directory are `company-workspace-ipad.log`,
+`company-workspace-mac-debug.log` and `company-workspace-mac-release.log`.
+Original iCloud workspace and review clone are byte-identical for the candidate
+source files; the test project uses the same original sources through symlinks.
 
 Before deploying this additive migration, verify an off-host database backup and
 restore test. Preserve both new tables during code rollback. A missing company
@@ -127,6 +204,9 @@ Apple references:
 
 - [Fetching the current CloudKit user record](https://developer.apple.com/documentation/cloudkit/ckcontainer/fetchuserrecordid(completionhandler:))
 - [CloudKit synchronization and account configuration](https://developer.apple.com/documentation/technotes/tn3164-debugging-the-synchronization-of-nspersistentcloudkitcontainer)
+- [CloudKit containers and signed environments](https://developer.apple.com/documentation/cloudkit/ckcontainer)
+- [Provisioning profiles and their entitlement allowlist](https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles)
+- [Verified store distribution transaction](https://developer.apple.com/documentation/storekit/apptransaction/shared)
 
 Apple documents that private-database replication uses the same iCloud account
 across devices, whereas CloudKit sharing supports separate owner/participant

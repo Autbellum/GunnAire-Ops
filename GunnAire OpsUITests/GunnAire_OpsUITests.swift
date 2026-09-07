@@ -800,6 +800,26 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertFalse(app.navigationBars["Invoices"].exists)
     }
 
+    @MainActor
+    func testCompanyIdentityMismatchGatesAdminBeforeOperationalNavigation() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-uiTestWorkspaceProofMismatch"
+        ]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Workspace does not match"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["Check Again"].exists)
+        XCTAssertTrue(app.buttons["Sign Out"].exists)
+        XCTAssertFalse(app.buttons["GlobalFindButton"].exists)
+        XCTAssertFalse(app.navigationBars["Invoices"].exists)
+        XCTAssertFalse(app.buttons["CompanyWorkspaceApproveButton"].exists)
+        app.buttons["Check Again"].tap()
+        XCTAssertTrue(app.staticTexts["Workspace does not match"].waitForExistence(timeout: 5))
+        app.buttons["Sign Out"].tap()
+        XCTAssertTrue(app.buttons["Sign In With Google"].waitForExistence(timeout: 5))
+    }
+
     /// The iPad workspace intentionally has a small, role-aware sidebar rather
     /// than putting every workflow in the Command Center. This smoke test
     /// verifies that the primary administrative destinations remain reachable

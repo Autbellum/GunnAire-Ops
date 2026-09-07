@@ -48,6 +48,8 @@ struct GunnAire_OpsApp: App {
                         .modelContainer(sharedModelContainer)
                 case .failed(let message):
                     StartupFailureView(message: message)
+                case .requiresAuthorization:
+                    StartupFailureView(message: "The isolated acceptance store was not prepared.")
                 }
             } else {
                 appRoot
@@ -70,24 +72,39 @@ struct GunnAire_OpsApp: App {
                 .environmentObject(cloudKitEventMonitor)
         case .failed(let message):
             StartupFailureView(message: message)
+        case .requiresAuthorization:
+            AppRootView()
+                .environmentObject(cloudKitEventMonitor)
         }
     }
 
     private static func buildStartupState() -> StartupState {
-        let schema = GunnAireModelSchema.schema
+        // Production startup must not attach a private CloudKit store before
+        // validating business identity, the current account, and local data.
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestWorkspaceProofMismatch") {
+            return .requiresAuthorization
+        }
+        if !GunnAireCloudKit.usesTestDatabase &&
+            !GunnAireCloudKitRoundTripProbe.isRequested &&
+            !GunnAireCloudKitSchemaBootstrap.isRequested {
+            return .requiresAuthorization
+        }
+        #else
+        return .requiresAuthorization
+        #endif
+        #if DEBUG
+        let schema = GunnAireModelSchema.schema
         do {
             try GunnAireCloudKitRoundTripProbe.prepareBeforeContainerIfRequested()
         } catch {
             logger.error("CloudKit round-trip probe preparation failed: \(error.localizedDescription, privacy: .public)")
             return .failed("The Development CloudKit acceptance probe could not prepare its isolated local store.")
         }
-        #endif
         let modelConfiguration = GunnAireCloudKit.modelConfiguration(for: schema)
 
         do {
             let modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
-            #if DEBUG
             if !GunnAireCloudKitRoundTripProbe.isRequested &&
                 !GunnAireCloudKitSchemaBootstrap.isRequested {
                 FieldFormTemplate.ensureStarterTemplates(in: modelContainer.mainContext)
@@ -96,10 +113,7 @@ struct GunnAire_OpsApp: App {
             try GunnAireCloudKitRoundTripProbe.runIfRequested(in: modelContainer.mainContext)
             try GunnAireCloudKitSchemaBootstrap.runIfRequested(in: modelContainer.mainContext)
             try GunnAireUITestFixtures.prepareIfRequested(in: modelContainer.mainContext)
-            #else
-            FieldFormTemplate.ensureStarterTemplates(in: modelContainer.mainContext)
-            try modelContainer.mainContext.save()
-            #endif
+            CompanyWorkspaceAccessController.shared.installTestContainer(modelContainer)
             return .ready(modelContainer)
         } catch {
             logger.error("Persistent SwiftData store load failed: \(error.localizedDescription, privacy: .public)")
@@ -107,9 +121,11 @@ struct GunnAire_OpsApp: App {
                 "The app could not access its local data store. Your existing data was not changed. Restart the app, check available device storage, and contact GunnAire support before reinstalling."
             )
         }
+        #endif
     }
 
     private enum StartupState {
+        case requiresAuthorization
         case ready(ModelContainer)
         case failed(String)
     }

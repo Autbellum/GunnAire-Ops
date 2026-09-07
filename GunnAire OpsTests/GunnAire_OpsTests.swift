@@ -1079,15 +1079,15 @@ struct GunnAire_OpsTests {
         #expect(
             OperationalDataContinuity.workspaceAccess(
                 role: .fieldTechnician,
-                didInspectLocalRecords: false,
-                hasLocalCompanyRecords: false
+                didCheckIdentity: false,
+                hasVerifiedCompanyStore: false
             ) == .checking
         )
 
         let emptyReplica = OperationalDataContinuity.workspaceAccess(
             role: .dispatcher,
-            didInspectLocalRecords: true,
-            hasLocalCompanyRecords: false
+            didCheckIdentity: true,
+            hasVerifiedCompanyStore: false
         )
         #expect(emptyReplica == .emptyReplica)
         #expect(!emptyReplica.allowsOperationalWork)
@@ -1103,22 +1103,22 @@ struct GunnAire_OpsTests {
         #expect(notice.recoveryDetail.localizedCaseInsensitiveContains("same approved business iCloud account"))
     }
 
-    @Test func existingOfflineReplicaRemainsUsableAndAdminCanBootstrapTheCompany() {
+    @Test func onlyVerifiedReplicaRemainsUsableAndAdminCannotBypassProof() {
         let offlineStaff = OperationalDataContinuity.workspaceAccess(
             role: .fieldTechnician,
-            didInspectLocalRecords: true,
-            hasLocalCompanyRecords: true
+            didCheckIdentity: true,
+            hasVerifiedCompanyStore: true
         )
         #expect(offlineStaff == .ready)
         #expect(offlineStaff.allowsOperationalWork)
 
         let firstAdmin = OperationalDataContinuity.workspaceAccess(
             role: .admin,
-            didInspectLocalRecords: true,
-            hasLocalCompanyRecords: false
+            didCheckIdentity: true,
+            hasVerifiedCompanyStore: false
         )
-        #expect(firstAdmin == .ready)
-        #expect(firstAdmin.allowsOperationalWork)
+        #expect(firstAdmin == .emptyReplica)
+        #expect(!firstAdmin.allowsOperationalWork)
     }
 
     @Test func cloudKitMirroringFailureRemainsVisibleUntilThatOperationSucceeds() throws {

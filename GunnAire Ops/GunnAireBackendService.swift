@@ -790,6 +790,7 @@ enum GunnAireBackendService {
         identityToken: String,
         nonce: String
     ) async throws -> BackendApplicationSessionResponse {
+        guard Config.Backend.isProductionReady else { throw GunnAireBackendError.notConfigured }
         let payload = AppleIdentityPayload(identityToken: identityToken, nonce: nonce)
         let body = try JSONEncoder().encode(payload)
         let data = try await sendUnauthenticated(path: "/api/auth/apple", method: "POST", body: body)
@@ -799,6 +800,7 @@ enum GunnAireBackendService {
     static func exchangeGoogleIdentity(
         identityToken: String
     ) async throws -> BackendApplicationSessionResponse {
+        guard Config.Backend.isProductionReady else { throw GunnAireBackendError.notConfigured }
         let payload = GoogleIdentityPayload(identityToken: identityToken)
         let body = try JSONEncoder().encode(payload)
         let data = try await sendUnauthenticated(path: "/api/auth/google", method: "POST", body: body)
@@ -1404,12 +1406,12 @@ enum GunnAireBackendService {
         headers: [String: String] = [:]
     ) async throws -> Data {
         let request = try makeRequest(path: path, method: method, body: body, headers: headers)
-        return try await perform(request)
+        return try await perform(request, endpointPath: path)
     }
 
     private static func sendUnauthenticated(path: String, method: String, body: Data?) async throws -> Data {
         let request = try baseRequest(path: path, method: method, body: body)
-        return try await perform(request)
+        return try await perform(request, endpointPath: path)
     }
 
     private static func sendWithBearerToken(
@@ -1419,11 +1421,28 @@ enum GunnAireBackendService {
     ) async throws -> Data {
         var request = try baseRequest(path: path, method: method, body: nil)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        return try await perform(request)
+        let deviceID = path.hasPrefix("/api/push-devices/") ? String(path.dropFirst("/api/push-devices/".count)) : ""
+        let isCleanup = path == "/api/auth/logout" || (method == "DELETE" && UUID(uuidString: deviceID) != nil)
+        return try await perform(request, endpointPath: path, allowsSessionCleanup: isCleanup)
     }
 
-    private static func perform(_ request: URLRequest) async throws -> Data {
+    private static func perform(_ request: URLRequest, endpointPath: String, allowsSessionCleanup: Bool = false) async throws -> Data {
+        // Use the service-relative endpoint, not the URL path: deployments may
+        // host the API below a prefix without changing the identity boundary.
+        let requiresWorkspace = CompanyWorkspaceRequestPolicy.needsWorkspaceProof(path: endpointPath) && !allowsSessionCleanup && !GunnAireCloudKit.usesTestDatabase
+        let workspaceGeneration = CompanyWorkspaceAccessController.shared.generation
+        let workspaceSession = requiresWorkspace ? CompanyWorkspaceSession.current : nil
+        if requiresWorkspace, CompanyWorkspaceAccessController.shared.authorizedContainer == nil {
+            throw GunnAireBackendError.missingBusinessIdentity
+        }
         let (data, response) = try await URLSession.shared.data(for: request)
+        if requiresWorkspace {
+            guard CompanyWorkspaceAccessController.shared.generation == workspaceGeneration,
+                  CompanyWorkspaceSession.current == workspaceSession,
+                  CompanyWorkspaceAccessController.shared.authorizedContainer != nil else {
+                throw GunnAireBackendError.missingBusinessIdentity
+            }
+        }
         guard let httpResponse = response as? HTTPURLResponse else {
             throw GunnAireBackendError.invalidResponse
         }
@@ -1442,6 +1461,11 @@ enum GunnAireBackendService {
         body: Data?,
         headers: [String: String] = [:]
     ) throws -> URLRequest {
+        if CompanyWorkspaceRequestPolicy.needsWorkspaceProof(path: path),
+           !GunnAireCloudKit.usesTestDatabase,
+           CompanyWorkspaceAccessController.shared.authorizedContainer == nil {
+            throw GunnAireBackendError.missingBusinessIdentity
+        }
         var request = try baseRequest(path: path, method: method, body: body)
         if Config.Backend.usesBusinessIdentity {
             if let sessionToken = AppleAuthManager.shared.sessionToken,

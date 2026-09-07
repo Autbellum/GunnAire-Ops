@@ -124,8 +124,6 @@ struct ContentView: View {
     @State private var isRetryingCustomerCommunicationUploads = false
     @State private var cloudKitReadiness: GunnAireCloudKit.AccountReadiness?
     @State private var showingCloudKitContinuityDetails = false
-    @State private var didInspectCompanyOperationalRecords = false
-    @State private var hasCompanyOperationalRecords = false
     
     // Authentication states
     @State private var isQuickBooksAuthenticated = false
@@ -182,8 +180,8 @@ struct ContentView: View {
 
         return OperationalDataContinuity.workspaceAccess(
             role: currentUserRole,
-            didInspectLocalRecords: didInspectCompanyOperationalRecords,
-            hasLocalCompanyRecords: hasCompanyOperationalRecords
+            didCheckIdentity: true,
+            hasVerifiedCompanyStore: CompanyWorkspaceAccessController.shared.authorizedContainer != nil
         )
     }
 
@@ -448,7 +446,6 @@ struct ContentView: View {
             isQuickBooksAuthenticated = QuickBooksDataAPI.shared.isAuthenticated
             isGoogleAuthenticated = GoogleAuthManager.shared.isAuthenticated
             ensurePrimaryAdminExists()
-            refreshCompanyOperationalRecordState()
             collapseCloudKitUserDuplicatesIfNeeded()
             cleanupCalendarCreatedCustomersIfNeeded()
             refreshGoogleAccountIdentityIfNeeded()
@@ -484,9 +481,6 @@ struct ContentView: View {
         .task {
             await refreshOperationalContinuityState()
             await StaffPushNotificationManager.shared.activateForCurrentSessionIfNeeded()
-        }
-        .onChange(of: cloudKitEventMonitor.state) { _, _ in
-            refreshCompanyOperationalRecordState()
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView(
@@ -615,42 +609,7 @@ struct ContentView: View {
 
     @MainActor
     private func refreshOperationalContinuityState() async {
-        refreshCompanyOperationalRecordState()
         await refreshCloudKitContinuityReadiness()
-        refreshCompanyOperationalRecordState()
-    }
-
-    @MainActor
-    private func refreshCompanyOperationalRecordState() {
-        func containsRecord<Model: PersistentModel>(_: Model.Type) -> Bool {
-            let count = (try? modelContext.fetchCount(FetchDescriptor<Model>())) ?? 0
-            return count > 0
-        }
-
-        // AppUser and Technician are intentionally excluded because business
-        // authentication can create them before the private CloudKit store has
-        // received any actual company operations. Starter form templates are
-        // also created locally on first launch and therefore prove nothing
-        // about the selected iCloud replica.
-        hasCompanyOperationalRecords =
-            containsRecord(Customer.self) ||
-            containsRecord(CustomerServiceLocation.self) ||
-            containsRecord(CustomerEquipment.self) ||
-            containsRecord(ServiceCall.self) ||
-            containsRecord(Estimate.self) ||
-            containsRecord(Invoice.self) ||
-            containsRecord(Payment.self) ||
-            containsRecord(TimeEntry.self) ||
-            containsRecord(Item.self) ||
-            containsRecord(Vendor.self) ||
-            containsRecord(PurchaseOrder.self) ||
-            containsRecord(InventoryMovement.self) ||
-            containsRecord(RecurringMaintenanceContract.self) ||
-            containsRecord(FieldFormResponse.self) ||
-            containsRecord(FleetVehicle.self) ||
-            containsRecord(FieldExpenseClaim.self) ||
-            containsRecord(BusinessTask.self)
-        didInspectCompanyOperationalRecords = true
     }
 
     @ViewBuilder

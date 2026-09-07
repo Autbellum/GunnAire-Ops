@@ -1,3 +1,18 @@
+2026-09-06 workspace-access candidate: **743/743 iPad logic tests, 6/6 focused
+iPad UI journeys, and successful Mac Catalyst Debug/Release builds**. Startup,
+login, Shortcuts and own-backend business requests now require company/store
+proof; existing unregistered data needs explicit fresh-admin approval. Leases
+expire without navigation, stale session results are rejected, and account
+changes close access without deleting saved work. See
+[CLOUDKIT_WORKSPACE_IDENTITY.md](CLOUDKIT_WORKSPACE_IDENTITY.md) for exact evidence
+and limitations. This supersedes earlier record-count/admin-bypass claims, not
+the physical acceptance boundary. Direct provider callback/role audits,
+mirroring lifetime after account changes, signed-device/offline convergence,
+historical statement corrections and the existing release gates remain open.
+Backend `2026.09.06.20` must be deployed and verified before this native candidate
+is distributed. No production deployment, workspace approval or physical-device
+installation occurred in this checkpoint.
+
 The exact build-`2026090506` signing recheck passes **70/4/0** in normal local
 preflight. Strict App Store mode preserves all 70 passes and produces only two
 failures: the iOS archive is signed by the installed Apple Development identity
