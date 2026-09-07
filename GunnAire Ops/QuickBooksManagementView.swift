@@ -2524,7 +2524,7 @@ struct QuickBooksManagementView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || customers.isEmpty)
+                            .accessibilityIdentifier("ManagementCreateEstimate")
                     }
 
                     Section(header: Text("Invoices").foregroundColor(Color.brandGold)) {
@@ -2588,7 +2588,7 @@ struct QuickBooksManagementView: View {
                             .buttonStyle(.borderedProminent)
                             .tint(Color.brandGold)
                             .foregroundStyle(Color.primaryBlack)
-                            .disabled(!isAuthenticated || customers.isEmpty)
+                            .accessibilityIdentifier("ManagementCreateInvoice")
                     }
 
                     Section(header: Text("Sales Receipts").foregroundColor(Color.brandGold)) {
@@ -3147,27 +3147,13 @@ struct QuickBooksManagementView: View {
                     }
                 }
                 .sheet(isPresented: $showingNewEstimateSheet) {
-                    QuickBooksEstimateComposeView(customers: customers) { customer, amount, note, email, sendAfterCreate in
-                        createEstimate(
-                            customer: customer,
-                            amount: amount,
-                            note: note,
-                            emailAddress: email,
-                            sendAfterCreate: sendAfterCreate
-                        )
-                    }
+                    BillingDocumentsView(workspaceMode: .estimates, showsDismissButton: true,
+                                         dismissButtonTitle: "Close", startsNewDocument: true)
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingNewInvoiceSheet) {
-                    QuickBooksInvoiceComposeView(customers: customers) { customer, amount, note, email, sendAfterCreate in
-                        createInvoice(
-                            customer: customer,
-                            amount: amount,
-                            note: note,
-                            emailAddress: email,
-                            sendAfterCreate: sendAfterCreate
-                        )
-                    }
+                    BillingDocumentsView(workspaceMode: .invoices, showsDismissButton: true,
+                                         dismissButtonTitle: "Close", startsNewDocument: true)
                     .tint(Color.brandGold)
                 }
                 .sheet(isPresented: $showingNewSalesReceiptSheet) {
@@ -3907,105 +3893,6 @@ struct QuickBooksManagementView: View {
                 showCatalogPublicationQueue = true
                 showCatalogReconciliationQueue = true
                 actionMessage = workflow.failureMessage(error)
-            }
-        }
-    }
-
-    private func createEstimate(
-        customer: QuickBooksCustomer,
-        amount: Double,
-        note: String?,
-        emailAddress: String?,
-        sendAfterCreate: Bool
-    ) {
-        guard let salesItemRef = QuickBooksItemAccountResolver.defaultSalesItemRef(
-            configuration: accountingConfiguration
-        ) else {
-            actionMessage = "Open Overview → Accounting Mappings and choose a default sales item before creating estimates."
-            return
-        }
-        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let estimateEmail = trimmedEmail?.isEmpty == false ? trimmedEmail : nil
-        if sendAfterCreate, estimateEmail == nil {
-            actionMessage = "Add an email address before sending this estimate."
-            return
-        }
-
-        let payload = QuickBooksEstimateCreate(
-            CustomerRef: customer.reference,
-            Line: [salesLineItem(amount: amount, note: note, itemRef: salesItemRef)],
-            PrivateNote: note,
-            BillEmail: estimateEmail.map { QuickBooksEmailAddress(Address: $0) },
-            GlobalTaxCalculation: "TaxExcluded"
-        )
-
-        performAction(message: "Creating estimate in QuickBooks...") {
-            liveAPI.createEstimate(payload) { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success(let estimate):
-                        if sendAfterCreate {
-                            actionMessage = "Estimate created. Sending email..."
-                            sendCreatedEstimateEmail(estimate, to: estimateEmail)
-                        } else {
-                            actionMessage = "Estimate created: \(estimate.DocNumber ?? estimate.Id)"
-                            syncAllQuickBooksData()
-                        }
-                    case .failure(let error):
-                        actionMessage = "Estimate creation failed: \(error.localizedDescription)"
-                        isLoading = false
-                    }
-                }
-            }
-        }
-    }
-
-    private func createInvoice(
-        customer: QuickBooksCustomer,
-        amount: Double,
-        note: String?,
-        emailAddress: String?,
-        sendAfterCreate: Bool
-    ) {
-        guard let salesItemRef = QuickBooksItemAccountResolver.defaultSalesItemRef(
-            configuration: accountingConfiguration
-        ) else {
-            actionMessage = "Open Overview → Accounting Mappings and choose a default sales item before creating invoices."
-            return
-        }
-        let trimmedEmail = emailAddress?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let invoiceEmail = trimmedEmail?.isEmpty == false ? trimmedEmail : nil
-        if sendAfterCreate, invoiceEmail == nil {
-            actionMessage = "Add an email address before sending this invoice."
-            return
-        }
-
-        let payload = QuickBooksInvoiceCreate(
-            CustomerRef: customer.reference,
-            Line: [salesLineItem(amount: amount, note: note, itemRef: salesItemRef)],
-            PrivateNote: note,
-            BillEmail: invoiceEmail.map { QuickBooksEmailAddress(Address: $0) },
-            DueDate: QuickBooksDateOnly.string(from: Date()),
-            GlobalTaxCalculation: "TaxExcluded"
-        )
-
-        performAction(message: "Creating invoice in QuickBooks...") {
-            liveAPI.createInvoice(payload) { result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success(let invoice):
-                        if sendAfterCreate {
-                            actionMessage = "Invoice created. Sending email..."
-                            sendCreatedInvoiceEmail(invoice, to: invoiceEmail)
-                        } else {
-                            actionMessage = "Invoice created: \(invoice.DocNumber ?? invoice.Id)"
-                            syncAllQuickBooksData()
-                        }
-                    case .failure(let error):
-                        actionMessage = "Invoice creation failed: \(error.localizedDescription)"
-                        isLoading = false
-                    }
-                }
             }
         }
     }
@@ -5395,196 +5282,6 @@ private struct QuickBooksDocumentComposeView: View {
             }
             .onAppear {
                 selectedCustomerID = selectedCustomerID ?? customerRefs.first?.value
-            }
-        }
-    }
-}
-
-private struct QuickBooksEstimateComposeView: View {
-    @Environment(\.dismiss) private var dismiss
-
-    let customers: [QuickBooksCustomer]
-    let onCreate: (QuickBooksCustomer, Double, String?, String?, Bool) -> Void
-
-    @State private var selectedCustomerID: String?
-    @State private var amountText = ""
-    @State private var note = ""
-    @State private var emailAddress = ""
-    @State private var sendAfterCreate = true
-
-    private var selectedCustomer: QuickBooksCustomer? {
-        if let selectedCustomerID, let match = customers.first(where: { $0.Id == selectedCustomerID }) {
-            return match
-        }
-        return customers.first
-    }
-
-    private var customerOptions: [SearchableDropdownOption] {
-        customers.map { customer in
-            SearchableDropdownOption(
-                id: customer.Id,
-                title: customer.DisplayName,
-                subtitle: customer.PrimaryEmailAddr?.Address ?? customer.PrimaryPhone?.FreeFormNumber
-            )
-        }
-    }
-
-    private var canCreate: Bool {
-        guard let amount = Double(amountText), amount > 0 else { return false }
-        return selectedCustomer != nil &&
-        (sendAfterCreate == false || !emailAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Create Estimate") {
-                    if customers.isEmpty {
-                        Text("Sync QuickBooks customers first.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        SearchableDropdownPicker(
-                            title: "Customer",
-                            options: customerOptions,
-                            selectedID: $selectedCustomerID,
-                            placeholder: "Choose customer"
-                        )
-                    }
-
-                    TextField("Amount", text: $amountText)
-                        .keyboardType(.decimalPad)
-                    TextField("Notes", text: $note)
-                }
-
-                Section("Delivery") {
-                    Toggle("Email estimate after creating", isOn: $sendAfterCreate)
-                    TextField("Customer email", text: $emailAddress)
-                        .keyboardType(.emailAddress)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
-            }
-            .navigationTitle("Create Estimate")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(sendAfterCreate ? "Create & Send" : "Create") {
-                        guard let selectedCustomer, let amount = Double(amountText), amount > 0 else { return }
-                        onCreate(
-                            selectedCustomer,
-                            amount,
-                            note.isEmpty ? nil : note,
-                            emailAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : emailAddress,
-                            sendAfterCreate
-                        )
-                        dismiss()
-                    }
-                    .disabled(!canCreate)
-                }
-            }
-            .onAppear {
-                selectedCustomerID = selectedCustomerID ?? customers.first?.Id
-                emailAddress = selectedCustomer?.PrimaryEmailAddr?.Address ?? emailAddress
-            }
-            .onChange(of: selectedCustomerID) { _, _ in
-                emailAddress = selectedCustomer?.PrimaryEmailAddr?.Address ?? ""
-            }
-        }
-    }
-}
-
-private struct QuickBooksInvoiceComposeView: View {
-    @Environment(\.dismiss) private var dismiss
-
-    let customers: [QuickBooksCustomer]
-    let onCreate: (QuickBooksCustomer, Double, String?, String?, Bool) -> Void
-
-    @State private var selectedCustomerID: String?
-    @State private var amountText = ""
-    @State private var note = ""
-    @State private var emailAddress = ""
-    @State private var sendAfterCreate = true
-
-    private var selectedCustomer: QuickBooksCustomer? {
-        if let selectedCustomerID, let match = customers.first(where: { $0.Id == selectedCustomerID }) {
-            return match
-        }
-        return customers.first
-    }
-
-    private var customerOptions: [SearchableDropdownOption] {
-        customers.map { customer in
-            SearchableDropdownOption(
-                id: customer.Id,
-                title: customer.DisplayName,
-                subtitle: customer.PrimaryEmailAddr?.Address ?? customer.PrimaryPhone?.FreeFormNumber
-            )
-        }
-    }
-
-    private var canCreate: Bool {
-        guard let amount = Double(amountText), amount > 0 else { return false }
-        return selectedCustomer != nil &&
-        (sendAfterCreate == false || !emailAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Create Invoice") {
-                    if customers.isEmpty {
-                        Text("Sync QuickBooks customers first.")
-                            .foregroundColor(.secondary)
-                    } else {
-                        SearchableDropdownPicker(
-                            title: "Customer",
-                            options: customerOptions,
-                            selectedID: $selectedCustomerID,
-                            placeholder: "Choose customer"
-                        )
-                    }
-
-                    TextField("Amount", text: $amountText)
-                        .keyboardType(.decimalPad)
-                    TextField("Notes", text: $note)
-                }
-
-                Section("Delivery") {
-                    Toggle("Email invoice after creating", isOn: $sendAfterCreate)
-                    TextField("Customer email", text: $emailAddress)
-                        .keyboardType(.emailAddress)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
-            }
-            .navigationTitle("Create Invoice")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(sendAfterCreate ? "Create & Send" : "Create") {
-                        guard let selectedCustomer, let amount = Double(amountText), amount > 0 else { return }
-                        onCreate(
-                            selectedCustomer,
-                            amount,
-                            note.isEmpty ? nil : note,
-                            emailAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : emailAddress,
-                            sendAfterCreate
-                        )
-                        dismiss()
-                    }
-                    .disabled(!canCreate)
-                }
-            }
-            .onAppear {
-                selectedCustomerID = selectedCustomerID ?? customers.first?.Id
-                emailAddress = selectedCustomer?.PrimaryEmailAddr?.Address ?? emailAddress
-            }
-            .onChange(of: selectedCustomerID) { _, _ in
-                emailAddress = selectedCustomer?.PrimaryEmailAddr?.Address ?? ""
             }
         }
     }

@@ -1,7 +1,7 @@
 import Foundation
 
 enum BillingPublicationError: LocalizedError, Equatable {
-    case unavailable, accessRequired, reviewRequired, invalidProposal, invalidResponse
+    case unavailable, accessRequired, reviewRequired, invalidProposal, invalidResponse, savedDocumentRequired
 
     var errorDescription: String? {
         switch self {
@@ -10,6 +10,7 @@ enum BillingPublicationError: LocalizedError, Equatable {
         case .reviewRequired: "Review the original billing attempt or job assignment before sending another request. Keep the prices already sold."
         case .invalidProposal: "Review the original billing lines, dates, addresses and job assignment."
         case .invalidResponse: "The service did not confirm the original business, job or billing identity. Keep the saved draft for review."
+        case .savedDocumentRequired: "Create or edit the saved document in Invoices or Estimates, then use Billing Review for its original QuickBooks request. Direct accounting creation is unavailable."
         }
     }
 }
@@ -275,8 +276,8 @@ struct JobBillingAssignmentRequest: Codable, Equatable {
 
 /// The typed native boundary for the server migration. Every operation requires
 /// its original workflow and validates the exact returned identities. No direct
-/// accounting fallback or automatic POST retry exists here. The current billing
-/// buttons are migrated separately once address/legacy-mapping handoffs exist.
+/// accounting fallback or automatic POST retry exists here. Native billing
+/// builders and management retries share this publication boundary.
 @MainActor
 struct BillingPublicationClient {
     typealias Transport = (_ path: String, _ method: String, _ body: Data?) async throws -> Data

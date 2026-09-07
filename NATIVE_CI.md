@@ -6,7 +6,17 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
-The native billing publication candidate selects **twenty-two** iPad interface
+The billing entry-point candidate selects **twenty-four** iPad interface
+journeys. The two additions cover cancelling edited Management invoices and
+estimates without saving/sending, and saving each original document offline
+with return to the same Sales workspace. Both use the real standalone item
+builder, not a direct accounting shortcut. The existing Invoice launch journey
+also checks the shared service/repair/replacement choice. Final local evidence
+and remaining full-suite gates are recorded in
+[BILLING_ENTRY_POINT_UNIFICATION.md](BILLING_ENTRY_POINT_UNIFICATION.md).
+The new selectors require exact-head hosted qualification after publication.
+
+The preceding native billing publication checkpoint selected **twenty-two** iPad interface
 journeys, adding cancellation of an unsent proposal and read-only recovery of
 an accepted invoice without publishing again. Final local acceptance passes
 1191 logic tests per native platform, four selected iPad journeys (1195 total),
@@ -15,8 +25,10 @@ Release with verified arm64/x86_64 architectures. Six final iPad screenshots
 were visually inspected; the account-email footer remains hidden. Scope,
 backend-first rollout and evidence are recorded in
 [NATIVE_BILLING_PUBLICATION.md](NATIVE_BILLING_PUBLICATION.md).
-The two new selectors require their own exact-head hosted qualification; local
-success and preceding-head green checks are not substitutes.
+Published head `2669a4d` passes all four hosted jobs:
+[Native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34157688539) and
+[Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34157688652).
+These preceding-head green checks do not qualify the entry-point candidate.
 
 Preceding head `9821668` passes all four hosted jobs:
 [Native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34153343592) and
@@ -116,7 +128,7 @@ The published resource-sync checkpoint 529fe26 passes all four hosted jobs:
 [Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728884).
 This is exact-head evidence for that checkpoint, not subsequent catalog work.
 
-- **iPad native tests**: the complete `GunnAire OpsTests` target plus twenty-two
+- **iPad native tests**: the complete `GunnAire OpsTests` target plus twenty-four
   serial interface journeys: direct Invoice launch, simple Mail actions,
   current customer statement generation, statement review-to-Invoices,
   billing-identity review-to-Invoices with safe report export controls,
@@ -130,7 +142,8 @@ This is exact-head evidence for that checkpoint, not subsequent catalog work.
   retained tax-address review, and existing-link cancellation, original-decision
   GET recovery and safe cancellation after QuickBooks reconnection, plus native
   billing unsent-proposal cancellation and accepted-invoice read-only recovery
-  with return to the original invoice.
+  with return to the original invoice, and Management invoice/estimate unsaved
+  cancellation and original-document offline saving with return to Sales.
 - **Mac native tests**: the complete logic target on arm64 Mac Catalyst,
   followed by an unsigned optimized Release build. `lipo -verify_arch`
   requires both arm64 and x86_64 in the Release executable.

@@ -40,6 +40,7 @@ struct BillingDocumentsView: View {
     private let openTapToPayOnAppear: Bool
     private let showsDismissButton: Bool
     private let dismissButtonTitle: String
+    private let startsNewDocument: Bool
     private let liveAPI = QuickBooksDataAPI.shared
     private let googleAuth = GoogleAuthManager.shared
     private let byteCountFormatter: ByteCountFormatter = {
@@ -50,6 +51,10 @@ struct BillingDocumentsView: View {
 
     @State private var selectedDocumentKind: BillingDocumentKind
     @State private var invoiceWorkspaceLane: InvoiceWorkspaceLane = .overview
+    @State private var completedNewDocument: QuickBooksBillingDocument?
+    @State private var newDocumentSaveConfirmed = false
+    @State private var standaloneInvoiceWorkType: InvoiceWorkType = .service
+    @State private var showingNewDocumentDismissConfirmation = false
     @State private var selectedJobStage: JobDocumentationStage = .work
     @State private var selectedCustomerID: UUID?
     @State private var selectedServiceLocationID: UUID?
@@ -149,7 +154,8 @@ struct BillingDocumentsView: View {
         openCloseoutOnAppear: Bool = false,
         openTapToPayOnAppear: Bool = false,
         showsDismissButton: Bool = false,
-        dismissButtonTitle: String = "Minimize"
+        dismissButtonTitle: String = "Minimize",
+        startsNewDocument: Bool = false
     ) {
         self.initialServiceCall = initialServiceCall
         self.initialJobStage = initialJobStage
@@ -157,6 +163,7 @@ struct BillingDocumentsView: View {
         self.openTapToPayOnAppear = openTapToPayOnAppear
         self.showsDismissButton = showsDismissButton
         self.dismissButtonTitle = dismissButtonTitle
+        self.startsNewDocument = startsNewDocument
         self.workspaceMode = workspaceMode
         let initialKind: BillingDocumentKind
         if let initialServiceCall {
@@ -165,6 +172,7 @@ struct BillingDocumentsView: View {
             initialKind = workspaceMode.defaultDocumentKind
         }
         _selectedDocumentKind = State(initialValue: initialKind)
+        _invoiceWorkspaceLane = State(initialValue: startsNewDocument ? .newInvoice : .overview)
     }
 
     private var activeServiceCall: ServiceCall? {
@@ -709,6 +717,7 @@ struct BillingDocumentsView: View {
 
     private var documentActionIsDisabled: Bool {
         isCreatingDocument ||
+            (startsNewDocument && (!canViewFinancials || completedNewDocument != nil)) ||
             customerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             selectedItems.isEmpty ||
             documentDiscountValidationMessage != nil ||
@@ -1548,7 +1557,7 @@ GunnAire
     /// single generic type on a physical device can exhaust the main-thread
     /// stack before the first invoice row appears.
     private var usesStackSafeInvoiceWorkspace: Bool {
-        workspaceMode == .invoices && initialServiceCall == nil
+        (workspaceMode == .invoices || startsNewDocument) && initialServiceCall == nil
     }
 
     /// Keep the read-mostly overview and the mutation-heavy builder in
@@ -1584,16 +1593,47 @@ GunnAire
         AnyView(
             NavigationStack {
                 List {
-                    AnyView(stackSafeInvoiceLanePickerSection)
-                    AnyView(builderDetailsWorkspaceSection)
+                    if startsNewDocument, let document = completedNewDocument {
+                        Section(newDocumentSaveConfirmed ? "\(document.label) Saved" : "Save Needs Review") {
+                            Text(document.customer?.name ?? "Customer syncing")
+                                .font(.headline)
+                                .accessibilityIdentifier("ManagementBillingSavedCustomer")
+                            if case .invoice(let invoice) = document {
+                                LabeledContent("Work type", value: invoice.workType.displayName)
+                                    .accessibilityElement(children: .ignore)
+                                    .accessibilityLabel("Work type")
+                                    .accessibilityValue(invoice.workType.displayName)
+                                    .accessibilityIdentifier("ManagementBillingSavedWorkType")
+                            }
+                            Text(newDocumentSaveConfirmed
+                                 ? "Your original document is saved in GunnAire. Review its QuickBooks status below. Email and payment remain separate actions."
+                                 : "The original draft is retained, but its local save was not confirmed. Retry saving this same draft before leaving. No replacement document will be created.")
+                                .foregroundStyle(.secondary)
+                            if newDocumentSaveConfirmed {
+                                BillingPublicationReviewLink(document: document, context: modelContext)
+                                Button("Sync Saved \(document.label)") { publishBillingDocument(document) }
+                                    .disabled(!isQuickBooksConnected || billingSyncLifecycles["\(document.label)-\(document.id)"] != nil)
+                            } else {
+                                Button("Retry Saving Original Draft") { retryNewDocumentSave(document) }
+                                    .disabled(isCreatingDocument)
+                            }
+                        }
+                        if !actionMessage.isEmpty {
+                            Section { Text(actionMessage).accessibilityIdentifier("ManagementBillingSavedStatus") }
+                        }
+                    } else {
+                        if !startsNewDocument { AnyView(stackSafeInvoiceLanePickerSection) }
+                        AnyView(builderDetailsWorkspaceSection)
+                    }
                 }
-                .navigationTitle(navigationTitle)
+                .navigationTitle(startsNewDocument ? "New \(selectedDocumentKind.rawValue)" : navigationTitle)
                 .toolbar {
                     if showsDismissButton {
                         ToolbarItem(placement: .cancellationAction) {
                             Button(dismissButtonTitle) {
-                                dismiss()
+                                requestNewDocumentDismissal()
                             }
+                            .accessibilityIdentifier("ManagementBillingClose")
                         }
                     }
                 }
@@ -1831,10 +1871,44 @@ GunnAire
 
     @ViewBuilder
     var body: some View {
-        billingBody.onDisappear {
+        billingBody
+        .interactiveDismissDisabled(startsNewDocument && (hasNewDocumentEdits || isCreatingDocument))
+        .alert("Discard unsaved document?", isPresented: $showingNewDocumentDismissConfirmation) {
+            Button("Discard Unsaved Document", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) {}
+        } message: {
+            Text("Only this unsaved document will be discarded. Saved customers, pricebook items and existing invoices or estimates are retained.")
+        }
+        .onDisappear {
             for owner in billingSyncLifecycles.values { owner.cancel() }
             billingSyncLifecycles.removeAll()
         }
+    }
+
+    private var hasNewDocumentEdits: Bool {
+        startsNewDocument && !newDocumentSaveConfirmed &&
+            (completedNewDocument != nil || selectedCustomerID != nil || !selectedItems.isEmpty || !notes.isEmpty || !customerName.isEmpty || standaloneInvoiceWorkType != .service)
+    }
+
+    private func requestNewDocumentDismissal() {
+        guard !isCreatingDocument else { return }
+        if completedNewDocument != nil, !newDocumentSaveConfirmed {
+            actionMessage = "Retry saving the original draft before closing. Its save has not been confirmed."
+            return
+        }
+        if hasNewDocumentEdits { showingNewDocumentDismissConfirmation = true }
+        else { dismiss() }
+    }
+
+    private func retryNewDocumentSave(_ document: QuickBooksBillingDocument) {
+        guard startsNewDocument, canViewFinancials, !isCreatingDocument, !newDocumentSaveConfirmed,
+              completedNewDocument?.id == document.id else { return }
+        isCreatingDocument = true
+        defer { isCreatingDocument = false }
+        guard saveBillingContext(failureMessage: "Could not save the original draft") else { return }
+        newDocumentSaveConfirmed = true
+        actionMessage = "\(document.label) saved locally."
+        publishBillingDocument(document)
     }
 
     @ViewBuilder
@@ -2293,7 +2367,8 @@ GunnAire
             }
         }
         loadCustomerFinancingReadinessIfNeeded()
-        loadPendingIntentServiceCallIfNeeded()
+        // A fresh office composer must not consume an unrelated queued job route.
+        if !startsNewDocument { loadPendingIntentServiceCallIfNeeded() }
 
         if let call = activeServiceCall {
             selectedCustomerID = call.customer.id
@@ -3194,6 +3269,15 @@ GunnAire
     private var builderDetailsWorkspaceSection: some View {
                 if !isJobDocumentationMode {
                 Section(workspaceMode == .invoices ? "Invoice Details" : "Builder Details") {
+                    if selectedDocumentKind == .invoice, activeServiceCall == nil, selectedInvoiceForEditingID == nil {
+                        Picker("Work type", selection: $standaloneInvoiceWorkType) {
+                            ForEach(InvoiceWorkType.allCases) { type in
+                                Text(type.displayName).tag(type)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityIdentifier("BillingInvoiceWorkType")
+                    }
                     if workspaceMode == .all {
                         Picker("Document", selection: $selectedDocumentKind) {
                             ForEach(BillingDocumentKind.allCases) { kind in
@@ -3269,6 +3353,7 @@ GunnAire
 
                     TextField("Notes", text: $notes, axis: .vertical)
                         .lineLimit(2...5)
+                        .accessibilityIdentifier("BillingDocumentNotes")
 
                     if changeOrderParentEstimateID != nil {
                         TextField("Change order reason", text: $changeOrderReason, axis: .vertical)
@@ -3361,6 +3446,7 @@ GunnAire
                     Button(documentActionTitle) {
                         createDocument()
                     }
+                    .accessibilityIdentifier("SaveBillingDocument")
                     .buttonStyle(.borderedProminent)
                     .tint(Color.brandGold)
                     .foregroundStyle(Color.primaryBlack)
@@ -8627,7 +8713,11 @@ GunnAire
     }
 
     private func createDocument() {
-        guard !selectedLineItems.isEmpty else { return }
+        guard !isCreatingDocument, !selectedLineItems.isEmpty else { return }
+        if startsNewDocument, !canViewFinancials || completedNewDocument != nil {
+            actionMessage = "Your current business access does not allow another document from this composer."
+            return
+        }
         if let documentDiscountValidationMessage {
             actionMessage = documentDiscountValidationMessage
             return
@@ -8689,10 +8779,12 @@ GunnAire
             actionMessage = isQuickBooksConnected
                 ? "\(documentTitle) created locally. Syncing to QuickBooks..."
                 : "\(documentTitle) created locally."
+            if startsNewDocument { completedNewDocument = .estimate(estimate) }
             guard saveBillingContext(failureMessage: "Could not save estimate locally") else {
                 isCreatingDocument = false
                 return
             }
+            if startsNewDocument { newDocumentSaveConfirmed = true }
             syncEstimateIfNeeded(estimate, customer: customer, items: selectedLineItems)
             if openInvoiceAfterEstimateCreation {
                 selectedDocumentKind = .invoice
@@ -8763,7 +8855,7 @@ GunnAire
                     serviceLocationID: activeServiceCall?.serviceLocationID ?? selectedServiceLocationID,
                     siteAddress: selectedSiteAddressSnapshot,
                     customer: customer,
-                    workType: InvoiceWorkType.inferred(from: activeServiceCall),
+                    workType: activeServiceCall.map { InvoiceWorkType.inferred(from: $0) } ?? standaloneInvoiceWorkType,
                     lineItemSummary: selectedSummary,
                     catalogSnapshotJSON: selectedCatalogSnapshotJSON,
                     amount: selectedTotal,
@@ -8777,13 +8869,16 @@ GunnAire
                 activeServiceCall?.markDocumentationCompleteIfReady()
                 activeServiceCall?.status = .invoiced
                 let reportErrorMessage = prepareLinkedOnsiteReportForInvoiceCreation(invoice, serviceCall: activeServiceCall)
-                actionMessage = reportErrorMessage ?? (isQuickBooksConnected ? "Invoice created locally with onsite report. Syncing to QuickBooks..." : "Invoice created locally with onsite report.")
+                let creationMessage = activeServiceCall == nil ? "Invoice saved locally." : "Invoice created locally with onsite report."
+                actionMessage = reportErrorMessage ?? (isQuickBooksConnected ? "\(creationMessage) Syncing to QuickBooks..." : creationMessage)
             }
+            if startsNewDocument { completedNewDocument = .invoice(invoice) }
             guard saveBillingContext(failureMessage: isUpdatingExistingInvoice ? "Could not update invoice locally" : "Could not save invoice locally") else {
                 isCreatingDocument = false
                 return
             }
             let shouldReturnToInvoiceOverview = isUpdatingExistingInvoice && selectedInvoiceForEditingID == invoice.id
+            if startsNewDocument { newDocumentSaveConfirmed = true }
             syncInvoiceIfNeeded(invoice, customer: customer, items: selectedLineItems)
             if shouldReturnToInvoiceOverview {
                 finishInvoiceWorkspaceEditing()

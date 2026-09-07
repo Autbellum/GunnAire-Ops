@@ -42,7 +42,7 @@ struct JobBillingAccessView: View {
     @State private var busy = false
     @State private var confirmsSavedCrew = false
 
-    init(dispatch: JobBillingDispatch = .shared, call: ServiceCall, context: ModelContext) {
+    init(dispatch: JobBillingDispatch? = nil, call: ServiceCall, context: ModelContext) {
         self.call = call
         #if DEBUG
         if GunnAireCloudKit.usesTestDatabase,
@@ -52,7 +52,7 @@ struct JobBillingAccessView: View {
             return
         }
         #endif
-        self.dispatch = dispatch
+        self.dispatch = dispatch ?? .shared
     }
 
     private func names(_ emails: [String]) -> String {

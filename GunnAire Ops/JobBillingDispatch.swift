@@ -17,12 +17,15 @@ final class JobBillingDispatch: ObservableObject {
     private let fixture: Bool
     private var running: Set<String> = []
 
-    init(store: JobBillingJournalStore = .device, api: QuickBooksDataAPI = .shared,
-         client: BillingPublicationClient = GunnAireBackendService.billingPublicationClient,
-         actor: @escaping () -> String = { AppAccess.normalizedEmail(AppIdentity.currentEmail) },
+    init(store: JobBillingJournalStore? = nil, api: QuickBooksDataAPI? = nil,
+         client: BillingPublicationClient? = nil, actor: (() -> String)? = nil,
          validateAccess: ((ModelContext, String) throws -> Void)? = nil, fixture: Bool = false) {
-        self.store = store; self.api = api; self.client = client
-        self.actor = actor
+        // Resolve actor-isolated defaults inside this MainActor initializer,
+        // not in the caller's default-argument evaluation context.
+        self.store = store ?? .device
+        self.api = api ?? .shared
+        self.client = client ?? GunnAireBackendService.billingPublicationClient
+        self.actor = actor ?? { AppAccess.normalizedEmail(AppIdentity.currentEmail) }
         self.validateAccess = validateAccess ?? { try GoogleCalendarWorkflow.requireDispatchAccess(context: $0, email: $1) }
         self.fixture = fixture
     }

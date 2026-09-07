@@ -1250,6 +1250,9 @@ final class QuickBooksDataAPI: ObservableObject {
 
     func createEstimate(_ estimate: QuickBooksEstimateCreate, requestID: String? = nil,
                         completion: @escaping (Result<QuickBooksEstimate, Error>) -> Void) {
+        guard billingPublicationClient == nil else {
+            completion(.failure(BillingPublicationError.savedDocumentRequired)); return
+        }
         let body = try? JSONEncoder().encode(estimate)
         let queryItems = requestID.map { [URLQueryItem(name: "requestid", value: $0)] } ?? []
         performAuthorizedDecodingRequest(
@@ -1328,6 +1331,9 @@ final class QuickBooksDataAPI: ObservableObject {
         requestID: String? = nil,
         completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void
     ) {
+        guard billingPublicationClient == nil else {
+            completion(.failure(BillingPublicationError.savedDocumentRequired)); return
+        }
         let body = try? JSONEncoder().encode(invoice)
         let queryItems = requestID.map { [URLQueryItem(name: "requestid", value: $0)] } ?? []
         performAuthorizedDecodingRequest(
@@ -1353,6 +1359,9 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     func updateInvoice(_ invoice: QuickBooksInvoiceUpdate, completion: @escaping (Result<QuickBooksInvoice, Error>) -> Void) {
+        guard billingPublicationClient == nil else {
+            completion(.failure(BillingPublicationError.savedDocumentRequired)); return
+        }
         let body = try? JSONEncoder().encode(invoice)
         let requestID = UUID().uuidString
         performAuthorizedDecodingRequest(

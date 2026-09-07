@@ -1,4 +1,16 @@
-Existing QBO links checkpoint, 2026-09-07: **1174/1174 logic tests per native
+Native billing entry-point follow-up, 2026-09-07: Management invoice and
+estimate creation now uses the full saved-document builder and shared billing
+authority. Payment preparation cannot implicitly create or relink invoices or
+customers. Standalone invoices share a service/repair/replacement choice;
+completed composers retain the original document and return to Sales without
+automatic email or payment. Exact source, qualification, rollout and remaining
+requirements: [BILLING_ENTRY_POINT_UNIFICATION.md](BILLING_ENTRY_POINT_UNIFICATION.md).
+This supersedes the native-publication limitation in the historical checkpoints
+below, not their open full-suite, independent-staff CloudKit, device, provider
+and distribution gates. Backend 2026.09.07.29 requires separately approved
+deployment before distributing the shared-billing native client.
+
+Prior existing QBO links checkpoint, 2026-09-07: **1174/1174 logic tests per native
 platform, 7/7 selected iPad journeys, 349/349 Backend, 37/37 Tools and unsigned
 universal Mac Release pass**. Administrator review now adopts original
 customer/item/document IDs into shared mappings without creating or changing

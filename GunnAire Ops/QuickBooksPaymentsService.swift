@@ -139,6 +139,7 @@ final class QuickBooksPaymentsService {
         return try await api.withWorkspaceOperation { operation in
             try validateInvoiceWorkspace(invoice)
             try validatePaymentAmount(amount)
+            let validateOriginalInvoice = try invoiceCollectionValidation(invoice)
             let customerQBID = try await prepareInvoiceForQuickBooksPayment(
                 invoice,
                 catalogItems: catalogItems
@@ -147,7 +148,9 @@ final class QuickBooksPaymentsService {
             let intent = try paymentIntent(id: localPaymentID, invoice: invoice, customerID: customerQBID,
                                            amount: amount, rail: "card")
             let clientTransactionID = intent.clientTransactionID
-            let (authorized, attempt) = try await PaymentAttemptDispatcher(journal: journal, check: operation.check).dispatch(
+            let (authorized, attempt) = try await PaymentAttemptDispatcher(journal: journal, check: {
+                try operation.check(); try validateOriginalInvoice()
+            }).dispatch(
                 intent: intent, prepare: { try await self.createCardToken(cardInput) },
                 send: { token, permit in
                     try await self.createAuthorization(amount: amount, token: token.value, note: note,
@@ -209,6 +212,7 @@ final class QuickBooksPaymentsService {
         return try await api.withWorkspaceOperation { operation in
             try validateInvoiceWorkspace(invoice)
             try validatePaymentAmount(amount)
+            let validateOriginalInvoice = try invoiceCollectionValidation(invoice)
             let customerQBID = try await prepareInvoiceForQuickBooksPayment(
                 invoice,
                 catalogItems: catalogItems
@@ -217,7 +221,9 @@ final class QuickBooksPaymentsService {
             let intent = try paymentIntent(id: localPaymentID, invoice: invoice, customerID: customerQBID,
                                            amount: amount, rail: "ach")
             let clientTransactionID = intent.clientTransactionID
-            let (charge, attempt) = try await PaymentAttemptDispatcher(journal: journal, check: operation.check).dispatch(
+            let (charge, attempt) = try await PaymentAttemptDispatcher(journal: journal, check: {
+                try operation.check(); try validateOriginalInvoice()
+            }).dispatch(
                 intent: intent, prepare: { try await self.createBankAccountToken(bankInput) },
                 send: { token, permit in
                     try await self.createBankCharge(amount: amount, token: token.value, note: note,
@@ -658,6 +664,7 @@ final class QuickBooksPaymentsService {
         _ invoice: Invoice,
         catalogItems: [Item]
     ) async throws -> String {
+        let check = try invoiceCollectionValidation(invoice)
         if let blockedMessage = invoice.paymentCollectionBlockedMessage {
             throw QuickBooksPaymentsServiceError.authoritativeTaxRequired(blockedMessage)
         }
@@ -666,106 +673,44 @@ final class QuickBooksPaymentsService {
             throw QuickBooksPaymentsServiceError.quickBooksSessionExpired
         }
 
-        let customerQBID = try await ensureQuickBooksCustomer(for: invoice.customer)
-        try await ensureQuickBooksInvoice(
-            for: invoice,
-            customerQBID: customerQBID,
-            catalogItems: catalogItems
-        )
-        return customerQBID
+        try check()
+        guard let customerID = invoice.customer?.quickBooksID else {
+            throw QuickBooksPaymentsServiceError.customerNotSynced
+        }
+        return customerID
     }
 
-    private func ensureQuickBooksCustomer(for customer: Customer) async throws -> String {
-        if let quickBooksID = customer.quickBooksID.nilIfBlank {
-            return quickBooksID
+    /// Collection cannot create or modify its invoice/customer as a hidden
+    /// prerequisite. The saved billing workflow owns publication. Freeze the
+    /// local evidence across reservation, tokenization and the dispatch permit;
+    /// the shared payment journal separately checks live authority and balance.
+    private func invoiceCollectionValidation(_ invoice: Invoice) throws -> () throws -> Void {
+        try validateInvoiceWorkspace(invoice)
+        guard let customer = invoice.customer else { throw QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable }
+        guard let invoiceID = invoice.quickBooksID, PaymentAttemptRecord.isReference(invoiceID) else {
+            throw QuickBooksPaymentsServiceError.invoiceNotSyncedToQuickBooks
         }
-
-        let reconciled = try await withCheckedThrowingContinuation { continuation in
-            api.recoverOrCreateCustomer(
-                QuickBooksCustomerCreateOperation.draft(for: customer)
-            ) { result in
-                continuation.resume(with: result)
+        guard let customerID = customer.quickBooksID, PaymentAttemptRecord.isReference(customerID) else {
+            throw QuickBooksPaymentsServiceError.customerNotSynced
+        }
+        let id = invoice.id, localCustomerID = customer.id
+        let amount = invoice.amount, tax = invoice.salesTaxAmount, balance = invoice.quickBooksBalanceDue
+        let snapshot = invoice.catalogSnapshotJSON, status = invoice.status
+        let taxStatus = invoice.taxCalculationStatusRawValue, syncStatus = invoice.quickBooksSyncStatus
+        let context = invoice.modelContext
+        let modelCheck = context.map { QuickBooksBillingDocument.invoice(invoice).validation(context: $0) }
+        return {
+            try self.validateInvoiceWorkspace(invoice)
+            try modelCheck?()
+            guard invoice.id == id, invoice.customer === customer, customer.id == localCustomerID,
+                  invoice.quickBooksID == invoiceID, customer.quickBooksID == customerID,
+                  invoice.amount == amount, invoice.salesTaxAmount == tax, invoice.quickBooksBalanceDue == balance,
+                  invoice.catalogSnapshotJSON == snapshot, invoice.status == status,
+                  invoice.taxCalculationStatusRawValue == taxStatus, invoice.quickBooksSyncStatus == syncStatus,
+                  invoice.modelContext === context else { throw QuickBooksBillingWorkflowError.changed }
+            if let message = invoice.paymentCollectionBlockedMessage {
+                throw QuickBooksPaymentsServiceError.authoritativeTaxRequired(message)
             }
-        }
-        try api.checkWorkflowOperation()
-        customer.quickBooksID = reconciled.Id
-        try customer.modelContext?.save()
-        return reconciled.Id
-    }
-
-    private func ensureQuickBooksInvoice(
-        for invoice: Invoice,
-        customerQBID: String,
-        catalogItems: [Item]
-    ) async throws {
-        if invoice.quickBooksID.nilIfBlank != nil {
-            return
-        }
-
-        let inputs = try await MainActor.run {
-            try QuickBooksInvoicePublicationRecovery.publicationInputs(
-                for: invoice,
-                catalogItems: catalogItems,
-                payments: []
-            )
-        }
-        let taxAddresses = try await MainActor.run {
-            try BillingTaxAddressContext.forPublication(.invoice(invoice))
-        }
-        let payload = QuickBooksInvoiceCreate(
-            CustomerRef: QuickBooksReference(value: customerQBID, name: inputs.customerRef.name),
-            Line: inputs.lines,
-            PrivateNote: inputs.privateNote,
-            BillEmail: inputs.billEmail,
-            ShipAddr: taxAddresses?.service.quickBooksAddress ?? inputs.shipAddress,
-            ShipFromAddr: taxAddresses?.origin.quickBooksAddress,
-            DueDate: QuickBooksDateOnly.string(from: invoice.effectiveDueDate()),
-            GlobalTaxCalculation: "TaxExcluded",
-            ApplyTaxAfterDiscount: invoice.documentDiscount == nil ? nil : true
-        )
-
-        let remoteInvoices = try await withCheckedThrowingContinuation { continuation in
-            api.fetchInvoices { result in
-                continuation.resume(with: result)
-            }
-        }
-
-        let recovered = try await MainActor.run {
-            try QuickBooksInvoicePublicationRecovery.matchingRemoteInvoice(
-                for: invoice,
-                in: remoteInvoices
-            )
-        }
-
-        let confirmed: QuickBooksInvoice
-        if let recovered {
-            confirmed = recovered
-        } else {
-            confirmed = try await withCheckedThrowingContinuation { continuation in
-                api.createInvoice(
-                    payload,
-                    requestID: QuickBooksInvoiceLineage.createRequestID(for: invoice)
-                ) { result in
-                    continuation.resume(with: result)
-                }
-            }
-        }
-
-        try await MainActor.run {
-            try validateInvoiceWorkspace(invoice)
-            invoice.quickBooksID = confirmed.Id
-            invoice.quickBooksBalanceDue = confirmed.Balance
-            if let rawDueDate = confirmed.DueDate,
-               let dueDate = QuickBooksDateOnly.date(from: rawDueDate) {
-                invoice.dueDate = dueDate
-            }
-            let taxIssue = invoice.applyQuickBooksTaxResult(
-                total: confirmed.TotalAmt,
-                reportedTax: confirmed.TxnTaxDetail?.TotalTax
-            )
-            invoice.quickBooksSyncStatus = taxIssue == nil ? "synced" : "needs_attention"
-            invoice.quickBooksSyncDetail = taxIssue
-            invoice.quickBooksLastSyncedAt = Date()
         }
     }
 
@@ -1194,17 +1139,17 @@ enum QuickBooksPaymentsServiceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .customerNotSynced:
-            return "This customer needs a QuickBooks customer ID before QuickBooks Payments can be processed."
+            return "Open the saved invoice in Invoices and publish or recover its original customer link before collecting payment. No customer or invoice was created by payment preparation."
         case .invoiceRelationshipUnavailable:
             return "This payment is still waiting for its CloudKit invoice and customer links. Keep GunnAire Ops open until sync finishes, then retry; no QuickBooks request was sent."
         case .chargeNotSynced:
             return "This payment does not have a QuickBooks Payments charge ID to refund."
         case .missingSalesItemReference:
-            return "Ask an administrator to open QuickBooks Management → Overview → Accounting Mappings and choose the default sales item before creating QuickBooks invoices, payments, or refund receipts."
+            return "Ask an administrator to open QuickBooks Management → Overview → Accounting Mappings and choose the default sales item before creating the required refund receipt."
         case .invalidRetryTarget:
             return "This QuickBooks sync retry target is not valid for the requested recovery action."
         case .invoiceNotSyncedToQuickBooks:
-            return "Sync this invoice to QuickBooks before syncing or retrying the accounting payment."
+            return "Open this saved invoice in Invoices and use Billing Review to publish or recover its original QuickBooks link before collecting or syncing payment. No replacement invoice was created."
         case .quickBooksSessionExpired:
             return "Reconnect QuickBooks before processing this payment. The saved QuickBooks session could not be refreshed."
         case .invalidAmount:

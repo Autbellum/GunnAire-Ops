@@ -1,5 +1,11 @@
 # Native billing publication — candidate 2026.09.07.29
 
+Follow-on native entry-point changes are documented in
+[BILLING_ENTRY_POINT_UNIFICATION.md](BILLING_ENTRY_POINT_UNIFICATION.md).
+The historical secondary-path limitation below describes this checkpoint;
+the follow-on candidate replaces management raw creation and payment preparation
+creation with the saved-document lifecycle and explicit collection boundary.
+
 The Billing Documents invoice/estimate actions and QuickBooks Management's
 local-document retry actions now use the shared billing service. Production
 instances of `QuickBooksBillingWorkflow` cannot fall back to a direct accounting

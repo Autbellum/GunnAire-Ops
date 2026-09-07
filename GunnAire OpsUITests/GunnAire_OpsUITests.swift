@@ -577,6 +577,11 @@ final class GunnAire_OpsUITests: XCTestCase {
 
         lanePicker.buttons["New Invoice"].tap()
         XCTAssertTrue(app.staticTexts["Invoice Details"].waitForExistence(timeout: 3))
+        let workType = app.segmentedControls["BillingInvoiceWorkType"]
+        XCTAssertTrue(workType.waitForExistence(timeout: 3))
+        XCTAssertTrue(workType.buttons["Service"].isSelected)
+        XCTAssertTrue(workType.buttons["Repair"].exists)
+        XCTAssertTrue(workType.buttons["Replacement"].exists)
         XCTAssertFalse(app.staticTexts["Collections Queue"].exists)
         XCTAssertEqual(app.state, .runningForeground)
     }
@@ -641,13 +646,18 @@ final class GunnAire_OpsUITests: XCTestCase {
             "-enableSplashVideo", "NO",
             "-disableCloudKitForTesting",
             "-uiTestAuthenticatedAdmin",
+            "-appStoreScreenshotFixtures",
             "-uiTestSeedCollectibleJob",
+            "-uiTestForceQuickBooksDisconnected",
             "-GunnAirePendingAppRoute", "invoices"
         ]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
         app.launch()
 
         XCTAssertTrue(app.navigationBars["Invoices"].waitForExistence(timeout: 8))
-        let invoiceDisclosure = app.buttons["InvoiceDisclosure-\(screenshotInvoiceID)"]
+        // SwiftUI exposes the disclosure's combined customer label as the
+        // button; the identifier on its child HStack is not a button ID.
+        let invoiceDisclosure = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Blue Ridge Dental")).firstMatch
         for _ in 0..<8 where !invoiceDisclosure.exists || !invoiceDisclosure.isHittable {
             app.swipeUp()
         }
@@ -655,7 +665,7 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(invoiceDisclosure.isHittable)
         invoiceDisclosure.tap()
 
-        let editInvoice = app.buttons["Edit Line Items"]
+        let editInvoice = app.buttons["EditInvoice-\(screenshotInvoiceID)"]
         for _ in 0..<4 where !editInvoice.exists || !editInvoice.isHittable {
             app.swipeUp()
         }
@@ -3860,6 +3870,100 @@ final class GunnAire_OpsUITests: XCTestCase {
     @MainActor
     func testNativeBillingReviewCancelsUnsentProposalAndReturnsToOriginalInvoice() throws {
         try exerciseNativeBillingReview(recover: false)
+    }
+
+    @MainActor
+    private func openManagementBillingComposer(_ kind: String) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-appStoreScreenshotFixtures",
+            "-uiTestSeedCollectibleJob", "-uiTestForceQuickBooksDisconnected", "-GunnAirePendingAppRoute", "quickBooksManagement",
+            "-GunnAirePendingQuickBooksWorkspace", "sales"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 8))
+        let sales = app.segmentedControls["QuickBooksWorkspacePicker"].buttons["Sales"]
+        if !sales.isSelected { sales.tap() }
+        let create = app.buttons["ManagementCreate\(kind)"]
+        for _ in 0..<14 where !create.exists || !create.isHittable { app.swipeUp() }
+        XCTAssertTrue(create.waitForExistence(timeout: 4))
+        XCTAssertTrue(create.isEnabled, "Offline office work must not require downloaded QuickBooks customers.")
+        create.tap()
+        XCTAssertTrue(app.navigationBars["New \(kind)"].waitForExistence(timeout: 6))
+        XCTAssertFalse(app.buttons["Create & Send"].exists)
+        XCTAssertFalse(app.switches["Email \(kind.lowercased()) after creating"].exists)
+        XCTAssertFalse(app.segmentedControls["InvoiceWorkspaceLanePicker"].exists)
+        return app
+    }
+
+    @MainActor
+    private func assertReturnedToManagementSales(_ app: XCUIApplication) {
+        XCTAssertTrue(app.navigationBars["QuickBooks Management"].waitForExistence(timeout: 4))
+        let picker = app.segmentedControls["QuickBooksWorkspacePicker"]
+        for _ in 0..<14 where !picker.exists || !picker.isHittable { app.swipeDown() }
+        XCTAssertTrue(picker.waitForExistence(timeout: 3))
+        XCTAssertTrue(picker.buttons["Sales"].isSelected)
+    }
+
+    @MainActor
+    func testManagementBillingComposerCancelsWithoutCreatingOrSending() throws {
+        for kind in ["Invoice", "Estimate"] {
+            let app = openManagementBillingComposer(kind)
+            let input = app.textFields["BillingDocumentNotes"]
+            XCTAssertTrue(input.waitForExistence(timeout: 3))
+            input.tap(); input.typeText("Keep this unsaved draft")
+            app.buttons["ManagementBillingClose"].tap()
+            XCTAssertTrue(app.buttons["Keep Editing"].waitForExistence(timeout: 3))
+            app.buttons["Keep Editing"].tap()
+            XCTAssertTrue((input.value as? String)?.contains("Keep this unsaved draft") == true)
+            app.buttons["ManagementBillingClose"].tap()
+            app.buttons["Discard Unsaved Document"].tap()
+            assertReturnedToManagementSales(app)
+            app.terminate()
+        }
+    }
+
+    @MainActor
+    func testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline() throws {
+        for kind in ["Invoice", "Estimate"] {
+            let app = openManagementBillingComposer(kind)
+            if kind == "Invoice" {
+                app.segmentedControls["BillingInvoiceWorkType"].buttons["Repair"].tap()
+            }
+            let customer = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Select Customer")).firstMatch
+            XCTAssertTrue(customer.waitForExistence(timeout: 3)); customer.tap()
+            XCTAssertTrue(app.navigationBars["Customer"].waitForExistence(timeout: 3))
+            let choice = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Blue Ridge Dental")).firstMatch
+            XCTAssertTrue(choice.waitForExistence(timeout: 3)); choice.tap()
+            let search = app.textFields["Search items to add"]
+            for _ in 0..<8 where !search.exists || !search.isHittable { app.swipeUp() }
+            XCTAssertTrue(search.waitForExistence(timeout: 3))
+            search.tap(); search.typeText("HVAC Diagnostic Service")
+            let item = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "HVAC Diagnostic Service")).firstMatch
+            for _ in 0..<6 where !item.exists || !item.isHittable { app.swipeUp() }
+            XCTAssertTrue(item.waitForExistence(timeout: 3)); item.tap()
+            let hideKeyboard = app.buttons["Hide keyboard"]
+            if hideKeyboard.exists && hideKeyboard.isHittable { hideKeyboard.tap() }
+            let save = app.buttons["SaveBillingDocument"]
+            for _ in 0..<10 where !save.exists || !save.isHittable { app.swipeUp() }
+            XCTAssertTrue(save.waitForExistence(timeout: 3)); XCTAssertTrue(save.isEnabled); save.tap()
+            let savedCustomer = app.staticTexts["ManagementBillingSavedCustomer"]
+            XCTAssertTrue(savedCustomer.waitForExistence(timeout: 5))
+            let evidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            evidence.name = "Management - original \(kind.lowercased()) saved offline"
+            evidence.lifetime = .keepAlways; self.add(evidence)
+            XCTAssertEqual(savedCustomer.label, "Blue Ridge Dental")
+            if kind == "Invoice" {
+                let workType = app.descendants(matching: .any)["ManagementBillingSavedWorkType"]
+                XCTAssertTrue(workType.exists)
+                XCTAssertEqual(workType.value as? String, "Repair")
+            }
+            XCTAssertTrue(app.staticTexts["\(kind) Saved"].exists)
+            XCTAssertFalse(app.buttons["SaveBillingDocument"].exists, "The completed composer cannot create the same document twice.")
+            XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "BillingReview-")).firstMatch.exists)
+            app.buttons["ManagementBillingClose"].tap()
+            assertReturnedToManagementSales(app)
+            app.terminate()
+        }
     }
 
     @MainActor

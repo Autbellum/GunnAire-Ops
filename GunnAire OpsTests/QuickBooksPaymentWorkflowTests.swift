@@ -201,6 +201,98 @@ struct QuickBooksPaymentWorkflowTests {
         #expect(invoice.status == "unpaid")
     }
 
+    private func collectFixture(_ record: Invoice, rail: String, api: QuickBooksDataAPI,
+                                journal: FixturePaymentJournal) async throws {
+        let service = QuickBooksPaymentsService(api: api, journal: journal)
+        if rail == "card" {
+            _ = try await service.processCardPayment(localPaymentID: UUID(), invoice: record, amount: 1.23,
+                cardInput: .init(cardholderName: "Fixture", cardNumber: "4111111111111111", expMonth: "12",
+                    expYear: "2040", cvc: "123", postalCode: nil, addressLine: nil, city: nil, region: nil, country: "US"),
+                note: nil, catalogItems: [])
+        } else {
+            _ = try await service.processBankPayment(localPaymentID: UUID(), invoice: record, amount: 1.23,
+                bankInput: .init(accountHolderName: "Fixture", accountNumber: "1234", routingNumber: "490000018",
+                    phone: "2025550100", accountType: .personalChecking, checkNumber: nil), note: nil, catalogItems: [])
+        }
+    }
+
+    @Test func collectionNeverCreatesAnInvoiceOrCustomerAsAPaymentPrerequisite() async {
+        for rail in ["card", "ach"] {
+        for missing in ["invoice", "customer", "relationship", "invalid-invoice", "invalid-customer"] {
+            var sends = 0
+            let instance = api { request in sends += 1; return reply(request) }
+            let record = invoice()
+            if missing == "invoice" { record.quickBooksID = nil }
+            if missing == "customer" { record.customer.quickBooksID = nil }
+            if missing == "relationship" { record.customer = nil }
+            if missing == "invalid-invoice" { record.quickBooksID = "../invoice" }
+            if missing == "invalid-customer" { record.customer.quickBooksID = "customer/other" }
+            let journal = FixturePaymentJournal()
+            do {
+                try await collectFixture(record, rail: rail, api: instance, journal: journal)
+                Issue.record("Missing original billing identity allowed collection")
+            } catch {
+                #expect(error is QuickBooksPaymentsServiceError)
+            }
+            #expect(sends == 0 && journal.events.isEmpty)
+            #expect(record.status == "unpaid")
+        }
+        }
+    }
+
+    @Test func invoiceChangesDuringTokenizationNeverSendAChargeOrBankDebit() async {
+        for rail in ["card", "ach"] {
+        for change in ["invoice", "customer", "amount", "lines", "status"] {
+            let record = invoice()
+            var sent: [URLRequest] = []
+            let instance = api { request in
+                sent.append(request)
+                switch change {
+                case "invoice": record.quickBooksID = "replacement-invoice"
+                case "customer": record.customer.quickBooksID = "replacement-customer"
+                case "amount": record.amount = 20
+                case "lines": record.catalogSnapshotJSON = "changed"
+                default: record.status = "paid"
+                }
+                return reply(request, payload: #"{"value":"fixture-bank-token"}"#)
+            }
+            let journal = FixturePaymentJournal()
+            do {
+                try await collectFixture(record, rail: rail, api: instance, journal: journal)
+                Issue.record("Changed invoice continued into collection")
+            } catch { #expect(error as? QuickBooksBillingWorkflowError == .changed) }
+            #expect(sent.map { $0.url!.lastPathComponent } == ["tokens"])
+            #expect(!journal.events.contains("begin") && !journal.events.contains("confirm"))
+        }
+        }
+    }
+
+    @Test func sharedBillingClientsCannotBypassSavedDocumentsWithRawAccountingCreatesOrUpdates() async {
+        var sends = 0
+        let publisher = BillingPublicationClient { _, _, _ in
+            sends += 1; throw BillingPublicationError.unavailable
+        }
+        let instance = QuickBooksDataAPI(testTokens: .init(accessToken: "fixture", expiration: .distantFuture),
+            realmID: "fixture-realm", environment: Config.QuickBooks.environment, billingPublisher: publisher) { request in
+                sends += 1; return reply(request)
+            }
+        for kind in ["Invoice", "Estimate", "Update"] {
+            let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+                let finish: (Result<Void, Error>) -> Void = { continuation.resume(returning: $0) }
+                let ref = QuickBooksReference(value: "fixture-customer", name: nil)
+                switch kind {
+                case "Invoice": instance.createInvoice(.init(CustomerRef: ref, Line: [], PrivateNote: nil)) { finish($0.map { _ in () }) }
+                case "Estimate": instance.createEstimate(.init(CustomerRef: ref, Line: [], PrivateNote: nil)) { finish($0.map { _ in () }) }
+                default: instance.updateInvoice(.init(Id: "fixture-invoice", SyncToken: "1", CustomerRef: ref,
+                    Line: [], PrivateNote: nil)) { finish($0.map { _ in () }) }
+                }
+            }
+            if case .failure(let error) = result { #expect(error as? BillingPublicationError == .savedDocumentRequired) }
+            else { Issue.record("Shared billing was bypassed") }
+        }
+        #expect(sends == 0)
+    }
+
     @Test func actualRefundServiceSelectsTheOriginalPaymentRail() async {
         for method in ["card", "ach"] {
             var sent: [URLRequest] = []
