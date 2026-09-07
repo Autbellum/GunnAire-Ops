@@ -37,7 +37,8 @@ struct GoogleWorkspaceTransportTests {
             case .profile: #"{"sub":"fixture-subject","email":"provider-fixture@gunnaire.com","hd":"gunnaire.com"}"#
             case .mailRead: #"{"id":"fixture-message"}"#
             case .mailSend: #"{"id":"fixture-message","threadId":"fixture-thread"}"#
-            case .mailTrash, .calendarDelete: "{}"
+            case .mailTrash: #"{"id":"fixture-message","threadId":"fixture-thread","labelIds":["TRASH"]}"#
+            case .calendarDelete: "{}"
             case .calendarRead: #"{"items":[{"id":"fixture-calendar"}]}"#
             case .calendarCreate, .calendarPatch: #"{"id":"fixture-event","start":{},"end":{}}"#
             }

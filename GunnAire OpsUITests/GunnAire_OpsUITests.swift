@@ -441,13 +441,116 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Forward"].exists)
         app.buttons["Move to Trash"].tap()
         XCTAssertTrue(app.staticTexts["Move this message to Trash?"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["You can recover it later from Gmail Trash."].exists)
+        XCTAssertTrue(app.staticTexts["You can recover it later from Mailboxes → Trash."].exists)
         let trashEvidence = XCTAttachment(screenshot: app.screenshot())
         trashEvidence.name = "Simple Mail Trash Confirmation"
         trashEvidence.lifetime = .keepAlways
         add(trashEvidence)
         app.buttons["Cancel"].tap()
         XCTAssertTrue(app.navigationBars["Mail"].exists)
+    }
+
+    @MainActor
+    func testMailOlderMessagesSentAndArchiveHaveNaturalMailboxHandoffs() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures", "-uiTestSeedMailInbox", "-uiTestMailMailbox",
+            "-GunnAirePendingAppRoute", "mail"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 6))
+        let original = app.descendants(matching: .any)["MailMessage-ui-mail-1"]
+        let older = app.descendants(matching: .any)["MailMessage-ui-mail-older"]
+        XCTAssertTrue(original.waitForExistence(timeout: 3))
+        XCTAssertFalse(older.exists)
+        app.buttons["MailLoadOlderButton"].tap()
+        XCTAssertTrue(older.waitForExistence(timeout: 3))
+        XCTAssertTrue(original.exists)
+        XCTAssertFalse(app.buttons["MailLoadOlderButton"].exists)
+        let pages = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        pages.name = "Mail - older messages remain reachable"
+        pages.lifetime = .keepAlways
+        add(pages)
+
+        app.buttons["MailFoldersButton"].tap()
+        XCTAssertTrue(app.buttons["Sent"].waitForExistence(timeout: 3))
+        let folders = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        folders.name = "Mail - compact mailbox selection"
+        folders.lifetime = .keepAlways
+        add(folders)
+        app.buttons["Sent"].tap()
+        XCTAssertTrue(app.navigationBars["Sent"].waitForExistence(timeout: 3))
+        let sent = app.descendants(matching: .any)["MailMessage-ui-mail-sent"]
+        XCTAssertTrue(sent.waitForExistence(timeout: 3))
+        XCTAssertTrue(sent.label.contains("Taylor Customer"))
+        XCTAssertFalse(sent.label.contains("GunnAire Service"))
+        XCTAssertFalse(original.exists)
+        let sentEvidence = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        sentEvidence.name = "Mail - Sent shows the recipient"
+        sentEvidence.lifetime = .keepAlways
+        add(sentEvidence)
+
+        app.buttons["MailFoldersButton"].tap()
+        app.buttons["Inbox"].tap()
+        XCTAssertTrue(app.buttons["MailLoadOlderButton"].waitForExistence(timeout: 3))
+        app.buttons["MailLoadOlderButton"].tap()
+        XCTAssertTrue(older.waitForExistence(timeout: 3))
+        older.tap()
+        app.buttons["MailMoreActionsButton"].tap()
+        app.buttons["Mark as Unread"].tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 3))
+        XCTAssertEqual(older.value as? String, "Unread")
+        older.tap()
+        app.buttons["MailMoreActionsButton"].tap()
+        app.buttons["Archive"].tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 3))
+        XCTAssertTrue(older.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Message archived. Find it in All Mail."].exists)
+        app.buttons["MailFoldersButton"].tap()
+        app.buttons["All Mail"].tap()
+        XCTAssertTrue(app.navigationBars["All Mail"].waitForExistence(timeout: 3))
+        app.buttons["MailLoadOlderButton"].tap()
+        XCTAssertTrue(older.waitForExistence(timeout: 3))
+        XCTAssertFalse(app.staticTexts["Headers"].exists)
+        XCTAssertFalse(app.staticTexts["MIME-Version"].exists)
+    }
+
+    @MainActor
+    func testMailTrashRestoresTheOriginalMessageInsideTheApp() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-appStoreScreenshotFixtures", "-uiTestSeedMailInbox", "-GunnAirePendingAppRoute", "mail"]
+        app.launchEnvironment["GUNNAIRE_BACKEND_AUTH_MODE"] = "disabled-for-screenshot"
+        app.launch()
+        let original = app.descendants(matching: .any)["MailMessage-ui-mail-1"]
+        XCTAssertTrue(original.waitForExistence(timeout: 6))
+        original.tap()
+        app.buttons["MailMoreActionsButton"].tap()
+        app.buttons["Move to Trash"].tap()
+        XCTAssertTrue(app.alerts["Move this message to Trash?"].waitForExistence(timeout: 3))
+        app.alerts.buttons["Move to Trash"].tap()
+        XCTAssertTrue(app.staticTexts["Inbox Empty"].waitForExistence(timeout: 3))
+        XCTAssertTrue(original.waitForNonExistence(timeout: 3))
+        app.buttons["MailFoldersButton"].tap()
+        app.buttons["Trash"].tap()
+        XCTAssertTrue(app.navigationBars["Trash"].waitForExistence(timeout: 3))
+        XCTAssertTrue(original.waitForExistence(timeout: 3))
+        original.tap()
+        app.buttons["MailMoreActionsButton"].tap()
+        XCTAssertFalse(app.buttons["Move to Trash"].exists)
+        XCTAssertFalse(app.buttons["Delete Permanently"].exists)
+        app.buttons["Restore"].tap()
+        XCTAssertTrue(app.staticTexts["Trash Empty"].waitForExistence(timeout: 3))
+        app.buttons["MailFoldersButton"].tap()
+        app.buttons["All Mail"].tap()
+        XCTAssertTrue(original.waitForExistence(timeout: 3))
+        let restored = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        restored.name = "Mail - restored original message in All Mail"
+        restored.lifetime = .keepAlways
+        add(restored)
+        original.tap()
+        XCTAssertTrue(app.staticTexts["Service appointment confirmed"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'We will see you Tuesday morning'")).firstMatch.exists)
     }
 
     @MainActor

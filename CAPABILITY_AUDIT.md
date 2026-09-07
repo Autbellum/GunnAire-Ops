@@ -21,9 +21,11 @@ Shared catalog dispatch moved to the server-owned intent workflow in
 [QBO_SERVER_CATALOG_PUBLICATION.md](QBO_SERVER_CATALOG_PUBLICATION.md), and
 Calendar schedule identity/deletion handling is documented in
 [GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md](GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md).
-Mail composition, attachment forwarding and confirmed-send recovery are under
-active implementation/acceptance in
-[GMAIL_COMPOSITION_WORKFLOW.md](GMAIL_COMPOSITION_WORKFLOW.md). These migrations
+Mail composition, attachment forwarding and confirmed-send recovery have
+checkpoint acceptance in [GMAIL_COMPOSITION_WORKFLOW.md](GMAIL_COMPOSITION_WORKFLOW.md).
+Mailbox pagination, Sent/All Mail/Trash and recoverable message actions are
+integrated in [GMAIL_MAILBOX_WORKFLOW.md](GMAIL_MAILBOX_WORKFLOW.md), with final
+logic/iPad evidence and an explicit unqualified Mac UI startup gate. These migrations
 do not establish server authority or production acceptance for all workflows.
 The ten-suite feature comparison is a coverage inventory, not proof of flawless
 end-to-end behavior. CloudKit/offline convergence, historical accounting,

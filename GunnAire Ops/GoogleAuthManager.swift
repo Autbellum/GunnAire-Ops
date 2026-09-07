@@ -304,7 +304,7 @@ struct GmailSendRequest: Codable {
     let threadId: String?
 }
 
-private struct GmailLabelModificationRequest: Codable {
+struct GmailLabelModificationRequest: Codable {
     let addLabelIds: [String]
     let removeLabelIds: [String]
 }
@@ -1061,16 +1061,31 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func fetchGmailMessages(maxResults: Int = 25, query: String? = nil, completion: @escaping (Result<[GmailMessageDetail], Error>) -> Void) {
+        fetchGmailMessagePage(folder: .allMail, query: query ?? "", maxResults: maxResults) {
+            completion($0.map(\.messages))
+        }
+    }
+
+    func fetchGmailMessagePage(folder: GmailMailboxFolder, query: String = "", pageToken: String? = nil,
+                               maxResults: Int = 25, operation existingOperation: WorkspaceProviderOperation? = nil,
+                               completion: @escaping (Result<GmailMailboxPage, Error>) -> Void) {
         let operation: WorkspaceProviderOperation
-        do { operation = try captureProviderOperation() }
+        do { operation = try existingOperation ?? captureProviderOperation(); try operation.check() }
         catch { completion(.failure(error)); return }
         if let businessAccountLinkError {
             completion(.failure(businessAccountLinkError))
             return
         }
+        guard (1...50).contains(maxResults), GmailMailboxPage.validToken(pageToken), query.utf8.count <= 8_192,
+              !query.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            completion(.failure(GoogleAuthError.invalidEndpoint)); return
+        }
         var components = URLComponents(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages")
-        var queryItems = [URLQueryItem(name: "maxResults", value: String(maxResults))]
-        if let query, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        var queryItems = [URLQueryItem(name: "maxResults", value: String(maxResults)),
+                          URLQueryItem(name: "includeSpamTrash", value: folder == .trash ? "true" : "false")]
+        if let label = folder.labelID { queryItems.append(.init(name: "labelIds", value: label)) }
+        if let pageToken { queryItems.append(.init(name: "pageToken", value: pageToken)) }
+        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             queryItems.append(URLQueryItem(name: "q", value: query))
         }
         components?.queryItems = queryItems
@@ -1085,7 +1100,15 @@ final class GoogleAuthManager: NSObject, ObservableObject {
                 completion(.failure(error))
             case .success(let response):
                 let references = response.messages ?? []
-                self.fetchGmailMessageDetails(references: references, operation: operation, completion: completion)
+                guard references.count <= maxResults, GmailMailboxPage.validToken(response.nextPageToken),
+                      response.nextPageToken != pageToken || pageToken == nil,
+                      Set(references.map(\.id)).count == references.count,
+                      references.allSatisfy({ Self.calendarPathComponent($0.id) != nil && Self.calendarPathComponent($0.threadId) != nil }) else {
+                    completion(.failure(GoogleAuthError.decoding)); return
+                }
+                self.fetchGmailMessageDetails(references: references, operation: operation) { result in
+                    completion(result.map { GmailMailboxPage(messages: $0, nextPageToken: response.nextPageToken) })
+                }
             }
         }
     }
@@ -1130,37 +1153,39 @@ final class GoogleAuthManager: NSObject, ObservableObject {
     }
 
     func markGmailMessageRead(id: String, operation: WorkspaceProviderOperation? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
-        if let businessAccountLinkError {
-            completion(.failure(businessAccountLinkError))
-            return
-        }
-        guard let escapedID = Self.calendarPathComponent(id),
-              let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)/modify") else {
-            completion(.failure(GoogleAuthError.invalidEndpoint))
-            return
-        }
-        let payload = GmailLabelModificationRequest(addLabelIds: [], removeLabelIds: ["UNREAD"])
-        authorizedJSONRequest(url: url, method: "POST", body: payload, existingOperation: operation) { (result: Result<GmailMessageDetail, Error>) in
-            completion(result.flatMap { value in
-                value.id == id && value.labelIds?.contains("UNREAD") != true
-                    ? .success(()) : .failure(GoogleAuthError.decoding)
-            })
-        }
+        changeGmailMessage(id: id, action: .read, operation: operation) { completion($0.map { _ in () }) }
     }
 
     /// Gmail's recoverable delete action. Messages are moved to Trash instead
     /// of being permanently deleted so office staff can recover mistakes.
     func moveGmailMessageToTrash(id: String, operation: WorkspaceProviderOperation? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
+        changeGmailMessage(id: id, action: .trash, operation: operation) { completion($0.map { _ in () }) }
+    }
+
+    func changeGmailMessage(id: String, threadID: String? = nil, action: GmailMailboxAction,
+                            operation: WorkspaceProviderOperation? = nil,
+                            completion: @escaping (Result<GmailMessageDetail, Error>) -> Void) {
         if let businessAccountLinkError {
             completion(.failure(businessAccountLinkError))
             return
         }
         guard let escapedID = Self.calendarPathComponent(id),
-              let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)/trash") else {
+              threadID.map({ Self.calendarPathComponent($0) != nil }) != false,
+              let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)/\(action.endpoint)") else {
             completion(.failure(GoogleAuthError.invalidEndpoint))
             return
         }
-        authorizedEmptyRequest(url: url, method: "POST", existingOperation: operation, completion: completion)
+        let verified: (Result<GmailMessageDetail, Error>) -> Void = { result in
+            completion(result.flatMap { value in
+                value.id == id && (threadID == nil || value.threadId == threadID) && action.confirmed(by: value)
+                    ? .success(value) : .failure(GoogleAuthError.decoding)
+            })
+        }
+        if action == .trash || action == .restore {
+            authorizedJSONDataRequest(url: url, method: "POST", body: Data(), existingOperation: operation, completion: verified)
+        } else {
+            authorizedJSONRequest(url: url, method: "POST", body: action.labels, existingOperation: operation, completion: verified)
+        }
     }
 
     func sendGmailMessage(
@@ -1353,13 +1378,19 @@ final class GoogleAuthManager: NSObject, ObservableObject {
 
         for reference in references {
             group.enter()
-            let escapedID = reference.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? reference.id
+            guard let escapedID = Self.calendarPathComponent(reference.id) else {
+                if firstError == nil { firstError = GoogleAuthError.invalidEndpoint }
+                group.leave()
+                continue
+            }
             let url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(escapedID)?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=To"
             authorizedGET(url, existingOperation: operation) { (result: Result<GmailMessageDetail, Error>) in
                 // All authorized request callbacks are delivered on MainActor.
                 switch result {
                 case .success(let detail):
-                    details.append(detail)
+                    if detail.id == reference.id && detail.threadId == reference.threadId {
+                        details.append(detail)
+                    } else if firstError == nil { firstError = GoogleAuthError.decoding }
                 case .failure(let error):
                     if firstError == nil { firstError = error }
                 }
@@ -1372,7 +1403,8 @@ final class GoogleAuthManager: NSObject, ObservableObject {
             if let firstError {
                 completion(.failure(firstError))
             } else {
-                let sorted = details.sorted { ($0.internalDate ?? "") > ($1.internalDate ?? "") }
+                let byID = Dictionary(uniqueKeysWithValues: details.map { ($0.id, $0) })
+                let sorted = references.compactMap { byID[$0.id] }
                 completion(.success(sorted))
             }
         }

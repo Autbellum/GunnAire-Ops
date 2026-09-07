@@ -6,6 +6,19 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
+Published Mail/workflow head `3348725` passes all four hosted jobs:
+[Native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34121851059) and
+[Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34121851023).
+The mailbox candidate adds older-message/Sent/archive and Trash/restore
+journeys, for twelve hosted selections. Its distinct acceptance is documented
+in [GMAIL_MAILBOX_WORKFLOW.md](GMAIL_MAILBOX_WORKFLOW.md); previous-head results
+do not qualify this new source.
+Local mailbox acceptance passes 1081 logic tests per platform and ten selected
+iPad journeys, plus Backend 173 and Tools 37. An attempted Mac UI journey
+stalled before test startup; it was diagnosed and cancelled, not marked passed
+or suppressed in a workflow. The hosted Mac job continues to exercise its
+existing logic/Release gate, not Mac UI acceptance.
+
 The published Calendar/documentation head `d9a83d8` passes all four hosted jobs:
 [native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34113375386) and
 [backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34113375391).
@@ -42,14 +55,15 @@ The published resource-sync checkpoint 529fe26 passes all four hosted jobs:
 [Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728884).
 This is exact-head evidence for that checkpoint, not subsequent catalog work.
 
-- **iPad native tests**: the complete `GunnAire OpsTests` target plus ten
+- **iPad native tests**: the complete `GunnAire OpsTests` target plus twelve
   serial interface journeys: direct Invoice launch, simple Mail actions,
   current customer statement generation, statement review-to-Invoices,
   billing-identity review-to-Invoices with safe report export controls,
   shared catalog recovery with cancellation of only an unsent proposal,
   exact-target schedule deletion with billed-job retention, editable draft
   recovery after a rejected send, uncertain-send duplicate prevention, and
-  native attachment preview/forward/removal.
+  native attachment preview/forward/removal, mailbox pagination/Sent/archive,
+  and recoverable Trash/restore inside the app.
 - **Mac native tests**: the complete logic target on arm64 Mac Catalyst,
   followed by an unsigned optimized Release build. `lipo -verify_arch`
   requires both arm64 and x86_64 in the Release executable.

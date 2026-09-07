@@ -111,16 +111,18 @@ struct GmailView: View {
     @Environment(\.modelContext) private var modelContext
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
 
-    @State private var messages: [GmailMessageDetail] = []
-    @State private var isLoading = false
-    @State private var statusMessage: String?
+    @StateObject private var mailbox = Self.makeMailbox()
     @State private var searchQuery = ""
-    @State private var deletingMessageIDs: Set<String> = []
     @State private var activeMailSend: GmailSendWorkflow?
-    @State private var mailboxOperation: WorkspaceProviderOperation?
-    @State private var mailLoadRun = UUID()
     @State private var composeDraft: GmailDraft?
     @State private var didConsumePendingDraft = false
+
+    private var messages: [GmailMessageDetail] { mailbox.messages }
+    private var isLoading: Bool { mailbox.isLoading }
+    private var statusMessage: String? {
+        get { mailbox.status }
+        nonmutating set { mailbox.status = newValue }
+    }
 
     private var usesMailUITestFixture: Bool {
         #if DEBUG
@@ -162,11 +164,16 @@ struct GmailView: View {
                         Spacer()
                     }
                     .listRowBackground(Color.clear)
+                } else if !mailbox.hasLoaded && messages.isEmpty {
+                    ContentUnavailableView("Mail Unavailable", systemImage: "envelope.badge",
+                        description: Text("Refresh to load this mailbox."))
+                        .listRowBackground(Color.clear)
                 } else if messages.isEmpty {
                     ContentUnavailableView(
-                        searchQuery.nilIfBlank == nil ? "Inbox Empty" : "No Results",
+                        mailbox.nextPageToken != nil ? "No Messages on This Page" : mailbox.query.isEmpty ? "\(mailbox.folder.rawValue) Empty" : "No Results",
                         systemImage: searchQuery.nilIfBlank == nil ? "tray" : "magnifyingglass",
-                        description: Text(searchQuery.nilIfBlank == nil ? "New messages will appear here." : "Try a different search.")
+                        description: Text(mailbox.nextPageToken != nil ? "Load older messages to continue."
+                            : mailbox.query.isEmpty ? "Messages in this mailbox will appear here." : "Try a different search.")
                     )
                     .listRowBackground(Color.clear)
                 } else {
@@ -175,34 +182,62 @@ struct GmailView: View {
                             GmailMessageDetailView(
                                 message: message,
                                 loadsRemoteMessage: !usesMailUITestFixture,
-                                provider: mailboxOperation,
+                                provider: mailbox.provider,
+                                mailbox: mailbox,
                                 onReply: { draft in
                                     composeDraft = draft
-                                },
-                                onDelete: trashMessage,
-                                onRead: markMessageRead
+                                }
                             )
                         } label: {
                             GmailMessageRow(
                                 message: message,
-                                isDeleting: deletingMessageIDs.contains(message.id)
+                                folder: mailbox.folder,
+                                isDeleting: mailbox.busyIDs.contains(message.id)
                             )
                         }
-                        .disabled(deletingMessageIDs.contains(message.id))
+                        .disabled(mailbox.busyIDs.contains(message.id))
                         .accessibilityIdentifier("MailMessage-\(message.id)")
                         .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                trashMessage(message)
+                            if mailbox.folder == .trash {
+                                Button { mailbox.perform(.restore, on: message) } label: {
+                                    Label("Restore", systemImage: "arrow.uturn.backward")
+                                }.tint(.blue)
+                            } else {
+                                Button(role: .destructive) { trashMessage(message) } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
+                        .swipeActions(edge: .leading) {
+                            Button {
+                                mailbox.perform((message.labelIds ?? []).contains("UNREAD") ? .read : .unread, on: message)
                             } label: {
-                                Label("Delete", systemImage: "trash")
+                                Label((message.labelIds ?? []).contains("UNREAD") ? "Mark as Read" : "Mark as Unread", systemImage: "envelope")
+                            }.tint(.blue)
+                            if mailbox.folder == .inbox {
+                                Button { mailbox.perform(.archive, on: message) } label: {
+                                    Label("Archive", systemImage: "archivebox")
+                                }.tint(.gray)
                             }
                         }
                     }
                 }
+                if mailbox.nextPageToken != nil && isMailConnected && canUseGoogleIntegration {
+                    Button { mailbox.loadMore() } label: {
+                        HStack {
+                            Spacer()
+                            if isLoading { ProgressView("Loading older messages…") }
+                            else { Text("Load Older Messages") }
+                            Spacer()
+                        }.padding(.vertical, 8)
+                    }
+                    .disabled(isLoading || !mailbox.busyIDs.isEmpty)
+                    .accessibilityIdentifier("MailLoadOlderButton")
+                }
             }
             .listStyle(.plain)
             .accessibilityIdentifier("MailInboxList")
-            .navigationTitle("Inbox")
+            .navigationTitle(mailbox.folder.rawValue)
             .searchable(text: $searchQuery, prompt: "Search mail")
             .safeAreaInset(edge: .bottom) {
                 if let statusMessage, !statusMessage.isEmpty {
@@ -224,13 +259,24 @@ struct GmailView: View {
                 }
             }
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItemGroup(placement: .navigationBarLeading) {
+                    Menu {
+                        Picker("Mailbox", selection: Binding(get: { mailbox.folder }, set: { loadMessages(folder: $0) })) {
+                            ForEach(GmailMailboxFolder.allCases) { folder in
+                                Label(folder.rawValue, systemImage: folder.symbol).tag(folder)
+                            }
+                        }
+                        .disabled(!canUseGoogleIntegration || !mailbox.busyIDs.isEmpty)
+                    } label: {
+                        Label("Mailboxes", systemImage: "tray.2")
+                    }
+                    .accessibilityIdentifier("MailFoldersButton")
                     Button {
                         loadMessages()
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
-                    .disabled(isLoading || !canUseGoogleIntegration)
+                    .disabled(isLoading || !canUseGoogleIntegration || !mailbox.busyIDs.isEmpty)
                     .accessibilityIdentifier("MailRefreshButton")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -251,6 +297,9 @@ struct GmailView: View {
             }
             .onSubmit(of: .search) {
                 loadMessages()
+            }
+            .onChange(of: searchQuery) { oldValue, newValue in
+                if !oldValue.isEmpty && newValue.isEmpty { loadMessages() }
             }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GunnAireRouteDidChange"))) { _ in
                 applyPendingDraftIfNeeded(force: true)
@@ -275,22 +324,9 @@ struct GmailView: View {
         }
     }
 
-    private func loadMessages(preservingStatus: Bool = false) {
-        if usesMailUITestFixture {
-            let search = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            messages = search.isEmpty ? Self.uiTestMessages : Self.uiTestMessages.filter { message in
-                [
-                    GmailMessagePresentation.headerValue(named: "From", in: message),
-                    GmailMessagePresentation.headerValue(named: "Subject", in: message),
-                    message.snippet
-                ]
-                .compactMap { $0?.lowercased() }
-                .contains { $0.contains(search) }
-            }
-            isLoading = false
-            if !preservingStatus {
-                statusMessage = nil
-            }
+    private func loadMessages(folder: GmailMailboxFolder? = nil, preservingStatus: Bool = false) {
+        guard mailbox.busyIDs.isEmpty else {
+            statusMessage = "Wait for the message change to finish, then try again."
             return
         }
         guard canUseGoogleIntegration else {
@@ -299,30 +335,14 @@ struct GmailView: View {
                 : "Connect Google in Settings first."
             return
         }
-
-        let run = UUID()
-        mailLoadRun = run
-        guard let retainedOperation = try? googleAuth.captureProviderOperation() else { return }
-        isLoading = true
-        if !preservingStatus {
-            statusMessage = nil
-        }
-        googleAuth.fetchGmailMessages(query: GmailMessagePresentation.inboxQuery(searchText: searchQuery)) { result in
-            DispatchQueue.main.async {
-                guard mailLoadRun == run, (try? retainedOperation.check()) != nil else { return }
-                isLoading = false
-                switch result {
-                case .success(let loadedMessages):
-                    mailboxOperation = retainedOperation
-                    messages = loadedMessages
-                    if !preservingStatus {
-                        statusMessage = nil
-                    }
-                case .failure:
-                    messages = []
-                    statusMessage = "Mail couldn't be refreshed. Check your Google connection in Settings and try again."
-                }
-            }
+        do {
+            let provider = try usesMailUITestFixture ? WorkspaceProviderOperation { true }
+                : GmailMailbox.captureAccess(auth: googleAuth, context: modelContext)
+            mailbox.refresh(folder: folder ?? mailbox.folder, query: searchQuery,
+                            provider: provider, preservingStatus: preservingStatus)
+        } catch {
+            mailbox.clear()
+            statusMessage = "Verify your Mail access and Google connection in Settings, then refresh."
         }
     }
 
@@ -358,55 +378,12 @@ struct GmailView: View {
     }
 
     private func clearMailbox() {
-        mailLoadRun = UUID()
-        mailboxOperation = nil
-        messages = []
-        deletingMessageIDs = []
-        isLoading = false
+        mailbox.clear()
         composeDraft = nil
-        statusMessage = nil
-    }
-
-    private func markMessageRead(_ message: GmailMessageDetail) {
-        guard (message.labelIds ?? []).contains("UNREAD") else { return }
-        if usesMailUITestFixture {
-            guard let index = messages.firstIndex(where: { $0.id == message.id }) else { return }
-            messages[index] = GmailMessagePresentation.removingUnreadLabel(from: messages[index])
-            return
-        }
-        guard let provider = mailboxOperation, (try? provider.check()) != nil else { return }
-        googleAuth.markGmailMessageRead(id: message.id, operation: provider) { result in
-            guard case .success = result else { return }
-            DispatchQueue.main.async {
-                guard (try? provider.check()) != nil,
-                      let index = messages.firstIndex(where: { $0.id == message.id }) else { return }
-                messages[index] = GmailMessagePresentation.removingUnreadLabel(from: messages[index])
-            }
-        }
     }
 
     private func trashMessage(_ message: GmailMessageDetail) {
-        guard canUseGoogleIntegration, !deletingMessageIDs.contains(message.id) else { return }
-        if usesMailUITestFixture {
-            messages.removeAll { $0.id == message.id }
-            statusMessage = "Message moved to Trash."
-            return
-        }
-        guard let provider = mailboxOperation, (try? provider.check()) != nil else { return }
-        deletingMessageIDs.insert(message.id)
-        googleAuth.moveGmailMessageToTrash(id: message.id, operation: provider) { result in
-            DispatchQueue.main.async {
-                guard (try? provider.check()) != nil else { return }
-                deletingMessageIDs.remove(message.id)
-                switch result {
-                case .success:
-                    messages.removeAll { $0.id == message.id }
-                    statusMessage = "Message moved to Trash."
-                case .failure:
-                    statusMessage = "The message couldn't be moved to Trash. Refresh and try again."
-                }
-            }
-        }
+        mailbox.perform(.trash, on: message)
     }
 
     private func applyPendingDraftIfNeeded(force: Bool = false) {
@@ -430,6 +407,54 @@ struct GmailView: View {
         )
     }
 
+    private static func makeMailbox() -> GmailMailbox {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-uiTestSeedMailInbox") {
+            var fixtures = uiTestMessages
+            if ProcessInfo.processInfo.arguments.contains("-uiTestMailMailbox") {
+                let base = fixtures[0]
+                fixtures.append(.init(id: "ui-mail-older", threadId: "ui-thread-older", labelIds: ["INBOX"],
+                    snippet: "Previous equipment visit.", internalDate: "1788000000000",
+                    payload: .init(headers: [.init(name: "From", value: "Previous Customer"),
+                        .init(name: "Subject", value: "Earlier service visit")], mimeType: "text/plain",
+                        body: .init(data: Data("Older service history.".utf8).base64EncodedString(), size: 22), parts: nil, filename: nil)))
+                fixtures.append(.init(id: "ui-mail-sent", threadId: "ui-thread-sent", labelIds: ["SENT"],
+                    snippet: "Your repair estimate is attached.", internalDate: base.internalDate,
+                    payload: .init(headers: [.init(name: "From", value: "GunnAire Service"),
+                        .init(name: "To", value: "Taylor Customer"), .init(name: "Subject", value: "Repair estimate sent")],
+                        mimeType: "text/plain", body: .init(data: Data("Estimate follow-up.".utf8).base64EncodedString(), size: 19), parts: nil, filename: nil)))
+            }
+            return GmailMailbox(loader: { folder, query, token, operation in
+                try operation.check()
+                let filtered = fixtures.filter(folder.contains).filter { message in
+                    query.isEmpty || ["From", "To", "Subject"].compactMap {
+                        GmailMessagePresentation.headerValue(named: $0, in: message)
+                    }.joined(separator: " ").localizedCaseInsensitiveContains(query)
+                }
+                let offset = token.flatMap(Int.init) ?? 0
+                let next = offset + 1
+                return .init(messages: Array(filtered.dropFirst(offset).prefix(1)),
+                             nextPageToken: next < filtered.count ? String(next) : nil)
+            }, mutator: { message, action, operation in
+                try operation.check()
+                guard let index = fixtures.firstIndex(where: { $0.id == message.id }) else { throw GoogleAuthError.noData }
+                var labels = Set(fixtures[index].labelIds ?? [])
+                switch action {
+                case .read: labels.remove("UNREAD")
+                case .unread: labels.insert("UNREAD")
+                case .archive: labels.remove("INBOX")
+                case .trash: labels.insert("TRASH")
+                case .restore: labels.remove("TRASH")
+                }
+                fixtures[index] = fixtures[index].replacingLabels(Array(labels).sorted())
+                return fixtures[index]
+            })
+        }
+        #endif
+        return GmailMailbox()
+    }
+
+    #if DEBUG
     private static var uiTestMessages: [GmailMessageDetail] {
         let html = "<div>Your service appointment is confirmed.</div><p>We will see you Tuesday morning.</p>"
         let encodedHTML = Data(html.utf8)
@@ -469,10 +494,12 @@ struct GmailView: View {
             )
         ]
     }
+    #endif
 }
 
 private struct GmailMessageRow: View {
     let message: GmailMessageDetail
+    let folder: GmailMailboxFolder
     let isDeleting: Bool
 
     private var isUnread: Bool {
@@ -489,7 +516,7 @@ private struct GmailMessageRow: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(GmailMessagePresentation.headerValue(named: "From", in: message) ?? "Unknown sender")
+                    Text(folder.correspondent(message))
                         .font(.headline)
                         .fontWeight(isUnread ? .semibold : .regular)
                         .lineLimit(1)
@@ -516,7 +543,7 @@ private struct GmailMessageRow: View {
             if isDeleting {
                 ProgressView()
                     .controlSize(.small)
-                    .accessibilityLabel("Moving message to Trash")
+                    .accessibilityLabel("Updating message")
             }
         }
         .padding(.vertical, 5)
@@ -544,10 +571,18 @@ private struct GmailMessageDetailView: View {
     @ObservedObject private var googleAuth = GoogleAuthManager.shared
     let message: GmailMessageDetail
     let loadsRemoteMessage: Bool
-    let provider: WorkspaceProviderOperation?
+    @State private var provider: WorkspaceProviderOperation?
+    @ObservedObject var mailbox: GmailMailbox
     let onReply: (GmailDraft) -> Void
-    let onDelete: (GmailMessageDetail) -> Void
-    let onRead: (GmailMessageDetail) -> Void
+
+    init(message: GmailMessageDetail, loadsRemoteMessage: Bool, provider: WorkspaceProviderOperation?,
+         mailbox: GmailMailbox, onReply: @escaping (GmailDraft) -> Void) {
+        self.message = message
+        self.loadsRemoteMessage = loadsRemoteMessage
+        _provider = State(initialValue: provider)
+        _mailbox = ObservedObject(wrappedValue: mailbox)
+        self.onReply = onReply
+    }
 
     @State private var loadedMessage: GmailMessageDetail?
     @State private var isLoading = false
@@ -661,15 +696,31 @@ private struct GmailMessageDetailView: View {
                     }
                     .disabled(!canReadFullMessage || isPreparingAttachment)
                     Divider()
-                    Button(role: .destructive) {
-                        showingDeleteConfirmation = true
-                    } label: {
-                        Label("Move to Trash", systemImage: "trash")
+                    Button {
+                        mailbox.perform(.unread, on: activeMessage, provider: provider)
+                        dismiss()
+                    } label: { Label("Mark as Unread", systemImage: "envelope.badge") }
+                    if mailbox.folder == .inbox {
+                        Button {
+                            mailbox.perform(.archive, on: activeMessage, provider: provider)
+                            dismiss()
+                        } label: { Label("Archive", systemImage: "archivebox") }
+                    }
+                    if mailbox.folder == .trash {
+                        Button {
+                            mailbox.perform(.restore, on: activeMessage, provider: provider)
+                            dismiss()
+                        } label: { Label("Restore", systemImage: "arrow.uturn.backward") }
+                    } else {
+                        Button(role: .destructive) {
+                            showingDeleteConfirmation = true
+                        } label: { Label("Move to Trash", systemImage: "trash") }
                     }
                 } label: {
                     Label("More", systemImage: "ellipsis.circle")
                 }
                 .accessibilityIdentifier("MailMoreActionsButton")
+                .disabled(mailbox.busyIDs.contains(message.id))
             }
         }
         .sheet(item: $previewFile, onDismiss: clearPreview) { file in
@@ -678,14 +729,14 @@ private struct GmailMessageDetailView: View {
         .alert("Move this message to Trash?", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Move to Trash", role: .destructive) {
-                onDelete(activeMessage)
+                mailbox.perform(.trash, on: activeMessage, provider: provider)
                 dismiss()
             }
         } message: {
-            Text("You can recover it later from Gmail Trash.")
+            Text("You can recover it later from Mailboxes → Trash.")
         }
         .onAppear {
-            onRead(message)
+            mailbox.perform(.read, on: message, provider: provider)
             if loadsRemoteMessage {
                 loadMessageIfNeeded()
             }
@@ -701,6 +752,10 @@ private struct GmailMessageDetailView: View {
             attachmentRun = UUID()
             previewFile = nil
             clearPreview()
+            if loadsRemoteMessage { dismiss() }
+        }
+        .onChange(of: googleAuth.isAuthenticated) { _, connected in
+            if loadsRemoteMessage && !connected { dismiss() }
         }
     }
 

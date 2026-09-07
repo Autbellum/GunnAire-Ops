@@ -1,3 +1,23 @@
+Mailbox checkpoint, 2026-09-07: **1081/1081 logic tests pass on each native
+platform, 10/10 selected iPad journeys, Backend 173/173 and Tools 37/37**.
+Mail now exposes older messages, Sent/All Mail/Trash, read/unread, archive and
+in-app restoration through the existing simple interface. Page/action results
+retain the original business/provider and message/thread identity; failed
+pages preserve their cursor and rows, and uncertain mutations do not report
+success or retry automatically. Thirty-two new logic tests and four visually
+checked final iPad PNGs are documented in
+[GMAIL_MAILBOX_WORKFLOW.md](GMAIL_MAILBOX_WORKFLOW.md). The final unsigned
+universal Mac Release passes and both architectures are verified. An additional Mac UI runner stalled at dyld startup;
+macOS developer authorization is disabled, no setting was changed, and the
+specific diagnostic run was cancelled and preserved. **Mac UI acceptance is
+not proved** by logic or iPad tests. Prior published `3348725` passes all four
+hosted jobs, not a substitute for this new source's checks. Durable/server-owned
+Mail dispatch, cross-restart drafts, received-mail/job/file linkage, remaining
+Google/accounting workflows, signed CloudKit/offline multi-device convergence,
+approved Tap to Pay and provider/platform release acceptance remain open. No
+merge, deployment, signing/entitlement change, physical install or live
+business/provider mutation occurred.
+
 Mail workflow checkpoint, 2026-09-07: **1049/1049 logic tests pass on each of
 iPad Simulator and Mac Catalyst; 8/8 selected iPad UI journeys, 173/173 Backend
 and 37/37 Tools tests pass**. Native attachment preview, complete forwarding,
