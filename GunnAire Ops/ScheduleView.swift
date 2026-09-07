@@ -342,17 +342,12 @@ struct ScheduleView: View {
 
                         if let syncMessage {
                             Text(syncMessage)
+                                .accessibilityIdentifier("ScheduleSyncStatus")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)
                         }
 
-                        if googleAuth.isAuthenticated {
-                            Text("If Google Calendar sync was connected before the calendar permission update, disconnect Google in Settings and reconnect it once so the app can request fresh calendar permission.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 2)
-                        }
                     }
                 }
                 .padding(.horizontal)
@@ -562,19 +557,18 @@ struct ScheduleView: View {
                         get: { deleteConfirmationCall != nil },
                         set: { if !$0 { deleteConfirmationCall = nil } }
                     ),
-                    titleVisibility: .visible
-                ) {
+                    titleVisibility: .visible,
+                    presenting: deleteConfirmationCall
+                ) { call in
                     Button("Delete Event", role: .destructive) {
-                        if let call = deleteConfirmationCall {
-                            deleteCall(call)
-                        }
+                        deleteCall(call)
                         deleteConfirmationCall = nil
                     }
                     Button("Cancel", role: .cancel) {
                         deleteConfirmationCall = nil
                     }
-                } message: {
-                    Text("This removes the event from the app. If it came from Google Calendar, sync will remember not to import it again.")
+                } message: { call in
+                    Text("Delete \(call.eventTitle ?? call.type.displayName)? App-managed Google events are checked first. Jobs with work or billing history must be cancelled instead.")
                 }
             }
         }
@@ -1631,7 +1625,9 @@ struct ScheduleView: View {
                     Label("+\(call.additionalTechnicianIDs.count) crew", systemImage: "person.2.fill")
                 }
                 if call.googleEventID != nil {
-                    Label("Google", systemImage: "calendar.badge.checkmark")
+                    // A retained link can also be an unconfirmed reservation.
+                    // Its existence is not fresh provider-sync evidence.
+                    Label("Google", systemImage: "calendar")
                 }
                 if call.documentationStartedAt != nil {
                     Label("Started", systemImage: "doc.text")
@@ -1753,63 +1749,26 @@ struct ScheduleView: View {
     }
 
     private func deleteCall(_ call: ServiceCall) {
-        guard AppAccess.canPerformScheduleMutation(
-            .deleteServiceCall,
-            email: AppIdentity.currentEmail,
-            users: users
-        ) else {
-            syncMessage = "Dispatcher or administrator access is required to delete schedule entries."
-            return
-        }
-        let shouldTryGoogleDelete = GoogleCalendarScheduleSync.shouldAttemptManagedCalendarDeletion(for: call)
-        if call.googleEventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
-            GoogleCalendarScheduleSync.markCalendarEventDeleted(calendarID: call.googleCalendarID, eventID: call.googleEventID)
-        }
-
-        let calendarID = call.googleCalendarID
-        let eventID = call.googleEventID
-        let hasGoogleEventID = eventID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        let isLocallyMarkedManagedByApp = call.googleEventManagedByApp
-        modelContext.delete(call)
-        try? modelContext.save()
-        syncMessage = "Event deleted from the app."
-
-        guard shouldTryGoogleDelete,
-              googleAuth.isAuthenticated,
-              let eventID,
-              !eventID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return
-        }
-
-        googleAuth.fetchCalendarEvent(calendarID: calendarID ?? "primary", eventID: eventID) { fetchResult in
-            switch fetchResult {
-            case .failure(let error):
-                DispatchQueue.main.async {
-                    syncMessage = "Event deleted from the app. Google Calendar was not changed: \(error.localizedDescription)"
-                }
-            case .success(let remoteEvent):
-                guard GoogleCalendarScheduleSync.shouldDeleteExistingGoogleCalendarEvent(
-                    hasGoogleEventID: hasGoogleEventID,
-                    isLocallyMarkedManagedByApp: isLocallyMarkedManagedByApp,
-                    remoteEvent: remoteEvent
-                ) else {
-                    DispatchQueue.main.async {
-                        syncMessage = "Event deleted from the app. Google-owned calendar details were left unchanged."
-                    }
+        do {
+            try GoogleCalendarWorkflow.requireDispatchAccess(context: modelContext, email: AppIdentity.currentEmail)
+            try GoogleCalendarScheduleSync.validateRemoval(call, context: modelContext)
+            if GoogleCalendarScheduleSync.shouldAttemptManagedCalendarDeletion(for: call) {
+                guard googleAuth.isAuthenticated else {
+                    syncMessage = "Reconnect Google before deleting this linked event. The appointment has been retained."
                     return
                 }
-                googleAuth.deleteCalendarEvent(calendarID: calendarID ?? "primary", eventID: eventID) { result in
-                    DispatchQueue.main.async {
-                        switch result {
-                        case .success:
-                            syncMessage = "Event deleted from the app and Google Calendar."
-                        case .failure(let error):
-                            syncMessage = "Event deleted from the app. Google Calendar did not delete it: \(error.localizedDescription)"
-                        }
+                syncMessage = "Checking the original Google Calendar event..."
+                GoogleCalendarScheduleSync.deleteImmediately(call: call, auth: googleAuth, modelContext: modelContext) { result in
+                    switch result {
+                    case .success(let message): syncMessage = message
+                    case .failure(let error): syncMessage = error.localizedDescription
                     }
                 }
+            } else {
+                try GoogleCalendarScheduleSync.removeLocalEntry(call, context: modelContext)
+                syncMessage = "Deleted the local calendar entry. Externally managed Google events were left unchanged."
             }
-        }
+        } catch { syncMessage = error.localizedDescription }
     }
 
     private func sectionTitle(_ title: String) -> some View {

@@ -1,3 +1,26 @@
+Google Calendar schedule checkpoint, 2026-09-07: **998/998 logic tests pass
+on each of iPad Simulator and Mac Catalyst; 7/7 selected iPad UI journeys,
+173/173 Backend tests and 37/37 Tools tests pass**. The final unsigned optimized
+universal Mac Release succeeds and both arm64 and x86_64 are verified.
+Forty-five new calendar tests cover original provider/calendar/event identity,
+durable pre-create ID reservation, same-ID recovery, conditional ETag writes,
+current dispatch authority, local edits/save failures and work/billing-history
+retention through asynchronous deletion. Import no longer guesses event links
+or overwrites operational jobs while publishing an appointment. The Schedule
+confirmation retains its exact target; its billed-job protection journey passes
+and the retained final iPad screenshot was visually checked, with readable
+context/status and no email footer. See
+[GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md](GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md)
+for exact retained evidence, intermediate corrections and remaining limits.
+The preceding `455ac33` head passes all four hosted jobs; this source requires
+its own new-head acceptance. Server-owned calendar dispatch/outcome journaling,
+cross-device reconciliation, recurring/deleted event sync, legacy metadata
+scoping, remaining Google/accounting workflows, signed CloudKit/offline and
+provider/platform acceptance remain open. No merge, deployment, signing change,
+physical install or live business mutation occurred. The full-suite goal remains
+open; this is not production release qualification.
+
+
 Shared catalog checkpoint, 2026-09-07: **953/953 logic tests pass on each
 of iPad Simulator and Mac Catalyst; 7/7 selected iPad journeys, 173/173
 Backend tests and 37/37 Tools tests pass**. Backend candidate

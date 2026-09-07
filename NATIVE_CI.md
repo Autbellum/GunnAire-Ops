@@ -6,6 +6,15 @@ It complements the existing Backend/Tools Python 3.13 and 3.14 workflow.
 
 ## Coverage
 
+Published shared-catalog head `455ac33` passes all four hosted jobs:
+[native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34108280415) and
+[backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34108280424).
+The subsequent Google Calendar checkpoint has final local acceptance of
+998 logic tests on each native platform, seven selected iPad UI journeys,
+173 Backend tests, 37 Tools tests and the universal Mac Release build.
+See [GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md](GOOGLE_CALENDAR_WORKFLOW_LIFECYCLE.md).
+It requires its own hosted checks; an earlier green head is not a substitute.
+
 Billing checkpoint `6ded36c` now passes all four exact-head hosted jobs:
 [native](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34101243455) and
 [backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34101243457).

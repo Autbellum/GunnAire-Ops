@@ -2128,6 +2128,51 @@ final class GunnAire_OpsUITests: XCTestCase {
     }
 
     @MainActor
+    func testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO", "-disableCloudKitForTesting", "-uiTestAuthenticatedAdmin",
+            "-uiTestSeedCollectibleJob", "-uiTestSeedScheduleAuthorization",
+            "-GunnAirePendingAppRoute", "scheduleAndJobs"
+        ]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Schedule"].waitForExistence(timeout: 8))
+        let unassigned = app.buttons["DeleteSchedule-\(unassignedScheduleServiceCallID)"]
+        for _ in 0..<10 where !unassigned.isHittable { app.swipeUp() }
+        XCTAssertTrue(unassigned.waitForExistence(timeout: 3))
+        unassigned.tap()
+        let confirmation = app.sheets["Delete this calendar event?"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 3))
+        XCTAssertTrue(confirmation.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Unassigned confidential dispatch job")).firstMatch.exists)
+        let dismissRegion = app.otherElements["PopoverDismissRegion"]
+        XCTAssertTrue(dismissRegion.waitForExistence(timeout: 3))
+        dismissRegion.tap()
+        XCTAssertTrue(confirmation.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(unassigned.exists)
+        unassigned.tap()
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 3))
+        confirmation.buttons["Delete Event"].tap()
+        XCTAssertTrue(unassigned.waitForNonExistence(timeout: 5))
+
+        let billed = app.buttons["DeleteSchedule-\(screenshotServiceCallID)"]
+        for _ in 0..<10 where !billed.isHittable { app.swipeDown() }
+        XCTAssertTrue(billed.waitForExistence(timeout: 3))
+        billed.tap()
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 3))
+        confirmation.buttons["Delete Event"].tap()
+        let status = app.staticTexts["ScheduleSyncStatus"]
+        for _ in 0..<10 where !status.isHittable { app.swipeUp() }
+        XCTAssertTrue(status.waitForExistence(timeout: 3))
+        XCTAssertTrue(status.label.contains("Cancel Job"))
+        XCTAssertTrue(app.buttons["OpenServiceCall-\(screenshotServiceCallID)"].exists)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "Schedule - retained billed job after deletion review"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    @MainActor
     func testAdminCanChooseRepairAndReplacementAsDistinctWorkTypes() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

@@ -17547,7 +17547,7 @@ struct GunnAire_OpsTests {
     }
 
     @MainActor
-    @Test func googleCalendarExportPrefersAssignedTechnicianCalendar() async throws {
+    @Test func googleCalendarExportRetainsTheExplicitOriginalCalendar() async throws {
         let customer = Customer(name: "Route Customer")
         let technician = Technician(name: "Route Tech", contactInfo: "route.tech@example.com")
         let call = ServiceCall(
@@ -17565,7 +17565,7 @@ struct GunnAire_OpsTests {
             writableCalendarIDs: ["previous.tech@example.com", "route.tech@example.com", "primary"]
         )
 
-        #expect(selected == "route.tech@example.com")
+        #expect(selected == "previous.tech@example.com")
     }
 
     @MainActor
