@@ -58,6 +58,8 @@ jobs:
               testMailOlderMessagesSentAndArchiveHaveNaturalMailboxHandoffs \
               testMailTrashRestoresTheOriginalMessageInsideTheApp \
               testCustomerAccountStatementGeneratesFromTheExistingFilesWorkspace \
+              testCustomerSyncReviewCancelsOnlyUnsentProposalAndReturnsToOriginalCustomer \
+              testCustomerSyncReviewRecoversOriginalLinkWithoutAnotherCustomerCreate \
               testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices \
               testCatalogPublicationReviewCancelsOnlyAnUnsentProposalAndReturnsToCatalog \
               testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs \
