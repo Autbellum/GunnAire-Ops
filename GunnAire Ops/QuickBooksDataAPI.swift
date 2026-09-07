@@ -135,6 +135,11 @@ final class QuickBooksDataAPI: ObservableObject {
     private var connectionGeneration = UUID()
     private let requestTransport: WorkspaceProviderOperation.Transport
     private let persistsCredentials: Bool
+    private struct WorkflowScope: Sendable {
+        let owner: ObjectIdentifier
+        let operation: WorkspaceProviderOperation
+    }
+    @TaskLocal private static var workflowScope: WorkflowScope?
     private let clientId = Config.QuickBooks.clientID
     private let realmIDKey = "QuickBooksRealmID"
     // Legacy builds stored a long-lived refresh token in this UserDefaults key.
@@ -519,9 +524,10 @@ final class QuickBooksDataAPI: ObservableObject {
         path: String,
         method: String = "GET",
         body: Data? = nil,
-        contentType: String? = nil
+        contentType: String? = nil,
+        requestID: UUID? = nil
     ) -> URLRequest? {
-        makeAuthorizedPaymentsRequest(baseURL: paymentsBaseURL, path: path, method: method, body: body, contentType: contentType)
+        makeAuthorizedPaymentsRequest(baseURL: paymentsBaseURL, path: path, method: method, body: body, contentType: contentType, requestID: requestID)
     }
 
     private func authorizedPaymentsCustomerRequest(
@@ -538,7 +544,8 @@ final class QuickBooksDataAPI: ObservableObject {
         path: String,
         method: String,
         body: Data?,
-        contentType: String?
+        contentType: String?,
+        requestID: UUID? = nil
     ) -> URLRequest? {
         guard let tokens else {
             return nil
@@ -554,7 +561,7 @@ final class QuickBooksDataAPI: ObservableObject {
         request.timeoutInterval = Config.QuickBooks.requestTimeoutSeconds
         request.setValue("Bearer \(tokens.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(UUID().uuidString, forHTTPHeaderField: "Request-Id")
+        request.setValue((requestID ?? UUID()).uuidString, forHTTPHeaderField: "Request-Id")
         if let contentType {
             request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
@@ -577,108 +584,47 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
 
+    // Provider messages and fault details can echo input, including card/bank
+    // data. Classify using HTTP status; never surface arbitrary body/header text.
     private func resolveHTTPError(data: Data?, response: URLResponse?) -> QBError? {
-        guard let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) else {
-            return nil
-        }
-
-        if let data,
-           let apiError = try? JSONDecoder().decode(QuickBooksFaultEnvelope.self, from: data),
-           let firstError = apiError.Fault.Error.first {
-            let detail = [firstError.Message, firstError.Detail]
-                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-                .joined(separator: ": ")
-            if isApplicationAuthorizationFailure(statusCode: http.statusCode, detail: detail, code: firstError.code) {
-                return .authorizationFailed(statusCode: http.statusCode, detail: authorizationFailureMessage(detail: detail))
-            }
-            return .api(statusCode: http.statusCode, detail: detail)
-        }
-
-        if let data,
-           let raw = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !raw.isEmpty {
-            if isApplicationAuthorizationFailure(statusCode: http.statusCode, detail: raw, code: nil) {
-                return .authorizationFailed(statusCode: http.statusCode, detail: authorizationFailureMessage(detail: raw))
-            }
-            return .httpDetail(statusCode: http.statusCode, detail: raw)
-        }
-
+        guard let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) else { return nil }
         if http.statusCode == 401 || http.statusCode == 403 {
-            return .authorizationFailed(statusCode: http.statusCode, detail: authorizationFailureMessage(detail: "QuickBooks rejected this app session."))
+            return .authorizationFailed(statusCode: http.statusCode,
+                detail: "Reconnect QuickBooks with a company administrator and approve Accounting access.")
         }
-
         if http.statusCode == 429 {
-            return .rateLimited(detail: "QuickBooks throttled this request. The app will retry automatically when possible; reduce simultaneous syncs if this persists.")
+            return .rateLimited(detail: "QuickBooks is busy. Review the original transaction before retrying a financial action.")
         }
-
-        return .http(statusCode: http.statusCode)
+        return .httpDetail(statusCode: http.statusCode, detail: Self.safeHTTPDetail(status: http.statusCode))
     }
 
     private func resolvePaymentsHTTPError(data: Data?, response: URLResponse?) -> QBError? {
-        guard let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) else {
-            return nil
-        }
-
-        if let data,
-           let apiError = try? JSONDecoder().decode(QuickBooksPaymentsErrorEnvelope.self, from: data),
-           let description = apiError.firstProblemDescription {
-            if http.statusCode == 401 || http.statusCode == 403 {
-                return .paymentsAuthorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: description))
-            }
-            return .httpDetail(statusCode: http.statusCode, detail: description)
-        }
-
-        if let data,
-           let raw = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !raw.isEmpty {
-            if http.statusCode == 401 || http.statusCode == 403 {
-                return .paymentsAuthorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: raw))
-            }
-            return .httpDetail(statusCode: http.statusCode, detail: raw)
-        }
-
+        guard let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) else { return nil }
         if http.statusCode == 401 || http.statusCode == 403 {
-            return .paymentsAuthorizationFailed(statusCode: http.statusCode, detail: paymentsAuthorizationFailureMessage(detail: "QuickBooks Payments rejected this app session."))
+            return .paymentsAuthorizationFailed(statusCode: http.statusCode,
+                detail: "Confirm this company's Payments access with an administrator, then reconnect QuickBooks.")
         }
-
         if http.statusCode == 429 {
-            return .rateLimited(detail: "QuickBooks Payments throttled this request. The app will retry automatically when possible; reduce simultaneous syncs if this persists.")
+            return .rateLimited(detail: "QuickBooks Payments is busy. Reconcile the original transaction before retrying.")
         }
-
-        return .http(statusCode: http.statusCode)
+        return .httpDetail(statusCode: http.statusCode,
+            detail: Self.safeHTTPDetail(status: http.statusCode) +
+                " For a charge or refund, check the original transaction in QuickBooks before trying again.")
     }
 
-    private func isApplicationAuthorizationFailure(statusCode: Int, detail: String, code: String?) -> Bool {
-        guard statusCode == 401 || statusCode == 403 else { return false }
-        let normalized = detail.lowercased()
-        return code == "3100"
-            || normalized.contains("applicationauthorizationfailed")
-            || normalized.contains("application authorization failed")
-            || normalized.contains("errorcode=003100")
+    private static func safeHTTPDetail(status: Int) -> String {
+        switch status {
+        case 400, 422: "Review the record's required fields and accounting mappings in QuickBooks."
+        case 404: "The requested record or service was not found."
+        case 409: "The record changed or conflicts with an existing transaction. Refresh and reconcile it."
+        case 500...599: "QuickBooks could not confirm the request. Check its outcome before retrying."
+        default: "QuickBooks did not accept the request. Review the record and connection."
+        }
     }
 
-    private func authorizationFailureMessage(detail: String) -> String {
-        let company = realmID ?? lastRejectedRealmID ?? "the selected QuickBooks company"
-        let environment = currentEnvironment
-        let cleanedDetail = detail
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\n", with: " ")
-        let intuitDetail = cleanedDetail.isEmpty || cleanedDetail == "QuickBooks rejected this app session."
-            ? ""
-            : " Intuit detail: \(String(cleanedDetail.prefix(700)))"
-        return "QuickBooks rejected the saved connection for company realm \(company) in \(environment). Your production keys can still be correct; this 403 means Intuit does not consider the current saved token authorized for QBO Accounting on that company. Use Disconnect QuickBooks, then Connect QuickBooks again with a QuickBooks company admin and accept the Accounting permission.\(intuitDetail)"
-    }
-
-    private func paymentsAuthorizationFailureMessage(detail: String) -> String {
-        let cleanedDetail = detail
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\n", with: " ")
-        let intuitDetail = cleanedDetail.isEmpty || cleanedDetail == "QuickBooks Payments rejected this app session."
-            ? ""
-            : " Intuit detail: \(String(cleanedDetail.prefix(700)))"
-        return "QuickBooks Payments rejected this app session. This means Accounting is connected, but this company/token is not authorized for the QuickBooks Payments API. Reconnect QuickBooks after confirming Payments access is enabled for this company in Intuit.\(intuitDetail)"
+    private static func safeDecodingDetail(_ response: URLResponse?) -> String {
+        let status = (response as? HTTPURLResponse).map { " (HTTP \($0.statusCode))" } ?? ""
+        return "The response could not be verified\(status). Review the original QuickBooks record before retrying. Provider content is omitted to protect payment and customer information."
     }
 
     private func clearRejectedSessionIfNeeded(_ error: QBError) {
@@ -704,10 +650,49 @@ final class QuickBooksDataAPI: ObservableObject {
     }
 
     private func captureProviderOperation() throws -> WorkspaceProviderOperation {
+        if let scope = Self.workflowScope {
+            guard scope.owner == ObjectIdentifier(self) else {
+                throw WorkspaceProviderAccessError.changed(mayHaveReachedProvider: scope.operation.mayHaveReachedProvider)
+            }
+            try scope.operation.check()
+            return scope.operation
+        }
         let generation = connectionGeneration
         let context = retryContext
         return try WorkspaceProviderOperation.capture {
             self.isAuthenticated && self.connectionGeneration == generation && self.retryContext == context
+        }
+    }
+
+    /// Keep a multi-step workflow on its initiating connection through async
+    /// suspension. A new provider call cannot recapture a replacement account.
+    func withWorkspaceOperation<T>(
+        _ body: (WorkspaceProviderOperation) async throws -> T
+    ) async throws -> T {
+        let operation = try captureProviderOperation()
+        let scope = WorkflowScope(owner: ObjectIdentifier(self), operation: operation)
+        return try await Self.$workflowScope.withValue(scope) {
+            try operation.check()
+            let value = try await body(operation)
+            try operation.check()
+            return value
+        }
+    }
+
+    func checkWorkflowOperation() throws {
+        try captureProviderOperation().check()
+    }
+
+    /// Callback-based recovery can cross queues. Reinstall the same context
+    /// before invoking any callback that may start another provider request.
+    private func sendProviderRequest(
+        _ request: URLRequest,
+        operation: WorkspaceProviderOperation,
+        completion: @escaping (Data?, URLResponse?, Error?) -> Void
+    ) {
+        let scope = WorkflowScope(owner: ObjectIdentifier(self), operation: operation)
+        operation.send(request, transport: requestTransport) { data, response, error in
+            Self.$workflowScope.withValue(scope) { completion(data, response, error) }
         }
     }
 
@@ -747,7 +732,7 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
 
-            access.send(request, transport: self.requestTransport) { data, response, error in
+            self.sendProviderRequest(request, operation: access) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         self.performAuthorizedDecodingRequest(
@@ -766,7 +751,7 @@ final class QuickBooksDataAPI: ObservableObject {
                 Task { @MainActor in
                     if let error = access.failure { completion(.failure(error)); return }
                     if let error {
-                        completion(.failure(error))
+                        completion(.failure(error is CancellationError ? error : QBError.network))
                         return
                     }
                     if let httpError = self.resolveHTTPError(data: data, response: response) {
@@ -782,10 +767,7 @@ final class QuickBooksDataAPI: ObservableObject {
                         let decoded = try JSONDecoder().decode(T.self, from: data)
                         completion(.success(decoded))
                     } catch {
-                        let raw = String(data: data, encoding: .utf8)?
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        let sample = raw.map { String($0.prefix(8000)) } ?? "No response body"
-                        completion(.failure(QBError.decodingDetail("\(error.localizedDescription). Raw response: \(sample)")))
+                        completion(.failure(QBError.decodingDetail(Self.safeDecodingDetail(response))))
                     }
                 }
             }
@@ -884,7 +866,7 @@ final class QuickBooksDataAPI: ObservableObject {
                 return
             }
 
-            access.send(request, transport: self.requestTransport) { data, response, error in
+            self.sendProviderRequest(request, operation: access) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         self.performPaymentsDecodingRequest(
@@ -903,7 +885,7 @@ final class QuickBooksDataAPI: ObservableObject {
                 Task { @MainActor in
                     if let error = access.failure { completion(.failure(error)); return }
                     if let error {
-                        completion(.failure(error))
+                        completion(.failure(error is CancellationError ? error : QBError.network))
                         return
                     }
                     if let httpError = self.resolvePaymentsHTTPError(data: data, response: response) {
@@ -919,10 +901,7 @@ final class QuickBooksDataAPI: ObservableObject {
                         let decoded = try JSONDecoder().decode(T.self, from: data)
                         completion(.success(decoded))
                     } catch {
-                        let raw = String(data: data, encoding: .utf8)?
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        let sample = raw.map { String($0.prefix(8000)) } ?? "No response body"
-                        completion(.failure(QBError.decodingDetail("\(error.localizedDescription). Raw response: \(sample)")))
+                        completion(.failure(QBError.decodingDetail(Self.safeDecodingDetail(response))))
                     }
                 }
             }
@@ -1713,10 +1692,19 @@ final class QuickBooksDataAPI: ObservableObject {
         )
     }
 
-    func createCharge(_ charge: QuickBooksPaymentsChargeCreate, completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void) {
+    func createCharge(_ charge: QuickBooksPaymentsChargeCreate, requestID: UUID = UUID(), completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void) {
         let body = try? JSONEncoder().encode(charge)
         performPaymentsChargeRequest(
-            { self.authorizedPaymentsRequest(path: "charges", method: "POST", body: body, contentType: "application/json") },
+            { self.authorizedPaymentsRequest(path: "charges", method: "POST", body: body, contentType: "application/json", requestID: requestID) },
+            completion: completion
+        )
+    }
+
+    func createECheck(_ debit: QuickBooksPaymentsECheckCreate, requestID: UUID = UUID(),
+                      completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void) {
+        let body = try? JSONEncoder().encode(debit)
+        performPaymentsChargeRequest(
+            { self.authorizedPaymentsRequest(path: "echecks", method: "POST", body: body, contentType: "application/json", requestID: requestID) },
             completion: completion
         )
     }
@@ -1824,8 +1812,29 @@ final class QuickBooksDataAPI: ObservableObject {
         amount: Double,
         description: String?,
         clientTransactionID: String? = nil,
+        requestID: UUID = UUID(),
         completion: @escaping (Result<QuickBooksPaymentsRefundResponse, Error>) -> Void
     ) {
+        refundPaymentTransaction(rail: .card, id: id, amount: amount, description: description,
+                                 clientTransactionID: clientTransactionID, requestID: requestID, completion: completion)
+    }
+
+    func refundECheck(
+        id: String, amount: Double, description: String?, clientTransactionID: String? = nil,
+        requestID: UUID = UUID(), completion: @escaping (Result<QuickBooksPaymentsRefundResponse, Error>) -> Void
+    ) {
+        refundPaymentTransaction(rail: .bank, id: id, amount: amount, description: description,
+                                 clientTransactionID: clientTransactionID, requestID: requestID, completion: completion)
+    }
+
+    private func refundPaymentTransaction(
+        rail: QuickBooksPaymentRail, id: String, amount: Double, description: String?,
+        clientTransactionID: String?, requestID: UUID,
+        completion: @escaping (Result<QuickBooksPaymentsRefundResponse, Error>) -> Void
+    ) {
+        guard let path = rail.refundPath(transactionID: id) else {
+            completion(.failure(QBError.invalidPaymentIdentifier)); return
+        }
         let body = try? JSONEncoder().encode(
             QuickBooksPaymentsRefundRequest(
                 amount: amount,
@@ -1834,7 +1843,7 @@ final class QuickBooksDataAPI: ObservableObject {
             )
         )
         performPaymentsDecodingRequest(
-            { self.authorizedPaymentsRequest(path: "charges/\(id)/refunds", method: "POST", body: body, contentType: "application/json") },
+            { self.authorizedPaymentsRequest(path: path, method: "POST", body: body, contentType: "application/json", requestID: requestID) },
             decode: QuickBooksPaymentsRefundResponse.self,
             completion: completion
         )
@@ -1962,7 +1971,7 @@ final class QuickBooksDataAPI: ObservableObject {
                 completion(.failure(QBError.unauthorized))
                 return
             }
-            access.send(request, transport: self.requestTransport) { data, response, error in
+            self.sendProviderRequest(request, operation: access) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         self.performUploadDocumentRequest(
@@ -1978,7 +1987,7 @@ final class QuickBooksDataAPI: ObservableObject {
                 Task { @MainActor in
                     if let error = access.failure { completion(.failure(error)); return }
                     if let error {
-                        completion(.failure(error))
+                        completion(.failure(error is CancellationError ? error : QBError.network))
                         return
                     }
                     if let httpError = self.resolveHTTPError(data: data, response: response) {
@@ -1993,9 +2002,7 @@ final class QuickBooksDataAPI: ObservableObject {
                     do {
                         completion(.success(try QuickBooksUploadResponsePolicy.attachmentID(from: data)))
                     } catch {
-                        completion(.failure(QBError.decodingDetail(
-                            "QuickBooks did not confirm the attachment identifier: \(error.localizedDescription)"
-                        )))
+                        completion(.failure(QBError.decodingDetail(Self.safeDecodingDetail(response))))
                     }
                 }
             }
@@ -2041,6 +2048,7 @@ final class QuickBooksDataAPI: ObservableObject {
         case unauthorized
         case missingConfiguration
         case noData
+        case network
         case decoding
         case decodingDetail(String)
         case http(statusCode: Int)
@@ -2053,6 +2061,7 @@ final class QuickBooksDataAPI: ObservableObject {
         case missingSyncToken(entity: String)
         case rateLimited(detail: String)
         case missingCustomerIDForStoredCards
+        case invalidPaymentIdentifier
 
         var requiresReconnect: Bool {
             switch self {
@@ -2065,10 +2074,14 @@ final class QuickBooksDataAPI: ObservableObject {
 
         var errorDescription: String? {
             switch self {
+            case .invalidPaymentIdentifier:
+                return "The original QuickBooks payment identifier is missing or invalid. Reconcile the payment before refunding."
             case .unauthorized:
                 return "QuickBooks access token is missing or expired. Reconnect QuickBooks in Settings."
             case .missingConfiguration:
                 return "QuickBooks is not configured. Set QB_CLIENT_ID and the HTTPS redirect URI in the app, then configure the QuickBooks client secret only in the backend environment."
+            case .network:
+                return "QuickBooks could not confirm the request over the network. For a financial action, reconcile the original transaction before retrying."
             case .noData:
                 return "QuickBooks returned no data."
             case .decoding:
@@ -2139,7 +2152,7 @@ private extension QuickBooksDataAPI {
                 return
             }
 
-            access.send(request, transport: self.requestTransport) { data, response, error in
+            self.sendProviderRequest(request, operation: access) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         self.performPaymentsTokenRequest(
@@ -2156,7 +2169,7 @@ private extension QuickBooksDataAPI {
                 Task { @MainActor in
                     if let error = access.failure { completion(.failure(error)); return }
                     if let error {
-                        completion(.failure(error))
+                        completion(.failure(error is CancellationError ? error : QBError.network))
                         return
                     }
                     if let httpError = self.resolvePaymentsHTTPError(data: data, response: response) {
@@ -2165,7 +2178,7 @@ private extension QuickBooksDataAPI {
                         return
                     }
                     guard let data, !data.isEmpty else {
-                        completion(.failure(QBError.decodingDetail("QuickBooks Payments returned an empty token response. Headers: \(Self.headerSummary(response))")))
+                        completion(.failure(QBError.decodingDetail(Self.safeDecodingDetail(response))))
                         return
                     }
                     if let decoded = try? JSONDecoder().decode(QuickBooksPaymentsTokenResponse.self, from: data),
@@ -2173,12 +2186,11 @@ private extension QuickBooksDataAPI {
                         completion(.success(decoded))
                         return
                     }
-                    let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     if let token = Self.firstStringValue(in: data, matching: ["value", "token", "id"]), !token.isEmpty {
                         completion(.success(QuickBooksPaymentsTokenResponse(value: token)))
                         return
                     }
-                    completion(.failure(QBError.decodingDetail("Unable to find a token value in QuickBooks Payments response. Raw response: \(raw.prefix(8000))")))
+                    completion(.failure(QBError.decodingDetail(Self.safeDecodingDetail(response))))
                 }
             }
         }
@@ -2209,7 +2221,7 @@ private extension QuickBooksDataAPI {
                 return
             }
 
-            access.send(request, transport: self.requestTransport) { data, response, error in
+            self.sendProviderRequest(request, operation: access) { data, response, error in
                 if let delay = self.retryDelayIfRateLimited(response: response, attempt: attempt) {
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         self.performPaymentsChargeRequest(
@@ -2226,7 +2238,7 @@ private extension QuickBooksDataAPI {
                 Task { @MainActor in
                     if let error = access.failure { completion(.failure(error)); return }
                     if let error {
-                        completion(.failure(error))
+                        completion(.failure(error is CancellationError ? error : QBError.network))
                         return
                     }
                     if let httpError = self.resolvePaymentsHTTPError(data: data, response: response) {
@@ -2236,9 +2248,7 @@ private extension QuickBooksDataAPI {
                     }
 
                     guard let data, !data.isEmpty else {
-                        completion(.failure(QBError.decodingDetail(
-                            "QuickBooks Payments returned an empty charge response. The transaction outcome is unknown; do not retry until the payment is reconciled in QuickBooks. Headers: \(Self.headerSummary(response))"
-                        )))
+                        completion(.failure(QBError.decodingDetail(Self.safeDecodingDetail(response))))
                         return
                     }
 
@@ -2249,13 +2259,12 @@ private extension QuickBooksDataAPI {
                         return
                     }
 
-                    let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     if let charge = Self.chargeResponseFromRawJSON(data: data, fallbackID: headerChargeID) {
                         completion(.success(charge))
                         return
                     }
 
-                    completion(.failure(QBError.decodingDetail("Unable to parse QuickBooks Payments charge response. Raw response: \(raw.prefix(8000)). Headers: \(Self.headerSummary(response))")))
+                    completion(.failure(QBError.decodingDetail(Self.safeDecodingDetail(response))))
                 }
             }
         }
@@ -2275,10 +2284,6 @@ private extension QuickBooksDataAPI {
         }
     }
 
-    static func headerSummary(_ response: URLResponse?) -> String {
-        guard let http = response as? HTTPURLResponse else { return "No HTTP response" }
-        return http.allHeaderFields.map { "\($0.key): \($0.value)" }.joined(separator: "; ")
-    }
 
     static func firstStringValue(in data: Data, matching keys: Set<String>) -> String? {
         guard let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
@@ -4910,8 +4915,8 @@ struct QuickBooksCreditCardPayment: Codable {
 struct QuickBooksRefundReceiptCreate: Codable {
     let Line: [QuickBooksLineItem]
     let CustomerRef: QuickBooksReference
-    let CreditCardPayment: QuickBooksCreditCardPayment
-    let TxnSource: String
+    let CreditCardPayment: QuickBooksCreditCardPayment?
+    let TxnSource: String?
     let PrivateNote: String?
 }
 

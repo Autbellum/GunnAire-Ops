@@ -1,7 +1,11 @@
 # Direct provider workspace lifecycle — 2026-09-06
 
-Status: request-boundary implementation and fixture verification. This is not
-end-to-end tenant, payment, or production acceptance.
+Status: historical request-boundary checkpoint. The subsequent
+[payment workflow checkpoint](PAYMENT_WORKFLOW_LIFECYCLE.md) extends QBO
+multi-step payment/model-save checks, fixes ACH/refund accounting and direct
+diagnostic privacy, and adds backend grant-persistence guards. The remaining
+work below describes this earlier checkpoint; consult the newer document for
+current evidence and unresolved gaps. Neither proves production acceptance.
 
 ## Corrected behavior
 

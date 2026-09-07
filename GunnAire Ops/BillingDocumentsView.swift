@@ -10278,6 +10278,7 @@ private struct RecordInvoicePaymentView: View {
                         note: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
                         catalogItems: catalogItems
                     )
+                    try result.validateWorkspace()
 
                     let resolvedCardLast4: String?
                     if !trimmedCardLast4.isEmpty {
@@ -10334,6 +10335,7 @@ private struct RecordInvoicePaymentView: View {
                         note: trimmedPaymentNotes.isEmpty ? nil : trimmedPaymentNotes,
                         catalogItems: catalogItems
                     )
+                    try result.validateWorkspace()
 
                     let payment = Payment(
                         id: localPaymentID,

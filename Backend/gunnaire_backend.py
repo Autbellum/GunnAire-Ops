@@ -33,7 +33,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.06.20"
+SERVICE_VERSION = "2026.09.06.21"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -5040,7 +5040,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         with db() as connection:
             connection_row = connection.execute(
-                "SELECT realm_id, environment, refresh_token_ciphertext FROM qbo_connections WHERE id = 1"
+                "SELECT * FROM qbo_connections WHERE id = 1"
             ).fetchone()
         if connection_row is None:
             self.write_json({"error": "QuickBooks is not connected"}, status=HTTPStatus.CONFLICT)
@@ -5062,13 +5062,30 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         except RuntimeError:
             self.write_json({"error": "QuickBooks encrypted token storage is not configured"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
             return
-        with db() as connection:
-            connection.execute(
-                "UPDATE qbo_connections SET refresh_token_ciphertext = ?, updated_at = ? WHERE id = 1",
-                (encrypted_refresh_token, utc_now()),
-            )
         principal = self.principal() or {}
-        record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "refresh", "quickbooks")
+        with db() as connection:
+            # Compare the exact grant read before the network call. Reconnection,
+            # revocation, or another rotation must never be overwritten by a
+            # late refresh, even when the company and environment are unchanged.
+            updated = connection.execute(
+                """UPDATE qbo_connections SET refresh_token_ciphertext = ?, updated_at = ?
+                   WHERE id = 1 AND realm_id = ? AND environment = ?
+                     AND client_id_fingerprint = ? AND authorized_at = ?
+                     AND refresh_token_ciphertext = ?""",
+                (encrypted_refresh_token, utc_now(), connection_row["realm_id"],
+                 connection_row["environment"], connection_row["client_id_fingerprint"],
+                 connection_row["authorized_at"], connection_row["refresh_token_ciphertext"]),
+            )
+            if updated.rowcount != 1:
+                self.write_json(
+                    {"error": "QuickBooks connection changed during refresh; reopen the current connection"},
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            record_audit_event(
+                principal.get("email") if isinstance(principal.get("email"), str) else None,
+                "refresh", "quickbooks", connection=connection,
+            )
         self.write_json(qbo_client_token_response(result))
 
     def revoke_qbo_token(self) -> None:
@@ -5077,7 +5094,7 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         with db() as connection:
             connection_row = connection.execute(
-                "SELECT refresh_token_ciphertext FROM qbo_connections WHERE id = 1"
+                "SELECT * FROM qbo_connections WHERE id = 1"
             ).fetchone()
         if connection_row is None:
             self.write_json({"revoked": True})
@@ -5090,10 +5107,25 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if status < 200 or status >= 300:
             self.write_json({"error": "QuickBooks token revocation failed"}, status=HTTPStatus.BAD_GATEWAY)
             return
-        with db() as connection:
-            connection.execute("DELETE FROM qbo_connections WHERE id = 1")
         principal = self.principal() or {}
-        record_audit_event(principal.get("email") if isinstance(principal.get("email"), str) else None, "revoke", "quickbooks")
+        with db() as connection:
+            deleted = connection.execute(
+                """DELETE FROM qbo_connections WHERE id = 1 AND realm_id = ? AND environment = ?
+                   AND client_id_fingerprint = ? AND authorized_at = ? AND refresh_token_ciphertext = ?""",
+                (connection_row["realm_id"], connection_row["environment"],
+                 connection_row["client_id_fingerprint"], connection_row["authorized_at"],
+                 connection_row["refresh_token_ciphertext"]),
+            )
+            if deleted.rowcount != 1:
+                self.write_json(
+                    {"error": "QuickBooks connection changed during revocation; review the current authorization in QuickBooks"},
+                    status=HTTPStatus.CONFLICT,
+                )
+                return
+            record_audit_event(
+                principal.get("email") if isinstance(principal.get("email"), str) else None,
+                "revoke", "quickbooks", connection=connection,
+            )
         self.write_json({"revoked": True})
 
     def store_document(self) -> None:

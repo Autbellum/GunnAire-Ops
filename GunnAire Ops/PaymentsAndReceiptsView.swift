@@ -1716,6 +1716,7 @@ struct PaymentsAndReceiptsView: View {
                     note: paymentNotes.nilIfBlank,
                     catalogItems: catalogItems
                 )
+                try result.validateWorkspace()
                 if let masked = result.charge.card?.number?.suffix(4), cardLast4.nilIfBlank == nil {
                     cardLast4 = String(masked)
                 }
@@ -1769,6 +1770,7 @@ struct PaymentsAndReceiptsView: View {
                     note: paymentNotes.nilIfBlank,
                     catalogItems: catalogItems
                 )
+                try result.validateWorkspace()
                 authorizationReference = result.charge.authCode ?? authorizationReference
                 let payment = saveLocalPayment(
                     id: localPaymentID,
@@ -1988,20 +1990,17 @@ GunnAire
         syncingPaymentID = payment.id
         Task {
             do {
-                let quickBooksPayment = try await QuickBooksPaymentsService.shared.syncManualAccountingPayment(for: payment)
-                await MainActor.run {
+                let result = try await QuickBooksPaymentsService.shared
+                    .syncAndRecordAccountingFollowUp(for: payment, manual: true)
+                try await MainActor.run {
+                    try result.validateWorkspace()
                     syncingPaymentID = nil
-                    payment.quickBooksID = quickBooksPayment.Id
-                    payment.quickBooksAccountingSyncStatus = "synced"
-                    payment.quickBooksAccountingSyncDetail = nil
-                    actionMessage = "Payment synced to QuickBooks: \(quickBooksPayment.Id)."
+                    actionMessage = "Payment synced to QuickBooks: \(result.value)."
                 }
             } catch {
                 await MainActor.run {
                     syncingPaymentID = nil
-                    payment.quickBooksAccountingSyncStatus = "needs_attention"
-                    payment.quickBooksAccountingSyncDetail = error.localizedDescription
-                    actionMessage = "QuickBooks payment sync failed: \(error.localizedDescription)"
+                    actionMessage = "QuickBooks payment sync needs attention: \(error.localizedDescription)"
                 }
             }
         }
@@ -2016,31 +2015,16 @@ GunnAire
         syncingPaymentID = payment.id
         Task {
             do {
-                if payment.isRefund {
-                    let receipt = try await QuickBooksPaymentsService.shared.retryRefundReceiptSync(for: payment)
-                    await MainActor.run {
-                        payment.quickBooksRefundReceiptID = receipt.Id
-                        payment.quickBooksAccountingSyncStatus = "synced"
-                        payment.quickBooksAccountingSyncDetail = nil
-                        syncingPaymentID = nil
-                        actionMessage = "QuickBooks refund receipt sync completed."
-                    }
-                } else {
-                    let accountingPayment = try await QuickBooksPaymentsService.shared.retryAccountingSync(for: payment)
-                    await MainActor.run {
-                        payment.quickBooksID = accountingPayment.Id
-                        payment.quickBooksAccountingSyncStatus = "synced"
-                        payment.quickBooksAccountingSyncDetail = nil
-                        syncingPaymentID = nil
-                        actionMessage = "QuickBooks accounting payment sync completed."
-                    }
+                let result = try await QuickBooksPaymentsService.shared.syncAndRecordAccountingFollowUp(for: payment)
+                try await MainActor.run {
+                    try result.validateWorkspace()
+                    syncingPaymentID = nil
+                    actionMessage = "QuickBooks accounting follow-up completed."
                 }
             } catch {
                 await MainActor.run {
-                    payment.quickBooksAccountingSyncStatus = "needs_attention"
-                    payment.quickBooksAccountingSyncDetail = error.localizedDescription
                     syncingPaymentID = nil
-                    actionMessage = "QuickBooks follow-up retry failed: \(error.localizedDescription)"
+                    actionMessage = "QuickBooks follow-up needs attention: \(error.localizedDescription)"
                 }
             }
         }
@@ -2117,6 +2101,7 @@ GunnAire
                 amount: refundAmountValue,
                 note: refundNotes.nilIfBlank
             )
+            try result.validateWorkspace()
 
             modelContext.insert(
                 Payment(
@@ -2148,7 +2133,7 @@ GunnAire
             resetRefundForm()
             showingRefundSheet = false
         } catch {
-            actionMessage = "Refund failed: \(error.localizedDescription)"
+            actionMessage = "Refund needs review: \(error.localizedDescription)"
         }
     }
 

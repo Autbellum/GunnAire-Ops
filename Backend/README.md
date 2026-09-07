@@ -57,6 +57,16 @@ Apple identity exchange is available at `POST /api/auth/apple`. The token is ver
 
 After source `2026.08.28.13` is deployed, configure the primary App ID's Sign in with Apple server-to-server notification URL as `https://gunnaire-api.onrender.com/api/auth/apple/notifications`. The public endpoint accepts only Apple's exact JSON envelope, verifies the signed JWS against Apple's RS256 keys plus issuer, app audience, issue/event times, event ID, type, and subject, and idempotently processes `email-enabled`, `email-disabled`, `consent-revoked`, and `account-deleted`. Consent and deletion events revoke only Apple application sessions and their push registrations; delayed events older than a fresh Apple reauthorization cannot revoke that newer session. The raw JWS and private-relay address are not retained in the event ledger. Do not enter the URL in Apple Developer before the reviewed backend version is live and the endpoint is reachable over TLS 1.2 or later.
 
+## Payment workflow and grant-persistence follow-up
+
+Candidate `2026.09.06.21` preserves a replacement QBO grant when a stale refresh
+or revocation returns. Successful grant changes and their audit events are
+atomic; a mismatched snapshot returns HTTP 409 without returning the old access
+token. This does not serialize provider OAuth operations or revalidate an
+administrator's cached session after a network wait. See
+[the payment lifecycle checkpoint](../PAYMENT_WORKFLOW_LIFECYCLE.md) for evidence
+and remaining payment/authorization requirements. No deployment is implied.
+
 ## Company and CloudKit workspace identity
 
 Candidate `2026.09.06.20` adds a durable, server-owned company identity and

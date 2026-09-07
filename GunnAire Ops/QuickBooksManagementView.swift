@@ -4203,25 +4203,15 @@ struct QuickBooksManagementView: View {
         performAction(message: "Payment saved locally. Publishing it to QuickBooks...") {
             Task {
                 do {
-                    let quickBooksPayment = try await QuickBooksPaymentsService.shared
-                        .syncManualAccountingPayment(for: localPayment)
-                    await MainActor.run {
-                        localPayment.quickBooksID = quickBooksPayment.Id
-                        localPayment.quickBooksAccountingSyncStatus = "synced"
-                        localPayment.quickBooksAccountingSyncDetail = nil
-                        do {
-                            try modelContext.save()
-                            actionMessage = "Payment saved locally and linked to QuickBooks: \(quickBooksPayment.Id)."
-                        } catch {
-                            actionMessage = "QuickBooks accepted payment \(quickBooksPayment.Id), but its local link could not be saved. Retry the same payment from Payments; the recovery marker prevents another QuickBooks payment."
-                        }
+                    let result = try await QuickBooksPaymentsService.shared
+                        .syncAndRecordAccountingFollowUp(for: localPayment, manual: true)
+                    try await MainActor.run {
+                        try result.validateWorkspace()
+                        actionMessage = "Payment saved locally and linked to QuickBooks: \(result.value)."
                         syncAllQuickBooksData()
                     }
                 } catch {
                     await MainActor.run {
-                        localPayment.quickBooksAccountingSyncStatus = "needs_attention"
-                        localPayment.quickBooksAccountingSyncDetail = error.localizedDescription
-                        try? modelContext.save()
                         isLoading = false
                         actionMessage = "Payment is saved locally, but QuickBooks publication needs attention: \(error.localizedDescription)"
                     }
@@ -4293,7 +4283,8 @@ struct QuickBooksManagementView: View {
                         catalogItems: localCatalogItems
                     )
                     let resolvedCardLast4 = result.charge.card?.number.flatMap { String($0.suffix(4)) }
-                    await MainActor.run {
+                    try await MainActor.run {
+                        try result.validateWorkspace()
                         modelContext.insert(
                             Payment(
                                 id: localPaymentID,
@@ -4342,16 +4333,16 @@ struct QuickBooksManagementView: View {
         performAction(message: "Storing QuickBooks card for \(customer.DisplayName)...") {
             Task {
                 do {
-                    let token = try await QuickBooksPaymentsService.shared.createStandaloneCardToken(input)
-                    let card = try await withCheckedThrowingContinuation { continuation in
-                        liveAPI.createStoredCard(QuickBooksPaymentsStoredCardCreateRequest(value: token.value), forCustomerID: customer.Id) { result in
-                            continuation.resume(with: result)
-                        }
-                    }
-                    await MainActor.run {
-                        let customerScopedCard = card.associated(withCustomerID: customer.Id)
+                    let result = try await QuickBooksPaymentsService.shared.storeCard(input, for: customer)
+                    try await MainActor.run {
+                        try result.validateWorkspace()
+                        let customerScopedCard = result.value.associated(withCustomerID: customer.Id)
                         if let localCustomer = unambiguousLocalCustomer(for: customer),
                            let reference = customerScopedCard.storedPaymentMethodReference() {
+                            guard GunnAireCloudKit.usesTestDatabase ||
+                                    localCustomer.modelContext?.container === CompanyWorkspaceAccessController.shared.authorizedContainer else {
+                                throw WorkspaceProviderAccessError.unavailable
+                            }
                             localCustomer.upsertStoredPaymentMethod(reference)
                             do {
                                 try modelContext.save()
@@ -4388,7 +4379,8 @@ struct QuickBooksManagementView: View {
                         amount: amount,
                         note: note
                     )
-                    await MainActor.run {
+                    try await MainActor.run {
+                        try result.validateWorkspace()
                         modelContext.insert(
                             Payment(
                                 invoice: payment.invoice,
@@ -4419,7 +4411,7 @@ struct QuickBooksManagementView: View {
                     }
                 } catch {
                     await MainActor.run {
-                        actionMessage = "QuickBooks refund failed: \(error.localizedDescription)"
+                        actionMessage = "QuickBooks refund needs review: \(error.localizedDescription)"
                         isLoading = false
                     }
                 }
@@ -4431,30 +4423,15 @@ struct QuickBooksManagementView: View {
         performAction(message: "Retrying QuickBooks follow-up...") {
             Task {
                 do {
-                    if payment.isRefund {
-                        let receipt = try await QuickBooksPaymentsService.shared.retryRefundReceiptSync(for: payment)
-                        await MainActor.run {
-                            payment.quickBooksRefundReceiptID = receipt.Id
-                            payment.quickBooksAccountingSyncStatus = "synced"
-                            payment.quickBooksAccountingSyncDetail = nil
-                            actionMessage = "QuickBooks refund receipt sync completed."
-                            syncAllQuickBooksData()
-                        }
-                    } else {
-                        let accountingPayment = try await QuickBooksPaymentsService.shared.retryAccountingSync(for: payment)
-                        await MainActor.run {
-                            payment.quickBooksID = accountingPayment.Id
-                            payment.quickBooksAccountingSyncStatus = "synced"
-                            payment.quickBooksAccountingSyncDetail = nil
-                            actionMessage = "QuickBooks accounting payment sync completed."
-                            syncAllQuickBooksData()
-                        }
+                    let result = try await QuickBooksPaymentsService.shared.syncAndRecordAccountingFollowUp(for: payment)
+                    try await MainActor.run {
+                        try result.validateWorkspace()
+                        actionMessage = "QuickBooks accounting follow-up completed."
+                        syncAllQuickBooksData()
                     }
                 } catch {
                     await MainActor.run {
-                        payment.quickBooksAccountingSyncStatus = "needs_attention"
-                        payment.quickBooksAccountingSyncDetail = error.localizedDescription
-                        actionMessage = "QuickBooks follow-up retry failed: \(error.localizedDescription)"
+                        actionMessage = "QuickBooks follow-up needs attention: \(error.localizedDescription)"
                         isLoading = false
                     }
                 }

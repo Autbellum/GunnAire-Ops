@@ -213,6 +213,10 @@ final class QuickBooksAPI: ObservableObject {
         data.createCharge(charge, completion: completion)
     }
 
+    func createECheck(_ debit: QuickBooksPaymentsECheckCreate, completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void) {
+        data.createECheck(debit, completion: completion)
+    }
+
     func captureCharge(id: String, amount: Double, completion: @escaping (Result<QuickBooksPaymentsChargeResponse, Error>) -> Void) {
         data.captureCharge(id: id, amount: amount, completion: completion)
     }
@@ -231,6 +235,14 @@ final class QuickBooksAPI: ObservableObject {
             clientTransactionID: clientTransactionID,
             completion: completion
         )
+    }
+
+    func refundECheck(
+        id: String, amount: Double, description: String?, clientTransactionID: String? = nil,
+        completion: @escaping (Result<QuickBooksPaymentsRefundResponse, Error>) -> Void
+    ) {
+        data.refundECheck(id: id, amount: amount, description: description,
+                         clientTransactionID: clientTransactionID, completion: completion)
     }
 
     func createRefundReceipt(_ receipt: QuickBooksRefundReceiptCreate, completion: @escaping (Result<QuickBooksRefundReceipt, Error>) -> Void) {

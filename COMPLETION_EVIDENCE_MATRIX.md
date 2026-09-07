@@ -1,4 +1,17 @@
-2026-09-06 provider-request checkpoint: **765/765 logic tests on both iPad and
+2026-09-06 payment-workflow checkpoint: **779/779 logic tests on both iPad
+and Mac Catalyst, 6/6 focused iPad UI journeys, 93/93 Backend and 37/37 Tools**.
+QBO payment workflows retain their initiating account through async/callback
+work and local accounting saves; ACH uses eCheck routes, accounting refund
+records do not request another payment, and direct-provider errors omit raw
+sensitive content. Backend candidate `2026.09.06.21` prevents late refresh/revoke
+responses from replacing or deleting a newer saved grant. See
+[PAYMENT_WORKFLOW_LIFECYCLE.md](PAYMENT_WORKFLOW_LIFECYCLE.md) for exact evidence
+and current limitations. Durable cross-device attempts, refund-receipt recovery,
+ACH settlement/returns, remaining authorization/diagnostic lifecycle work,
+historical statements and signed CloudKit/production acceptance remain open.
+The full application is not finished. No merge or production action occurred.
+
+Prior 2026-09-06 provider-request checkpoint: **765/765 logic tests on both iPad and
 Mac Catalyst, 6/6 focused iPad UI journeys, and a successful universal Mac
 Release build**. Direct QBO/Google requests now retain the verified workspace
 and initiating provider identity across refresh, retries, pages and Drive

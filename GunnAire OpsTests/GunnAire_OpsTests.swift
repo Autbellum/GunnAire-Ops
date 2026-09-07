@@ -25799,24 +25799,30 @@ struct GunnAire_OpsTests {
         )
         payment.invoice = nil
 
+        var sends = 0
+        let api = QuickBooksDataAPI(
+            testTokens: .init(accessToken: "fixture-bearer", expiration: .distantFuture),
+            realmID: "fixture-realm", environment: Config.QuickBooks.environment
+        ) { _ in
+            sends += 1
+            throw URLError(.notConnectedToInternet)
+        }
+        let service = QuickBooksPaymentsService(api: api)
         await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
-            try await QuickBooksPaymentsService.shared.retryAccountingSync(for: payment)
+            try await service.syncAndRecordAccountingFollowUp(for: payment)
         }
         await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
-            try await QuickBooksPaymentsService.shared.syncManualAccountingPayment(for: payment)
+            try await service.syncAndRecordAccountingFollowUp(for: payment, manual: true)
         }
         await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
-            try await QuickBooksPaymentsService.shared.refundPayment(
-                payment: payment,
-                amount: 25,
-                note: "Customer refund"
-            )
+            try await service.refundPayment(payment: payment, amount: 25, note: "Customer refund")
         }
 
         payment.isRefund = true
         await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
-            try await QuickBooksPaymentsService.shared.retryRefundReceiptSync(for: payment)
+            try await service.syncAndRecordAccountingFollowUp(for: payment)
         }
+        #expect(sends == 0)
         #expect(
             QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable.errorDescription?
                 .contains("no QuickBooks request was sent") == true
