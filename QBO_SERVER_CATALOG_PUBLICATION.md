@@ -130,6 +130,11 @@ These are focused simulator checks, not fresh whole-UI or signed-device
 acceptance. The fourteen new native tests exercise the actual coordinator
 using an injected shared publisher; all provider mutations remain fixtures.
 
+Workflow commit `b6bf8bf` also selects the catalog recovery/cancellation journey
+in hosted iPad CI. The hosted workflow now has six interface journeys, a
+different selection from the seven focused local journeys above. Both workflow
+files pass actionlint; each new PR head still requires its own hosted results.
+
 Backend: 173/173 tests pass, including 34 catalog journal/HTTP tests and 15
 provider-boundary tests. The focused catalog plus existing payment-provider
 suite passes 57/57 in the review clone. Tools: 37/37 pass. Fixtures cover concurrent devices, restart

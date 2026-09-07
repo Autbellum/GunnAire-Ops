@@ -23,10 +23,11 @@ The published resource-sync checkpoint 529fe26 passes all four hosted jobs:
 [Backend](https://github.com/Autbellum/GunnAire-Ops/actions/runs/34093728884).
 This is exact-head evidence for that checkpoint, not subsequent catalog work.
 
-- **iPad native tests**: the complete `GunnAire OpsTests` target plus five
+- **iPad native tests**: the complete `GunnAire OpsTests` target plus six
   serial interface journeys: direct Invoice launch, simple Mail actions,
   current customer statement generation, statement review-to-Invoices,
-  and billing-identity review-to-Invoices with safe report export controls.
+  billing-identity review-to-Invoices with safe report export controls,
+  and shared catalog recovery with cancellation of only an unsent proposal.
 - **Mac native tests**: the complete logic target on arm64 Mac Catalyst,
   followed by an unsigned optimized Release build. `lipo -verify_arch`
   requires both arm64 and x86_64 in the Release executable.
@@ -36,6 +37,14 @@ This is exact-head evidence for that checkpoint, not subsequent catalog work.
   the result bundle in Xcode.
 
 The workflow selects Xcode 26.6 on the standard arm64 `macos-26` runner.
+
+Workflow commit `b6bf8bf` adds the catalog recovery journey to the existing
+five hosted journeys. This six-journey hosted selection differs from the seven
+focused local catalog-checkpoint journeys documented in
+[QBO_SERVER_CATALOG_PUBLICATION.md](QBO_SERVER_CATALOG_PUBLICATION.md).
+Local success does not establish hosted success; inspect the exact PR head's
+native and backend checks before approving the candidate.
+
 The iPad destination is the 13-inch M5 simulator on iOS 26.2, matching the
 existing local acceptance baseline. These versions were checked against
 [GitHub's runner inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md)
