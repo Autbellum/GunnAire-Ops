@@ -55,6 +55,8 @@ jobs:
               testMailSendFailureKeepsTheEditableDraftAndInboxSimple \
               testMailUnconfirmedSendRetainsDraftWithoutOfferingDuplicateSend \
               testMailAttachmentPreviewAndForwardRetainTheOriginalFile \
+              testMailOlderMessagesSentAndArchiveHaveNaturalMailboxHandoffs \
+              testMailTrashRestoresTheOriginalMessageInsideTheApp \
               testCustomerAccountStatementGeneratesFromTheExistingFilesWorkspace \
               testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices \
               testCatalogPublicationReviewCancelsOnlyAnUnsentProposalAndReturnsToCatalog \
