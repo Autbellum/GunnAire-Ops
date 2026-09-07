@@ -31,6 +31,8 @@ struct PaymentsAndReceiptsView: View {
     @State private var showingRecordPaymentSheet = false
     @State private var showingContactlessPaymentGuide = false
     @State private var showingRefundSheet = false
+    @State private var showingPaymentReview = false
+    @State private var reviewInvoiceID: UUID?
     @State private var selectedInvoiceID: UUID?
     @State private var refundPaymentID: UUID?
     @State private var amountText = ""
@@ -342,6 +344,13 @@ struct PaymentsAndReceiptsView: View {
                                     }
 
                                     LazyVGrid(columns: collectionActionColumns, alignment: .leading, spacing: 8) {
+                                        if entry.invoice.quickBooksID != nil {
+                                            Button("Payment review") {
+                                                reviewInvoiceID = entry.invoice.id
+                                                showingPaymentReview = true
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
                                         Button("Open Invoice") {
                                             selectedInvoiceID = entry.invoice.id
                                         }
@@ -478,6 +487,12 @@ struct PaymentsAndReceiptsView: View {
                     }
 
                     if selectedWorkspace == .history {
+                    Section {
+                        Button("Review interrupted payments") {
+                            reviewInvoiceID = nil
+                            showingPaymentReview = true
+                        }
+                    }
                     if isAdminUser {
                         Section("Shared Field Collections") {
                             HStack {
@@ -550,6 +565,10 @@ struct PaymentsAndReceiptsView: View {
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(payment.invoice.customer.name)
                                                 .font(.headline)
+                                            if payment.isProviderSettlementPending {
+                                                Label("Bank settlement pending", systemImage: "clock")
+                                                    .font(.caption).foregroundStyle(.secondary)
+                                            }
                                             Text("\(payment.methodSummary) - \(payment.date.formatted(date: .abbreviated, time: .shortened))")
                                                 .font(.caption)
                                                 .foregroundColor(.secondary)
@@ -720,6 +739,9 @@ struct PaymentsAndReceiptsView: View {
         }
         .sheet(isPresented: $showingRefundSheet) {
             refundSheet
+        }
+        .sheet(isPresented: $showingPaymentReview) {
+            PaymentAttemptRecoveryView(invoices: visibleInvoices, initialInvoiceID: reviewInvoiceID)
         }
         .onAppear {
             if !isAdminUser, selectedWorkspace == .overview {
@@ -1493,6 +1515,8 @@ struct PaymentsAndReceiptsView: View {
         quickBooksPaymentID: String? = nil,
         quickBooksChargeID: String? = nil,
         quickBooksClientTransID: String? = nil,
+        collectionAttemptID: UUID? = nil,
+        providerPaymentStatus: String? = nil,
         quickBooksAccountingSyncStatus: String? = nil,
         quickBooksAccountingSyncDetail: String? = nil,
         processorSyncStatus: String? = nil,
@@ -1509,6 +1533,8 @@ struct PaymentsAndReceiptsView: View {
                 quickBooksID: quickBooksPaymentID,
                 quickBooksChargeID: quickBooksChargeID,
                 quickBooksClientTransID: quickBooksClientTransID,
+                collectionAttemptID: collectionAttemptID,
+                providerPaymentStatus: providerPaymentStatus,
                 quickBooksDepositID: quickBooksDepositID,
                 quickBooksSalesReceiptID: quickBooksSalesReceiptID,
                 quickBooksAccountingSyncStatus: quickBooksAccountingSyncStatus,
@@ -1728,6 +1754,8 @@ struct PaymentsAndReceiptsView: View {
                     quickBooksPaymentID: result.accountingPayment?.Id,
                     quickBooksChargeID: result.charge.id,
                     quickBooksClientTransID: result.clientTransactionID,
+                    collectionAttemptID: localPaymentID,
+                    providerPaymentStatus: result.charge.status,
                     quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                     quickBooksAccountingSyncDetail: result.accountingError,
                     processorSyncStatus: "captured",
@@ -1779,6 +1807,8 @@ struct PaymentsAndReceiptsView: View {
                     quickBooksPaymentID: result.accountingPayment?.Id,
                     quickBooksChargeID: result.charge.id,
                     quickBooksClientTransID: result.clientTransactionID,
+                    collectionAttemptID: localPaymentID,
+                    providerPaymentStatus: result.charge.status,
                     quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                     quickBooksAccountingSyncDetail: result.accountingError,
                     processorSyncStatus: "submitted",
@@ -2105,9 +2135,12 @@ GunnAire
 
             modelContext.insert(
                 Payment(
+                    id: result.localPaymentID,
                     invoice: payment.invoice,
                     quickBooksChargeID: result.refund.id,
                     quickBooksClientTransID: result.clientTransactionID,
+                    collectionAttemptID: result.localPaymentID,
+                    providerPaymentStatus: result.refund.status,
                     quickBooksRefundReceiptID: result.refundReceipt?.Id,
                     quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                     quickBooksAccountingSyncDetail: result.accountingError,

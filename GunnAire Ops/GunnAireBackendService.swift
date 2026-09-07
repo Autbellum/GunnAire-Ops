@@ -761,6 +761,55 @@ enum GunnAireBackendService {
         return try JSONDecoder().decode(BackendSessionRecord.self, from: data).user
     }
 
+
+    private struct PaymentAttemptEnvelope: Decodable { let attempt: PaymentAttemptRecord }
+    private struct PaymentAttemptListEnvelope: Decodable { let attempts: [PaymentAttemptRecord] }
+
+    static func reservePaymentAttempt(_ intent: PaymentAttemptIntent) async throws -> PaymentAttemptRecord {
+        do {
+            let data = try await send(path: "/api/payment-attempts", method: "POST", body: JSONEncoder().encode(intent))
+            return try JSONDecoder().decode(PaymentAttemptEnvelope.self, from: data).attempt
+        } catch let error as GunnAireBackendError {
+            if case .server(let status, _) = error, status == 409 { throw PaymentAttemptError.needsReview }
+            throw PaymentAttemptError.unavailable
+        } catch { throw PaymentAttemptError.unavailable }
+    }
+
+    static func updatePaymentAttempt(_ id: UUID, action: String, reference: String?) async throws -> PaymentAttemptRecord {
+        var payload: [String: String] = [:]
+        switch action {
+        case "begin", "cancel", "unknown":
+            guard reference == nil else { throw PaymentAttemptError.needsReview }
+        case "confirm", "complete":
+            guard let reference, PaymentAttemptRecord.isReference(reference) else { throw PaymentAttemptError.needsReview }
+            payload[action == "confirm" ? "providerID" : "accountingID"] = reference
+        default: throw PaymentAttemptError.needsReview
+        }
+        do {
+            let data = try await send(path: "/api/payment-attempts/\(id.uuidString.lowercased())/\(action)",
+                                      method: "POST", body: JSONEncoder().encode(payload))
+            return try JSONDecoder().decode(PaymentAttemptEnvelope.self, from: data).attempt
+        } catch { throw PaymentAttemptError.needsReview }
+    }
+
+    static func fetchPaymentAttempt(_ id: UUID) async throws -> PaymentAttemptRecord {
+        do {
+            let data = try await send(path: "/api/payment-attempts/\(id.uuidString.lowercased())", method: "GET")
+            return try JSONDecoder().decode(PaymentAttemptEnvelope.self, from: data).attempt
+        } catch { throw PaymentAttemptError.needsReview }
+    }
+
+    static func fetchPaymentAttempts(companyID: UUID, invoiceID: UUID) async throws -> [PaymentAttemptRecord] {
+        do {
+            let data = try await send(path: "/api/payment-attempts?companyID=\(companyID.uuidString.lowercased())&invoiceID=\(invoiceID.uuidString.lowercased())", method: "GET")
+            let records = try JSONDecoder().decode(PaymentAttemptListEnvelope.self, from: data).attempts
+            guard records.allSatisfy({ $0.intent.companyID == companyID && $0.intent.invoiceID == invoiceID }) else {
+                throw PaymentAttemptError.needsReview
+            }
+            return records
+        } catch { throw PaymentAttemptError.needsReview }
+    }
+
     static func fetchCompanyWorkspace() async throws -> BackendCompanyWorkspaceResponse {
         let data = try await send(path: "/api/workspace", method: "GET")
         return try JSONDecoder().decode(BackendCompanyWorkspaceResponse.self, from: data)

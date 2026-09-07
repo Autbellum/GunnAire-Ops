@@ -3,6 +3,10 @@
 Status: verified source checkpoint, not production payment acceptance. The full
 application goal remains open. Backend candidate: `2026.09.06.21` (not deployed).
 
+The subsequent [durable coordination checkpoint](PAYMENT_ATTEMPT_COORDINATION.md)
+supersedes this document's unjournaled native-entry status. Counts below remain
+historical evidence for this earlier commit, not the latest acceptance result.
+
 ## Corrected payment behavior
 
 - ACH debit and refund requests use Intuit's `echecks` resources rather than

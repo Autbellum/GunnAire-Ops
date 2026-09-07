@@ -57,6 +57,19 @@ struct QuickBooksPaymentWorkflowTests {
         }
     }
 
+    @Test func workflowErrorAfterReplacementReportsOriginalWorkspaceFailure() async {
+        let api = api { reply($0) }
+        do {
+            try await api.withWorkspaceOperation { _ in
+                replaceConnection(api)
+                throw URLError(.timedOut)
+            }
+            Issue.record("Late workflow error escaped its workspace")
+        } catch {
+            #expect(error as? WorkspaceProviderAccessError == .changed(mayHaveReachedProvider: false))
+        }
+    }
+
     @Test func callbackRecoveryRetainsIdentityAfterADelayed429Retry() async {
         var sends = 0
         let api = api { request in
@@ -175,7 +188,7 @@ struct QuickBooksPaymentWorkflowTests {
             return reply(request, payload: request.url!.path.hasSuffix("/tokens")
                          ? #"{"value":"fixture-bank-token"}"# : "{}")
         }
-        let service = QuickBooksPaymentsService(api: api)
+        let service = QuickBooksPaymentsService(api: api, journal: FixturePaymentJournal())
         let invoice = invoice()
         do {
             _ = try await service.processBankPayment(localPaymentID: UUID(), invoice: invoice, amount: 1.23,
@@ -192,8 +205,8 @@ struct QuickBooksPaymentWorkflowTests {
         for method in ["card", "ach"] {
             var sent: [URLRequest] = []
             let api = api { request in sent.append(request); return reply(request, payload: "{}") }
-            let service = QuickBooksPaymentsService(api: api, salesItemReference: "fixture-sales-item")
-            let payment = Payment(invoice: invoice(), quickBooksChargeID: "fixture-original", amount: 1.23, method: method)
+            let service = QuickBooksPaymentsService(api: api, journal: FixturePaymentJournal(), salesItemReference: "fixture-sales-item")
+            let payment = Payment(invoice: invoice(), quickBooksID: "fixture-original-accounting", quickBooksChargeID: "fixture-original", amount: 1.23, method: method)
             do {
                 _ = try await service.refundPayment(payment: payment, amount: 1, note: nil)
                 Issue.record("Malformed refund response was confirmed")
@@ -208,18 +221,18 @@ struct QuickBooksPaymentWorkflowTests {
             var sent: [URLRequest] = []
             let api = api { request in
                 sent.append(request)
-                return reply(request, payload: request.url!.path.hasSuffix("/refundreceipt")
+                return reply(request, payload: request.url!.path.hasSuffix("/query") ? #"{"QueryResponse":{"RefundReceipt":[]}}"# : request.url!.path.hasSuffix("/refundreceipt")
                     ? #"{"RefundReceipt":{"Id":"fixture-receipt"}}"#
                     : #"{"id":"fixture-refund","amount":"1.00","status":"REFUNDED"}"#)
             }
-            let service = QuickBooksPaymentsService(api: api, salesItemReference: "fixture-sales-item")
-            let payment = Payment(invoice: invoice(), quickBooksChargeID: "fixture-original",
+            let service = QuickBooksPaymentsService(api: api, journal: FixturePaymentJournal(), salesItemReference: "fixture-sales-item")
+            let payment = Payment(invoice: invoice(), quickBooksID: "fixture-original-accounting", quickBooksChargeID: "fixture-original",
                                   amount: 1.23, method: method)
             let result = try await service.refundPayment(payment: payment, amount: 1, note: "Fixture refund")
             try result.validateWorkspace()
             #expect(result.refundReceipt?.Id == "fixture-receipt")
             #expect(result.accountingError == nil)
-            #expect(sent.count == 2)
+            #expect(sent.count == 3)
             let accounting = try #require(sent.last?.httpBody)
             let body = try #require(try JSONSerialization.jsonObject(with: accounting) as? [String: Any])
             #expect(body["CreditCardPayment"] == nil)
@@ -233,10 +246,10 @@ struct QuickBooksPaymentWorkflowTests {
             var instance: QuickBooksDataAPI!
             instance = api { request in
                 if outcome.hasPrefix("changed") { replaceConnection(instance) }
-                return reply(request, payload: #"{"RefundReceipt":{"Id":"fixture-receipt"}}"#,
+                return reply(request, payload: request.url!.path.hasSuffix("/query") ? #"{"QueryResponse":{"RefundReceipt":[]}}"# : #"{"RefundReceipt":{"Id":"fixture-receipt"}}"#,
                              status: outcome.hasSuffix("error") ? 400 : 200)
             }
-            let service = QuickBooksPaymentsService(api: instance, salesItemReference: "fixture-sales-item")
+            let service = QuickBooksPaymentsService(api: instance, journal: FixturePaymentJournal(), salesItemReference: "fixture-sales-item")
             let payment = Payment(invoice: invoice(), quickBooksChargeID: "fixture-refund",
                 quickBooksAccountingSyncStatus: "pending", amount: -1, method: "ach", isRefund: true)
             do {
@@ -252,7 +265,7 @@ struct QuickBooksPaymentWorkflowTests {
                 #expect(outcome != "success")
                 #expect(payment.quickBooksRefundReceiptID == nil)
                 if outcome.hasPrefix("changed") {
-                    #expect(error as? WorkspaceProviderAccessError == .changed(mayHaveReachedProvider: true))
+                    #expect(error as? WorkspaceProviderAccessError == .changed(mayHaveReachedProvider: false))
                     #expect(payment.quickBooksAccountingSyncStatus == "pending")
                     #expect(payment.quickBooksAccountingSyncDetail == nil)
                 } else {
@@ -273,7 +286,7 @@ struct QuickBooksPaymentWorkflowTests {
                 return reply(request, payload: sent.count == 1 ? #"{"value":"fixture-token"}"#
                     : #"{"id":"fixture-card","number":"1234","name":"Fixture only"}"#)
             }
-            let service = QuickBooksPaymentsService(api: instance)
+            let service = QuickBooksPaymentsService(api: instance, journal: FixturePaymentJournal())
             let customer = try JSONDecoder().decode(QuickBooksCustomer.self,
                 from: Data(#"{"Id":"fixture-customer","DisplayName":"Fixture"}"#.utf8))
             do {
@@ -299,8 +312,8 @@ struct QuickBooksPaymentWorkflowTests {
     @Test func invalidAmountsFailBeforeTokenizationOrRefundAndNeverTrap() async {
         var sends = 0
         let api = api { request in sends += 1; return reply(request) }
-        let service = QuickBooksPaymentsService(api: api, salesItemReference: "fixture-sales-item")
-        let payment = Payment(invoice: invoice(), quickBooksChargeID: "fixture-original", amount: 10, method: "card")
+        let service = QuickBooksPaymentsService(api: api, journal: FixturePaymentJournal(), salesItemReference: "fixture-sales-item")
+        let payment = Payment(invoice: invoice(), quickBooksID: "fixture-original-accounting", quickBooksChargeID: "fixture-original", amount: 10, method: "card")
         for amount in [Double.nan, .infinity, -.infinity, .greatestFiniteMagnitude, 0, -1, 1.001] {
             await #expect(throws: QuickBooksPaymentsServiceError.invalidAmount) {
                 try await service.refundPayment(payment: payment, amount: amount, note: nil)

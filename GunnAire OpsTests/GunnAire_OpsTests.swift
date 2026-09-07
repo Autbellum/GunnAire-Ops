@@ -25807,7 +25807,7 @@ struct GunnAire_OpsTests {
             sends += 1
             throw URLError(.notConnectedToInternet)
         }
-        let service = QuickBooksPaymentsService(api: api)
+        let service = QuickBooksPaymentsService(api: api, journal: FixturePaymentJournal())
         await #expect(throws: QuickBooksPaymentsServiceError.invoiceRelationshipUnavailable) {
             try await service.syncAndRecordAccountingFollowUp(for: payment)
         }

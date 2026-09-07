@@ -673,9 +673,14 @@ final class QuickBooksDataAPI: ObservableObject {
         let scope = WorkflowScope(owner: ObjectIdentifier(self), operation: operation)
         return try await Self.$workflowScope.withValue(scope) {
             try operation.check()
-            let value = try await body(operation)
-            try operation.check()
-            return value
+            do {
+                let value = try await body(operation)
+                try operation.check()
+                return value
+            } catch {
+                if let failure = operation.failure { throw failure }
+                throw error
+            }
         }
     }
 
@@ -1849,10 +1854,55 @@ final class QuickBooksDataAPI: ObservableObject {
         )
     }
 
-    func createRefundReceipt(_ receipt: QuickBooksRefundReceiptCreate, completion: @escaping (Result<QuickBooksRefundReceipt, Error>) -> Void) {
+
+    func fetchRefundReceipts(completion: @escaping (Result<[QuickBooksRefundReceipt], Error>) -> Void) {
+        performPaginatedQuery(
+            baseSQL: "SELECT * FROM RefundReceipt", entityName: "refund receipt",
+            decode: QuickBooksRefundReceiptQueryResponse.self,
+            entities: { $0.QueryResponse.RefundReceipt ?? [] }, identifier: \QuickBooksRefundReceipt.Id,
+            completion: completion
+        )
+    }
+
+    func recoverOrCreateRefundReceipt(
+        _ receipt: QuickBooksRefundReceiptCreate, localPaymentID: UUID,
+        completion: @escaping (Result<QuickBooksRefundReceipt, Error>) -> Void
+    ) {
+        fetchRefundReceipts { result in
+            do {
+                let records = try result.get()
+                let markers = (receipt.PrivateNote ?? "").components(separatedBy: .newlines)
+                    .filter { $0.hasPrefix("Client transaction ID: ") }
+                let total = receipt.Line.reduce(0) { $0 + $1.Amount }
+                guard markers.count == 1, let marker = markers.first, marker.count > 23,
+                      total.isFinite, total > 0, total <= 1_000_000,
+                      PaymentAttemptRecord.isReference(receipt.CustomerRef.value),
+                      receipt.CreditCardPayment == nil, receipt.TxnSource == nil else {
+                    throw PaymentAttemptError.needsReview
+                }
+                let matches = records.filter {
+                    ($0.PrivateNote ?? "").components(separatedBy: .newlines).contains(marker)
+                }
+                if !matches.isEmpty {
+                    guard matches.count == 1, let match = matches.first,
+                          match.CustomerRef?.value == receipt.CustomerRef.value,
+                          let amount = match.TotalAmt, amount.isFinite,
+                          abs(amount - total) < 0.000_001 else { throw PaymentAttemptError.needsReview }
+                    completion(.success(match))
+                } else {
+                    self.createRefundReceipt(receipt, requestID: "ga-rr-\(localPaymentID.uuidString.lowercased())",
+                                             completion: completion)
+                }
+            } catch { completion(.failure(error)) }
+        }
+    }
+
+    func createRefundReceipt(_ receipt: QuickBooksRefundReceiptCreate, requestID: String? = nil, completion: @escaping (Result<QuickBooksRefundReceipt, Error>) -> Void) {
         let body = try? JSONEncoder().encode(receipt)
         performAuthorizedDecodingRequest(
-            { self.authorizedRequest(path: "refundreceipt", method: "POST", body: body, contentType: "application/json") },
+            { self.authorizedRequest(path: "refundreceipt",
+                queryItems: requestID.map { [URLQueryItem(name: "requestid", value: $0)] } ?? [],
+                method: "POST", body: body, contentType: "application/json") },
             decode: QuickBooksRefundReceiptResponse.self
         ) { result in
             completion(result.flatMap {
@@ -4926,6 +4976,17 @@ struct QuickBooksRefundReceiptResponse: Codable {
 
 struct QuickBooksRefundReceipt: Codable {
     let Id: String
+    var TotalAmt: Double? = nil
+    var CustomerRef: QuickBooksReference? = nil
+    var PrivateNote: String? = nil
+}
+
+struct QuickBooksRefundReceiptQueryResponse: Decodable {
+    let QueryResponse: QuickBooksRefundReceiptList
+}
+
+struct QuickBooksRefundReceiptList: Decodable {
+    let RefundReceipt: [QuickBooksRefundReceipt]?
 }
 
 struct QuickBooksFaultEnvelope: Decodable {

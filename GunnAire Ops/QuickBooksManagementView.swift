@@ -4292,6 +4292,8 @@ struct QuickBooksManagementView: View {
                                 quickBooksID: result.accountingPayment?.Id,
                                 quickBooksChargeID: result.charge.id,
                                 quickBooksClientTransID: result.clientTransactionID,
+                                collectionAttemptID: localPaymentID,
+                                providerPaymentStatus: result.charge.status,
                                 quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                                 quickBooksAccountingSyncDetail: result.accountingError,
                                 processorSyncStatus: "captured",
@@ -4383,9 +4385,12 @@ struct QuickBooksManagementView: View {
                         try result.validateWorkspace()
                         modelContext.insert(
                             Payment(
+                                id: result.localPaymentID,
                                 invoice: payment.invoice,
                                 quickBooksChargeID: result.refund.id,
                                 quickBooksClientTransID: result.clientTransactionID,
+                                collectionAttemptID: result.localPaymentID,
+                                providerPaymentStatus: result.refund.status,
                                 quickBooksRefundReceiptID: result.refundReceipt?.Id,
                                 quickBooksAccountingSyncStatus: result.accountingError == nil ? "synced" : "needs_attention",
                                 quickBooksAccountingSyncDetail: result.accountingError,

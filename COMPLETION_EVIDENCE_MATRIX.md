@@ -1,4 +1,20 @@
-2026-09-06 payment-workflow checkpoint: **779/779 logic tests on both iPad
+Payment coordination checkpoint, completed 2026-09-07: **792/792 logic tests
+on iPad and Mac Catalyst, 7/7 focused iPad UI journeys, 124/124 Backend and
+37/37 Tools tests; universal Mac Release built successfully**. Backend candidate
+`2026.09.06.22` now reserves immutable shared attempts and issues one-time
+dispatch permissions for the current native card/ACH/refund service. Server
+provider/accounting verification, original-assignment limits, native restoration
+and the focused Payment review sheet replace the prior unjournaled entry paths.
+Refund accounting adds complete-snapshot matching and stable request IDs;
+optional CloudKit fields retain attempt/provider status separately from queue
+progress. See [PAYMENT_ATTEMPT_COORDINATION.md](PAYMENT_ATTEMPT_COORDINATION.md).
+Server-owned sending, accounting-send coordination, ACH returns/settlement,
+cross-channel collection, historical statements, signed CloudKit/replica
+acceptance and provider/platform release gates remain open. This is progress,
+not complete payment safety or finished application readiness. No merge,
+deployment, signing, production approval or physical install occurred.
+
+Prior 2026-09-06 payment-workflow checkpoint: **779/779 logic tests on both iPad
 and Mac Catalyst, 6/6 focused iPad UI journeys, 93/93 Backend and 37/37 Tools**.
 QBO payment workflows retain their initiating account through async/callback
 work and local accounting saves; ACH uses eCheck routes, accounting refund

@@ -6480,6 +6480,52 @@ final class GunnAire_OpsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["ReconnectGoogleForDrive"].exists)
     }
 
+
+    @MainActor
+    func testInterruptedPaymentReviewIsFocusedAndReturnsToHistory() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-enableSplashVideo", "NO", "-disableCloudKitForTesting",
+            "-uiTestAuthenticatedAdmin", "-uiTestSeedCollectibleJob"
+        ]
+        app.launch()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let window = app.windows.firstMatch
+        let landscape = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in window.frame.width > window.frame.height }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [landscape], timeout: 6), .completed)
+        revealSidebarDestination("Payments", in: app).tap()
+        let picker = app.segmentedControls["PaymentsWorkspacePicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        picker.buttons["History"].tap()
+        let review = app.buttons["Review interrupted payments"]
+        XCTAssertTrue(waitForHittable(review))
+        review.tap()
+        XCTAssertTrue(app.navigationBars["Payment review"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Choose an invoice"].exists)
+        XCTAssertTrue(app.staticTexts["Review an interrupted payment here. Verification restores its records; it never sends another charge or refund."].exists)
+        XCTAssertFalse(app.textFields["Original QuickBooks transaction ID"].exists)
+        XCTAssertFalse(app.buttons["Verify and restore records"].exists)
+        XCTAssertFalse(app.buttons["Release unsent reservation"].exists)
+        let readyAt = Date().addingTimeInterval(4)
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            Date() >= readyAt && window.exists && window.frame.width > window.frame.height &&
+                app.buttons["Done"].isHittable
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 6), .completed)
+        waitForSystemBannerToClear(beforeCapturing: "Payment review")
+        // Capture the display coordinate space, not a landscape app-window
+        // crop that can be offset under iPadOS window management.
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = "Focused payment review - no invoice selected"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(picker.waitForExistence(timeout: 3))
+        XCTAssertTrue(picker.buttons["History"].isSelected)
+    }
+
     @MainActor
     func testPaymentsUsesFocusedCollectionWorkspaces() throws {
         XCUIDevice.shared.orientation = .portrait

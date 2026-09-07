@@ -31,9 +31,14 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa, utils
 
+try:
+    from Backend import payment_attempts
+except ModuleNotFoundError:
+    import payment_attempts  # Direct launch from the Backend directory.
+
 
 HOST = os.environ.get("GUNNAIRE_BACKEND_HOST", "0.0.0.0")
-SERVICE_VERSION = "2026.09.06.21"
+SERVICE_VERSION = "2026.09.06.22"
 # Managed hosts such as Render supply PORT. Keep the GunnAire setting first so
 # local/LAN deployments remain deterministic.
 PORT = int(os.environ.get("GUNNAIRE_BACKEND_PORT", os.environ.get("PORT", "8787")))
@@ -109,6 +114,7 @@ CUSTOMER_PORTAL_RESPONSE_MAX_BYTES = min(
 )
 QBO_TOKEN_ENDPOINT = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 QBO_REVOCATION_ENDPOINT = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
+QBO_PAYMENT_READ_LOCK = threading.Lock()
 QBO_ACCOUNTING_REFERENCE_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 QBO_SALES_ITEM_TYPES = {
     "service": "Service",
@@ -936,6 +942,112 @@ def qbo_request(form: dict[str, str], endpoint: str) -> tuple[int, dict[str, obj
         return error.code, {"error": "QuickBooks rejected the OAuth request", "status": error.code}
     except (urllib.error.URLError, TimeoutError):
         return HTTPStatus.BAD_GATEWAY, {"error": "QuickBooks is unavailable"}
+
+
+class QBOReadNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Never forward a merchant bearer to a redirect destination.
+        return None
+
+
+def qbo_payment_read_transport(request):
+    if request.get_method() != "GET":
+        raise payment_attempts.AttemptError("read_only", "Only provider verification reads are supported.", 400)
+    try:
+        parsed = urllib.parse.urlsplit(request.full_url)
+        if parsed.scheme != "https" or parsed.hostname not in {
+            "api.intuit.com", "sandbox.api.intuit.com",
+            "quickbooks.api.intuit.com", "sandbox-quickbooks.api.intuit.com",
+        } or parsed.username is not None or parsed.password is not None or parsed.fragment or parsed.port not in (None, 443):
+            raise ValueError("unsupported provider origin")
+        opener = urllib.request.build_opener(QBOReadNoRedirect())
+        with opener.open(request, timeout=20) as response:
+            raw = response.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise ValueError("oversized provider response")
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("invalid provider response")
+            return response.status, payload
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeDecodeError):
+        raise payment_attempts.AttemptError(
+            "provider_unavailable", "The provider record could not be verified. No new payment was sent.", 502,
+        ) from None
+
+
+def read_payment_provider_record(context, category, record_id, *, kind="charge", rail="card", source_id=None):
+    """Read from a fixed Intuit resource, using only the exact saved grant.
+
+    This boundary does not send financial mutations. Its refresh is serialized
+    within this process and compare-and-set against other grant writers. The
+    journal reauthorizes the session after every read before accepting evidence.
+    """
+    payment_attempts.reference(record_id)
+    payment_attempts.reference(context["realm_id"])
+    if category not in ("invoice", "accounting", "transaction") or kind not in ("charge", "refund") or rail not in ("card", "ach"):
+        raise payment_attempts.AttemptError("invalid_resource", "Unsupported provider verification resource.", 400)
+    if category == "transaction" and kind == "refund":
+        payment_attempts.reference(source_id)
+    environment = context["environment"]
+    if environment not in ("sandbox", "production") or environment != QBO_ENVIRONMENT:
+        raise payment_attempts.AttemptError("provider_changed", "The original QuickBooks environment is not available.")
+    expected_grant = context["grant_fingerprint"]
+    with QBO_PAYMENT_READ_LOCK:
+        with db() as connection:
+            current = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+        if current is None or payment_attempts.grant_fingerprint(current) != expected_grant or current["realm_id"] != context["realm_id"] or current["environment"] != environment:
+            raise payment_attempts.AttemptError("grant_changed", "The QuickBooks connection changed before verification.")
+        if current["client_id_fingerprint"] != hashlib.sha256(QBO_CLIENT_ID.encode()).hexdigest():
+            raise payment_attempts.AttemptError("client_changed", "Reconnect QuickBooks using the configured provider credentials.")
+        token = decrypt_qbo_refresh_token(current["refresh_token_ciphertext"])
+        if not token:
+            raise payment_attempts.AttemptError("connection_unavailable", "The QuickBooks authorization is unavailable.", 503)
+        status, raw_token = qbo_request({"grant_type": "refresh_token", "refresh_token": token}, QBO_TOKEN_ENDPOINT)
+        result = qbo_token_response(raw_token)
+        if not 200 <= status < 300 or result is None or not result["accessToken"] or not result["refreshToken"]:
+            raise payment_attempts.AttemptError("connection_unavailable", "QuickBooks authorization could not be refreshed.", 502)
+        encrypted = encrypt_qbo_refresh_token(result["refreshToken"])
+        with db() as connection:
+            changed = connection.execute(
+                """UPDATE qbo_connections SET refresh_token_ciphertext=?, updated_at=?
+                   WHERE id=1 AND realm_id=? AND environment=? AND client_id_fingerprint=?
+                   AND authorized_at=? AND refresh_token_ciphertext=?""",
+                (encrypted, utc_now(), current["realm_id"], current["environment"], current["client_id_fingerprint"],
+                 current["authorized_at"], current["refresh_token_ciphertext"]),
+            )
+            if changed.rowcount != 1:
+                raise payment_attempts.AttemptError("grant_changed", "The QuickBooks connection changed during verification.")
+            record_audit_event("system:payment-verification", "refresh", "qbo-connection",
+                               current["realm_id"], connection=connection)
+        bearer = result["accessToken"]
+    if category in ("invoice", "accounting"):
+        entity = "invoice" if category == "invoice" else ("payment" if kind == "charge" else "refundreceipt")
+        base = "https://sandbox-quickbooks.api.intuit.com" if environment == "sandbox" else "https://quickbooks.api.intuit.com"
+        path = "/v3/company/" + urllib.parse.quote(context["realm_id"], safe="") + "/" + entity + "/" + urllib.parse.quote(record_id, safe="")
+        url = base + path + "?minorversion=75"
+        envelope = {"invoice": "Invoice", "payment": "Payment", "refundreceipt": "RefundReceipt"}[entity]
+    elif category == "transaction" and kind in ("charge", "refund") and rail in ("card", "ach"):
+        base = "https://sandbox.api.intuit.com" if environment == "sandbox" else "https://api.intuit.com"
+        path = "/quickbooks/v4/payments/" + ("charges" if rail == "card" else "echecks")
+        if kind == "refund":
+            payment_attempts.reference(source_id)
+            path += "/" + urllib.parse.quote(source_id, safe="") + "/refunds"
+        url = base + path + "/" + urllib.parse.quote(record_id, safe="")
+        envelope = None
+    else:
+        raise payment_attempts.AttemptError("invalid_resource", "Unsupported provider verification resource.", 400)
+    request = urllib.request.Request(url, method="GET", headers={"Authorization": "Bearer " + bearer, "Accept": "application/json"})
+    status, payload = qbo_payment_read_transport(request)
+    if not 200 <= status < 300:
+        raise payment_attempts.AttemptError("provider_unavailable", "The provider record could not be verified.", 502)
+    with db() as connection:
+        latest = connection.execute("SELECT * FROM qbo_connections WHERE id=1").fetchone()
+    if latest is None or payment_attempts.grant_fingerprint(latest) != expected_grant:
+        raise payment_attempts.AttemptError("grant_changed", "The QuickBooks connection changed during the provider read.")
+    value = payload.get(envelope) if envelope else payload
+    if not isinstance(value, dict):
+        raise payment_attempts.AttemptError("provider_unconfirmed", "The provider record was incomplete.")
+    return value
 
 
 def qbo_token_response(payload: dict[str, object]) -> dict[str, object] | None:
@@ -2110,6 +2222,7 @@ def initialize_database() -> None:
         ensure_column(connection, "field_payment_assignments", "completed_at", "TEXT")
         ensure_column(connection, "field_payment_assignments", "completed_by", "TEXT")
         ensure_column(connection, "field_payment_assignments", "completion_payment_id", "TEXT")
+        payment_attempts.initialize_schema(connection)
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS customer_communications (
@@ -3150,6 +3263,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/session":
             self.write_json({"user": self.principal()})
             return
+        if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
+            self.handle_payment_attempt(parsed, method="GET")
+            return
         if parsed.path == "/api/workspace":
             if not self.require_application_session():
                 return
@@ -3339,6 +3455,9 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/auth/logout":
             self.revoke_application_session()
+            return
+        if parsed.path == "/api/payment-attempts" or parsed.path.startswith("/api/payment-attempts/"):
+            self.handle_payment_attempt(parsed, method="POST")
             return
         if parsed.path == "/api/workspace/bind":
             if not self.require_application_session() or not self.require_admin():
@@ -5406,6 +5525,63 @@ class GunnAireBackendHandler(BaseHTTPRequestHandler):
                 ).fetchone()
         record_audit_event(actor, "cancel", "field-payment", assignment_id)
         self.write_json({"assignment": field_payment_assignment_record(row)})
+
+    def handle_payment_attempt(self, parsed, *, method):
+        if not self.require_application_session():
+            return
+        session_id = self._application_session_id
+        journal = payment_attempts.PaymentAttemptJournal(
+            db,
+            lambda context, invoice_id: read_payment_provider_record(context, "invoice", invoice_id),
+            lambda context, kind, rail, source, provider_id: read_payment_provider_record(
+                context, "transaction", provider_id, kind=kind, rail=rail, source_id=source,
+            ),
+            lambda context, kind, accounting_id: read_payment_provider_record(context, "accounting", accounting_id, kind=kind),
+            record_audit_event,
+        )
+        suffix = parsed.path.removeprefix("/api/payment-attempts")
+        parts = suffix.strip("/").split("/") if suffix else []
+        try:
+            if method == "GET":
+                if not parts:
+                    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                    if set(query) != {"companyID", "invoiceID"} or any(len(value) != 1 for value in query.values()):
+                        raise payment_attempts.AttemptError("invalid_query", "Choose one company invoice to review.", 400)
+                    result = journal.list_for_invoice(session_id, query["companyID"][0], query["invoiceID"][0])
+                    self.write_json({"attempts": result})
+                    return
+                if len(parts) == 1:
+                    result = journal.get(session_id, parts[0])
+                else:
+                    raise payment_attempts.AttemptError("not_found", "Payment action not found.", 404)
+            else:
+                payload = json.loads(self.read_limited_body(8192).decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise payment_attempts.AttemptError("invalid_request", "A payment request object is required.", 400)
+                if not parts:
+                    result = journal.reserve(session_id, payload)
+                elif len(parts) == 2:
+                    attempt_id, action = parts
+                    if action in ("begin", "cancel", "unknown") and not payload:
+                        result = getattr(journal, action)(session_id, attempt_id)
+                    elif action == "confirm" and set(payload) == {"providerID"}:
+                        result = journal.confirm(session_id, attempt_id, payload["providerID"])
+                    elif action == "complete" and set(payload) == {"accountingID"}:
+                        result = journal.complete(session_id, attempt_id, payload["accountingID"])
+                    else:
+                        raise payment_attempts.AttemptError("invalid_action", "Use the supported payment action fields only.", 400)
+                else:
+                    raise payment_attempts.AttemptError("not_found", "Payment action not found.", 404)
+            self.write_json({"attempt": result})
+        except payment_attempts.AttemptError as error:
+            self.write_json({"error": str(error), "code": error.code}, status=error.status)
+        except (ValueError, UnicodeDecodeError):
+            self.write_json({"error": "Invalid payment attempt request", "code": "invalid_request"}, status=HTTPStatus.BAD_REQUEST)
+        except (sqlite3.Error, RuntimeError):
+            self.write_json(
+                {"error": "Payment verification storage is unavailable; review existing attempts before retrying", "code": "storage_unavailable"},
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
 
     def store_payment_collection(self) -> None:
         try:

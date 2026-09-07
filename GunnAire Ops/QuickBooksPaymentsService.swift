@@ -52,6 +52,7 @@ struct QuickBooksProcessedPaymentResult {
 }
 
 struct QuickBooksProcessedRefundResult {
+    let localPaymentID: UUID
     let refund: QuickBooksPaymentsRefundResponse
     let refundReceipt: QuickBooksRefundReceipt?
     let accountingError: String?
@@ -73,17 +74,53 @@ final class QuickBooksPaymentsService {
     static let shared = QuickBooksPaymentsService()
 
     private let api: QuickBooksDataAPI
+    private let journal: any PaymentAttemptCoordinating
 
-    private init() { api = .shared }
+    private init() {
+        api = .shared
+        journal = BackendPaymentAttemptCoordinator()
+    }
 
 #if DEBUG
     private var testSalesItemReference: String?
-    init(api: QuickBooksDataAPI, salesItemReference: String? = nil) {
+    init(api: QuickBooksDataAPI, journal: any PaymentAttemptCoordinating, salesItemReference: String? = nil) {
         precondition(GunnAireCloudKit.usesTestDatabase)
         self.api = api
+        self.journal = journal
         testSalesItemReference = salesItemReference
     }
 #endif
+
+
+    private func paymentIntent(id: UUID, invoice: Invoice, customerID: String, amount: Double,
+                               rail: String, kind: String = "charge") throws -> PaymentAttemptIntent {
+        try api.checkWorkflowOperation()
+        guard let realmID = api.realmID, let invoiceID = invoice.quickBooksID.nilIfBlank,
+              PaymentAttemptRecord.isReference(realmID), PaymentAttemptRecord.isReference(invoiceID),
+              PaymentAttemptRecord.isReference(customerID),
+              amount.isFinite, amount > 0, amount <= 1_000_000 else {
+            throw QuickBooksPaymentsServiceError.invalidAmount
+        }
+        return PaymentAttemptIntent(id: id, companyID: try journal.companyID(), realmID: realmID,
+            environment: api.currentEnvironment, invoiceID: invoice.id, invoiceQuickBooksID: invoiceID,
+            customerQuickBooksID: customerID, amountCents: Int((amount * 100).rounded()), rail: rail, kind: kind)
+    }
+
+    private func finishAttempt(_ attempt: PaymentAttemptRecord, accountingID: String?) async -> String? {
+        guard let accountingID else { return nil }
+        do {
+            try api.checkWorkflowOperation()
+            let completed = try await journal.action("complete", attemptID: attempt.id, reference: accountingID)
+            try api.checkWorkflowOperation()
+            try completed.validate(for: attempt.intent, states: [.completed], previous: attempt)
+            guard completed.providerID == attempt.providerID, completed.accountingID == accountingID else {
+                throw PaymentAttemptError.needsReview
+            }
+            return nil
+        } catch {
+            return "The payment is verified, but shared accounting confirmation still needs review. Do not collect it again."
+        }
+    }
 
     private enum AccountingPaymentKind {
         case card(chargeID: String)
@@ -107,13 +144,15 @@ final class QuickBooksPaymentsService {
                 catalogItems: catalogItems
             )
 
-            let clientTransactionID = Self.chargeClientTransactionID(for: localPaymentID)
-            let token = try await createCardToken(cardInput)
-            let authorized = try await createAuthorization(
-                amount: amount,
-                token: token.value,
-                note: note,
-                clientTransactionID: clientTransactionID
+            let intent = try paymentIntent(id: localPaymentID, invoice: invoice, customerID: customerQBID,
+                                           amount: amount, rail: "card")
+            let clientTransactionID = intent.clientTransactionID
+            let (authorized, attempt) = try await PaymentAttemptDispatcher(journal: journal, check: operation.check).dispatch(
+                intent: intent, prepare: { try await self.createCardToken(cardInput) },
+                send: { token, permit in
+                    try await self.createAuthorization(amount: amount, token: token.value, note: note,
+                        clientTransactionID: permit.clientTransactionID, requestID: permit.requestID)
+                }, providerID: { $0.id }
             )
             try QuickBooksPaymentsResponsePolicy.validateCharge(
                 authorized,
@@ -134,10 +173,11 @@ final class QuickBooksPaymentsService {
                 paymentKind: .card(chargeID: charge.id)
             )
 
+            let completionError = await finishAttempt(attempt, accountingID: accountingPayment.payment?.Id)
             return QuickBooksProcessedPaymentResult(
                 charge: charge,
                 accountingPayment: accountingPayment.payment,
-                accountingError: accountingPayment.error,
+                accountingError: accountingPayment.error ?? completionError,
                 clientTransactionID: charge.resolvedClientTransID ?? clientTransactionID,
                 operation: operation
             )
@@ -174,14 +214,16 @@ final class QuickBooksPaymentsService {
                 catalogItems: catalogItems
             )
 
-            let clientTransactionID = Self.chargeClientTransactionID(for: localPaymentID)
-            let token = try await createBankAccountToken(bankInput)
-            let charge = try await createBankCharge(
-                amount: amount,
-                token: token.value,
-                note: note,
-                clientTransactionID: clientTransactionID,
-                checkNumber: bankInput.checkNumber
+            let intent = try paymentIntent(id: localPaymentID, invoice: invoice, customerID: customerQBID,
+                                           amount: amount, rail: "ach")
+            let clientTransactionID = intent.clientTransactionID
+            let (charge, attempt) = try await PaymentAttemptDispatcher(journal: journal, check: operation.check).dispatch(
+                intent: intent, prepare: { try await self.createBankAccountToken(bankInput) },
+                send: { token, permit in
+                    try await self.createBankCharge(amount: amount, token: token.value, note: note,
+                        clientTransactionID: permit.clientTransactionID, checkNumber: bankInput.checkNumber,
+                        requestID: permit.requestID)
+                }, providerID: { $0.id }
             )
             try QuickBooksPaymentsResponsePolicy.validateCharge(
                 charge,
@@ -201,10 +243,11 @@ final class QuickBooksPaymentsService {
                 paymentKind: .ach(chargeID: charge.id)
             )
 
+            let completionError = await finishAttempt(attempt, accountingID: accountingPayment.payment?.Id)
             return QuickBooksProcessedPaymentResult(
                 charge: charge,
                 accountingPayment: accountingPayment.payment,
-                accountingError: accountingPayment.error,
+                accountingError: accountingPayment.error ?? completionError,
                 clientTransactionID: charge.resolvedClientTransID ?? clientTransactionID,
                 operation: operation
             )
@@ -238,13 +281,22 @@ final class QuickBooksPaymentsService {
                 throw QuickBooksPaymentsServiceError.missingSalesItemReference
             }
 
-            let clientTransactionID = Self.refundClientTransactionID(for: payment, amount: amount)
-            let refund = try await refundCharge(
-                rail: rail,
-                id: chargeID,
-                amount: amount,
-                note: note,
-                clientTransactionID: clientTransactionID
+            guard let originalAccountingID = payment.quickBooksID.nilIfBlank else {
+                throw PaymentAttemptError.originalAccountingRequired
+            }
+            let refundPaymentID = UUID()
+            var intent = try paymentIntent(id: refundPaymentID, invoice: invoice, customerID: customerQBID,
+                                           amount: amount, rail: rail == .bank ? "ach" : "card", kind: "refund")
+            intent.sourcePaymentID = payment.id
+            intent.sourceProviderID = chargeID
+            intent.sourceAccountingID = originalAccountingID
+            let clientTransactionID = intent.clientTransactionID
+            let (refund, attempt) = try await PaymentAttemptDispatcher(journal: journal, check: operation.check).dispatch(
+                intent: intent, prepare: { () },
+                send: { _, permit in
+                    try await self.refundCharge(rail: rail, id: chargeID, amount: amount, note: note,
+                        clientTransactionID: permit.clientTransactionID, requestID: permit.requestID)
+                }, providerID: { $0.id }
             )
             try QuickBooksPaymentsResponsePolicy.validateRefund(
                 refund,
@@ -252,22 +304,129 @@ final class QuickBooksPaymentsService {
                 expectedClientTransactionID: clientTransactionID
             )
             let refundReceipt = await syncRefundReceipt(
+                localPaymentID: refundPaymentID,
                 invoice: invoice,
                 customerQBID: customerQBID,
                 salesItemRef: salesItemRef,
                 amount: amount,
                 note: note,
-                refund: refund,
                 clientTransactionID: clientTransactionID
             )
 
+            let completionError = await finishAttempt(attempt, accountingID: refundReceipt.receipt?.Id)
             return QuickBooksProcessedRefundResult(
+                localPaymentID: refundPaymentID,
                 refund: refund,
                 refundReceipt: refundReceipt.receipt,
-                accountingError: refundReceipt.error,
+                accountingError: refundReceipt.error ?? completionError,
                 clientTransactionID: refund.resolvedClientTransID ?? clientTransactionID,
                 operation: operation
             )
+        }
+    }
+
+
+    func paymentAttempts(for invoice: Invoice) async throws -> QuickBooksWorkspaceResult<[PaymentAttemptRecord]> {
+        try await api.withWorkspaceOperation { operation in
+            try validateInvoiceWorkspace(invoice)
+            let records = try await journal.list(invoiceID: invoice.id)
+            try operation.check()
+            return QuickBooksWorkspaceResult(value: records, operation: operation)
+        }
+    }
+
+    func cancelPaymentReservation(_ id: UUID, for invoice: Invoice) async throws {
+        try await api.withWorkspaceOperation { operation in
+            try validateInvoiceWorkspace(invoice)
+            let record = try await journal.get(id)
+            try validateAttempt(record, invoice: invoice)
+            let cancelled = try await journal.action("cancel", attemptID: id, reference: nil)
+            try operation.check()
+            try cancelled.validate(for: record.intent, states: [.cancelled], previous: record)
+        }
+    }
+
+    private func validateAttempt(_ record: PaymentAttemptRecord, invoice: Invoice) throws {
+        try validateInvoiceWorkspace(invoice)
+        guard record.intent.companyID == (try journal.companyID()),
+              record.intent.realmID == api.realmID, record.intent.environment == api.currentEnvironment,
+              record.intent.invoiceID == invoice.id, record.intent.invoiceQuickBooksID == invoice.quickBooksID,
+              record.intent.customerQuickBooksID == invoice.customer?.quickBooksID,
+              record.intent.amountCents > 0, record.intent.amountCents <= 100_000_000,
+              ["card", "ach"].contains(record.intent.rail),
+              ["charge", "refund"].contains(record.intent.kind) else { throw PaymentAttemptError.needsReview }
+    }
+
+    /// Recovery never resends a charge/refund. Server GET evidence precedes
+    /// accounting-only recovery and a local upsert by the original attempt UUID.
+    func recoverPaymentAttempt(_ id: UUID, for invoice: Invoice, providerReference: String? = nil)
+        async throws -> QuickBooksWorkspaceResult<UUID> {
+        try await api.withWorkspaceOperation { operation in
+            guard let context = invoice.modelContext else { throw WorkspaceProviderAccessError.unavailable }
+            var attempt = try await journal.get(id)
+            try validateAttempt(attempt, invoice: invoice)
+            guard let providerID = attempt.providerID ?? attempt.candidateProviderID ?? providerReference,
+                  PaymentAttemptRecord.isReference(providerID) else { throw PaymentAttemptError.needsReview }
+            let verified = try await journal.action("confirm", attemptID: id, reference: providerID)
+            try operation.check()
+            try verified.validate(for: attempt.intent, states: [.confirmed, .completed], previous: attempt)
+            guard verified.providerID == providerID else { throw PaymentAttemptError.needsReview }
+            attempt = verified
+            let isRefund = attempt.intent.kind == "refund"
+            let amount = Double(attempt.intent.amountCents) / 100
+            let accountingID: String
+            if let existing = attempt.accountingID {
+                accountingID = existing
+            } else if isRefund {
+                guard let salesItem = await resolvedSalesItemRef() else {
+                    throw QuickBooksPaymentsServiceError.missingSalesItemReference
+                }
+                let receipt = await syncRefundReceipt(localPaymentID: id, invoice: invoice,
+                    customerQBID: attempt.intent.customerQuickBooksID, salesItemRef: salesItem,
+                    amount: amount, note: nil, clientTransactionID: attempt.clientTransactionID)
+                guard let receipt = receipt.receipt else { throw PaymentAttemptError.needsReview }
+                accountingID = receipt.Id
+            } else {
+                let payload = try await quickBooksPaymentPayload(invoice: invoice,
+                    customerQBID: attempt.intent.customerQuickBooksID, amount: amount, note: nil,
+                    paymentRef: providerID, clientTransactionID: attempt.clientTransactionID,
+                    paymentKind: attempt.intent.rail == "ach" ? .ach(chargeID: providerID) : .card(chargeID: providerID))
+                accountingID = try await recoverOrCreateAccountingPayment(localPaymentID: id, payload: payload).Id
+            }
+            guard await finishAttempt(attempt, accountingID: accountingID) == nil else {
+                throw PaymentAttemptError.needsReview
+            }
+            try validateInvoiceWorkspace(invoice)
+            let existing = try context.fetch(FetchDescriptor<Payment>(predicate: #Predicate { $0.id == id }))
+            guard existing.count <= 1 else { throw PaymentAttemptError.needsReview }
+            if let payment = existing.first {
+                guard payment.invoice?.id == invoice.id, payment.quickBooksChargeID == providerID,
+                      payment.quickBooksClientTransID == attempt.clientTransactionID,
+                      payment.isRefund == isRefund, abs(abs(payment.amount) - amount) < 0.000_001 else {
+                    throw PaymentAttemptError.needsReview
+                }
+                payment.collectionAttemptID = id
+                payment.providerPaymentStatus = attempt.providerStatus
+                if isRefund { payment.quickBooksRefundReceiptID = accountingID }
+                else { payment.quickBooksID = accountingID }
+                payment.quickBooksAccountingSyncStatus = "synced"
+                payment.quickBooksAccountingSyncDetail = nil
+            } else {
+                let payment = Payment(id: id, invoice: invoice,
+                    quickBooksID: isRefund ? nil : accountingID, quickBooksChargeID: providerID,
+                    quickBooksClientTransID: attempt.clientTransactionID, collectionAttemptID: id,
+                    providerPaymentStatus: attempt.providerStatus,
+                    quickBooksRefundReceiptID: isRefund ? accountingID : nil,
+                    quickBooksAccountingSyncStatus: "synced",
+                    processorSyncStatus: attempt.providerStatus?.lowercased(),
+                    amount: isRefund ? -amount : amount, method: attempt.intent.rail,
+                    authorizationReference: providerID, processor: OnsitePaymentProcessor.quickBooksPayments.rawValue,
+                    isRefund: isRefund, refundedPaymentID: attempt.intent.sourcePaymentID)
+                context.insert(payment)
+                invoice.applyLocalPaymentAmount(amount, isRefund: isRefund)
+            }
+            try context.save()
+            return QuickBooksWorkspaceResult(value: id, operation: operation)
         }
     }
 
@@ -287,6 +446,27 @@ final class QuickBooksPaymentsService {
                 }
             }
             do {
+                var attempt: PaymentAttemptRecord?
+                if let attemptID = payment.collectionAttemptID {
+                    let stored = try await journal.get(attemptID)
+                    try operation.check()
+                    let expected = try paymentIntent(id: payment.id, invoice: invoice,
+                        customerID: invoice.customer?.quickBooksID ?? "", amount: abs(payment.amount),
+                        rail: QuickBooksPaymentRail.forMethod(payment.method) == .bank ? "ach" : "card",
+                        kind: payment.isRefund ? "refund" : "charge")
+                    guard stored.id == payment.id, stored.intent.companyID == expected.companyID,
+                          stored.intent.realmID == expected.realmID, stored.intent.environment == expected.environment,
+                          stored.intent.invoiceID == expected.invoiceID,
+                          stored.intent.invoiceQuickBooksID == expected.invoiceQuickBooksID,
+                          stored.intent.customerQuickBooksID == expected.customerQuickBooksID,
+                          stored.intent.amountCents == expected.amountCents, stored.intent.rail == expected.rail,
+                          stored.intent.kind == expected.kind, stored.providerID == payment.quickBooksChargeID,
+                          stored.clientTransactionID == payment.quickBooksClientTransID else {
+                        throw PaymentAttemptError.needsReview
+                    }
+                    try stored.validate(for: stored.intent, states: [.confirmed, .completed])
+                    attempt = stored
+                }
                 let identifier: String
                 if payment.isRefund {
                     guard !manual else { throw QuickBooksPaymentsServiceError.invalidRetryTarget }
@@ -302,6 +482,10 @@ final class QuickBooksPaymentsService {
                     identifier = record.Id
                     payment.quickBooksID = identifier
                 }
+                if let attempt, await finishAttempt(attempt, accountingID: identifier) != nil {
+                    throw PaymentAttemptError.needsReview
+                }
+                try operation.check()
                 payment.quickBooksAccountingSyncStatus = "synced"
                 payment.quickBooksAccountingSyncDetail = nil
                 try payment.modelContext?.save()
@@ -423,7 +607,7 @@ final class QuickBooksPaymentsService {
             )
 
             return try await withCheckedThrowingContinuation { continuation in
-                api.createRefundReceipt(receipt) { result in
+                api.recoverOrCreateRefundReceipt(receipt, localPaymentID: refundPayment.id) { result in
                     continuation.resume(with: result)
                 }
             }
@@ -687,7 +871,8 @@ final class QuickBooksPaymentsService {
         amount: Double,
         token: String,
         note: String?,
-        clientTransactionID: String
+        clientTransactionID: String,
+        requestID: UUID
     ) async throws -> QuickBooksPaymentsChargeResponse {
         let charge = QuickBooksPaymentsChargeCreate(
             amount: Self.currencyString(amount),
@@ -701,7 +886,7 @@ final class QuickBooksPaymentsService {
         )
 
         return try await withCheckedThrowingContinuation { continuation in
-            api.createCharge(charge) { result in
+            api.createCharge(charge, requestID: requestID) { result in
                 continuation.resume(with: result)
             }
         }
@@ -720,7 +905,8 @@ final class QuickBooksPaymentsService {
         token: String,
         note: String?,
         clientTransactionID: String,
-        checkNumber: String?
+        checkNumber: String?,
+        requestID: UUID
     ) async throws -> QuickBooksPaymentsChargeResponse {
         let charge = QuickBooksPaymentsECheckCreate(
             amount: Self.currencyString(amount),
@@ -734,7 +920,7 @@ final class QuickBooksPaymentsService {
         )
 
         return try await withCheckedThrowingContinuation { continuation in
-            api.createECheck(charge) { result in
+            api.createECheck(charge, requestID: requestID) { result in
                 continuation.resume(with: result)
             }
         }
@@ -745,16 +931,17 @@ final class QuickBooksPaymentsService {
         id: String,
         amount: Double,
         note: String?,
-        clientTransactionID: String
+        clientTransactionID: String,
+        requestID: UUID
     ) async throws -> QuickBooksPaymentsRefundResponse {
         try await withCheckedThrowingContinuation { continuation in
             switch rail {
             case .card:
-                api.refundCharge(id: id, amount: amount, description: note, clientTransactionID: clientTransactionID) {
+                api.refundCharge(id: id, amount: amount, description: note, clientTransactionID: clientTransactionID, requestID: requestID) {
                     continuation.resume(with: $0)
                 }
             case .bank:
-                api.refundECheck(id: id, amount: amount, description: note, clientTransactionID: clientTransactionID) {
+                api.refundECheck(id: id, amount: amount, description: note, clientTransactionID: clientTransactionID, requestID: requestID) {
                     continuation.resume(with: $0)
                 }
             }
@@ -796,12 +983,12 @@ final class QuickBooksPaymentsService {
     }
 
     private func syncRefundReceipt(
+        localPaymentID: UUID,
         invoice: Invoice,
         customerQBID: String,
         salesItemRef: String,
         amount: Double,
         note: String?,
-        refund: QuickBooksPaymentsRefundResponse,
         clientTransactionID: String
     ) async -> (receipt: QuickBooksRefundReceipt?, error: String?) {
         guard let customer = invoice.customer else {
@@ -829,7 +1016,7 @@ final class QuickBooksPaymentsService {
 
         do {
             let response = try await withCheckedThrowingContinuation { continuation in
-                api.createRefundReceipt(receipt) { result in
+                api.recoverOrCreateRefundReceipt(receipt, localPaymentID: localPaymentID) { result in
                     continuation.resume(with: result)
                 }
             }
@@ -866,11 +1053,6 @@ final class QuickBooksPaymentsService {
 
     private static func chargeClientTransactionID(for localPaymentID: UUID) -> String {
         "ga-charge-\(localPaymentID.uuidString.lowercased())"
-    }
-
-    private static func refundClientTransactionID(for payment: Payment, amount: Double) -> String {
-        let cents = Int((amount * 100).rounded())
-        return "ga-refund-\(payment.id.uuidString.lowercased())-\(cents)-\(UUID().uuidString.lowercased())"
     }
 
     private func accountingNote(baseNote: String?, clientTransactionID: String) -> String {

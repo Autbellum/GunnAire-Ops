@@ -57,6 +57,17 @@ Apple identity exchange is available at `POST /api/auth/apple`. The token is ver
 
 After source `2026.08.28.13` is deployed, configure the primary App ID's Sign in with Apple server-to-server notification URL as `https://gunnaire-api.onrender.com/api/auth/apple/notifications`. The public endpoint accepts only Apple's exact JSON envelope, verifies the signed JWS against Apple's RS256 keys plus issuer, app audience, issue/event times, event ID, type, and subject, and idempotently processes `email-enabled`, `email-disabled`, `consent-revoked`, and `account-deleted`. Consent and deletion events revoke only Apple application sessions and their push registrations; delayed events older than a fresh Apple reauthorization cannot revoke that newer session. The raw JWS and private-relay address are not retained in the event ledger. Do not enter the URL in Apple Developer before the reviewed backend version is live and the endpoint is reachable over TLS 1.2 or later.
 
+## Durable payment coordination
+
+Candidate `2026.09.06.22` adds a company/realm-scoped payment-attempt journal,
+one-time native dispatch permission, server-side provider/accounting verification,
+technician assignment limits and recovery after interrupted collection. It requires
+current application sessions and persistent SQLite storage. The matching native
+candidate will not collect through an older backend that lacks this contract.
+See [the coordination checkpoint](../PAYMENT_ATTEMPT_COORDINATION.md) for its API
+semantics, test evidence, backup/rollback rules and remaining correctness gates.
+No deployment or complete payment-safety claim is implied.
+
 ## Payment workflow and grant-persistence follow-up
 
 Candidate `2026.09.06.21` preserves a replacement QBO grant when a stale refresh

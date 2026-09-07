@@ -12,6 +12,11 @@ final class Payment {
     var quickBooksID: String?
     var quickBooksChargeID: String?
     var quickBooksClientTransID: String?
+    /// Optional for existing CloudKit records; new coordinated collections
+    /// retain the server attempt identity independently of sync status labels.
+    var collectionAttemptID: UUID?
+    /// Provider state is separate from local upload/accounting progress.
+    var providerPaymentStatus: String?
     var quickBooksRefundReceiptID: String?
     var quickBooksDepositID: String?
     var quickBooksSalesReceiptID: String?
@@ -37,6 +42,8 @@ final class Payment {
         quickBooksID: String? = nil,
         quickBooksChargeID: String? = nil,
         quickBooksClientTransID: String? = nil,
+        collectionAttemptID: UUID? = nil,
+        providerPaymentStatus: String? = nil,
         quickBooksRefundReceiptID: String? = nil,
         quickBooksDepositID: String? = nil,
         quickBooksSalesReceiptID: String? = nil,
@@ -61,6 +68,8 @@ final class Payment {
         self.quickBooksID = quickBooksID
         self.quickBooksChargeID = quickBooksChargeID
         self.quickBooksClientTransID = quickBooksClientTransID
+        self.collectionAttemptID = collectionAttemptID
+        self.providerPaymentStatus = providerPaymentStatus
         self.quickBooksRefundReceiptID = quickBooksRefundReceiptID
         self.quickBooksDepositID = quickBooksDepositID
         self.quickBooksSalesReceiptID = quickBooksSalesReceiptID
@@ -83,6 +92,10 @@ final class Payment {
 }
 
 extension Payment {
+    var isProviderSettlementPending: Bool {
+        backendCollectionMethod == "ach" && providerPaymentStatus?.uppercased() == "PENDING"
+    }
+
     /// Canonical trust-boundary value accepted by shared company storage.
     /// The durable local method may include masked display details.
     var backendCollectionMethod: String? {
