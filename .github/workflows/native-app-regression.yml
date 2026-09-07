@@ -68,6 +68,8 @@ jobs:
               testExistingQuickBooksLinkReviewCancelsAfterReconnection \
               testNativeBillingReviewCancelsUnsentProposalAndReturnsToOriginalInvoice \
               testNativeBillingReviewRecoversAcceptedInvoiceWithoutPublishingAgain \
+              testManagementBillingComposerCancelsWithoutCreatingOrSending \
+              testManagementBillingComposerSavesOriginalInvoiceAndEstimateOffline \
               testBillingIdentityReviewKeepsReportsSafeAndHandsOffToInvoices \
               testCatalogPublicationReviewCancelsOnlyAnUnsentProposalAndReturnsToCatalog \
               testScheduleDeletionRetainsTheConfirmedTargetAndProtectsBilledJobs \
